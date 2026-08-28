@@ -1,0 +1,209 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ===== Python Tests =====
+  python-tests:
+    name: Python Tests (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0 libportaudio2 ffmpeg
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ matrix.python-version }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install core deps first (always needed)
+          pip install Pillow numpy requests urllib3 httpx aiohttp aiofiles websockets psd-tools scipy scikit-learn cryptography rich opencv-python onnxruntime
+          # Install test deps
+          pip install pytest pytest-asyncio pytest-cov
+          # Install optional deps with --no-deps to avoid pulling large model packages
+          pip install edge-tts || true
+          pip install rembg[cpu] || true
+          pip install mediapipe || true
+          pip install "pygame>=2.5.0; python_version < '3.14'" || true
+          pip install sounddevice soundfile || true
+
+      - name: Run tests
+        run: |
+          python -m pytest tests/ -v --cov=core --cov=drivers --cov=llm_bridge --cov=live2d_builder --cov-report=xml --cov-report=term
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: matrix.python-version == '3.11'
+        with:
+          file: ./coverage.xml
+
+  # ===== Go Tests & Build =====
+  go-build:
+    name: Go API Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ hashFiles('api/go.sum') }}
+
+      - name: Go mod tidy
+        working-directory: api
+        run: go mod tidy
+
+      - name: Go mod download
+        working-directory: api
+        run: go mod download
+
+      - name: Go vet
+        working-directory: api
+        run: go vet ./...
+
+      - name: Go build
+        working-directory: api
+        run: go build -o /tmp/live2d-api .
+
+      - name: Go test
+        working-directory: api
+        run: go test -v ./...
+
+  # ===== Frontend Build =====
+  frontend-build:
+    name: Next.js Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('web/package-lock.json') }}
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: TypeScript check
+        working-directory: web
+        run: npx tsc --noEmit
+
+      - name: Build
+        working-directory: web
+        run: npm run build
+
+  # ===== Docker Build =====
+  docker-build:
+    name: Docker Image Build
+    runs-on: ubuntu-latest
+    needs: [python-tests, go-build, frontend-build]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: live2d-master-agent:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===== Desktop Pet Package =====
+  package-pet:
+    name: Package Desktop Pet
+    runs-on: ubuntu-latest
+    needs: [python-tests]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0 libportaudio2 ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install Pillow numpy requests urllib3 httpx aiohttp aiofiles websockets psd-tools scipy scikit-learn cryptography rich opencv-python onnxruntime
+          pip install edge-tts || true
+          pip install rembg[cpu] || true
+          pip install "pygame>=2.5.0; python_version < '3.14'" || true
+
+      - name: Generate example pet package
+        run: |
+          python -m core.workflow "anime girl with blue hair, cat ears, white background" --deploy-desktop --output ./dist/pet
+
+      - name: Upload pet package
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-pet-package
+          path: ./dist/pet/
+
+  # ===== Release =====
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [python-tests, go-build, frontend-build, docker-build]
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*

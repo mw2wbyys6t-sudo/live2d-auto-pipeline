@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+
+# Build artifacts
+.next/
+dist/
+build/
+output/
+*.egg-info/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Models & large files
+*.onnx
+*.pth
+*.bin
+*.safetensors
+
+# Go build output
+*.exe
+api/live2d-api
+
+# Temporary
+.cache/
+tmp/
+*.tmp
+
+# Assets (keep directory structure but ignore large files)
+assets/characters/*.json
+assets/models/

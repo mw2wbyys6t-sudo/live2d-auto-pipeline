@@ -1,0 +1,42 @@
+version: "3.8"
+
+services:
+  # ===== Live2D Master Agent - All-in-one =====
+  live2d:
+    build: .
+    container_name: live2d-master-agent
+    ports:
+      - "8080:8080"   # Go API
+      - "3000:3000"   # Next.js Web UI
+    volumes:
+      - ./assets:/app/assets      # Characters, output, models
+      - ./output:/app/output      # Generated files
+      - ./.env:/app/.env:ro       # API keys
+    environment:
+      - GO_API_HOST=0.0.0.0
+      - GO_API_PORT=8080
+      - LIVE2D_PROJECT_ROOT=/app
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ===== Optional: Redis for task queue =====
+  redis:
+    image: redis:7-alpine
+    container_name: live2d-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    profiles:
+      - redis
+
+volumes:
+  redis_data:

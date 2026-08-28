@@ -1,0 +1,62 @@
+{
+  "layer_000": {
+    "vertex_count": 3202,
+    "triangle_count": 3776
+  },
+  "layer_001": {
+    "vertex_count": 2569,
+    "triangle_count": 1136
+  },
+  "layer_002": {
+    "vertex_count": 1621,
+    "triangle_count": 876
+  },
+  "layer_003": {
+    "vertex_count": 1292,
+    "triangle_count": 724
+  },
+  "layer_004": {
+    "vertex_count": 1067,
+    "triangle_count": 416
+  },
+  "layer_005": {
+    "vertex_count": 245,
+    "triangle_count": 164
+  },
+  "layer_006": {
+    "vertex_count": 269,
+    "triangle_count": 96
+  },
+  "layer_007": {
+    "vertex_count": 133,
+    "triangle_count": 76
+  },
+  "layer_008": {
+    "vertex_count": 204,
+    "triangle_count": 66
+  },
+  "layer_009": {
+    "vertex_count": 296,
+    "triangle_count": 19
+  },
+  "layer_010": {
+    "vertex_count": 311,
+    "triangle_count": 40
+  },
+  "layer_011": {
+    "vertex_count": 256,
+    "triangle_count": 39
+  },
+  "layer_012": {
+    "vertex_count": 60,
+    "triangle_count": 34
+  },
+  "layer_013": {
+    "vertex_count": 90,
+    "triangle_count": 28
+  },
+  "layer_014": {
+    "vertex_count": 45,
+    "triangle_count": 5
+  }
+}

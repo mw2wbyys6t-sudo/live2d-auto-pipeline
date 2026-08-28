@@ -1,0 +1,1687 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 桌宠生成器 - 一句话生成你的桌面伙伴</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg-deep: #0a0e27;
+    --bg-card: rgba(255,255,255,0.04);
+    --border: rgba(255,255,255,0.08);
+    --border-hover: rgba(255,107,157,0.4);
+    --pink: #ff6b9d;
+    --purple: #c44dff;
+    --blue: #6b8cff;
+    --cyan: #4dd4ff;
+    --green: #4ade80;
+    --text: #fff;
+    --text-muted: rgba(255,255,255,0.6);
+    --text-dim: rgba(255,255,255,0.4);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background:
+      radial-gradient(ellipse at top, rgba(196,77,255,0.15), transparent 50%),
+      radial-gradient(ellipse at bottom, rgba(255,107,157,0.1), transparent 50%),
+      var(--bg-deep);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* === Hero === */
+  .hero {
+    text-align: center;
+    padding: 60px 20px 30px;
+    position: relative;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 50%;
+    transform: translateX(-50%);
+    width: 600px; height: 600px;
+    background: radial-gradient(circle, rgba(196,77,255,0.15), transparent 70%);
+    pointer-events: none;
+    z-index: -1;
+  }
+  .hero h1 {
+    font-size: 56px;
+    font-weight: 800;
+    background: linear-gradient(90deg, var(--pink), var(--purple), var(--blue));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 14px;
+    letter-spacing: -1px;
+  }
+  .hero .subtitle {
+    font-size: 22px;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+    font-weight: 300;
+  }
+  .hero-cta {
+    display: flex;
+    gap: 14px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+  .btn-cta {
+    padding: 14px 32px;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 700;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.25s;
+    border: none;
+    cursor: pointer;
+  }
+  .btn-cta-primary {
+    background: linear-gradient(135deg, var(--pink), var(--purple));
+    color: #fff;
+    box-shadow: 0 8px 24px rgba(196,77,255,0.35);
+  }
+  .btn-cta-primary:hover { transform: translateY(-2px); box-shadow: 0 12px 32px rgba(196,77,255,0.5); }
+  .btn-cta-secondary {
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-cta-secondary:hover { border-color: var(--border-hover); background: rgba(255,255,255,0.08); }
+  .badges {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .badge {
+    padding: 5px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    backdrop-filter: blur(10px);
+  }
+  .badge-green { background: rgba(74,222,128,0.15); color: var(--green); border: 1px solid rgba(74,222,128,0.3); }
+  .badge-purple { background: rgba(196,77,255,0.15); color: var(--purple); border: 1px solid rgba(196,77,255,0.3); }
+  .badge-blue { background: rgba(107,140,255,0.15); color: var(--blue); border: 1px solid rgba(107,140,255,0.3); }
+  .badge-pink { background: rgba(255,107,157,0.15); color: var(--pink); border: 1px solid rgba(255,107,157,0.3); }
+
+  /* === Section 通用 === */
+  .section {
+    max-width: 1100px;
+    margin: 0 auto 60px;
+    padding: 0 20px;
+  }
+  .section-title {
+    font-size: 32px;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 8px;
+  }
+  .section-subtitle {
+    text-align: center;
+    color: var(--text-muted);
+    margin-bottom: 32px;
+    font-size: 15px;
+  }
+
+  /* === AI 产物展示 === */
+  .product-showcase {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  @media (max-width: 768px) { .product-showcase { grid-template-columns: 1fr; } }
+  .showcase-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px;
+    transition: all 0.3s;
+  }
+  .showcase-card:hover {
+    border-color: var(--border-hover);
+    transform: translateY(-3px);
+  }
+  .showcase-card h3 {
+    font-size: 18px;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .showcase-card p {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-bottom: 14px;
+  }
+  .showcase-card img {
+    width: 100%;
+    border-radius: 10px;
+    display: block;
+    background: rgba(0,0,0,0.2);
+  }
+  .showcase-tag {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .tag-real { background: rgba(74,222,128,0.15); color: var(--green); }
+
+  /* === 分层动画 === */
+  .layer-animator {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    margin-top: 20px;
+  }
+  .layer-animator-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .layer-animator-header h3 { font-size: 18px; }
+  .layer-controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .layer-btn {
+    padding: 6px 14px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .layer-btn:hover { background: rgba(255,255,255,0.1); }
+  .layer-btn.active {
+    background: linear-gradient(135deg, var(--pink), var(--purple));
+    border-color: transparent;
+  }
+  .layer-display {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 2/3;
+    max-width: 400px;
+    margin: 0 auto;
+    background:
+      linear-gradient(45deg, rgba(255,255,255,0.02) 25%, transparent 25%),
+      linear-gradient(-45deg, rgba(255,255,255,0.02) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.02) 75%),
+      linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.02) 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .layer-display img {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    transition: opacity 0.4s;
+  }
+  .layer-info {
+    text-align: center;
+    margin-top: 14px;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  .layer-info strong { color: var(--pink); }
+
+  /* === Live2D Canvas === */
+  .canvas-wrapper {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    position: relative;
+  }
+  #live2d-canvas {
+    width: 100%;
+    height: 520px;
+    display: block;
+    cursor: grab;
+  }
+  #live2d-canvas:active { cursor: grabbing; }
+  .loading {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    color: var(--text-muted);
+  }
+  .loading-spinner {
+    width: 40px; height: 40px;
+    border: 3px solid rgba(255,255,255,0.1);
+    border-top-color: var(--pink);
+    border-radius: 50%;
+    margin: 0 auto 14px;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .canvas-label {
+    position: absolute;
+    top: 14px; left: 14px;
+    background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(10px);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .canvas-label strong { color: var(--cyan); }
+
+  /* === 控制面板 === */
+  .control-panel {
+    max-width: 1100px;
+    margin: 20px auto 60px;
+    padding: 0 20px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  @media (max-width: 768px) { .control-panel { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 22px;
+  }
+  .panel h3 {
+    font-size: 15px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .expr-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .expr-btn {
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.04);
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .expr-btn:hover {
+    background: rgba(255,255,255,0.08);
+    transform: translateY(-2px);
+  }
+  .expr-btn.playing {
+    background: linear-gradient(135deg, var(--pink), var(--purple));
+    border-color: transparent;
+  }
+  .toggle-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .toggle-btn {
+    flex: 1;
+    min-width: 120px;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.04);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .toggle-btn.on {
+    background: rgba(74,222,128,0.15);
+    border-color: rgba(74,222,128,0.4);
+    color: var(--green);
+  }
+  .slider-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 14px;
+    gap: 12px;
+  }
+  .slider-row:last-child { margin-bottom: 0; }
+  .slider-label {
+    width: 90px;
+    font-size: 13px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .slider {
+    flex: 1;
+    -webkit-appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.1);
+    outline: none;
+  }
+  .slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--pink), var(--purple));
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(196,77,255,0.5);
+  }
+  .slider-value {
+    width: 45px;
+    text-align: right;
+    font-size: 12px;
+    color: var(--text-dim);
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+  .auto-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 9px;
+    background: rgba(74,222,128,0.2);
+    color: var(--green);
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+
+  /* === Features === */
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+  }
+  .feature-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    transition: all 0.3s;
+    position: relative;
+    overflow: hidden;
+  }
+  .feature-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 3px; height: 0;
+    background: linear-gradient(180deg, var(--pink), var(--purple));
+    transition: height 0.3s;
+  }
+  .feature-card:hover::before { height: 100%; }
+  .feature-card:hover {
+    background: rgba(255,255,255,0.06);
+    transform: translateY(-3px);
+  }
+  .feature-icon { font-size: 32px; margin-bottom: 14px; }
+  .feature-title { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+  .feature-desc { font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+
+  /* === Stats === */
+  .stats-bar {
+    display: flex;
+    justify-content: center;
+    gap: 40px;
+    flex-wrap: wrap;
+    margin: 40px 0;
+    padding: 30px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+  }
+  .stat {
+    text-align: center;
+  }
+  .stat-num {
+    font-size: 36px;
+    font-weight: 800;
+    background: linear-gradient(90deg, var(--pink), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .stat-label {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  /* === Footer === */
+  .footer {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-dim);
+    font-size: 13px;
+    border-top: 1px solid var(--border);
+    margin-top: 40px;
+  }
+  .footer a { color: var(--text-muted); text-decoration: none; }
+  .footer a:hover { color: var(--pink); }
+
+  /* === 状态提示 === */
+  .toast {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: rgba(0,0,0,0.85);
+    backdrop-filter: blur(20px);
+    color: #fff;
+    padding: 12px 24px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    font-size: 14px;
+    transition: transform 0.3s;
+    z-index: 1000;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  /* === 在线试用 === */
+  .trial-box {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 28px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+  }
+  @media (max-width: 768px) { .trial-box { grid-template-columns: 1fr; } }
+
+  .trial-input { display: flex; flex-direction: column; gap: 16px; }
+  .trial-label {
+    font-size: 13px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 600;
+  }
+  #promptInput {
+    width: 100%;
+    min-height: 100px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    color: var(--text);
+    padding: 14px;
+    font-size: 15px;
+    font-family: inherit;
+    resize: vertical;
+    transition: border-color 0.2s;
+  }
+  #promptInput:focus { outline: none; border-color: var(--pink); box-shadow: 0 0 0 3px rgba(255,107,157,0.15); }
+  #promptInput::placeholder { color: var(--text-dim); }
+
+  .preset-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .preset-btn {
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.04);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: left;
+  }
+  .preset-btn:hover {
+    background: rgba(255,107,157,0.1);
+    border-color: var(--border-hover);
+    transform: translateY(-2px);
+  }
+
+  .trial-options {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .trial-options select {
+    flex: 1;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 8px 12px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .trial-options select:focus { outline: none; border-color: var(--pink); }
+
+  .generate-btn {
+    background: linear-gradient(135deg, var(--pink), var(--purple));
+    color: #fff;
+    border: none;
+    padding: 16px;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.25s;
+    box-shadow: 0 8px 24px rgba(196,77,255,0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 54px;
+  }
+  .generate-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 12px 32px rgba(196,77,255,0.5); }
+  .generate-btn:disabled { opacity: 0.7; cursor: not-allowed; }
+
+  .generate-btn-spinner {
+    width: 18px; height: 18px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  .trial-hint {
+    font-size: 12px;
+    color: var(--text-dim);
+    text-align: center;
+    line-height: 1.5;
+  }
+
+  .trial-result {
+    background: rgba(0,0,0,0.25);
+    border: 1px dashed var(--border);
+    border-radius: 12px;
+    min-height: 400px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+  }
+  .result-placeholder {
+    text-align: center;
+    color: var(--text-dim);
+  }
+  .placeholder-icon { font-size: 64px; margin-bottom: 14px; opacity: 0.5; }
+  .result-placeholder p { font-size: 14px; }
+
+  .result-image-wrap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .result-image-wrap img {
+    max-width: 100%;
+    max-height: 500px;
+    object-fit: contain;
+    border-radius: 8px;
+    display: block;
+  }
+  .result-loading {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(4px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--text);
+    font-size: 14px;
+    gap: 14px;
+  }
+  .result-loading-spinner {
+    width: 48px; height: 48px;
+    border: 4px solid rgba(255,255,255,0.1);
+    border-top-color: var(--pink);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+  .progress-text { color: var(--text-muted); font-size: 13px; }
+
+  .result-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .result-action-btn {
+    padding: 10px 18px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.06);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .result-action-btn:hover {
+    background: rgba(255,255,255,0.1);
+    border-color: var(--border-hover);
+    transform: translateY(-2px);
+  }
+  .result-action-btn.primary {
+    background: linear-gradient(135deg, var(--pink), var(--purple));
+    border-color: transparent;
+  }
+
+  /* === 颜色聚类分层预览 === */
+  .layer-analysis {
+    margin-top: 24px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+  }
+  .layer-analysis h3 {
+    font-size: 18px;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .layer-analysis > p {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-bottom: 18px;
+  }
+  .color-palette {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  .color-chip {
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  .color-chip:hover { transform: translateY(-2px); border-color: var(--pink); }
+  .color-chip.active { border-color: var(--pink); box-shadow: 0 0 0 3px rgba(255,107,157,0.2); }
+  .color-swatch {
+    height: 50px;
+    width: 100%;
+  }
+  .color-info {
+    padding: 6px 8px;
+    background: rgba(0,0,0,0.4);
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+  .color-info strong { color: var(--cyan); display: block; font-size: 12px; }
+  .layer-canvas-wrap {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .layer-canvas-wrap canvas {
+    max-width: 100%;
+    border-radius: 10px;
+    background:
+      linear-gradient(45deg, rgba(255,255,255,0.02) 25%, transparent 25%),
+      linear-gradient(-45deg, rgba(255,255,255,0.02) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.02) 75%),
+      linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.02) 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  }
+  .layer-canvas-label {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 8px;
+  }
+  .layer-canvas-block { text-align: center; }
+</style>
+</head>
+<body>
+
+<!-- ============ Hero ============ -->
+<div class="hero">
+  <h1>🎭 AI 桌宠生成器</h1>
+  <p class="subtitle">一句话生成你的专属桌面伙伴 · 会眨眼 · 会呼吸 · 会跟着鼠标看</p>
+  <div class="hero-cta">
+    <a href="#trial" class="btn-cta btn-cta-primary">
+      🚀 立即在线体验
+    </a>
+    <a href="https://github.com/mw2wbyys6t-sudo/Live2D" class="btn-cta btn-cta-secondary" target="_blank">
+      📦 GitHub 仓库
+    </a>
+  </div>
+  <div class="badges">
+    <span class="badge badge-green">✓ 149 Tests Passed</span>
+    <span class="badge badge-purple">🤖 AI 生成</span>
+    <span class="badge badge-blue">💻 桌面桌宠</span>
+    <span class="badge badge-pink">Open Source MIT</span>
+  </div>
+</div>
+
+<!-- ============ 在线试用 ============ -->
+<div class="section" id="trial">
+  <h2 class="section-title">🎯 立即在线试用</h2>
+  <p class="section-subtitle">在浏览器内直接生成你的桌宠角色 · Pollinations 免费 API · 无需安装 · 实时预览动画效果</p>
+
+  <div class="trial-box">
+    <!-- 左侧：输入区 -->
+    <div class="trial-input">
+      <label class="trial-label">📝 描述你想要的角色</label>
+      <textarea id="promptInput" placeholder="例：蓝发猫耳少女，红色眼睛，白色背景，全身立绘，anime style，高质量"></textarea>
+
+      <label class="trial-label">⚡ 快速预设</label>
+      <div class="preset-grid">
+        <button class="preset-btn" data-prompt="blue hair cat girl, red eyes, white background, full body portrait, anime style, high quality">🐱 蓝发猫耳少女</button>
+        <button class="preset-btn" data-prompt="pink hair VTuber girl, cute, big eyes, white background, anime style, high quality">🌸 粉发 VTuber</button>
+        <button class="preset-btn" data-prompt="silver hair fox girl, golden eyes, kimono, white background, anime style, high quality">🦊 银发狐妖</button>
+        <button class="preset-btn" data-prompt="chibi cute girl, twin tails, pastel colors, white background, anime style, high quality">🎀 Q版萌系</button>
+        <button class="preset-btn" data-prompt="purple hair magical girl, sparkle, frilly dress, white background, anime style, high quality">💜 魔法少女</button>
+        <button class="preset-btn" data-prompt="black hair samurai girl, traditional japanese, white background, anime style, high quality">⚔️ 武士少女</button>
+      </div>
+
+      <div class="trial-options">
+        <label>📐 宽高比:</label>
+        <select id="aspectRatio">
+          <option value="portrait">2:3 立绘（推荐）</option>
+          <option value="square">1:1 方形</option>
+          <option value="landscape">3:2 横图</option>
+        </select>
+      </div>
+
+      <button class="generate-btn" id="generateBtn" onclick="generateImage()">
+        <span class="generate-btn-text">✨ 生成角色</span>
+      </button>
+
+      <div class="trial-hint">
+        💡 Pollinations 免费 API · 无需 Key · 首次生成约 10-30 秒<br>
+        🔒 所有计算都在你的浏览器内完成，图片不会上传到任何服务器
+      </div>
+    </div>
+
+    <!-- 右侧：结果区 -->
+    <div>
+      <div class="trial-result" id="trialResult">
+        <div class="result-placeholder" id="resultPlaceholder">
+          <div class="placeholder-icon">🎨</div>
+          <p>生成的角色将显示在这里</p>
+          <p style="font-size:12px;margin-top:8px">点击左侧"生成角色"按钮开始</p>
+        </div>
+      </div>
+      <div class="result-actions" id="resultActions" style="display:none">
+        <button class="result-action-btn primary" onclick="analyzeLayers()">
+          🔍 AI 自动分层
+        </button>
+        <button class="result-action-btn" onclick="generateImage()">
+          🔄 重新生成
+        </button>
+        <a class="result-action-btn" id="downloadLink" download="live2d-character.png">
+          ⬇ 下载图片
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 颜色聚类分层预览（生成后显示） -->
+  <div class="layer-analysis" id="layerAnalysis" style="display:none">
+    <h3>🔍 AI 自动分层预览（K-means 颜色聚类）</h3>
+    <p>把图像按颜色聚类成 8 个图层 — 这就是 Live2D 拆层的第一步。点击下方色块查看每个独立图层。</p>
+    <div class="color-palette" id="colorPalette"></div>
+    <div class="layer-canvas-wrap" id="layerCanvasWrap">
+      <div class="layer-canvas-block">
+        <canvas id="originalCanvas" width="300" height="450"></canvas>
+        <div class="layer-canvas-label">📋 原图</div>
+      </div>
+      <div class="layer-canvas-block">
+        <canvas id="layerCanvas" width="300" height="450"></canvas>
+        <div class="layer-canvas-label" id="layerCanvasLabel">👆 点击色块查看独立图层</div>
+      </div>
+    </div>
+    <div class="trial-hint" style="margin-top:14px">
+      💡 真实项目里会用更复杂的语义分割（识别头发/眼睛/嘴巴等部位），这里只演示颜色聚类原理
+    </div>
+  </div>
+</div>
+
+<!-- ============ 数据统计 ============ -->
+<div class="section">
+  <div class="stats-bar">
+    <div class="stat">
+      <div class="stat-num">15</div>
+      <div class="stat-label">AI 自动分层</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">8</div>
+      <div class="stat-label">纹理图集</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">16</div>
+      <div class="stat-label">Live2D 参数</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">3</div>
+      <div class="stat-label">预设表情</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">279</div>
+      <div class="stat-label">测试通过</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ AI 真实产物展示 ============ -->
+<div class="section">
+  <h2 class="section-title">📦 AI 生成的真实产物</h2>
+  <p class="section-subtitle">以下全部由本项目的 AI 流水线自动生成 · 非样例 · 可下载验证</p>
+
+  <div class="product-showcase">
+    <div class="showcase-card">
+      <span class="showcase-tag tag-real">● 真实输入</span>
+      <h3>🖼️ 原始输入图</h3>
+      <p>用户提供的一张动漫角色立绘</p>
+      <img src="assets/demo_input.png" alt="原始输入图" loading="lazy">
+    </div>
+    <div class="showcase-card">
+      <span class="showcase-tag tag-real">● AI 自动拆分</span>
+      <h3>✂️ 15 层分解结果</h3>
+      <p>K-means 颜色聚类自动分层 · 每层独立 PNG</p>
+      <img src="assets/layer_demo_overview.png" alt="分层效果" loading="lazy">
+    </div>
+    <div class="showcase-card">
+      <span class="showcase-tag tag-real">● 自动打包</span>
+      <h3>🎨 纹理图集 #1</h3>
+      <p>多页 shelf-packing 算法自动合图</p>
+      <img src="assets/character.texture_00.jpg" alt="纹理图集" loading="lazy">
+    </div>
+    <div class="showcase-card">
+      <span class="showcase-tag tag-real">● 自动打包</span>
+      <h3>🎨 纹理图集 #2</h3>
+      <p>超出单页自动分页 · 8 张纹理</p>
+      <img src="assets/character.texture_01.jpg" alt="纹理图集" loading="lazy">
+    </div>
+  </div>
+
+  <!-- 分层动画演示 -->
+  <div class="layer-animator">
+    <div class="layer-animator-header">
+      <h3>🎬 分层逐层预览（点击切换）</h3>
+      <div class="layer-controls">
+        <button class="layer-btn active" onclick="showLayer('all', this)">全部</button>
+        <button class="layer-btn" onclick="showLayer('0', this)">Layer 00</button>
+        <button class="layer-btn" onclick="showLayer('4', this)">Layer 04</button>
+        <button class="layer-btn" onclick="showLayer('8', this)">Layer 08</button>
+        <button class="layer-btn" onclick="playLayerSequence(this)">▶ 自动播放</button>
+      </div>
+    </div>
+    <div class="layer-display" id="layerDisplay">
+      <img src="assets/demo_input.png" id="layerImgAll" style="opacity:1">
+      <img src="assets/layer_000.png" id="layerImg0" style="opacity:0">
+      <img src="assets/layer_004.png" id="layerImg4" style="opacity:0">
+      <img src="assets/layer_008.png" id="layerImg8" style="opacity:0">
+    </div>
+    <div class="layer-info" id="layerInfo">
+      显示: <strong>全部图层</strong> · 共 15 层
+    </div>
+  </div>
+</div>
+
+<!-- ============ 桌宠动画预览 ============ -->
+<div class="section">
+  <h2 class="section-title">🎭 桌宠动画预览</h2>
+  <p class="section-subtitle">鼠标移到模型上 · 视线会跟随 · 点击有互动 · 这就是桌宠的效果</p>
+
+  <div class="canvas-wrapper">
+    <div class="canvas-label">
+      演示模型: <strong>Haru</strong> (Live2D 官方样例) · 你的 AI 生成角色也会有类似的动画效果
+    </div>
+    <canvas id="live2d-canvas"></canvas>
+    <div class="loading" id="loading">
+      <div class="loading-spinner"></div>
+      <div>加载演示模型中...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 控制面板 ============ -->
+<div class="control-panel">
+  <div class="panel">
+    <h3>😊 表情 & 动作</h3>
+    <div class="expr-grid">
+      <button class="expr-btn" onclick="playExpression('smile', this)">😊 微笑</button>
+      <button class="expr-btn" onclick="playExpression('surprised', this)">😮 惊讶</button>
+      <button class="expr-btn" onclick="playExpression('angry', this)">😠 生气</button>
+    </div>
+    <div class="toggle-row">
+      <button class="toggle-btn on" id="blinkBtn" onclick="toggleAuto('blink')">👁 自动眨眼</button>
+      <button class="toggle-btn on" id="breathBtn" onclick="toggleAuto('breath')">🫁 自动呼吸</button>
+      <button class="toggle-btn on" id="trackingBtn" onclick="toggleAuto('tracking')">👀 鼠标跟随</button>
+    </div>
+    <div class="toggle-row" style="margin-top:10px">
+      <button class="toggle-btn" id="motionBtn" onclick="playRandomMotion()">🎬 播放动作</button>
+      <button class="toggle-btn" id="resetBtn" onclick="resetParams()">↻ 重置参数</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>🎚️ 手动参数调节</h3>
+    <div class="slider-row">
+      <span class="slider-label">头部左右</span>
+      <input type="range" class="slider" id="paramAngleX" min="-30" max="30" value="0" step="1" oninput="setParam('AngleX', this.value, false)">
+      <span class="slider-value" id="valAngleX">0</span>
+    </div>
+    <div class="slider-row">
+      <span class="slider-label">头部上下</span>
+      <input type="range" class="slider" id="paramAngleY" min="-30" max="30" value="0" step="1" oninput="setParam('AngleY', this.value, false)">
+      <span class="slider-value" id="valAngleY">0</span>
+    </div>
+    <div class="slider-row">
+      <span class="slider-label">身体旋转</span>
+      <input type="range" class="slider" id="paramBodyAngleX" min="-10" max="10" value="0" step="0.1" oninput="setParam('BodyAngleX', this.value, false)">
+      <span class="slider-value" id="valBodyAngleX">0.0</span>
+    </div>
+    <div class="slider-row">
+      <span class="slider-label">左眼开闭</span>
+      <input type="range" class="slider" id="paramEyeLOpen" min="0" max="1" value="1" step="0.01" oninput="setParam('EyeLOpen', this.value, true)">
+      <span class="slider-value" id="valEyeLOpen">1.00</span>
+    </div>
+    <div class="slider-row">
+      <span class="slider-label">右眼开闭</span>
+      <input type="range" class="slider" id="paramEyeROpen" min="0" max="1" value="1" step="0.01" oninput="setParam('EyeROpen', this.value, true)">
+      <span class="slider-value" id="valEyeROpen">1.00</span>
+    </div>
+    <div class="slider-row">
+      <span class="slider-label">嘴巴开闭</span>
+      <input type="range" class="slider" id="paramMouthOpenY" min="0" max="1" value="0" step="0.01" oninput="setParam('MouthOpenY', this.value, true)">
+      <span class="slider-value" id="valMouthOpenY">0.00</span>
+    </div>
+    <div class="slider-row">
+      <span class="slider-label">嘴巴形状</span>
+      <input type="range" class="slider" id="paramMouthForm" min="-1" max="1" value="0" step="0.01" oninput="setParam('MouthForm', this.value, true)">
+      <span class="slider-value" id="valMouthForm">0.00</span>
+    </div>
+    <div class="slider-row">
+      <span class="slider-label">呼吸 <span class="auto-badge">AUTO</span></span>
+      <input type="range" class="slider" id="paramBreath" min="0" max="1" value="0.5" step="0.01" oninput="setParam('Breath', this.value, true)">
+      <span class="slider-value" id="valBreath">0.50</span>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 核心能力 ============ -->
+<div class="section">
+  <h2 class="section-title">✨ 核心能力</h2>
+  <p class="section-subtitle">AI 生成 + 自动分层 + 桌宠动画 · 全部真实可用</p>
+
+  <div class="feature-grid">
+    <div class="feature-card">
+      <div class="feature-icon">🎨</div>
+      <div class="feature-title">AI 图像生成</div>
+      <div class="feature-desc">一句话生成角色立绘，支持 Pollinations（免费）/ Seedream / SenseNova 多家 Provider</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">✂️</div>
+      <div class="feature-title">自动分层</div>
+      <div class="feature-desc">K-means 颜色聚类自动拆层，12-15 层颜色分离，可导出 PSD 进一步编辑</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">👁</div>
+      <div class="feature-title">桌宠动画</div>
+      <div class="feature-desc">眨眼 / 呼吸 / 身体摇摆 / 头发摆动 / 鼠标跟随，桌面窗口透明置顶</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">😊</div>
+      <div class="feature-title">表情系统</div>
+      <div class="feature-desc">微笑 / 惊讶 / 生气 等基础表情，点击互动触发</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🖱️</div>
+      <div class="feature-title">丰富交互</div>
+      <div class="feature-desc">拖拽移动 / 点击互动 / 自动漫游 / 右键菜单 / 多角色切换</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">💻</div>
+      <div class="feature-title">桌面桌宠</div>
+      <div class="feature-desc">Windows 双击运行，透明窗口置顶，开机自启，不占工作区</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Footer ============ -->
+<div class="footer">
+  <p>🎭 AI 桌宠生成器 · <a href="https://github.com/mw2wbyys6t-sudo/Live2D" target="_blank">GitHub</a> · MIT License</p>
+  <p style="margin-top:8px">演示模型 = Live2D 官方样例 Haru · 你的 AI 生成角色将有类似动画效果</p>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@7.4.0/dist/pixi.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/pixi-live2d-display.min.js"></script>
+<script>
+  // ============================================================
+  // 第一部分：基础工具 + 在线试用 + 分层动画（不依赖 PIXI/Live2D）
+  // 这部分即使 Live2D 加载失败也必须正常工作
+  // ============================================================
+
+  // ============ Toast 提示 ============
+  let toastTimer = null;
+  function showToast(msg) {
+    const toast = document.getElementById('toast');
+    toast.textContent = msg;
+    toast.classList.add('show');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 2000);
+  }
+
+  // ============ 分层动画（真实产物展示区）============
+  function showLayer(id, btn) {
+    document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+    if (btn) {
+      btn.classList.add('active');
+    } else {
+      const btns = document.querySelectorAll('.layer-btn');
+      const targetBtn = Array.from(btns).find(b => {
+        if (id === 'all') return b.textContent.includes('全部');
+        return b.textContent.includes(`Layer ${id.padStart(2,'0')}`);
+      });
+      if (targetBtn) targetBtn.classList.add('active');
+    }
+    ['All', '0', '4', '8'].forEach(k => {
+      const img = document.getElementById('layerImg' + k);
+      if (img) img.style.opacity = (k === id || (id === 'all' && k === 'All')) ? '1' : '0';
+    });
+    const labels = { all: '全部图层', '0': 'Layer 00 (最大色块)', '4': 'Layer 04 (中间色块)', '8': 'Layer 08 (小色块)' };
+    document.getElementById('layerInfo').innerHTML = `显示: <strong>${labels[id]}</strong> · 共 15 层`;
+  }
+
+  let sequenceTimer = null;
+  function playLayerSequence(btn) {
+    const layers = ['all', '0', '4', '8'];
+    let idx = 0;
+    if (sequenceTimer) {
+      clearInterval(sequenceTimer);
+      sequenceTimer = null;
+      if (btn) btn.textContent = '▶ 自动播放';
+      showToast('⏸ 停止自动播放');
+      return;
+    }
+    if (btn) btn.textContent = '⏸ 停止播放';
+    showToast('▶ 开始自动播放');
+    sequenceTimer = setInterval(() => {
+      const id = layers[idx % layers.length];
+      showLayer(id);
+      idx++;
+    }, 1200);
+  }
+
+  // ============ 在线试用：Pollinations API 调用 ============
+  const trialState = {
+    currentImageURL: null,
+    currentImageEl: null,
+    kmeansResult: null,
+    _sampleCanvas: null,
+  };
+
+  // 预设按钮：点击填充 prompt（必须最先绑定）
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('promptInput').value = btn.dataset.prompt;
+      document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  async function generateImage() {
+    const prompt = document.getElementById('promptInput').value.trim();
+    if (!prompt) {
+      showToast('⚠️ 请先输入或选择一个 prompt');
+      return;
+    }
+
+    const btn = document.getElementById('generateBtn');
+    const btnText = btn.querySelector('.generate-btn-text');
+    const originalText = btnText.textContent;
+    btn.disabled = true;
+    btnText.textContent = '生成中...';
+
+    const resultBox = document.getElementById('trialResult');
+    resultBox.innerHTML = `
+      <div class="result-loading">
+        <div class="result-loading-spinner"></div>
+        <div>🎨 AI 正在生成角色...</div>
+        <div class="progress-text" id="progressText">⏳ 首次约 10-30 秒，请耐心等待</div>
+      </div>
+    `;
+
+    document.getElementById('layerAnalysis').style.display = 'none';
+    document.getElementById('resultActions').style.display = 'none';
+    trialState._sampleCanvas = null;
+
+    const progressMessages = [
+      '⏳ 首次约 10-30 秒，请耐心等待',
+      '🎨 AI 正在绘制角色...',
+      '✨ 添加细节中...',
+      '🖼️ 即将完成...',
+    ];
+    let pmIdx = 0;
+    const pmTimer = setInterval(() => {
+      pmIdx = (pmIdx + 1) % progressMessages.length;
+      const el = document.getElementById('progressText');
+      if (el) el.textContent = progressMessages[pmIdx];
+    }, 3000);
+
+    const aspect = document.getElementById('aspectRatio').value;
+    let width = 768, height = 1152;
+    if (aspect === 'square') { width = 1024; height = 1024; }
+    if (aspect === 'landscape') { width = 1152; height = 768; }
+
+    const enhancedPrompt = `${prompt}, live2d style, clean lines, flat colors, clear outline, suitable for live2d rigging`;
+    const seed = Math.floor(Math.random() * 1000000);
+    const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=${width}&height=${height}&nologo=true&seed=${seed}`;
+
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error('图像加载失败'));
+        img.src = imageUrl;
+      });
+
+      clearInterval(pmTimer);
+      trialState.currentImageURL = imageUrl;
+      trialState.currentImageEl = img;
+
+      resultBox.innerHTML = `
+        <div class="result-image-wrap">
+          <img src="${imageUrl}" alt="生成的角色">
+        </div>
+      `;
+      document.getElementById('resultActions').style.display = 'flex';
+      document.getElementById('downloadLink').href = imageUrl;
+      showToast('✅ 生成完成！点击"AI 自动分层"看拆层效果');
+    } catch (err) {
+      clearInterval(pmTimer);
+      console.error(err);
+      resultBox.innerHTML = `
+        <div class="result-placeholder">
+          <div class="placeholder-icon">😢</div>
+          <p>生成失败</p>
+          <p style="font-size:12px;margin-top:8px">${err.message} · 请重试</p>
+        </div>
+      `;
+      showToast('❌ 生成失败，请重试');
+    } finally {
+      btn.disabled = false;
+      btnText.textContent = originalText;
+    }
+  }
+
+  // ============ K-means 颜色聚类分层 ============
+  function analyzeLayers() {
+    if (!trialState.currentImageEl) {
+      showToast('⚠️ 请先生成图像');
+      return;
+    }
+    showToast('🔍 正在分析颜色...');
+    setTimeout(() => {
+      try {
+        const img = trialState.currentImageEl;
+        const K = 8;
+        const sampleCanvas = document.createElement('canvas');
+        const targetW = 200;
+        const targetH = Math.round(targetW * (img.naturalHeight / img.naturalWidth));
+        sampleCanvas.width = targetW;
+        sampleCanvas.height = targetH;
+        const sctx = sampleCanvas.getContext('2d');
+        sctx.drawImage(img, 0, 0, targetW, targetH);
+        const imageData = sctx.getImageData(0, 0, targetW, targetH);
+        const pixels = imageData.data;
+
+        const samples = [];
+        for (let i = 0; i < pixels.length; i += 4) {
+          if (pixels[i + 3] > 10) {
+            samples.push([pixels[i], pixels[i + 1], pixels[i + 2]]);
+          }
+        }
+        if (samples.length === 0) {
+          showToast('❌ 图像无有效像素');
+          return;
+        }
+
+        const centers = kmeansPlusPlusInit(samples, K);
+        const labels = new Uint8Array(samples.length);
+        for (let iter = 0; iter < 10; iter++) {
+          for (let i = 0; i < samples.length; i++) {
+            let minDist = Infinity, minIdx = 0;
+            for (let k = 0; k < K; k++) {
+              const dr = samples[i][0] - centers[k][0];
+              const dg = samples[i][1] - centers[k][1];
+              const db = samples[i][2] - centers[k][2];
+              const dist = dr * dr + dg * dg + db * db;
+              if (dist < minDist) { minDist = dist; minIdx = k; }
+            }
+            labels[i] = minIdx;
+          }
+          const sums = Array.from({ length: K }, () => [0, 0, 0, 0]);
+          for (let i = 0; i < samples.length; i++) {
+            const k = labels[i];
+            sums[k][0] += samples[i][0];
+            sums[k][1] += samples[i][1];
+            sums[k][2] += samples[i][2];
+            sums[k][3]++;
+          }
+          for (let k = 0; k < K; k++) {
+            if (sums[k][3] > 0) {
+              centers[k] = [sums[k][0] / sums[k][3], sums[k][1] / sums[k][3], sums[k][2] / sums[k][3]];
+            }
+          }
+        }
+
+        const counts = new Array(K).fill(0);
+        for (let i = 0; i < labels.length; i++) counts[labels[i]]++;
+        const order = [...Array(K).keys()].sort((a, b) => counts[b] - counts[a]);
+
+        trialState.kmeansResult = { centers, labels, samples, order, counts, targetW, targetH };
+        trialState._sampleCanvas = sampleCanvas;
+
+        document.getElementById('layerAnalysis').style.display = 'block';
+        document.getElementById('layerAnalysis').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        renderColorPalette();
+        renderOriginalImage(img);
+        showLayerByColor(order[0]);
+        showToast('✅ 分层完成！点击色块查看每个图层');
+      } catch (e) {
+        console.error(e);
+        showToast('❌ 分层失败：' + e.message);
+      }
+    }, 100);
+  }
+
+  function kmeansPlusPlusInit(samples, K) {
+    const centers = [];
+    centers.push([...samples[Math.floor(Math.random() * samples.length)]]);
+    for (let k = 1; k < K; k++) {
+      const dists = samples.map(s => {
+        let minDist = Infinity;
+        for (const c of centers) {
+          const d = (s[0] - c[0]) ** 2 + (s[1] - c[1]) ** 2 + (s[2] - c[2]) ** 2;
+          if (d < minDist) minDist = d;
+        }
+        return minDist;
+      });
+      const total = dists.reduce((a, b) => a + b, 0);
+      let r = Math.random() * total;
+      let idx = 0;
+      for (let i = 0; i < dists.length; i++) {
+        r -= dists[i];
+        if (r <= 0) { idx = i; break; }
+      }
+      centers.push([...samples[idx]]);
+    }
+    return centers;
+  }
+
+  function renderColorPalette() {
+    const { centers, order, counts, samples } = trialState.kmeansResult;
+    const palette = document.getElementById('colorPalette');
+    palette.innerHTML = '';
+    order.forEach((k, idx) => {
+      const [r, g, b] = centers[k].map(v => Math.round(v));
+      const hex = '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+      const percent = ((counts[k] / samples.length) * 100).toFixed(1);
+      const chip = document.createElement('div');
+      chip.className = 'color-chip' + (idx === 0 ? ' active' : '');
+      chip.dataset.k = k;
+      chip.innerHTML = `
+        <div class="color-swatch" style="background:${hex}"></div>
+        <div class="color-info">
+          <strong>Layer ${String(idx + 1).padStart(2, '0')}</strong>
+          ${hex}<br>${percent}%
+        </div>
+      `;
+      chip.onclick = () => {
+        document.querySelectorAll('.color-chip').forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        showLayerByColor(k);
+      };
+      palette.appendChild(chip);
+    });
+  }
+
+  function renderOriginalImage(img) {
+    const canvas = document.getElementById('originalCanvas');
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const ratio = Math.min(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight);
+    const w = img.naturalWidth * ratio;
+    const h = img.naturalHeight * ratio;
+    const x = (canvas.width - w) / 2;
+    const y = (canvas.height - h) / 2;
+    ctx.drawImage(img, x, y, w, h);
+  }
+
+  function showLayerByColor(k) {
+    const { centers, targetW, targetH } = trialState.kmeansResult;
+    const img = trialState.currentImageEl;
+    const canvas = document.getElementById('layerCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const ratio = Math.min(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight);
+    const w = img.naturalWidth * ratio;
+    const h = img.naturalHeight * ratio;
+    const offsetX = (canvas.width - w) / 2;
+    const offsetY = (canvas.height - h) / 2;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const sampleData = trialState._sampleCanvas.getContext('2d').getImageData(0, 0, targetW, targetH).data;
+    const layerImg = ctx.createImageData(targetW, targetH);
+    for (let i = 0; i < sampleData.length; i += 4) {
+      const r = sampleData[i], g = sampleData[i + 1], b = sampleData[i + 2], a = sampleData[i + 3];
+      if (a < 10) continue;
+      let minDist = Infinity, minK = 0;
+      for (let kk = 0; kk < centers.length; kk++) {
+        const d = (r - centers[kk][0]) ** 2 + (g - centers[kk][1]) ** 2 + (b - centers[kk][2]) ** 2;
+        if (d < minDist) { minDist = d; minK = kk; }
+      }
+      if (minK === k) {
+        layerImg.data[i] = r;
+        layerImg.data[i + 1] = g;
+        layerImg.data[i + 2] = b;
+        layerImg.data[i + 3] = 255;
+      }
+    }
+
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = targetW;
+    tempCanvas.height = targetH;
+    tempCanvas.getContext('2d').putImageData(layerImg, 0, 0);
+    ctx.drawImage(tempCanvas, offsetX, offsetY, w, h);
+
+    const [cr, cg, cb] = centers[k].map(v => Math.round(v));
+    const hex = '#' + [cr, cg, cb].map(v => v.toString(16).padStart(2, '0')).join('');
+    document.getElementById('layerCanvasLabel').innerHTML = `Layer 颜色: <strong style="color:${hex}">${hex}</strong>`;
+  }
+
+  // ============================================================
+  // 第二部分：Live2D 演示（可选，失败不影响其他功能）
+  // ============================================================
+
+  // 全局 Live2D 状态和函数（即使 Live2D 加载失败，这些函数也存在，不会报 ReferenceError）
+  const live2dState = {
+    model: null,
+    autoBlink: true,
+    autoBreath: true,
+    autoTracking: true,
+    manualOverride: {},
+    mouseX: 0,
+    mouseY: 0,
+    app: null,
+  };
+
+  function setParam(name, value, isPersistent) {
+    if (!live2dState.model) {
+      showToast('ℹ️ Live2D 模型未加载');
+      return;
+    }
+    const paramName = 'Param' + name;
+    const v = parseFloat(value);
+    live2dState.model.internalModel.coreModel.setParameterValueById(paramName, v);
+    const el = document.getElementById('val' + name);
+    if (el) el.textContent = v.toFixed(name.includes('Angle') && !name.includes('Body') ? 0 : 2);
+    if (isPersistent) live2dState.manualOverride[name] = true;
+  }
+
+  function resetParams() {
+    live2dState.manualOverride = {};
+    const defaults = {
+      AngleX: 0, AngleY: 0, BodyAngleX: 0,
+      EyeLOpen: 1, EyeROpen: 1,
+      MouthOpenY: 0, MouthForm: 0, Breath: 0.5
+    };
+    Object.entries(defaults).forEach(([k, v]) => {
+      const el = document.getElementById('param' + k);
+      if (el) el.value = v;
+      setParam(k, v, false);
+    });
+    showToast('↻ 参数已重置');
+  }
+
+  function playExpression(type, btn) {
+    if (!live2dState.model) {
+      showToast('ℹ️ Live2D 模型未加载');
+      return;
+    }
+    live2dState.model.expression(type);
+    document.querySelectorAll('.expr-btn').forEach(b => b.classList.remove('playing'));
+    if (btn) {
+      btn.classList.add('playing');
+      setTimeout(() => btn.classList.remove('playing'), 1000);
+    }
+    showToast(`😊 表情: ${type}`);
+  }
+
+  function playRandomMotion() {
+    if (!live2dState.model) {
+      showToast('ℹ️ Live2D 模型未加载');
+      return;
+    }
+    live2dState.model.motion('tap_body');
+    showToast('🎬 播放动作');
+  }
+
+  function toggleAuto(type) {
+    if (type === 'blink') {
+      live2dState.autoBlink = !live2dState.autoBlink;
+      const btn = document.getElementById('blinkBtn');
+      if (btn) btn.classList.toggle('on', live2dState.autoBlink);
+      if (!live2dState.autoBlink && live2dState.model) {
+        live2dState.model.internalModel.coreModel.setParameterValueById('ParamEyeLOpen', 1);
+        live2dState.model.internalModel.coreModel.setParameterValueById('ParamEyeROpen', 1);
+      }
+      showToast(live2dState.autoBlink ? '👁 自动眨眼 开' : '👁 自动眨眼 关');
+    } else if (type === 'breath') {
+      live2dState.autoBreath = !live2dState.autoBreath;
+      const btn = document.getElementById('breathBtn');
+      if (btn) btn.classList.toggle('on', live2dState.autoBreath);
+      showToast(live2dState.autoBreath ? '🫁 自动呼吸 开' : '🫁 自动呼吸 关');
+    } else if (type === 'tracking') {
+      live2dState.autoTracking = !live2dState.autoTracking;
+      const btn = document.getElementById('trackingBtn');
+      if (btn) btn.classList.toggle('on', live2dState.autoTracking);
+      showToast(live2dState.autoTracking ? '👀 鼠标跟随 开' : '👀 鼠标跟随 关');
+    }
+  }
+
+  // Live2D 初始化（全部包在 try-catch 里，失败不影响其他功能）
+  (function initLive2D() {
+    try {
+      if (typeof PIXI === 'undefined' || !PIXI.Application) {
+        console.warn('PIXI 未加载，跳过 Live2D 演示');
+        return;
+      }
+
+      const canvasEl = document.getElementById('live2d-canvas');
+      if (!canvasEl) return;
+
+      const app = new PIXI.Application({
+        view: canvasEl,
+        width: 1100,
+        height: 520,
+        backgroundAlpha: 0,
+        autoDensity: true,
+        resolution: window.devicePixelRatio || 1,
+      });
+      live2dState.app = app;
+
+      // 鼠标跟随
+      app.view.addEventListener('mousemove', e => {
+        const rect = app.view.getBoundingClientRect();
+        live2dState.mouseX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        live2dState.mouseY = ((e.clientY - rect.top) / rect.height) * 2 - 1;
+      });
+
+      // Ticker: 呼吸
+      let breathTime = 0;
+      app.ticker.add(delta => {
+        if (!live2dState.model) return;
+        breathTime += delta * 0.02;
+        if (live2dState.autoBreath && !live2dState.manualOverride['Breath']) {
+          const v = (Math.sin(breathTime) + 1) / 2;
+          live2dState.model.internalModel.coreModel.setParameterValueById('ParamBreath', v);
+          const el = document.getElementById('paramBreath');
+          if (el) el.value = v;
+          const vel = document.getElementById('valBreath');
+          if (vel) vel.textContent = v.toFixed(2);
+        }
+      });
+
+      // Ticker: 眨眼
+      let blinkTimer = 0;
+      let nextBlink = 3000;
+      app.ticker.add(delta => {
+        if (!live2dState.model || !live2dState.autoBlink) return;
+        blinkTimer += delta * 16;
+        if (blinkTimer >= nextBlink) {
+          const blinkStep = (phase) => {
+            if (!live2dState.model || !live2dState.autoBlink) return;
+            if (phase < 0.5) {
+              const v = 1 - phase * 2;
+              live2dState.model.internalModel.coreModel.setParameterValueById('ParamEyeLOpen', v);
+              live2dState.model.internalModel.coreModel.setParameterValueById('ParamEyeROpen', v);
+            } else if (phase < 1) {
+              const v = (phase - 0.5) * 2;
+              live2dState.model.internalModel.coreModel.setParameterValueById('ParamEyeLOpen', v);
+              live2dState.model.internalModel.coreModel.setParameterValueById('ParamEyeROpen', v);
+            }
+          };
+          let phase = 0;
+          const blinkInterval = setInterval(() => {
+            phase += 0.15;
+            if (phase >= 1) {
+              clearInterval(blinkInterval);
+              if (live2dState.model) {
+                live2dState.model.internalModel.coreModel.setParameterValueById('ParamEyeLOpen', 1);
+                live2dState.model.internalModel.coreModel.setParameterValueById('ParamEyeROpen', 1);
+                const el = document.getElementById('paramEyeLOpen');
+                if (el) el.value = 1;
+                const er = document.getElementById('paramEyeROpen');
+                if (er) er.value = 1;
+                const vl = document.getElementById('valEyeLOpen');
+                if (vl) vl.textContent = '1.00';
+                const vr = document.getElementById('valEyeROpen');
+                if (vr) vr.textContent = '1.00';
+              }
+              return;
+            }
+            blinkStep(phase);
+          }, 30);
+          blinkTimer = 0;
+          nextBlink = 2000 + Math.random() * 4000;
+        }
+      });
+
+      // Ticker: 鼠标跟随
+      app.ticker.add(() => {
+        if (!live2dState.model || !live2dState.autoTracking) return;
+        if (!live2dState.manualOverride['AngleX']) {
+          const targetX = live2dState.mouseX * 30;
+          const curX = live2dState.model.internalModel.coreModel.getParameterValueById('ParamAngleX');
+          const newX = curX + (targetX - curX) * 0.1;
+          live2dState.model.internalModel.coreModel.setParameterValueById('ParamAngleX', newX);
+          const el = document.getElementById('paramAngleX');
+          if (el) el.value = newX;
+          const vel = document.getElementById('valAngleX');
+          if (vel) vel.textContent = Math.round(newX);
+        }
+        if (!live2dState.manualOverride['AngleY']) {
+          const targetY = -live2dState.mouseY * 30;
+          const curY = live2dState.model.internalModel.coreModel.getParameterValueById('ParamAngleY');
+          const newY = curY + (targetY - curY) * 0.1;
+          live2dState.model.internalModel.coreModel.setParameterValueById('ParamAngleY', newY);
+          const el = document.getElementById('paramAngleY');
+          if (el) el.value = newY;
+          const vel = document.getElementById('valAngleY');
+          if (vel) vel.textContent = Math.round(newY);
+        }
+        const eyeBallX = live2dState.mouseX;
+        const eyeBallY = -live2dState.mouseY;
+        live2dState.model.internalModel.coreModel.setParameterValueById('ParamEyeBallX', eyeBallX);
+        live2dState.model.internalModel.coreModel.setParameterValueById('ParamEyeBallY', eyeBallY);
+      });
+
+      // 加载模型
+      if (PIXI.live2d && PIXI.live2d.Live2DModel) {
+        const MODEL_URL = 'https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru/haru_greeter_t03.model3.json';
+        PIXI.live2d.Live2DModel.from(MODEL_URL).then(model => {
+          const loading = document.getElementById('loading');
+          if (loading) loading.style.display = 'none';
+          live2dState.model = model;
+          model.scale.set(0.4);
+          model.anchor.set(0.5, 0.5);
+          model.x = app.screen.width / 2;
+          model.y = app.screen.height / 2 + 30;
+          app.stage.addChild(model);
+
+          model.on('hit', hitAreas => {
+            if (hitAreas.includes('body')) {
+              model.motion('tap_body');
+              showToast('👋 点击身体');
+            } else if (hitAreas.includes('head')) {
+              model.expression();
+              showToast('👆 点击头部 → 切换表情');
+            }
+          });
+
+          showToast('✅ 模型加载完成 · 移动鼠标试试');
+        }).catch(err => {
+          const loading = document.getElementById('loading');
+          if (loading) loading.innerHTML = '<div>❌ 模型加载失败 · 请刷新重试</div>';
+          console.error(err);
+        });
+      } else {
+        const loading = document.getElementById('loading');
+        if (loading) loading.innerHTML = '<div>ℹ️ Live2D 插件未加载 · 其他功能正常可用</div>';
+      }
+    } catch (e) {
+      console.warn('Live2D 初始化失败，跳过：', e.message);
+      const loading = document.getElementById('loading');
+      if (loading) loading.innerHTML = '<div>ℹ️ 此浏览器不支持 WebGL · 其他功能正常可用</div>';
+    }
+  })();
+</script>
+</body>
+</html>

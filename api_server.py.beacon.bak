@@ -1,0 +1,652 @@
+"""
+Live2D Master Agent - Python FastAPI Server
+替代 Go API 的 Python 实现，提供兼容的 API 端点
+"""
+import os
+import sys
+import json
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+# 添加项目根目录到 Python 路径
+PROJECT_ROOT = Path(__file__).parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+# 配置
+OUTPUT_DIR = PROJECT_ROOT / "output"
+ASSETS_DIR = PROJECT_ROOT / "assets"
+CHARACTERS_DIR = ASSETS_DIR / "characters"
+
+# 确保目录存在
+OUTPUT_DIR.mkdir(exist_ok=True)
+ASSETS_DIR.mkdir(exist_ok=True)
+CHARACTERS_DIR.mkdir(exist_ok=True)
+
+# 启动时间
+START_TIME = time.time()
+API_VERSION = "v10.1-py"
+
+app = FastAPI(title="Live2D Master Agent API", version=API_VERSION)
+
+# CORS 中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 静态文件服务
+app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
+
+
+# ==================== 数据模型 ====================
+
+class GenerateImageRequest(BaseModel):
+    prompt: str
+    width: int = 1024
+    height: int = 1024
+    seed: int = 0
+    model_id: Optional[str] = None
+    negative_prompt: Optional[str] = None
+
+
+class GenerateRequest(BaseModel):
+    prompt: str
+    width: int = 1024
+    height: int = 1024
+    seed: int = 0
+    model_id: Optional[str] = None
+    character_id: Optional[str] = None
+    use_semantic: bool = False
+    export_live2d: bool = True
+    use_tracking: bool = False
+    negative_prompt: Optional[str] = None
+    deploy_desktop: bool = False
+
+
+class CharacterRequest(BaseModel):
+    name: str
+    face: Optional[Dict[str, Any]] = None
+    hair: Optional[Dict[str, Any]] = None
+    body: Optional[Dict[str, Any]] = None
+    palette: Optional[Dict[str, Any]] = None
+    outfit: Optional[Dict[str, Any]] = None
+    persona: Optional[Dict[str, Any]] = None
+    style: Optional[Dict[str, Any]] = None
+    ref_image: Optional[str] = None
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    character_id: Optional[str] = None
+    session_id: Optional[str] = None
+    message: str
+    history: Optional[List[ChatMessage]] = None
+    stream: bool = False
+    system_prompt: Optional[str] = None
+
+
+class ExportModelRequest(BaseModel):
+    character_id: Optional[str] = None
+    layers_dir: Optional[str] = None
+    output_dir: Optional[str] = None
+    model_dir: Optional[str] = None
+    download: bool = False
+    format: str = "model3"
+
+
+# ==================== 工具函数 ====================
+
+def generate_id() -> str:
+    """生成唯一 ID"""
+    return f"char_{uuid.uuid4().hex[:12]}"
+
+
+def api_response(data: Any = None, message: str = "", success: bool = True, error: str = "") -> Dict[str, Any]:
+    """标准 API 响应格式"""
+    result = {"success": success}
+    if message:
+        result["message"] = message
+    if data is not None:
+        result["data"] = data
+    if error:
+        result["error"] = error
+    return result
+
+
+def get_uptime() -> str:
+    """获取运行时间"""
+    seconds = int(time.time() - START_TIME)
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    return f"{hours}h {minutes}m {secs}s"
+
+
+# ==================== 角色管理 ====================
+
+def load_character(character_id: str) -> Optional[Dict[str, Any]]:
+    """加载角色卡片"""
+    path = CHARACTERS_DIR / f"{character_id}.json"
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def save_character(card: Dict[str, Any]) -> None:
+    """保存角色卡片"""
+    path = CHARACTERS_DIR / f"{card['character_id']}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(card, f, ensure_ascii=False, indent=2)
+
+
+def list_characters() -> List[Dict[str, Any]]:
+    """列出所有角色"""
+    characters = []
+    if CHARACTERS_DIR.exists():
+        for f in CHARACTERS_DIR.glob("*.json"):
+            try:
+                with open(f, "r", encoding="utf-8") as fp:
+                    card = json.load(fp)
+                    characters.append({
+                        "character_id": card.get("character_id", ""),
+                        "name": card.get("name", ""),
+                        "created_at": card.get("created_at", ""),
+                        "updated_at": card.get("updated_at", ""),
+                        "has_embedding": bool(card.get("embedding")),
+                        "hair_color": card.get("hair", {}).get("color", ""),
+                        "eye_color": card.get("face", {}).get("eye_color", ""),
+                    })
+            except Exception:
+                pass
+    return characters
+
+
+# ==================== API 端点 ====================
+
+@app.get("/")
+async def root():
+    return api_response(
+        data={"version": API_VERSION, "name": "Live2D Master Agent API"},
+        message="Live2D Master Agent API 服务运行中"
+    )
+
+
+@app.get("/api/health")
+async def health_check():
+    return api_response(
+        data={"version": API_VERSION, "uptime": get_uptime()},
+        message="Live2D API 服务正常运行"
+    )
+
+
+@app.get("/api/info")
+async def get_api_info():
+    return api_response(data={
+        "version": API_VERSION,
+        "name": "Live2D Master Agent API",
+        "features": [
+            "image_generation",
+            "psd_segmentation",
+            "live2d_export",
+            "character_management",
+            "llm_chat",
+            "desktop_pet",
+            "face_tracking"
+        ],
+        "providers": ["pollinations", "seedream", "sensenova"],
+        "uptime": get_uptime()
+    })
+
+
+@app.get("/api/status")
+async def get_system_status():
+    services = []
+    
+    # Python 环境
+    services.append({
+        "name": "python_env",
+        "available": True,
+        "version": f"Python {sys.version.split()[0]}",
+        "last_checked": datetime.now(timezone.utc).isoformat()
+    })
+    
+    # 图像生成服务
+    services.append({
+        "name": "image_generator",
+        "available": True,
+        "version": "pollinations (free)",
+        "last_checked": datetime.now(timezone.utc).isoformat()
+    })
+    
+    # 角色管理
+    services.append({
+        "name": "character_manager",
+        "available": True,
+        "version": "v10.1",
+        "last_checked": datetime.now(timezone.utc).isoformat()
+    })
+    
+    return api_response(data={
+        "services": services,
+        "version": API_VERSION,
+        "uptime": get_uptime()
+    })
+
+
+@app.get("/api/models")
+async def get_models():
+    return api_response(data=[
+        {"id": "pollinations", "name": "Pollinations (Free)", "type": "image", "available": True},
+        {"id": "seedream", "name": "Seedream 4.0", "type": "image", "available": True},
+        {"id": "sensenova", "name": "SenseNova", "type": "image", "available": True},
+    ])
+
+
+@app.get("/api/expressions")
+async def get_expressions(character_id: Optional[str] = None):
+    expressions = [
+        {"name": "neutral", "id": "expr_neutral", "params": [], "thumbnail": ""},
+        {"name": "happy", "id": "expr_happy", "params": [], "thumbnail": ""},
+        {"name": "sad", "id": "expr_sad", "params": [], "thumbnail": ""},
+        {"name": "angry", "id": "expr_angry", "params": [], "thumbnail": ""},
+        {"name": "surprised", "id": "expr_surprised", "params": [], "thumbnail": ""},
+    ]
+    return api_response(data=expressions)
+
+
+@app.get("/api/scripts")
+async def get_python_scripts():
+    scripts = []
+    scripts_dir = PROJECT_ROOT / "scripts"
+    if scripts_dir.exists():
+        for f in scripts_dir.glob("*.py"):
+            scripts.append({"name": f.stem, "path": f"scripts/{f.name}"})
+    return api_response(data=scripts)
+
+
+@app.get("/api/cache/stats")
+async def get_cache_stats():
+    return api_response(data={
+        "enabled": True,
+        "max_entries": 100,
+        "current_entries": 0,
+        "max_size_mb": 100,
+        "current_size_mb": 0,
+        "hit_count": 0,
+        "miss_count": 0,
+    })
+
+
+@app.post("/api/cache/clear")
+async def clear_cache():
+    return api_response(message="缓存已清除", data={"cleared": True})
+
+
+# ==================== 角色管理端点 ====================
+
+@app.get("/api/characters")
+async def list_characters_endpoint():
+    characters = list_characters()
+    return api_response(data=characters)
+
+
+@app.post("/api/characters")
+async def create_character(req: CharacterRequest):
+    now = datetime.now(timezone.utc).isoformat()
+    card = {
+        "character_id": generate_id(),
+        "name": req.name,
+        "created_at": now,
+        "updated_at": now,
+        "face": req.face or {
+            "shape": "oval",
+            "eye_shape": "almond",
+            "eye_color": "#4a90d9",
+            "eye_size": 1.0,
+            "eyebrow_shape": "normal",
+            "nose_type": "small",
+            "mouth_type": "normal",
+            "face_width_ratio": 1.0,
+            "face_height_ratio": 1.0,
+        },
+        "hair": req.hair or {
+            "color": "#3a2a1a",
+            "style": "long",
+            "length": 1.0,
+            "bangs_style": "side",
+            "highlights_color": "",
+        },
+        "body": req.body or {
+            "type": "slim",
+            "height_ratio": 1.0,
+            "proportions": "normal",
+        },
+        "palette": req.palette or {
+            "primary_colors": ["#4a90d9", "#e8b4b8"],
+            "skin_tone": "#f5d5b8",
+            "accent_color": "#ff6b6b",
+        },
+        "outfit": req.outfit or {
+            "current": {},
+            "wardrobe": [],
+        },
+        "references": {
+            "front": req.ref_image or "",
+            "side": "",
+            "back": "",
+        },
+        "embedding": [],
+        "persona": req.persona or {
+            "personality": "",
+            "voice_style": "",
+            "backstory": "",
+        },
+        "style": req.style or {
+            "constraints": "",
+            "negative_prompt": "",
+        },
+    }
+    
+    save_character(card)
+    return api_response(data=card, message="角色创建成功")
+
+
+@app.get("/api/characters/{character_id}")
+async def get_character(character_id: str):
+    card = load_character(character_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="角色不存在")
+    return api_response(data=card)
+
+
+@app.put("/api/characters/{character_id}")
+async def update_character(character_id: str, req: CharacterRequest):
+    card = load_character(character_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="角色不存在")
+    
+    if req.name:
+        card["name"] = req.name
+    if req.face:
+        card["face"].update(req.face)
+    if req.hair:
+        card["hair"].update(req.hair)
+    if req.body:
+        card["body"].update(req.body)
+    if req.palette:
+        card["palette"].update(req.palette)
+    if req.persona:
+        card["persona"].update(req.persona)
+    if req.style:
+        card["style"].update(req.style)
+    
+    card["updated_at"] = datetime.now(timezone.utc).isoformat()
+    save_character(card)
+    return api_response(data=card, message="角色更新成功")
+
+
+@app.delete("/api/characters/{character_id}")
+async def delete_character(character_id: str):
+    path = CHARACTERS_DIR / f"{character_id}.json"
+    if path.exists():
+        path.unlink()
+        return api_response(message="角色删除成功")
+    raise HTTPException(status_code=404, detail="角色不存在")
+
+
+# ==================== 图像生成端点 ====================
+
+@app.post("/api/generate")
+async def generate_image(req: GenerateImageRequest):
+    """简单图像生成（使用 Pollinations 免费 API）"""
+    try:
+        from core.image_gen.pollinations import PollinationsGenerator
+        
+        generator = PollinationsGenerator()
+        result = generator.generate(
+            prompt=req.prompt,
+            width=req.width,
+            height=req.height,
+            seed=req.seed,
+            negative_prompt=req.negative_prompt,
+        )
+        
+        image_path = result.get("image_path", "")
+        image_filename = os.path.basename(image_path) if image_path else ""
+        
+        return api_response(data={
+            "image_path": image_path,
+            "image_url": f"/output/{image_filename}" if image_filename else "",
+            "seed": result.get("seed", req.seed),
+            "width": req.width,
+            "height": req.height,
+            "source": "pollinations",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "success": True,
+        })
+    except Exception as e:
+        return api_response(error=str(e), success=False)
+
+
+@app.post("/api/generate/character")
+async def generate_character(req: GenerateRequest):
+    """完整角色生成工作流"""
+    try:
+        from core.workflow import WorkflowEngine
+        
+        engine = WorkflowEngine(
+            output_dir=str(OUTPUT_DIR),
+            provider="auto",
+        )
+        
+        result = engine.run(
+            prompt=req.prompt,
+            character_id=req.character_id,
+            use_semantic=req.use_semantic,
+            export_live2d=req.export_live2d,
+            deploy_desktop=req.deploy_desktop,
+            width=req.width,
+            height=req.height,
+            seed=req.seed,
+            negative_prompt=req.negative_prompt,
+        )
+        
+        return api_response(data={
+            "image_path": result.get("image_path", ""),
+            "image_url": result.get("image_url", ""),
+            "seed": result.get("seed", 0),
+            "width": req.width,
+            "height": req.height,
+            "source": "workflow_v10.1",
+            "layers_dir": result.get("layers_dir", ""),
+            "psd_path": result.get("psd_path", ""),
+            "model3_json": result.get("model3_json", ""),
+            "output_dir": result.get("output_dir", ""),
+            "character_id": result.get("character_id", ""),
+            "success": True,
+            "steps": result.get("steps", {}),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        return api_response(error=str(e), success=False)
+
+
+# ==================== PSD 分层端点 ====================
+
+@app.post("/api/psd-plan")
+async def create_psd_plan(request: Request):
+    try:
+        body = await request.json()
+        image_path = body.get("image_path", "")
+        if not image_path:
+            return api_response(error="缺少 image_path 参数", success=False)
+        
+        return api_response(data={
+            "plan_dir": "",
+            "psd_path": "",
+            "layer_count": 0,
+            "layers": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }, message="PSD 分层规划功能开发中")
+    except Exception as e:
+        return api_response(error=str(e), success=False)
+
+
+@app.post("/api/see-through")
+async def run_see_through(request: Request):
+    try:
+        body = await request.json()
+        return api_response(data={
+            "task_id": f"task_{uuid.uuid4().hex[:8]}",
+            "status": "pending",
+            "output_dir": "",
+            "message": "See-through 工作流功能开发中",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        return api_response(error=str(e), success=False)
+
+
+# ==================== 导出端点 ====================
+
+@app.post("/api/export/live2d")
+async def export_live2d(req: ExportModelRequest):
+    try:
+        return api_response(data={
+            "success": True,
+            "model_path": "",
+            "model3_json": "",
+            "texture": "",
+            "message": "Live2D 导出功能开发中",
+        })
+    except Exception as e:
+        return api_response(error=str(e), success=False)
+
+
+@app.post("/api/export/psd")
+async def export_psd(request: Request):
+    try:
+        return api_response(data={
+            "success": True,
+            "psd_path": "",
+            "message": "PSD 导出功能开发中",
+        })
+    except Exception as e:
+        return api_response(error=str(e), success=False)
+
+
+@app.post("/api/export/spine")
+async def export_spine(request: Request):
+    try:
+        return api_response(data={
+            "success": True,
+            "spine_path": "",
+            "message": "Spine 导出功能开发中",
+        })
+    except Exception as e:
+        return api_response(error=str(e), success=False)
+
+
+@app.post("/api/deploy/desktop")
+async def deploy_desktop(request: Request):
+    try:
+        return api_response(data={
+            "success": True,
+            "message": "桌宠部署功能开发中",
+        })
+    except Exception as e:
+        return api_response(error=str(e), success=False)
+
+
+# ==================== 聊天端点 ====================
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    try:
+        reply = f"收到你的消息：{req.message}\n\n（聊天功能需要配置 LLM 提供商后才能使用）"
+        return api_response(data={
+            "reply": reply,
+            "emotion": "neutral",
+            "action": "",
+            "finished": True,
+        })
+    except Exception as e:
+        return api_response(error=str(e), success=False)
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """流式聊天 - 返回 SSE 格式"""
+    from fastapi.responses import StreamingResponse
+    import asyncio
+    
+    async def generate():
+        reply = f"收到你的消息：{req.message}\n\n（聊天功能需要配置 LLM 提供商后才能使用）"
+        for char in reply:
+            chunk = json.dumps({
+                "type": "token",
+                "content": char,
+                "finished": False,
+            })
+            yield f"data: {chunk}\n\n"
+            await asyncio.sleep(0.02)
+        
+        final_chunk = json.dumps({
+            "type": "done",
+            "finished": True,
+            "emotion": "neutral",
+        })
+        yield f"data: {final_chunk}\n\n"
+    
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# ==================== WebSocket 端点 ====================
+
+@app.websocket("/api/ws")
+async def websocket_endpoint(websocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_json({"type": "pong", "time": int(time.time() * 1000)})
+    except Exception:
+        pass
+
+
+@app.websocket("/ws/progress")
+async def ws_progress(websocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_json({"type": "ping", "time": int(time.time() * 1000)})
+    except Exception:
+        pass
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=8000,
+        log_level="info",
+    )

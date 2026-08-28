@@ -1,0 +1,403 @@
+package handlers
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+
+	"live2d-api/config"
+	"live2d-api/models"
+	"live2d-api/services"
+)
+
+// newTestHandler 创建一个测试用 handler（不依赖外部服务）
+func newTestHandler(t *testing.T) *Handler {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Host:               "127.0.0.1",
+			Port:               0,
+			MaxRequestBodySize: 10 << 20,
+		},
+		Output: config.OutputConfig{
+			BaseDir: t.TempDir(),
+		},
+		Python: config.PythonConfig{
+			PythonPath: "python3",
+			ScriptsDir: "",
+			TimeoutSec: 5,
+		},
+		Cache: config.CacheConfig{
+			Enabled:    1,
+			MaxEntries: 100,
+			MaxSizeMB:  10,
+			TTLSeconds: 60,
+		},
+		Character: config.CharacterConfig{
+			StorageDir: t.TempDir() + "/chars",
+		},
+	}
+	cache := services.NewRequestCache(cfg.Cache)
+	img := services.NewImageGenerator(cfg)
+	return NewHandler(cfg, img, cache)
+}
+
+func TestHealthCheck(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.GET("/api/health", h.HealthCheck)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp models.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if !resp.Success {
+		t.Errorf("expected success=true, got %v", resp.Success)
+	}
+	if resp.Message == "" {
+		t.Error("expected non-empty message")
+	}
+}
+
+func TestGetAPIInfo(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.GET("/api/info", h.GetAPIInfo)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/info", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp models.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if !resp.Success {
+		t.Error("expected success=true")
+	}
+}
+
+func TestGetModels(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.GET("/api/models", h.GetModels)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp models.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if !resp.Success {
+		t.Error("expected success=true")
+	}
+}
+
+func TestGetExpressions(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.GET("/api/expressions", h.GetExpressions)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/expressions", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestListCharacters_Empty(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.GET("/api/characters", h.ListCharacters)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/characters", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var resp models.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if !resp.Success {
+		t.Error("expected success=true")
+	}
+}
+
+func TestCreateCharacter_Valid(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.POST("/api/characters", h.CreateCharacter)
+
+	body := `{"name":"测试角色","prompt":"a cute anime girl","description":"单元测试"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/characters", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated && w.Code != http.StatusOK {
+		t.Fatalf("expected 200/201, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var resp models.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if !resp.Success {
+		t.Errorf("expected success=true, body: %s", w.Body.String())
+	}
+}
+
+func TestCreateCharacter_MissingName(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.POST("/api/characters", h.CreateCharacter)
+
+	body := `{"prompt":"a cute anime girl"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/characters", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing name, got %d", w.Code)
+	}
+}
+
+func TestCreateCharacter_InvalidJSON(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.POST("/api/characters", h.CreateCharacter)
+
+	body := `{invalid json`
+	req := httptest.NewRequest(http.MethodPost, "/api/characters", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid JSON, got %d", w.Code)
+	}
+}
+
+func TestGetCharacter_NotFound(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.GET("/api/characters/:id", h.GetCharacter)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/characters/nonexistent", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestUpdateCharacter_NotFound(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.PUT("/api/characters/:id", h.UpdateCharacter)
+
+	body := `{"name":"updated","description":"new"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/characters/nonexistent", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound && w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 404/500 for nonexistent, got %d", w.Code)
+	}
+}
+
+func TestDeleteCharacter_NotFound(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.DELETE("/api/characters/:id", h.DeleteCharacter)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/characters/nonexistent", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError && w.Code != http.StatusNotFound {
+		t.Errorf("expected 404/500 for nonexistent, got %d", w.Code)
+	}
+}
+
+func TestGenerateImage_MissingPrompt(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.POST("/api/generate", h.GenerateImage)
+
+	body := `{"width":512,"height":512}`
+	req := httptest.NewRequest(http.MethodPost, "/api/generate", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing prompt, got %d", w.Code)
+	}
+}
+
+func TestGetPythonScripts(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.GET("/api/scripts", h.GetPythonScripts)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/scripts", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp models.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if !resp.Success {
+		t.Error("expected success=true")
+	}
+}
+
+func TestCacheStats(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.GET("/api/cache/stats", h.GetCacheStats)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/cache/stats", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+// TestResponseShape 验证 Response 结构体的 JSON 字段名（保证前端能正确解析）
+func TestResponseShape(t *testing.T) {
+	r := models.Response{Success: true, Message: "test", Data: "x"}
+	b, _ := json.Marshal(r)
+	got := string(b)
+	for _, k := range []string{`"success"`, `"message"`, `"data"`} {
+		if !contains(got, k) {
+			t.Errorf("expected key %s in JSON: %s", k, got)
+		}
+	}
+}
+
+func contains(s, sub string) bool {
+	return bytes.Contains([]byte(s), []byte(sub))
+}
+
+// TestIsPathSafe 验证路径穿越/绝对路径/空字节防护（Bug 1）。
+func TestIsPathSafe(t *testing.T) {
+	base := t.TempDir() // 绝对路径基目录
+
+	cases := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"legitimate file", filepath.Join(base, "foo.png"), true},
+		{"nested legitimate", filepath.Join(base, "sub", "bar.png"), true},
+		{"parent traversal", filepath.Join(base, "..", "secret"), false},
+		{"absolute escape", "/etc/passwd", false},
+		{"null byte injection", "foo\x00bar.png", false},
+		{"null byte in abs path", filepath.Join(base, "weird\x00name"), false},
+		{"deep traversal to etc", filepath.Join(base, "..", "..", "..", "etc", "passwd"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isPathSafe(tc.path, base)
+			if got != tc.want {
+				t.Errorf("isPathSafe(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHealthCheckVersion 验证 /api/health 版本号来自配置而非硬编码（Bug 2）。
+func TestHealthCheckVersion(t *testing.T) {
+	h := newTestHandler(t)
+	// 测试 handler 未显式设置 Version，应回退到 DefaultVersion
+	h.cfg.Version = "v9.9.9-test"
+	r := gin.New()
+	r.GET("/api/health", h.HealthCheck)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	var resp models.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	data, ok := resp.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected data map, got %T", resp.Data)
+	}
+	if data["version"] != "v9.9.9-test" {
+		t.Errorf("expected version from config, got %v", data["version"])
+	}
+}
+
+// TestChat_MissingMessage 验证 Chat 校验 message 必填（Bug 3）。
+func TestChat_MissingMessage(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.POST("/api/chat", h.Chat)
+
+	body := `{"character_id":"x"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing message, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+// TestChatStream_MissingMessage 验证 ChatStream 与 Chat 行为一致（Bug 3）。
+func TestChatStream_MissingMessage(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.POST("/api/chat/stream", h.ChatStream)
+
+	body := `{"character_id":"x"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/stream", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing message, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
