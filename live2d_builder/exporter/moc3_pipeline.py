@@ -45,13 +45,58 @@ from drivers.live2d_runtime.moc3_verify import (
 log = get_logger(__name__)
 
 # 只烘焙 Z 轴刚体旋转：X/Y 在 Live2D 里是位移 + 透视的复合，属美术判断，不臆造。
+#
+# 表项可以是 "pivot"（单个转动骨骼）或 "pivots"（多个候选 —— 官方只有**一个**
+# ParamHairSide，却对应左右两条侧发，枢轴不同即为不同变形器，同参数共享 binding）。
+# "groups" 供网格路径（rotation_keyforms）按蒙皮骨骼判定影响范围。
 ROTATION_KEYFORM_PARAMS: Dict[str, Dict[str, Any]] = {
     "ParamAngleZ": {
         "pivot": "Head",
         "groups": {"head", "face", "hair", "eyes", "brows", "ears"},
+        "mesh": True,          # 也用于网格路径（逐顶点烘焙进网格自身的键形）
     },
-    "ParamBodyAngleZ": {"pivot": "Body", "groups": {"body"}},
+    "ParamBodyAngleZ": {"pivot": "Body", "groups": {"body"}, "mesh": True},
+    # 手臂：官方四参数 = 左/右上臂(LA/RA) 与 左/右前臂(LB/RB)。
+    "ParamArmLA": {"pivot": "ArmBack_L", "groups": {"arms"}},
+    "ParamArmLB": {"pivot": "ForearmBack_L", "groups": {"arms"}},
+    "ParamArmRA": {"pivot": "ArmBack_R", "groups": {"arms"}},
+    "ParamArmRB": {"pivot": "ForearmBack_R", "groups": {"arms"}},
+    # 头发：官方三参数（前/侧/后）。呆毛(Hair_Top)归入前发组 —— 这是命名约定，
+    # 不是格式推断；左右侧发共用 ParamHairSide。
+    "ParamHairFront": {"pivots": ("Hair_Front", "Hair_Top"), "groups": {"hair"}},
+    "ParamHairSide": {"pivots": ("Hair_Side_L", "Hair_Side_R"), "groups": {"hair"}},
+    "ParamHairBack": {"pivot": "Hair_Back", "groups": {"hair"}},
 }
+
+
+def _bone_names(spec: Dict[str, Any]) -> tuple:
+    """表项的候选转动骨骼（单个 pivot 或 pivots 元组）。"""
+    return tuple(spec.get("pivots") or (spec["pivot"],))
+
+
+# 呼吸：胸腔起伏在 Live2D 里是**缩放 + 垂直位移的复合**，所以用 warp 变形器而不是
+# 刚体旋转（用旋转去实现它等于语义错误，与已排除的 ParamAngleX/Y 同类）。枢轴为
+# Chest 的 warp 由 ParamBreath(0..1) 驱动：上抬幅度 = 该变形器控制网格高度的 2%
+# （相对值，随网格自适应；美术可调）。
+BREATH_PARAM = "ParamBreath"
+BREATH_PIVOT = "Chest"
+BREATH_AMPLITUDE = 0.02
+
+
+def _breath_parameter(entry: Dict[str, Any],
+                      parameters_by_id: Dict[str, ParameterSpec],
+                      bone_positions: Dict[str, Any]):
+    """该 warp 变形器是否由 ParamBreath 驱动（枢轴 == 胸腔骨骼）；否则 None。"""
+    param = parameters_by_id.get(BREATH_PARAM)
+    bone = bone_positions.get(BREATH_PIVOT)
+    pivot = entry.get("pivot")
+    if param is None or bone is None or pivot is None:
+        return None
+    if abs(float(pivot[0]) - float(bone[0])) > 1e-3:
+        return None
+    if abs(float(pivot[1]) - float(bone[1])) > 1e-3:
+        return None
+    return param
 # 权重低于此值认为该骨骼对该网格无实际影响（避免贴图级抖动）
 _MIN_INFLUENCE = 0.02
 # 每 1 单位参数值转多少度：30 单位 -> 30 度，与 Cubism 头部转动的常规量级一致
@@ -125,8 +170,17 @@ def rotation_keyforms(mesh: Dict[str, Any], parameters_by_id: Dict[str, Paramete
 
     hits = []
     for pid, spec in ROTATION_KEYFORM_PARAMS.items():
+        # 网格路径只认 "mesh": True 的表项：手臂/头发与 ParamAngleZ 在骨骼分组上
+        # 有重叠，若一并参与，头发网格会同时命中两个参数而被判 multi_hit 退回静态
+        # —— 比改动前更差。手臂/头发归**变形器**路径（各自有独立枢轴）。
+        if not spec.get("mesh"):
+            continue
         param = parameters_by_id.get(pid)
-        pivot = bone_positions.get(spec["pivot"])
+        pivot = None
+        for bone_name in _bone_names(spec):
+            pivot = bone_positions.get(bone_name)
+            if pivot is not None:
+                break
         if param is None or pivot is None:
             continue
         affected = _affected_bones(spec["groups"], standard_bones)
@@ -155,6 +209,64 @@ def rotation_keyforms(mesh: Dict[str, Any], parameters_by_id: Dict[str, Paramete
         ]
         shapes.append(KeyformShape(key_value=key_value, vertices=vertices))
     return pid, shapes, [pid]
+
+
+# 眼球跟随：瞳孔网格由 ParamEyeBallX / ParamEyeBallY **两轴**驱动（官方标准参数）。
+#
+# 与 Z 轴旋转不同，眼球在 Live2D 里就是**平移** —— 不存在 X/Y 那种"位移 + 透视的
+# 复合"，所以这里可以如实烘焙而不是臆造。轴序按 F-06 实测定论：**X 在前、步长为 1**，
+# 即展平序 index = i_X + k_X * i_Y（tools/probe_multiband_axis_order.py）。
+EYE_TRACK_AXES = ("ParamEyeBallX", "ParamEyeBallY")
+# 极值键下的位移 = 瞳孔自身包围盒的 10%（相对值，随网格自适应；美术可调）。
+EYE_TRACK_AMPLITUDE = 0.10
+
+
+def _key_fraction(param: ParameterSpec, value: float) -> float:
+    """键值归一化到 [-1, 1]（按参数的最大绝对值），用于换算位移。"""
+    span = max(abs(float(param.minimum)), abs(float(param.maximum))) or 1.0
+    return float(value) / span
+
+
+def eye_track_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
+                       parameters_by_id: Dict[str, ParameterSpec]):
+    """眼球网格 -> ``(轴, 逐键形状)``；不适用时返回 ``((), [])``。
+
+    判定：网格在 ``Eyeball_L`` / ``Eyeball_R`` 上的合计权重超过阈值，且**恰好只有
+    一个**眼球骨骼受影响（两个都受影响说明左右眼分不清，宁可不生成）。返回的轴序
+    是 ``(X, Y)``，与 F-06 定论一致；形状顶点在**模型坐标**（与 MeshSpec.vertices 同空间）。
+    """
+    skin = mesh.get("weights") or {}
+    bone_names = skin.get("bone_names") or []
+    per_vertex = skin.get("weights") or []
+    if not bone_names or not per_vertex or not vertices:
+        return (), []
+    hits = []
+    for bone in ("Eyeball_L", "Eyeball_R"):
+        if bone not in bone_names:
+            continue
+        if _peak_influence(per_vertex, [bone_names.index(bone)]) > _MIN_INFLUENCE:
+            hits.append(bone)
+    if len(hits) != 1:
+        return (), []
+    if any(parameters_by_id.get(pid) is None for pid in EYE_TRACK_AXES):
+        return (), []
+
+    xs = [float(v[0]) for v in vertices]
+    ys = [float(v[1]) for v in vertices]
+    amp_x = (max(xs) - min(xs)) * EYE_TRACK_AMPLITUDE
+    amp_y = (max(ys) - min(ys)) * EYE_TRACK_AMPLITUDE
+
+    keys = [tuple(_key_times(parameters_by_id[pid])) for pid in EYE_TRACK_AXES]
+    axes = tuple((pid, values) for pid, values in zip(EYE_TRACK_AXES, keys))
+    shapes = []
+    for i_y, key_y in enumerate(keys[1]):
+        for i_x, key_x in enumerate(keys[0]):
+            dx = _key_fraction(parameters_by_id[EYE_TRACK_AXES[0]], key_x) * amp_x
+            dy = _key_fraction(parameters_by_id[EYE_TRACK_AXES[1]], key_y) * amp_y
+            shapes.append(KeyformShape(
+                key_value=float(i_x + len(keys[0]) * i_y),   # 展平序号（仅备注）
+                vertices=[(x + dx, y + dy) for x, y in vertices]))
+    return axes, shapes
 
 
 def _peak_influence(per_vertex, indices) -> float:
@@ -216,22 +328,53 @@ def _lattice(rect: tuple, n_cols: int, n_rows: int) -> List[List[float]]:
             for r in range(n_rows) for c in range(n_cols)]
 
 
+def _driving_rotation_parameter(pivot: Any,
+                                parameters_by_id: Dict[str, ParameterSpec],
+                                bone_positions: Dict[str, Any]) -> tuple:
+    """按「枢轴 == 官方转动骨骼」找出驱动该 rotation 变形器的唯一官方参数。
+
+    对齐 ``ROTATION_KEYFORM_PARAMS``：枢轴即 Head 的绑 ``ParamAngleZ``、即 Body 的绑
+    ``ParamBodyAngleZ``。只有**恰好命中一个**已声明参数时才绑定；否则返回
+    ``("", None)`` —— 宁可不驱动，也不猜一个参数。
+    """
+    px, py = float(pivot[0]), float(pivot[1])
+    hits = []
+    for pid, spec in ROTATION_KEYFORM_PARAMS.items():
+        param = parameters_by_id.get(pid)
+        if param is None:
+            continue
+        for bone_name in _bone_names(spec):
+            bone = bone_positions.get(bone_name)
+            if bone is None:
+                continue
+            if abs(float(bone[0]) - px) <= 1e-3 and abs(float(bone[1]) - py) <= 1e-3:
+                hits.append((pid, param))
+                break
+    if len(hits) != 1:
+        return "", None
+    return hits[0]
+
+
 def build_deformers(specs: List[MeshSpec],
                     entries: List[Dict],
                     width: float,
-                    height: float) -> tuple:
+                    height: float,
+                    parameters_by_id: Dict[str, ParameterSpec] | None = None,
+                    bone_positions: Dict[str, Any] | None = None) -> tuple:
     """把管线的 warp / rotation 变形器编成规格，并把成员网格就地挂上（改写 specs）。
 
     返回 ``(变形器规格, 未编译说明, 静态变形器名)``。一个网格只能挂一个变形器。
 
-    rotation 编译成**单键形**：管线给的条目里没有参数绑定（眼球跟随由哪个参数、
-    按多大幅度驱动属美术判断），所以这里只如实表达成「结构存在、当前不随参数动」，
-    不冒充会动的追踪 —— 它们会出现在 ``deformers_static`` 里，不会被算成已落地。
+    rotation 的**参数绑定**由枢轴判定（见 ``_driving_rotation_parameter``）：命中唯一
+    官方参数时烘焙**逐键键形**，它真的会随参数转动；枢轴对不上任何已知转动骨骼时退回
+    **单键形**并记入 ``deformers_static``（结构存在、不随参数动），不冒充会动的追踪。
     """
     by_norm = {_norm(m.mesh_id): m for m in specs}
     linked: Dict[str, str] = {}
     out: List = []
     static: List[str] = []
+    bound: List[str] = []
+    breath_bound: List[str] = []
     skipped: List[str] = []
     for entry in entries:
         name = str(entry.get("name") or "")
@@ -253,26 +396,60 @@ def build_deformers(specs: List[MeshSpec],
         if dtype == "warp":
             n_rows = max(2, int(entry.get("grid_rows") or 2))
             n_cols = max(2, int(entry.get("grid_cols") or 2))
+            rect = _member_rect(members)
+            grids = [DeformerGrid(0.0, _lattice(rect, n_cols, n_rows))]
+            breath = _breath_parameter(
+                entry, parameters_by_id or {}, bone_positions or {})
+            if breath is not None:
+                lift = (rect[3] - rect[1]) * BREATH_AMPLITUDE
+                span = max(abs(float(breath.minimum)),
+                           abs(float(breath.maximum))) or 1.0
+                for value in _key_times(breath)[1:]:
+                    grids.append(DeformerGrid(
+                        float(value),
+                        [[x, y + lift * (float(value) / span)]
+                         for x, y in _lattice(rect, n_cols, n_rows)]))
+                breath_bound.append(f"{name}={breath.parameter_id}")
             out.append(WarpDeformerSpec(
                 deformer_id=name, rows=n_rows - 1, cols=n_cols - 1,
-                grids=[DeformerGrid(0.0, _lattice(
-                    _member_rect(members), n_cols, n_rows))]))
+                parameter_id=breath.parameter_id if breath else "",
+                grids=grids))
         elif dtype == "rotation":
             pivot = entry.get("pivot") or (0.0, 0.0)
             # 与网格顶点同一换算：图像坐标 -> 原点居中、y 向上的模型坐标
             origin = (float(pivot[0]) - width / 2.0,
                       height / 2.0 - float(pivot[1]))
-            out.append(RotationDeformerSpec(
-                deformer_id=name,
-                keyforms=[RotationKeyform(0.0, angle=0.0, origin=origin)],
-                base_angle=float(entry.get("angle") or 0.0)))
-            static.append(name)
+            pid, param = _driving_rotation_parameter(
+                pivot, parameters_by_id or {}, bone_positions or {})
+            if pid and param is not None:
+                # 逐键键形：内核按参数值在键之间插值，整棵子树真的绕枢轴转。
+                out.append(RotationDeformerSpec(
+                    deformer_id=name,
+                    parameter_id=pid,
+                    keyforms=[
+                        RotationKeyform(value,
+                                        angle=float(value) * _DEGREES_PER_UNIT,
+                                        origin=origin)
+                        for value in _key_times(param)
+                    ],
+                    base_angle=float(entry.get("angle") or 0.0)))
+                bound.append(f"{name}={pid}")
+            else:
+                out.append(RotationDeformerSpec(
+                    deformer_id=name,
+                    keyforms=[RotationKeyform(0.0, angle=0.0, origin=origin)],
+                    base_angle=float(entry.get("angle") or 0.0)))
+                static.append(name)
     if linked:
         specs[:] = [
             replace(mesh, deformer_id=linked[mesh.mesh_id])
             if mesh.mesh_id in linked else mesh
             for mesh in specs
         ]
+    if breath_bound:
+        log.info(f"呼吸已烘焙（{BREATH_PARAM} 驱动的 warp 双键形）：{breath_bound}")
+    if bound:
+        log.info(f"rotation 变形器已绑定官方参数（真的会动）：{bound}")
     return out, skipped, static
 
 
@@ -330,7 +507,7 @@ def build_rig_spec(
     bone_positions = builder_result.get("bone_positions") or {}
     from live2d_builder.bones.deformers import BoneHierarchy
     standard_bones = BoneHierarchy.STANDARD_BONES
-    keyformed, multi_hit = [], []
+    keyformed, multi_hit, eyes_tracked = [], [], []
 
     for order, (name, mesh) in enumerate(meshes.items()):
         width = float(mesh.get("width") or 0)
@@ -363,6 +540,20 @@ def build_rig_spec(
 
         triangles = ensure_front_facing(
             vertices, [[int(a), int(b), int(c)] for a, b, c in mesh["indices"]])
+        eye_axes, eye_shapes = eye_track_keyforms(mesh, vertices, params_by_id)
+        if eye_axes:
+            # 眼球优先于旋转键形：瞳孔是平移，且必须由 X+Y 两轴共同驱动。
+            eyes_tracked.append(name)
+            specs.append(MeshSpec(
+                mesh_id=str(name),
+                vertices=vertices,
+                triangles=triangles,
+                uvs=uvs,
+                draw_order=float(order),
+                keyform_shapes=eye_shapes,
+                keyform_axes=eye_axes,
+            ))
+            continue
         pid, shapes, candidates = rotation_keyforms(
             mesh, params_by_id, bone_positions, standard_bones, width, height)
         if len(candidates) > 1:
@@ -383,6 +574,9 @@ def build_rig_spec(
         raise UnsupportedRig(f"各网格画布尺寸不一致: {sorted(extents)}")
     width, height = extents.pop()
 
+    if eyes_tracked:
+        log.info(f"眼球跟随已烘焙（{'+'.join(EYE_TRACK_AXES)} 双轴）："
+                 f"{len(eyes_tracked)} 个网格 {eyes_tracked[:5]}")
     if keyformed:
         driven = sorted({m.keyform_parameter_id for m in specs if m.keyform_shapes})
         log.info(f"参数形变键形已烘焙：{len(keyformed)} 个网格，驱动参数 {driven}")
@@ -395,7 +589,8 @@ def build_rig_spec(
 
     deformers = (builder_result.get("deformer_tree") or {}).get("deformers") or []
     deformer_specs, uncompiled, static = build_deformers(
-        specs, list(deformers), width, height)
+        specs, list(deformers), width, height,
+        parameters_by_id=params_by_id, bone_positions=bone_positions)
     warps = [d for d in deformer_specs if isinstance(d, WarpDeformerSpec)]
     if deformer_specs:
         linked = sum(1 for m in specs if m.deformer_id)

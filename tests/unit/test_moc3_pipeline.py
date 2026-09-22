@@ -134,6 +134,176 @@ def test_rotation_deformer_becomes_a_static_pivot():
     assert spec.static_deformers == ["EyeTrack_L"]
 
 
+# 与 BoneHierarchy.get_bone_positions() 的默认比例模型一致（图像坐标，左上原点）
+_STANDARD_BONE_POSITIONS = {"Head": (0.0, -40.0), "Body": (0.0, 50.0)}
+
+
+@pytest.mark.parametrize("bone, pid", [
+    ("Head", "ParamAngleZ"),
+    ("Body", "ParamBodyAngleZ"),
+])
+def test_rotation_deformer_binds_official_z_rotation_when_pivot_is_that_bone(bone, pid):
+    """枢轴恰为其转动骨骼时，rotation 绑**官方**参数并烘焙逐键键形 —— 真的会动。
+
+    这是"结构存在但不动"变成"可用"的分界：绑定后它不再出现在
+    ``static_deformers`` 里，内核会按参数值在键之间插值。
+    """
+    params = [{"Id": pid, "Min": -30, "Max": 30, "Value": 0}]
+    px, py = _STANDARD_BONE_POSITIONS[bone]
+    result = _builder_result(
+        {"a": _mesh()},
+        deformers=[{"name": f"{bone}Tilt", "type": "rotation", "targets": ["a"],
+                    "pivot": [px, py], "angle": 0.0}],
+        params=params)
+    result["bone_positions"] = dict(_STANDARD_BONE_POSITIONS)
+
+    spec = build_rig_spec(result, {"a": _uv()})
+    deformer = spec.deformers[0]
+    assert deformer.parameter_id == pid
+    # 逐键键形：键取 min/default/max；角度 = 键值 × 1°/单位（与网格键形同一约定）
+    assert [k.key_value for k in deformer.keyforms] == [-30.0, 0.0, 30.0]
+    assert [k.angle for k in deformer.keyforms] == [-30.0, 0.0, 30.0]
+    assert spec.static_deformers == []       # 真的会动，不再算静态
+
+
+def test_rotation_deformer_stays_static_when_pivot_is_not_a_known_turning_bone():
+    """枢轴对不上任何已知转动骨骼时保持静态 —— 宁可不驱动，也不猜一个参数。"""
+    params = [{"Id": "ParamAngleZ", "Min": -30, "Max": 30, "Value": 0}]
+    result = _builder_result(
+        {"a": _mesh()},
+        deformers=[{"name": "EyeTrack_L", "type": "rotation", "targets": ["a"],
+                    "pivot": [40.0, 20.0], "angle": 0.0}],
+        params=params)
+    result["bone_positions"] = dict(_STANDARD_BONE_POSITIONS)
+
+    spec = build_rig_spec(result, {"a": _uv()})
+    assert spec.deformers[0].parameter_id == ""
+    assert spec.static_deformers == ["EyeTrack_L"]
+
+
+_EYE_PARAMS = [{"Id": "ParamEyeBallX", "Min": -1, "Max": 1, "Value": 0},
+               {"Id": "ParamEyeBallY", "Min": -1, "Max": 1, "Value": 0}]
+
+
+def _skinned_mesh(bones):
+    """把网格顶点绑到给定骨骼上（后两个顶点给 0.9 权重，确保峰值超过阈值）。"""
+    mesh = _mesh()
+    rows = []
+    for i, _ in enumerate(mesh["vertices"]):
+        last = 0.9 if i >= len(mesh["vertices"]) - 2 else 0.0
+        rows.append([1.0] + [last for _ in bones])
+    mesh["weights"] = {"bone_names": ["Head"] + list(bones), "weights": rows}
+    return mesh
+
+
+def test_eye_mesh_gets_two_axis_keyforms_on_official_eyeball_params():
+    """瞳孔（绑在 Eyeball_L）由官方 ParamEyeBallX/Y 双轴驱动；轴序 X 在前、步长 1。
+
+    展平序 index = i_X + 3*i_Y：所以 index 2 = (X 最右, Y 居中)、index 6 = (X 居中, Y 最上)。
+    """
+    result = _builder_result({"pupil": _skinned_mesh(["Eyeball_L"])},
+                             params=_EYE_PARAMS)
+    spec = build_rig_spec(result, {"pupil": _uv()})
+    mesh = spec.meshes[0]
+    assert mesh.keyform_axes == (
+        ("ParamEyeBallX", (-1.0, 0.0, 1.0)),
+        ("ParamEyeBallY", (-1.0, 0.0, 1.0)),
+    )
+    assert len(mesh.keyform_shapes) == 9          # 3 x 3
+    base_x, base_y = mesh.vertices[0]
+    assert mesh.keyform_shapes[2].vertices[0][0] > base_x    # (X=+1, Y=0) -> 右移
+    assert mesh.keyform_shapes[6].vertices[0][1] > base_y    # (X=0, Y=+1) -> 上移
+    assert mesh.keyform_shapes[0].vertices[0][0] < base_x    # (X=-1, Y=-1) -> 左下
+
+
+def test_mesh_influenced_by_both_eyeballs_stays_undriven():
+    """同时受左右眼球影响说明分不清左右眼 —— 宁可不生成，也不猜。"""
+    result = _builder_result({"pupil": _skinned_mesh(["Eyeball_L", "Eyeball_R"])},
+                             params=_EYE_PARAMS)
+    spec = build_rig_spec(result, {"pupil": _uv()})
+    assert spec.meshes[0].keyform_axes == ()
+    assert not spec.meshes[0].keyform_shapes
+
+
+# 与 BoneHierarchy.get_bone_positions() 默认比例模型一致（图像坐标，左上原点）
+_ARM_HAIR_BONES = {
+    "ArmBack_L": (-90.0, 80.0), "ForearmBack_L": (-130.0, 150.0),
+    "ArmBack_R": (90.0, 80.0), "ForearmBack_R": (130.0, 150.0),
+    "Hair_Front": (0.0, -90.0), "Hair_Top": (0.0, -120.0),
+    "Hair_Side_L": (-60.0, -40.0), "Hair_Side_R": (60.0, -40.0),
+    "Hair_Back": (0.0, -80.0),
+}
+
+
+@pytest.mark.parametrize("bone, pid", [
+    ("ArmBack_L", "ParamArmLA"), ("ForearmBack_L", "ParamArmLB"),
+    ("ArmBack_R", "ParamArmRA"), ("ForearmBack_R", "ParamArmRB"),
+    ("Hair_Front", "ParamHairFront"), ("Hair_Top", "ParamHairFront"),
+    ("Hair_Side_L", "ParamHairSide"), ("Hair_Side_R", "ParamHairSide"),
+    ("Hair_Back", "ParamHairBack"),
+])
+def test_arm_and_hair_deformers_bind_official_params(bone, pid):
+    """手臂/头发的 rotation 变形器按枢轴绑官方参数。
+
+    注意 ``ParamHairSide`` 只有**一个**官方参数却服务左右两条侧发 —— 因此表项支持
+    多候选枢轴，两个枢轴各自成为独立变形器、共享同一参数的 binding。
+    """
+    params = [{"Id": pid, "Min": -30, "Max": 30, "Value": 0}]
+    px, py = _ARM_HAIR_BONES[bone]
+    result = _builder_result(
+        {"a": _mesh()},
+        deformers=[{"name": f"{bone}_d", "type": "rotation", "targets": ["a"],
+                    "pivot": [px, py], "angle": 0.0}],
+        params=params)
+    result["bone_positions"] = dict(_ARM_HAIR_BONES)
+
+    spec = build_rig_spec(result, {"a": _uv()})
+    deformer = spec.deformers[0]
+    assert deformer.parameter_id == pid
+    assert [k.key_value for k in deformer.keyforms] == [-30.0, 0.0, 30.0]
+    assert spec.static_deformers == []
+
+
+_CHEST_XY = (0.0, 100.0)
+
+
+def test_breath_warp_gets_two_keyforms_lifting_the_chest():
+    """枢轴 == Chest 的 warp 由 ParamBreath 驱动：2 个控制网格，第二个整体上抬。
+
+    呼吸在 Live2D 里是缩放 + 垂直位移的复合，所以走 warp 而不是刚体旋转。
+    """
+    params = [{"Id": "ParamBreath", "Min": 0, "Max": 1, "Value": 0}]
+    result = _builder_result(
+        {"a": _mesh()},
+        deformers=[{"name": "Breath", "type": "warp", "targets": ["a"],
+                    "grid_rows": 2, "grid_cols": 2, "pivot": list(_CHEST_XY)}],
+        params=params)
+    result["bone_positions"] = {"Chest": _CHEST_XY}
+
+    spec = build_rig_spec(result, {"a": _uv()})
+    deformer = spec.deformers[0]
+    assert deformer.parameter_id == "ParamBreath"
+    assert [g.key_value for g in deformer.grids] == [0.0, 1.0]
+    rest_y = [p[1] for p in deformer.grids[0].points]
+    lifted_y = [p[1] for p in deformer.grids[1].points]
+    assert len(lifted_y) == len(rest_y)
+    assert min(lifted_y) > min(rest_y)          # 吸气键整体上抬
+    assert all(b > a for a, b in zip(sorted(rest_y), sorted(lifted_y)))
+
+
+def test_warp_without_chest_pivot_stays_a_single_static_grid():
+    """枢轴对不上胸腔（或没有枢轴）时保持单网格静态 —— 宁可不驱动，也不猜。"""
+    result = _builder_result(
+        {"a": _mesh()},
+        deformers=[{"name": "HairSwing", "type": "warp", "targets": ["a"],
+                    "grid_rows": 2, "grid_cols": 2, "pivot": [0.0, 0.0]}],
+        params=[{"Id": "ParamBreath", "Min": 0, "Max": 1, "Value": 0}])
+    result["bone_positions"] = {"Chest": _CHEST_XY}
+    spec = build_rig_spec(result, {"a": _uv()})
+    assert spec.deformers[0].parameter_id == ""
+    assert len(spec.deformers[0].grids) == 1
+
+
 def test_uncompilable_deformers_are_reported_not_dropped_silently():
     """挂不上成员网格的变形器必须写明原因，而不是被静默丢掉。"""
     result = _builder_result(

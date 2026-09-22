@@ -61,6 +61,7 @@ def lint_document(doc: Moc3Container) -> List[LintIssue]:
     issues.extend(_check_ranges(doc))
     issues.extend(_check_references(doc))
     issues.extend(_check_binding_chain(doc))
+    issues.extend(_check_binding_layout(doc))
     issues.extend(_check_keyform_product(doc))
     issues.extend(_check_deformer_grids(doc))
     issues.extend(_check_deformer_types(doc))
@@ -364,6 +365,65 @@ def _check_deformer_grids(doc: Moc3Container) -> List[LintIssue]:
                 f"第 {idx} 个控制网格越出 keyform_position.xys"
                 f"（起点 {pos_begin[idx]}，需要 {2 * verts[owner]} 个浮点数，"
                 f"池长 {len(positions)}）"))
+    return issues
+
+
+def _check_binding_layout(doc: Moc3Container) -> List[LintIssue]:
+    """绑定布局不变量（多参数带的关键前提）。
+
+    轴序（``index = Σ_j i_j·Π_{m<j}k_m``，第一个 binding 步长为 1）**无法从字节读出** ——
+    它是列表顺序本身，没有可校验的冗余字段；所以这里校验的是它成立所需的**结构前提**：
+
+    1. 每个 binding 必须**恰好**被一个参数的 [begin, begin+count) 区间覆盖一次，
+       否则该参数名下的绑定链断裂，参数不会驱动任何形状；
+    2. 同一个带内不得重复引用同一 binding；
+    3. 同一个带内的多个 binding 必须属于**不同参数** —— 一个轴一个参数，
+       同参数占两个轴会让轴序失去意义（实测定论见
+       docs/reviews/2026-09-20-moc3-export-risk-review.md 的 F-06）。
+    """
+    issues: List[LintIssue] = []
+    n = len(doc.get("keyform_binding.keys_counts"))
+    if n == 0:
+        return issues
+    owner: List[int] = [-1] * n
+    for p, (begin, count) in enumerate(zip(
+            doc.get("parameter.keyform_binding_begin_indices"),
+            doc.get("parameter.keyform_binding_counts"))):
+        for j in range(begin, begin + count):
+            if not 0 <= j < n:
+                issues.append(LintIssue(
+                    "parameter.keyform_binding_begin_indices",
+                    f"参数 {p} 的绑定区间 [{begin}, {begin + count}) 越界"
+                    f"（共 {n} 个绑定）"))
+                continue
+            if owner[j] != -1:
+                issues.append(LintIssue(
+                    "parameter.keyform_binding_begin_indices",
+                    f"绑定 {j} 被参数 {owner[j]} 与 {p} 重复覆盖"))
+            owner[j] = p
+    for j, o in enumerate(owner):
+        if o == -1:
+            issues.append(LintIssue(
+                "parameter.keyform_binding_begin_indices",
+                f"绑定 {j} 不属于任何参数的区间（参数名下的绑定链断裂，"
+                f"该参数不会驱动形状）"))
+
+    begins = doc.get("keyform_binding_band.begin_indices")
+    counts = doc.get("keyform_binding_band.counts")
+    binding_index = doc.get("keyform_binding_index.indices")
+    for band, (begin, count) in enumerate(zip(begins, counts)):
+        refs = list(binding_index[begin:begin + count])
+        if len(set(refs)) != len(refs):
+            issues.append(LintIssue(
+                "keyform_binding_index.indices",
+                f"第 {band} 带重复引用了同一 binding（{refs}）"))
+            continue
+        owners = [owner[j] for j in refs if 0 <= j < n]
+        if len(set(owners)) != len(owners):
+            issues.append(LintIssue(
+                "keyform_binding_index.indices",
+                f"第 {band} 带的多个 binding 属于同一参数（轴应由不同参数驱动）："
+                f"{refs} -> 参数 {owners}"))
     return issues
 
 
