@@ -162,7 +162,7 @@ jobs:
       - name: Install system deps (headless GL)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1 libglib2.0-0 libegl1 xvfb
+          sudo apt-get install -y libgl1 libglib2.0-0 libegl1 xvfb cmake
 
       - name: Install Python deps
         run: |

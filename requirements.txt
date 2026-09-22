@@ -57,8 +57,12 @@ edge-tts>=6.1.0
 # ====== Live2D moc3 compile & verification (P0) ======
 # py-moc3: 结构参考与交叉校验（读写 .moc3）；编译器本体自研，不依赖其运行时
 py-moc3>=0.1.0
-# live2d-py: 仅用于隔离验证（官方 Cubism Native Core）；不进入生产数据路径
-live2d-py>=0.7.0
+# live2d-py: 官方 Cubism Native Core，仅用于隔离验证（逐像素验收 / 原生渲染探针），
+# 不进入生产数据路径。它没有预编译 wheel，构建需要 cmake + C++ 工具链，
+# 因此不能作为默认依赖（否则 `pip install -r requirements.txt` 及 Docker 构建会失败）。
+# 需要官方内核验收时再单独安装（CI 的 moc3-acceptance job 即如此）：
+#   pip install live2d-py
+# live2d-py>=0.7.0
 
 # ====== Optional: AI Models (large, install separately with install_models.py) ======
 # segment-anything>=1.0
