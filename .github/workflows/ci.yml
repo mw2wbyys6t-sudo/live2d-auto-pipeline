@@ -42,6 +42,10 @@ jobs:
           python -m pip install --upgrade pip
           # Install core deps first (always needed)
           pip install Pillow numpy requests urllib3 httpx aiohttp aiofiles websockets psd-tools scipy scikit-learn cryptography rich opencv-python onnxruntime
+          # Python API server (api_server.py) deps. tests/integration/test_api_contract.py
+          # and tests/unit/test_runtime_readiness.py import api_server at module scope,
+          # so these must be present or pytest fails collection.
+          pip install fastapi uvicorn python-multipart
           # Install test deps
           pip install pytest pytest-asyncio pytest-cov
           # Install optional deps with --no-deps to avoid pulling large model packages
@@ -165,6 +169,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install Pillow numpy requests psd-tools scipy scikit-learn opencv-python onnxruntime
           pip install pytest pytest-asyncio
+          # api_server.py import chain (used by the integration suite that runs here)
+          pip install fastapi uvicorn python-multipart
           pip install py-moc3
           pip install live2d-py
 
