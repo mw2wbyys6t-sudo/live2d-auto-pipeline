@@ -50,7 +50,6 @@ type WSHub struct {
 	unregister  chan *WSConn
 	broadcast   chan []byte
 	maxConns    int
-	onMessage   func(clientID string, msg []byte)
 }
 
 // NewWSHub 创建 WebSocket Hub（默认最大连接数 100）
@@ -75,11 +74,6 @@ func (h *WSHub) SetMaxConns(n int) {
 // Run 启动 Hub 主循环（阻塞，应在 goroutine 中调用）
 func (h *WSHub) Run() {
 	h.run()
-}
-
-// SetMessageHandler 设置消息处理回调
-func (h *WSHub) SetMessageHandler(fn func(clientID string, msg []byte)) {
-	h.onMessage = fn
 }
 
 // run Hub 主循环
@@ -142,6 +136,28 @@ func (h *WSHub) Broadcast(msgType string, data interface{}) {
 	h.broadcast <- b
 }
 
+// TryBroadcast 非阻塞广播原始帧：发送缓冲区满时丢弃并返回 false。
+//
+// 构建流水线这类调用方不能被慢客户端拖住 —— 丢一帧进度比卡住导出好得多，
+// 且丢帧只是「少一次上报」，前端仍会收到该阶段的 not_reported。
+func (h *WSHub) TryBroadcast(frame []byte) bool {
+	select {
+	case h.broadcast <- frame:
+		return true
+	default:
+		return false
+	}
+}
+
+// Publish 广播一条已构造好的消息；永不阻塞调用方。
+func (h *WSHub) Publish(msg models.WSMessage) bool {
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return false
+	}
+	return h.TryBroadcast(b)
+}
+
 // BroadcastProgress 广播生成进度
 func (h *WSHub) BroadcastProgress(taskID, stage string, progress int, message string) {
 	wsMsg := models.WSMessage{
@@ -154,35 +170,6 @@ func (h *WSHub) BroadcastProgress(taskID, stage string, progress int, message st
 	}
 	b, _ := json.Marshal(wsMsg)
 	h.broadcast <- b
-}
-
-// BroadcastTracking 广播人脸追踪参数
-func (h *WSHub) BroadcastTracking(trackingData map[string]float64) {
-	wsMsg := models.WSMessage{
-		Type: "tracking",
-		Data: trackingData,
-		Time: time.Now().UnixMilli(),
-	}
-	b, _ := json.Marshal(wsMsg)
-	h.broadcast <- b
-}
-
-// SendToClient 向指定客户端发送消息
-func (h *WSHub) SendToClient(clientID string, msg models.WSMessage) {
-	h.mu.RLock()
-	c, ok := h.clients[clientID]
-	h.mu.RUnlock()
-	if !ok {
-		return
-	}
-	b, err := json.Marshal(msg)
-	if err != nil {
-		return
-	}
-	select {
-	case c.send <- b:
-	default:
-	}
 }
 
 // HandleConnection 处理 gin 上下文中的 WebSocket 连接
@@ -312,9 +299,8 @@ func (c *WSConn) readPump() {
 		case wsPongFrame:
 			// 忽略
 		case wsTextFrame, wsBinaryFrame:
-			if c.hub.onMessage != nil {
-				c.hub.onMessage(c.id, payload)
-			}
+			// 本服务只做单向推送（生成进度 / 导出阶段）；入站消息当前没有消费者，
+			// 因此不解析也不丢弃连接（曾有一个从未被设置的 onMessage 回调）。
 		}
 	}
 }

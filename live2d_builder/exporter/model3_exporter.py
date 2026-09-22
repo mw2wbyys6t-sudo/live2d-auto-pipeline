@@ -6,13 +6,15 @@ Generates:
 - <name>.texture_NN.png (texture atlases)
 - <name>.physics3.json
 - expressions/*.exp3.json (28 expressions)
+- motions/*.motion3.json (仅覆盖真有键形驱动的参数；无可动参数则不产出)
 - Cubism Editor import guide (markdown)
 - Zip package ready for distribution
 
-Note: .moc3 binary files are NOT generated — they are a proprietary
-Cubism Editor output. The model3.json references a placeholder moc3
-path that users produce by importing the PSD and mesh data into the
-Cubism Editor.
+Note: 本模块只写 model3.json 与配套文件。`.moc3` 由
+`live2d_builder.exporter.moc3_pipeline.compile_export_moc3`（pipeline 第 9b 步）
+编译并写出：通过官方 Cubism Core 一致性验收才落盘，`build_meta.json` 的
+`moc3.runtime_ready` 如实反映状态。若编译被跳过或失败，model3.json 中的
+Moc 引用仍指向占位路径，需按导入指南在 Cubism Editor 手工生成。
 """
 
 from __future__ import annotations
@@ -29,7 +31,8 @@ from core.logger import get_logger
 from live2d_builder.exporter.texture_atlas import TextureAtlas
 from live2d_builder.blendshapes.parameters import ParameterSet
 from live2d_builder.blendshapes.expressions import ExpressionBuilder
-from live2d_builder.physics.config import PhysicsBuilder
+from live2d_builder.motion.motion3 import Motion3Builder
+from live2d_builder.physics.config import PhysicsBuilder, prune_physics_to_parameters
 
 log = get_logger("exporter.model3")
 
@@ -40,6 +43,7 @@ class Model3Exporter:
     def __init__(self, max_atlas_size: int = 2048) -> None:
         self.max_atlas_size = max_atlas_size
         self._atlas = TextureAtlas(max_size=max_atlas_size)
+        self.motion_files: List[str] = []
         self._params = ParameterSet()
         self._expressions = ExpressionBuilder()
         self._physics = PhysicsBuilder()
@@ -55,6 +59,7 @@ class Model3Exporter:
         character_name: str = "character",
         compress_webp: bool = False,
         webp_quality: int = 85,
+        drivable_parameters: Optional[Dict[str, List[float]]] = None,
     ) -> Dict[str, str]:
         """Export all model files to ``output_dir``.
 
@@ -65,10 +70,14 @@ class Model3Exporter:
             compress_webp:   导出纹理时转换为 WebP（体积缩小 30%~50%）。
                              Cubism 4/5 SDK 均支持 WebP 纹理加载。
             webp_quality:    WebP 质量，0~100，默认 85。
+            drivable_parameters: 参数 id -> 已编译键形值序列。只有落在这个表里
+                             的参数才会被排进 motion；不给就不产出动画文件。
 
         Returns:
             dict with paths to all generated files.
         """
+        if not character_name or character_name in (".", "..") or any(c in character_name for c in "/\\:\x00"):
+            raise ValueError("character_name must be a safe filename")
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
 
@@ -77,6 +86,11 @@ class Model3Exporter:
         physics_data: Dict = builder_result.get("physics3")
         if physics_data is None:
             physics_data = self._build_default_physics(layers)
+        # 只保留两端都已声明的物理链：引用缺失参数的链会被内核静默丢弃，
+        # 留下文件只会造出「有物理、却一动不动」的假产物。
+        physics_data = prune_physics_to_parameters(
+            physics_data,
+            (builder_result.get("parameters") or {}).get("cubism_params"))
 
         # 1. Pack textures（支持 WebP 压缩导出优化）
         texture_files = self._export_textures(
@@ -86,17 +100,23 @@ class Model3Exporter:
 
         # 2. Build file references
         moc_filename = f"{character_name}.moc3"
-        physics_filename = f"{character_name}.physics3.json"
 
         # 3. Expressions
         expr_manifest = self._expressions.export_to_directory(str(out))
 
-        # 4. Physics
-        physics_path = out / physics_filename
-        physics_path.write_text(
-            json.dumps(physics_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        # 4. Physics（一条链都不剩时不写文件，也不在清单里留引用）
+        physics_filename = ""
+        kept_settings = (physics_data or {}).get("PhysicsSettings") or []
+        if kept_settings:
+            physics_path = out / f"{character_name}.physics3.json"
+            physics_path.write_text(
+                json.dumps(physics_data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            physics_filename = f"{character_name}.physics3.json"
+        else:
+            log.warning("没有可用的物理链（引用了模型里未声明的参数），"
+                        "physics3.json 不写出")
 
         # 5. Groups (EyeBlink, LipSync)
         groups = self._build_groups(builder_result)
@@ -104,10 +124,7 @@ class Model3Exporter:
         # 6. Hit areas
         hit_areas = self._build_hit_areas(layers)
 
-        # 7. Layout
-        layout = self._build_layout()
-
-        # 7b. Deformers (warp grids + eye rotation pivots). The eye rotation
+        # 7. Deformers (warp grids + eye rotation pivots). The eye rotation
         # deformers carry the *measured* eyeball centroid as their pivot so
         # the gaze rotation centre is inspectable from model3.json.
         deformers = self._build_deformers(builder_result)
@@ -119,12 +136,18 @@ class Model3Exporter:
         # character and can deform each part independently.
         preview_layers = self._export_preview_layers(layers, out, character_name)
 
-        # 8. Assemble model3.json
+        # 8. Motions. 曲线只覆盖真的有键形驱动的参数：给一个动不了的参数排
+        #    曲线会得到「文件齐全但画面一动不动」的假产物。
+        motions_manifest = self._export_motions(
+            out, character_name, drivable_parameters)
+
+        # 8b. Assemble model3.json
         file_refs = self._build_file_references(
             moc=moc_filename,
             textures=texture_files,
             physics=physics_filename,
             expressions=expr_manifest,
+            motions=motions_manifest,
         )
         param_list = self._params.export_cubism_params()
 
@@ -133,7 +156,6 @@ class Model3Exporter:
             "FileReferences": file_refs,
             "Groups": groups,
             "HitAreas": hit_areas,
-            "Layout": layout,
             "Parameters": param_list,
             "Deformers": deformers,
             "PreviewLayers": preview_layers,
@@ -157,10 +179,13 @@ class Model3Exporter:
             "output_dir": str(out),
             "model3_json": str(model3_path),
             "moc3_ref": moc_filename,
+            "atlas_uvs": getattr(self, "_last_atlas_uvs", {}),
             "textures": [str(out / f) for f in texture_files],
             "texture_files": texture_files,
-            "physics": str(physics_path),
+            "physics": str(out / physics_filename) if physics_filename else "",
             "expressions": expr_manifest,
+            "motions": motions_manifest,
+            "motion_files": self.motion_files,
             "mesh_data": str(mesh_data_path),
             "guide": str(guide_path),
         }
@@ -168,6 +193,27 @@ class Model3Exporter:
     # ------------------------------------------------------------------
     # Component builders
     # ------------------------------------------------------------------
+
+    def _export_motions(self, out: Path, character_name: str,
+                        drivable_parameters: Optional[Dict[str, List[float]]]
+                        ) -> Dict[str, List[dict]]:
+        """生成并写出 idle 动作。
+
+        没有可动参数就返回空清单（``Motions`` 保持 ``{}``）—— 给动不了的参数
+        排曲线会得到「文件齐全但画面一动不动」的假产物。
+        """
+        self.motion_files = []
+        if not drivable_parameters:
+            return {}
+        builder = Motion3Builder()
+        document = builder.build_idle(drivable_parameters)
+        if document is None:
+            return {}
+        manifest = builder.export_to_directory(
+            str(out), character_name, {"idle": document})
+        self.motion_files = [str(out / entry["File"])
+                             for entries in manifest.values() for entry in entries]
+        return manifest
 
     def _build_file_references(
         self,
@@ -257,7 +303,7 @@ class Model3Exporter:
         for z, (name, img) in enumerate(layers.items()):
             try:
                 safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
-                fname = f"{safe}.png"
+                fname = f"{z:03d}_{safe}.png"
                 rgba = img if img.mode == "RGBA" else img.convert("RGBA")
                 rgba.save(str(preview_dir / fname))
                 manifest.append({
@@ -373,19 +419,6 @@ class Model3Exporter:
             "Height": round((max_y - min_y) / canvas, 4),
         }
 
-    @staticmethod
-    def _build_layout() -> Dict[str, Any]:
-        """Return default model layout configuration."""
-        return {
-            "Width": 2048,
-            "Height": 2048,
-            "X": 0,
-            "Y": 0,
-            "CenterX": 0.0,
-            "CenterY": 0.0,
-            "PixelsPerUnit": 1.0,
-        }
-
     # ------------------------------------------------------------------
     # Texture export
     # ------------------------------------------------------------------
@@ -417,6 +450,8 @@ class Model3Exporter:
             return [fname]
 
         atlas_result = self._atlas.pack(layers)
+        # 供 moc3 编译等下游使用：每层在图集中的归一化 UV 摆放
+        self._last_atlas_uvs = dict(atlas_result.get("uvs", {}))
         texture_files: List[str] = []
         for idx, atlas_img in enumerate(atlas_result["atlases"]):
             fname = f"{character_name}.texture_{idx:02d}{ext}"
@@ -529,126 +564,23 @@ class Model3Exporter:
     @staticmethod
     def _build_guide_text(character_name: str) -> str:
         """Build the markdown guide text."""
-        return f"""# Cubism Editor Import Guide — {character_name}
+        return f"""# Cubism 制作素材说明 — {character_name}
 
-Generated: {time.strftime("%Y-%m-%d %H:%M:%S")}
+本文件包是制作准备素材，不是可直接部署的 Live2D 模型。
 
-## What This Package Contains
+- PNG 图层及 PSD（如果提供）用于导入 Cubism Editor。
+- model3.json 是运行时描述，不是可编辑的 cmo3 工程；不能打开它自动恢复绑定。
+- meshes.json、Parameters 和 Deformers 是本项目的辅助数据，不会自动成为 Cubism 绑定。
+- 当前导出器没有实现 moc3 编译，也未完成 Cubism Editor 自动绑定集成。
 
-| File | Purpose |
-|------|---------|
-| `{character_name}.model3.json` | Cubism 4 model definition |
-| `{character_name}.moc3` | **NOT included** — generated by Cubism Editor |
-| `{character_name}.texture_00.png` | Texture atlas(es) |
-| `{character_name}.physics3.json` | Physics settings (hair, body, breath, skirt) |
-| `{character_name}.meshes.json` | Per-layer mesh data (vertices, UVs, triangles) |
-| `expressions/*.exp3.json` | 28 facial expressions |
-| `{character_name}.psd` | Original layered PSD (if provided) |
+## 正确流程
+1. 将 PSD 导入 Cubism Editor，检查图层及叠放顺序。
+2. 创建或检查 ArtMesh、变形器、参数关键形、遮挡和物理效果。
+3. 保存 cmo3 工程，再用编辑器导出 moc3 和配套运行时文件。
+4. 使用编辑器生成的纹理和描述文件整包替换，不要混用本项目重排的纹理。
+5. 在 Cubism SDK 或 VTube Studio 中实际加载，验证眨眼、嘴型、转头和物理。
 
-## Step-by-Step Import
-
-### 1. Prepare the PSD
-1. Open Adobe Photoshop or a PSD-capable editor.
-2. Ensure each body part is on a named layer.
-3. Recommended layer names follow the 52-layer Live2D standard:
-   - `Hair_Back`, `Hair_Front`, `Hair_Side_L/R`, `Hair_Top`
-   - `Face_Base`, `Face_Blush`, `Ear_L/R`
-   - `Eye_L/R`, `Eyeball_L/R`, `Eyelash_L/R`, `Brow_L/R`
-   - `Nose`, `Mouth_UpperLip`, `Mouth_LowerLip`, `Mouth_Cavity`
-   - `Neck`, `Chest`, `Waist_Hips`, `Clothes_Inner/Outer`
-   - `UpperArm_Back_L/R`, `Forearm_Back_L/R`
-   - `Thigh_L/R`, `Calf_L/R`, `Foot_L/R`
-
-### 2. Import into Cubism Editor
-1. Launch Live2D Cubism Editor 4.2+.
-2. **File > Open Model** and select `{character_name}.model3.json`.
-3. When prompted, point to the PSD file.
-4. Cubism Editor will auto-detect layers matching the model definitions.
-
-### 3. Generate the Moc3 File
-The `.moc3` binary is proprietary and cannot be generated outside Cubism Editor.
-1. After importing and verifying the model, **File > Export > Export as .moc3 file**.
-2. Save as `{character_name}.moc3` in the same directory as `model3.json`.
-3. The model3.json already references this filename.
-
-### 4. Apply Mesh Data
-The `{character_name}.meshes.json` file contains Delaunay-triangulated meshes
-for each layer. In Cubism Editor:
-1. Select an ArtMesh.
-2. In the **Mesh** palette, choose **Edit Mesh**.
-3. Use the vertex counts from `meshes.json` as a guide for mesh density.
-4. Apply UV coordinates from the JSON (u0, v0, u1, v1 per layer).
-
-### 5. Set Up Parameters
-All standard Cubism 4 parameters are already defined in model3.json:
-- `ParamAngleX/Y/Z` — Head rotation
-- `ParamBodyAngleX/Y/Z` — Body rotation
-- `ParamEyeLOpen/ParamEyeROpen` — Eye blink
-- `ParamEyeBallX/Y` — Gaze direction
-- `ParamMouthForm/ParamMouthOpenY` — Mouth
-- `ParamBrowL/R (Y, Angle, Form)` — Eyebrows
-- `ParamBreath` — Breathing
-- `ParamCheek`, `ParamTears` — Special effects
-- `ParamHairSwing`, `ParamBodySway` — Custom
-
-### 6. Apply Physics
-1. In Cubism Editor, open **Physics > Load Physics Settings**.
-2. Select `{character_name}.physics3.json`.
-3. Verify pendulum settings for:
-   - HairFront / HairBack (pendulum swing)
-   - BodyBounce (body bounce on movement)
-   - Breathing (slow cyclic breathing)
-   - Skirt (if present, cloth sway)
-
-### 7. Load Expressions
-The `expressions/` folder contains 28 pre-built `.exp3.json` files.
-In Cubism Editor:
-1. Open the **Expressions** palette.
-2. The expressions are automatically referenced by model3.json.
-3. Preview each expression by clicking its name.
-
-### 8. VTube Studio / VSeeFace Compatibility
-After generating moc3:
-1. Copy the entire model folder to VTube Studio's `Live2DModels/` directory.
-2. In VTube Studio, select the model from the model list.
-3. VTube Studio reads model3.json directly — no conversion needed.
-
-For VSeeFace, place the folder in `VSeeFace/Models/VSeeFace_Models/`.
-
-## Bone Hierarchy (32 bones)
-
-The bone tree follows the standard Live2D layout:
-```
-Root
- +-- Body
- |    +-- Torso (Chest + Waist)
- |    +-- Neck -> Head
- |    |    +-- Face, Hair_Back/Front/Side/Top, Ears
- |    |    +-- Eye_L -> Eyeball_L, Eyelash_L, Brow_L
- |    |    +-- Eye_R -> Eyeball_R, Eyelash_R, Brow_R
- |    |    +-- Nose, Mouth
- |    +-- ArmBack_L/R, Skirt, Leg_L/R
-```
-
-## Deformers
-
-Warp deformers are provided for:
-- HairFrontSwing (3x3 grid) — front hair swing
-- HairBackSwing (4x2 grid) — back hair swing
-- BodySway (2x2 grid) — torso sway
-- SkirtSway (4x3 grid) — skirt cloth
-- BreathChest (2x2 grid) — breathing chest expansion
-
-Rotation deformers:
-- EyeTrack_L / EyeTrack_R — eye gaze pivot
-
-## Notes
-
-- Textures are packed at 2048x2048 with 2px padding to prevent bleeding.
-- Physics uses pendulum model with gravity and damping parameters.
-- The eye blink group automatically blinks both eyes on `EyeBlink`.
-- Lip sync uses `ParamMouthOpenY` driven by audio volume.
-- All parameter ranges follow the Cubism 4 SDK specification.
+VSeeFace 使用 VRM 三维角色，不支持将此 Cubism 素材包直接部署为角色。
 """
 
     # ------------------------------------------------------------------

@@ -46,6 +46,7 @@ const ExportPage: NextPage = () => {
   const [job, setJob] = useState<ExportJob | null>(null);
   const [history, setHistory] = useState<ExportJob[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [blocker, setBlocker] = useState<string>('');
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     setMounted(true);
@@ -102,24 +103,21 @@ const ExportPage: NextPage = () => {
         const result = await apiClient.exportModel(selectedId, format).catch(() => null);
         const opt = FORMATS.find((f) => f.id === format)!;
         const filename = `${(selected?.name || 'character').replace(/\s+/g, '_')}_${format}${opt.ext}`;
-        if (result && result.success) {
-          // real download: model3_json/texture/model_path are returned as text/URL paths
-          const payload = result.model3_json || result.texture || result.model_path || '';
-          const size = typeof payload === 'string' ? payload.length : 0;
-          const url = result.model_path
-            ? result.model_path
-            : payload
-            ? `data:text/plain;charset=utf-8,${encodeURIComponent(payload)}`
-            : `#export-${format}`;
-          downloads.push({ format, filename, size, url });
-        } else {
-          // placeholder for demo / failed export
-          downloads.push({
-            format,
-            filename,
-            size: Math.round(Math.random() * 5_000_000) + 100_000,
-            url: `#demo-${format}`,
-          });
+        if (!result || !result.success) {
+          throw new Error(`Export failed for ${format}`);
+        }
+        const payload = result.model3_json || result.texture || result.model_path || '';
+        if (!payload) {
+          throw new Error(`Export returned no file for ${format}`);
+        }
+        const size = typeof payload === 'string' ? payload.length : 0;
+        const url = result.model_path
+          ? result.model_path
+          : `data:text/plain;charset=utf-8,${encodeURIComponent(payload)}`;
+        downloads.push({ format, filename, size, url });
+        // 如实反映「能否直接运行」：缺 .moc3 时给出明确阻塞原因
+        if (result.runtime_ready === false && result.blocker) {
+          setBlocker(result.blocker);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : `Export failed for ${format}`);
@@ -284,6 +282,12 @@ const ExportPage: NextPage = () => {
           {error && (
             <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-sm text-red-300">
               {error}
+            </div>
+          )}
+
+          {blocker && (
+            <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
+              <span className="font-semibold">导出成功，但该模型包暂不能直接运行：</span> {blocker}
             </div>
           )}
 

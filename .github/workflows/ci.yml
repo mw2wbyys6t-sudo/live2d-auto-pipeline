@@ -5,6 +5,8 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main]
+  # 手动入口：跑需要官方内核 + 逐像素验收的 moc3-acceptance job
+  workflow_dispatch:
 
 jobs:
   # ===== Python Tests =====
@@ -44,6 +46,10 @@ jobs:
           pip install pytest pytest-asyncio pytest-cov
           # Install optional deps with --no-deps to avoid pulling large model packages
           pip install edge-tts || true
+          # py-moc3：容器结构参考与交叉校验（纯 Python，CI 安全）。
+          # live2d-py（官方内核）**不在此安装**：其加载/渲染需要 GL 上下文，
+          # 由下方 moc3-acceptance job 在带 xvfb 的环境里安装并跑完整验收。
+          pip install py-moc3 || true
           pip install rembg[cpu] || true
           pip install mediapipe || true
           pip install "pygame>=2.5.0; python_version < '3.14'" || true
@@ -130,6 +136,43 @@ jobs:
       - name: Build
         working-directory: web
         run: npm run build
+
+  # ===== moc3 Acceptance (opt-in: 官方内核 + 逐像素形变) =====
+  # 默认 job 不装 live2d-py（加载/渲染需要 GL 上下文），所以一致性/加载/像素判据
+  # 在默认 job 里会被 skip —— 那些"绿色"不能证明模型真能被官方内核接受。
+  # 本 job 提供"真的装上内核并跑完整验收"的入口：只有它绿，才算模型能被加载、
+  # 参数真的驱动画面。首次运行需人工确认环境可跑通，确认后可再加 schedule 定时。
+  moc3-acceptance:
+    name: moc3 Acceptance (live2d-py + pixels)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system deps (headless GL)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0 libegl1 xvfb
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install Pillow numpy requests psd-tools scipy scikit-learn opencv-python onnxruntime
+          pip install pytest pytest-asyncio
+          pip install py-moc3
+          pip install live2d-py
+
+      - name: Run moc3 acceptance suite
+        env:
+          LIVE2D_TEST_PIXELS: "1"
+        run: |
+          xvfb-run -a python -m pytest tests/integration -q --no-header
 
   # ===== Docker Build =====
   docker-build:

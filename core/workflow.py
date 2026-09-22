@@ -75,6 +75,7 @@ class WorkflowEngine:
         height: int = 1024,
         character_consistency: Any = None,
         use_semantic_segmentation: bool = True,
+        segmentation_backend: str = "auto",
         export_live2d: bool = False,
     ):
         """Initialize the workflow engine.
@@ -97,10 +98,15 @@ class WorkflowEngine:
         self.output_dir = Path(output_dir or config.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.k_clusters = k_clusters
-        self.provider_name = provider
+        # "auto"/空字符串表示由 ProviderRouter 按优先级自动选择
+        self.provider_name = None if provider in (None, "", "auto") else provider
         self.width = width
         self.height = height
         self.use_semantic_segmentation = use_semantic_segmentation
+        #: 传给 SemanticLayerer 的 model_type；"sam2_gd" = GroundingDINO + SAM2。
+        #: 该后端不降级成颜色启发式：缺模型/权重就抛 ModelUnavailable，
+        #: workflow 以 error 收尾，而不是悄悄换算法。
+        self.segmentation_backend = segmentation_backend or "auto"
         self.export_live2d = export_live2d
 
         # Character consistency (lazy loaded)
@@ -113,7 +119,8 @@ class WorkflowEngine:
         self.router = get_router(config)
         self.qa_engine = QAEngine()
         self.kmeans_layerer = KMeansLayerer(k_clusters=k_clusters)
-        self.semantic_layerer = SemanticLayerer()
+        self.semantic_layerer = SemanticLayerer(
+            model_type=self.segmentation_backend)
         self.layer_composer = LayerComposer()
         self.layer52_gen = Layer52Generator()
         self.psd_creator = PSDCreator()
@@ -185,6 +192,50 @@ class WorkflowEngine:
     # ------------------------------------------------------------------
     # Main pipeline
     # ------------------------------------------------------------------
+
+    def _step_layering(self, optimized_img, result: Dict, timestamp: int):
+        """分层一步。K-means 只作最后兜底：只要语义分层产出了图层（即使退化为
+        HSV 颜色回落，它仍带部位名），就保留它用于 PSD —— 换成 K-means 的
+        layer_000..NNN 会让 PSD 在 PS/GIMP 里失去可编辑语义。
+
+        点名要的后端（如 ``sam2_gd``）没产出部件时，降级会写进
+        ``result['steps']['layering']``：调用方不能把 K-means 的结果读成自己
+        选的那条链路。这是本仓库「禁止虚假成功」的一部分。
+        """
+        if not self.use_semantic_segmentation:
+            self._set_state("layering", f"K-means layering (k={self.k_clusters})", 60)
+            layers_output = str(self.output_dir / f"layers_{timestamp}")
+            layer_result = self.kmeans_layerer.layer(
+                optimized_img, output_dir=layers_output)
+            return (layer_result.get("output_dir", layers_output), layer_result)
+
+        self._set_state("layering", "Semantic segmentation (SAM / ISNet)", 60)
+        layers_output = str(self.output_dir / f"layers_{timestamp}")
+        layer_result = self.semantic_layerer.layer(
+            optimized_img, output_dir=layers_output)
+        if not layer_result.get("layers"):
+            requested = self.semantic_layerer.model_type
+            if requested not in ("auto", "kmeans"):
+                result["steps"]["layering"] = {
+                    "requested_backend": requested,
+                    "used_backend": "kmeans",
+                    "degraded": True,
+                    "reason": layer_result.get("error")
+                              or f"{requested} 没有产出任何可用部件",
+                    "missing_parts": layer_result.get("missing_parts") or [],
+                }
+                log.warning(f"分层后端 {requested} 未产出部件，已降级为 K-means"
+                            f"（记录在 steps.layering.degraded）")
+            else:
+                log.info("Semantic segmentation produced no layers; "
+                         "falling back to K-means")
+            layers_output = str(self.output_dir / f"layers_{timestamp}_kmeans")
+            layer_result = self.kmeans_layerer.layer(
+                optimized_img, output_dir=layers_output)
+        elif layer_result.get("method") == "semantic_hsv_fallback":
+            log.warning("Semantic segmentation degraded to HSV color fallback; "
+                        "keeping named layers")
+        return (layer_result.get("output_dir", layers_output), layer_result)
 
     def run(
         self,
@@ -303,27 +354,8 @@ class WorkflowEngine:
             log.info("Image optimized: background removed, contrast enhanced")
 
             # === Step 4: Layer separation ===
-            if self.use_semantic_segmentation:
-                self._set_state("layering", "Semantic segmentation (with K-means fallback)", 60)
-                layers_output = str(self.output_dir / f"layers_{timestamp}")
-                layer_result = self.semantic_layerer.layer(optimized_img, output_dir=layers_output)
-                # v10.1: fall back to KMeans when semantic is unavailable OR when
-                # it degraded to HSV color fallback (quality ≈ KMeans, but KMeans
-                # produces more coherent clusters for rigging). Use a _kmeans suffixed
-                # directory so the semantic output remains available for diagnosis
-                # without mixing with KMeans layers.
-                if not layer_result.get("success") or layer_result.get("method") == "semantic_hsv_fallback":
-                    reason = "unavailable" if not layer_result.get("success") else "HSV fallback"
-                    log.info(f"Semantic segmentation {reason}; falling back to K-means")
-                    layers_output_k = str(self.output_dir / f"layers_{timestamp}_kmeans")
-                    layer_result = self.kmeans_layerer.layer(optimized_img, output_dir=layers_output_k)
-            else:
-                self._set_state("layering", f"K-means layering (k={self.k_clusters})", 60)
-                layers_output = str(self.output_dir / f"layers_{timestamp}")
-                layer_result = self.kmeans_layerer.layer(optimized_img, output_dir=layers_output)
-
-            # Extract timestamp/output dir from layer_result
-            layers_output = layer_result.get("output_dir", str(self.output_dir / f"layers_{timestamp}"))
+            layers_output, layer_result = self._step_layering(
+                optimized_img, result, timestamp)
 
             # Identify parts
             layers_with_parts = self.part_identifier.identify_layers(
@@ -389,8 +421,17 @@ class WorkflowEngine:
             # === Step 5: PSD export ===
             self._set_state("psd_export", "Creating PSD file", 75)
             psd_output = str(Path(layers_output) / "character.psd")
-            psd_result = self.psd_creator.create_psd(layers_output, psd_output)
+            # 传入有序的语义层名：PSD 在 PS/GIMP 中应显示 hair_back/face/eye_L，
+            # 而不是 layer_000，同时保持正确的前后层次序。
+            psd_names = [l.get("name") for l in (layer_result.get("layers") or []) if l.get("name")]
+            psd_result = self.psd_creator.create_psd(
+                layers_output, psd_output, ordered_names=psd_names or None
+            )
             result["steps"]["psd"] = psd_result
+            if not psd_result.get("success") or psd_result.get("fallback"):
+                raise RuntimeError(psd_result.get("error") or "PSD export produced only a PNG fallback package")
+            if not Path(psd_result.get("psd_path", "")).is_file():
+                raise RuntimeError("PSD export did not produce a file")
             log.success(f"PSD created: {psd_result.get('psd_path', 'N/A')}")
 
             # === Step 6: 52-layer mapping (DEF-004) ===
@@ -421,6 +462,8 @@ class WorkflowEngine:
                 self._set_state("pet_deploy", "Creating desktop pet package", 95)
                 pet_result = self._create_pet(rig_output if rig_result else layers_output)
                 result["steps"]["pet"] = pet_result
+                if not pet_result.get("success"):
+                    raise RuntimeError(pet_result.get("error") or "Desktop deployment failed")
 
             # === Step 8: Save/update character card ===
             if self._character_card and self._character_manager:
@@ -434,16 +477,23 @@ class WorkflowEngine:
 
             self._set_state("done", "Workflow complete!", 100)
             result["success"] = True
+            result["runtime_verified"] = False
+            result["deployment_ready"] = False
+            result["artifact_type"] = "preparation_bundle"
+            result["deployment_blockers"] = [
+                "Cubism moc3 compilation and actual runtime loading have not been verified"
+            ]
             result["character_image"] = character_path
             result["layers_dir"] = layers_output
             result["output_dir"] = str(self.output_dir)
 
         except Exception as e:
+            failed_state = self.state
             self._set_state("error", f"Error: {e}", 0)
             log.error(f"Workflow failed: {e}", exc_info=True)
             result["success"] = False
             result["error"] = str(e)
-            result["error_state"] = self.state
+            result["error_state"] = failed_state
         finally:
             # P1-2: Clean up temporary files (but keep final outputs)
             self._cleanup_temp()
@@ -615,6 +665,7 @@ def run_workflow(
     provider: Optional[str] = None,
     character_id: Optional[str] = None,
     use_semantic: bool = True,
+    segmentation_backend: str = "auto",
     export_live2d: bool = False,
     **kwargs
 ) -> Dict:
@@ -629,6 +680,9 @@ def run_workflow(
         provider: Image provider name.
         character_id: Character ID for consistency (loads or creates).
         use_semantic: Use semantic segmentation (True) or K-means (False).
+        segmentation_backend: Semantic backend, e.g. ``"sam2_gd"`` (GroundingDINO
+            + SAM2). Missing weights raise ``ModelUnavailable`` — the run fails
+            instead of quietly switching algorithm.
         export_live2d: Export Live2D model3 scaffold.
         **kwargs: Additional arguments passed to WorkflowEngine.run().
 
@@ -641,6 +695,7 @@ def run_workflow(
         provider=provider,
         character_consistency=character_id,
         use_semantic_segmentation=use_semantic,
+        segmentation_backend=segmentation_backend,
         export_live2d=export_live2d,
     )
     return engine.run(

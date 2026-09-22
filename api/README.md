@@ -307,4 +307,4 @@ Go API 服务通过以下方式与现有 Python 工具集成：
 
 ## 📄 许可证
 
-与主项目相同，详见 [LICENSE](../LICENSE)
+本项目采用 **Apache-2.0 License**，与主项目一致，详见根目录 [LICENSE](../LICENSE)。

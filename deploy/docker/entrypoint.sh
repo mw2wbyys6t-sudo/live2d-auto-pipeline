@@ -30,7 +30,7 @@ done
 # Start Next.js web server
 echo "Starting web UI on port 3000..."
 cd /app/web
-npx next start -p 3000 &
+node node_modules/next/dist/bin/next start -p 3000 &
 WEB_PID=$!
 cd /app
 
@@ -44,4 +44,9 @@ echo ""
 trap "kill $API_PID $WEB_PID 2>/dev/null; exit 0" SIGTERM SIGINT
 
 # Wait
+set +e
+wait -n "$API_PID" "$WEB_PID"
+STATUS=$?
+kill "$API_PID" "$WEB_PID" 2>/dev/null
 wait
+exit "$STATUS"

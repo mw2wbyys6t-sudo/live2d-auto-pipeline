@@ -92,10 +92,11 @@ func main() {
 	r.Use(func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
 		if origin != "" {
-			// 生产环境中应使用白名单验证 origin
-			allowedOrigins := cfg.Server.AllowedOrigins
-			if len(allowedOrigins) == 0 || contains(allowedOrigins, origin) {
+			// 严格白名单：只有命中列表才回 CORS 头。空列表 = 不启用跨域，
+			// 而不是"放行所有"——否则任意站点都能携带凭据调用本服务。
+			if contains(cfg.Server.AllowedOrigins, origin) {
 				c.Header("Access-Control-Allow-Origin", origin)
+				c.Header("Vary", "Origin")
 				c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
 				c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 				c.Header("Access-Control-Allow-Credentials", "true")
@@ -161,6 +162,7 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 		api.POST("/export/psd", h.ExportPSD)
 		api.POST("/export/spine", h.ExportSpine)
 		api.POST("/deploy/desktop", h.DeployDesktop)
+        api.GET("/deploy/desktop/status", h.DesktopStatus)
 
 		// 角色管理 v10
 		chars := api.Group("/characters")
@@ -178,6 +180,10 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 
 		// WebSocket v10
 		api.GET("/ws", h.WSHandle)
+
+		// 摄像头面捕：Go 后端未实现，显式回 501（前端 /preview 会调用这两个端点）
+		api.POST("/tracking/start", h.TrackingUnavailable)
+		api.POST("/tracking/stop", h.TrackingUnavailable)
 
 		// 工具
 		api.GET("/scripts", h.GetPythonScripts)

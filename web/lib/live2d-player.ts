@@ -1,5 +1,12 @@
 import { Application, Container, Mesh, MeshMaterial, PlaneGeometry, Texture, Assets } from 'pixi.js';
 import type { Model3Json, ParameterDef } from '../types';
+import {
+  STANDARD_PARAMS,
+  clampToBounds,
+  resolveBounds,
+  resolveParameters,
+  type ParameterBounds,
+} from './live2d-params';
 
 export type PartGroup = 'hair' | 'face' | 'eyes' | 'mouth' | 'body' | 'other';
 
@@ -39,22 +46,6 @@ export interface Live2DPlayerOptions {
   autoStart?: boolean;
 }
 
-const STANDARD_PARAMS: ParameterDef[] = [
-  { id: 'ParamAngleX', name: 'Angle X', min: -30, max: 30, default: 0, group: 'Head' },
-  { id: 'ParamAngleY', name: 'Angle Y', min: -30, max: 30, default: 0, group: 'Head' },
-  { id: 'ParamAngleZ', name: 'Angle Z', min: -30, max: 30, default: 0, group: 'Head' },
-  { id: 'ParamEyeLOpen', name: 'Eye L Open', min: 0, max: 1, default: 1, group: 'Eyes' },
-  { id: 'ParamEyeROpen', name: 'Eye R Open', min: 0, max: 1, default: 1, group: 'Eyes' },
-  { id: 'ParamEyeBallX', name: 'Eye Ball X', min: -1, max: 1, default: 0, group: 'Eyes' },
-  { id: 'ParamEyeBallY', name: 'Eye Ball Y', min: -1, max: 1, default: 0, group: 'Eyes' },
-  { id: 'ParamMouthForm', name: 'Mouth Form', min: -1, max: 1, default: 0, group: 'Mouth' },
-  { id: 'ParamMouthOpenY', name: 'Mouth Open', min: 0, max: 1, default: 0, group: 'Mouth' },
-  { id: 'ParamBrowLY', name: 'Brow L Y', min: -1, max: 1, default: 0, group: 'Brows' },
-  { id: 'ParamBrowRY', name: 'Brow R Y', min: -1, max: 1, default: 0, group: 'Brows' },
-  { id: 'ParamBodyAngleX', name: 'Body Angle X', min: -10, max: 10, default: 0, group: 'Body' },
-  { id: 'ParamBreath', name: 'Breath', min: 0, max: 1, default: 0, group: 'Body' },
-];
-
 // Vertex grid subdivision for the deformable planes. 5 vertices per side
 // yields a 4x4 cell grid (25 verts) which is enough for smooth warp/mouth.
 const PLANE_SEGMENTS = 5;
@@ -77,6 +68,10 @@ export class Live2DPlayer {
   private layers: LayerEntry[] = [];
   private params: Map<string, number> = new Map();
   private targetParams: Map<string, number> = new Map();
+  /** 参数清单：模型声明优先，缺失时退回标准表（供 UI / 校验页读取）。 */
+  private resolvedParams: ParameterDef[] = STANDARD_PARAMS.map((p) => ({ ...p }));
+  /** 可安全夹取的区间；只收可信来源，未知参数保持不夹取。 */
+  private bounds: Map<string, ParameterBounds> = resolveBounds(null);
   private expressions: Map<string, Record<string, number>> = new Map();
   private currentExpression = 'default';
   private running = false;
@@ -107,6 +102,12 @@ export class Live2DPlayer {
   async loadModel(modelUrl: string): Promise<void> {
     this.destroy();
     this._generation++;
+    // destroy() 会清空参数表；重新载入后必须恢复标准参数默认值，
+    // 否则 update() 的插值循环没有可动参数，角色只会停在静止姿态。
+    for (const p of STANDARD_PARAMS) {
+      this.params.set(p.id, p.default);
+      this.targetParams.set(p.id, p.default);
+    }
     const generation = this._generation;
     let app: Application;
     try {
@@ -168,6 +169,7 @@ export class Live2DPlayer {
     if (!res.ok) throw new Error(`Failed to load model3.json: ${res.status}`);
     const model3 = (await res.json()) as Model3Json;
     this.model3 = model3;
+    this._applyModelParameters(model3);
 
     const cx = (app.renderer.width / (this.options.resolution || 1)) / 2;
     const cy = (app.renderer.height / (this.options.resolution || 1)) / 2;
@@ -365,13 +367,28 @@ export class Live2DPlayer {
     return 'other';
   }
 
+  /**
+   * 用模型声明的参数刷新清单与夹取区间。
+   * 调用方在载入前设过的值会保留（用 has 判断），避免覆盖用户已拖动的滑块。
+   */
+  private _applyModelParameters(model3: Model3Json | null): void {
+    this.resolvedParams = resolveParameters(model3);
+    this.bounds = resolveBounds(model3);
+    for (const p of this.resolvedParams) {
+      if (!this.params.has(p.id)) this.params.set(p.id, p.default);
+      if (!this.targetParams.has(p.id)) this.targetParams.set(p.id, p.default);
+    }
+  }
+
   setParameter(name: string, value: number): void {
-    this.targetParams.set(name, value);
+    this.targetParams.set(name, clampToBounds(value, this.bounds.get(name)));
   }
 
   setParameters(params: Record<string, number>): void {
     for (const [k, v] of Object.entries(params)) {
-      if (typeof v === 'number') this.targetParams.set(k, v);
+      if (typeof v === 'number') {
+        this.targetParams.set(k, clampToBounds(v, this.bounds.get(k)));
+      }
     }
   }
 
@@ -380,7 +397,7 @@ export class Live2DPlayer {
     const exp = this.expressions.get(name);
     if (!exp) return;
     for (const [k, v] of Object.entries(exp)) {
-      this.targetParams.set(k, v);
+      this.targetParams.set(k, clampToBounds(v, this.bounds.get(k)));
     }
   }
 
@@ -424,7 +441,7 @@ export class Live2DPlayer {
   }
 
   get paramsCount(): number {
-    return this.params.size;
+    return this.resolvedParams.length;
   }
 
   get triangleCount(): number {
@@ -614,6 +631,8 @@ export class Live2DPlayer {
     this.params.clear();
     this.targetParams.clear();
     this.expressions.clear();
+    this.resolvedParams = STANDARD_PARAMS.map((p) => ({ ...p }));
+    this.bounds = resolveBounds(null);
     if (this.app) {
       this.app.destroy(true, { children: true, texture: true, baseTexture: true });
       this.app = null;

@@ -98,6 +98,9 @@ func (s *CharacterService) CreateCharacter(req models.CharacterRequest) (*models
 
 // GetCharacter 获取单个角色
 func (s *CharacterService) GetCharacter(characterID string) (*models.CharacterCard, error) {
+	if err := validateCharacterID(characterID); err != nil {
+		return nil, err
+	}
 	path := s.cardPath(characterID)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -179,6 +182,9 @@ func (s *CharacterService) UpdateCharacter(characterID string, req models.Charac
 
 // DeleteCharacter 删除角色
 func (s *CharacterService) DeleteCharacter(characterID string) error {
+	if err := validateCharacterID(characterID); err != nil {
+		return err
+	}
 	path := s.cardPath(characterID)
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
@@ -194,6 +200,9 @@ func (s *CharacterService) DeleteCharacter(characterID string) error {
 
 // save 保存角色卡片到 JSON 文件
 func (s *CharacterService) save(card *models.CharacterCard) error {
+	if err := validateCharacterID(card.CharacterID); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(card, "", "  ")
 	if err != nil {
 		return err
@@ -237,19 +246,6 @@ func (s *CharacterService) GetGenerationPrompt(characterID, basePrompt string) (
 		return basePrompt + ", " + styleSuffix, nil
 	}
 	return styleSuffix, nil
-}
-
-// GetNegativePrompt 获取角色负面提示词
-func (s *CharacterService) GetNegativePrompt(characterID string) string {
-	card, err := s.GetCharacter(characterID)
-	if err != nil {
-		return "different character, inconsistent design, mutated face, bad anatomy"
-	}
-	defaults := "different character, inconsistent design, multiple characters, mutated face, bad anatomy, wrong hair color, wrong eye color"
-	if card.Style.NegativePrompt != "" {
-		return card.Style.NegativePrompt + ", " + defaults
-	}
-	return defaults
 }
 
 // generateID 生成唯一 ID

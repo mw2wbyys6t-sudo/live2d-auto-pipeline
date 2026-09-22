@@ -3,6 +3,7 @@ package services
 import (
 	"crypto/sha256"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -125,13 +126,27 @@ func (c *RequestCache) evictOldest() {
 	}
 }
 
-// estimateSizeMB 估算响应大小（MB）
+// estimateSizeMB 估算条目占用（MB）。
+//
+// 缓存对象本身只是一个很小的 JSON，真正的成本是它引用的生成图片文件；因此以
+// 磁盘上的实际文件大小为准（向上取整，最小 1MB），让 maxSizeMB 真正生效。
+// 旧实现恒定返回 0，导致容量上限形同虚设（只有条目数上限在工作）。
 func estimateSizeMB(response *models.GenerateImageResponse) int {
 	if response == nil {
 		return 0
 	}
-	// 粗略估算：图片路径约100字节，其他字段约200字节
-	return 0 // 实际大小由文件系统管理，这里简化处理
+	if response.ImagePath != "" {
+		if info, err := os.Stat(response.ImagePath); err == nil && info.Size() > 0 {
+			mb := int((info.Size() + (1 << 20) - 1) >> 20)
+			if mb < 1 {
+				mb = 1
+			}
+			return mb
+		}
+	}
+	// 文件不可达（路径为 URL 或已被删除）时给一个保守下限，而不是返回 0 ——
+	// 否则容量上限又会被"算不出来"绕过。
+	return 1
 }
 
 // Clear 清除所有缓存

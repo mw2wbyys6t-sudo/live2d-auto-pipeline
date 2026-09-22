@@ -16,6 +16,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.logger import get_logger
 
+# 摆长（内部无量纲值）到 Cubism 顶点 Radius/Y 的长度单位。官方 Haru 的发型
+# 子顶点 Radius 是 8 这个量级，而我们的摆长在 0.15~1.2 之间。
+_PENDULUM_UNIT = 10.0
+
+
+def _as_percent(weight: float) -> float:
+    """把权重统一到 Cubism 的 0-100 制（历史上这里混用过 0-1 与 0-100）。"""
+    value = float(weight)
+    return value * 100.0 if 0.0 < value <= 1.0 else value
+
 log = get_logger("rigging.physics")
 
 
@@ -35,6 +45,62 @@ def geometry_spring_params(height_px: float) -> Tuple[float, float]:
     stiffness = min(0.9, max(0.05, rigidity / 100.0))
     length_scale = max(0.5, min(2.0, h / 200.0))
     return stiffness, length_scale
+
+
+def prune_physics_to_parameters(physics_data: Dict[str, Any],
+                                declared) -> Dict[str, Any]:
+    """丢掉引用了「模型里没声明的参数」的物理链。
+
+    Cubism 对这种链是**静默丢弃**：文件合 schema、能加载、一致性全绿，参数却一动
+    不动（官方内核实测：``drivers/live2d_runtime/moc3_physics_probe.py`` 直接报
+    「physics 引用了模型里没有的参数」）。所以只能在产物侧保证自洽：
+    输入或输出任一端未声明就砍掉该链，砍空了的整组也一并去掉。
+    ``declared`` 为空（调用方没给参数表）时原样返回，不做臆测。
+    """
+    names = {str(p.get("Id")) for p in declared or [] if p.get("Id")}
+    if not names or not physics_data:
+        return physics_data
+    kept_settings = []
+    dropped = []
+    for setting in physics_data.get("PhysicsSettings") or []:
+        inputs = [i for i in setting.get("Input") or []
+                  if i.get("Source", {}).get("Target") != "Parameter"
+                  or i["Source"]["Id"] in names]
+        outputs = [o for o in setting.get("Output") or []
+                   if o.get("Destination", {}).get("Target") != "Parameter"
+                   or o["Destination"]["Id"] in names]
+        for entry in (setting.get("Input") or [])[len(inputs):]:
+            dropped.append(f"{setting.get('Id')}: 输入 "
+                           f"{entry.get('Source', {}).get('Id')}")
+        for entry in (setting.get("Output") or [])[len(outputs):]:
+            dropped.append(f"{setting.get('Id')}: 输出 "
+                           f"{entry.get('Destination', {}).get('Id')}")
+        has_input = any((i.get("Source") or {}).get("Target") == "Parameter"
+                        for i in inputs)
+        has_output = any((o.get("Destination") or {}).get("Target") == "Parameter"
+                         for o in outputs)
+        if has_input and has_output:
+            setting["Input"] = inputs
+            setting["Output"] = outputs
+            kept_settings.append(setting)
+        elif setting.get("Input") or setting.get("Output"):
+            dropped.append(f"{setting.get('Id')}: 整组（输入或输出已被清空）")
+    if not dropped:
+        return physics_data
+    physics_data["PhysicsSettings"] = kept_settings
+    meta = physics_data.get("Meta") or {}
+    meta["PhysicsSettingCount"] = len(kept_settings)
+    meta["TotalInputCount"] = sum(len(s.get("Input") or [])
+                                  for s in kept_settings)
+    meta["TotalOutputCount"] = sum(len(s.get("Output") or [])
+                                   for s in kept_settings)
+    meta["VertexCount"] = sum(len(s.get("Vertices") or [])
+                              for s in kept_settings)
+    meta["PhysicsDictionary"] = [
+        {"Id": s.get("Id"), "Name": s.get("Name") or ""}
+        for s in kept_settings]
+    log.warning(f"物理链引用了模型里未声明的参数，已剔除：{sorted(set(dropped))}")
+    return physics_data
 
 
 class PhysicsBuilder:
@@ -174,8 +240,11 @@ class PhysicsBuilder:
                 {"target": "Parameter", "id": "ParamAngleY", "weight": 5.0},
             ],
             outputs=[
+                # 只输出 ParamBodySway。曾经这里还输出 ParamBreath，而
+                # Breathing 组又以 ParamBreath 为输入 —— 官方内核把这种
+                # 参数环当循环依赖丢弃，实测那两条链 peak 恒为 0
+                # （drivers/live2d_runtime/moc3_physics_probe.py）。
                 {"target": "Parameter", "id": "ParamBodySway", "weight": 100, "scale": 1.0, "reflect": False},
-                {"target": "Parameter", "id": "ParamBreath", "weight": 30, "scale": 0.5, "reflect": False},
             ],
             pendulums=[
                 {"length": 0.20, "damping": 0.70, "stiffness": 0.50, "mass": 1.5},
@@ -196,7 +265,15 @@ class PhysicsBuilder:
                 {"target": "Parameter", "id": "ParamBreath", "weight": 1.0},
             ],
             outputs=[
-                {"target": "Parameter", "id": "ParamBodyAngleY", "weight": 50, "scale": 0.3, "reflect": False},
+                # 双肩而不是 ParamBodyAngleY：物理参数**不得成环** ——
+                # BodyBounce 以 ParamBodyAngleY 为输入，而官方 Haru 里
+                # 「既被某组输出、又被另一组读取」的参数数量是 0；我们曾写成
+                # BodyAngleY，实测该链被内核整个丢掉（peak 恒为 0）。
+                # 吸气抬肩是常规做法，且这两个参数没有任何物理组读取。
+                {"target": "Parameter", "id": "ParamShoulderL", "weight": 50,
+                 "scale": 0.3, "reflect": False},
+                {"target": "Parameter", "id": "ParamShoulderR", "weight": 50,
+                 "scale": 0.3, "reflect": False},
             ],
             pendulums=[
                 {"length": 2.00, "damping": 0.99, "stiffness": 0.05, "mass": 2.0},
@@ -375,47 +452,64 @@ class PhysicsBuilder:
 
     @staticmethod
     def _group_to_setting(group: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert an internal group dict to physics3.json PhysicsSettings entry."""
-        verts = []
-        n = group["vertices"]
-        for i in range(n):
+        """内部摆参数 -> physics3.json 的 PhysicsSettings 条目。
+
+        Cubism 的 physics3 **没有** length/damping/stiffness/mass 这套摆模型，
+        它用的是逐顶点的 Mobility / Delay / Acceleration / Radius（官方 Haru：
+        根顶点 Position(0,0) Radius 0 Mobility 1 Delay 1 Acceleration 1，
+        子顶点如 Position(0,8) Mobility 0.95 Delay 0.8 Acceleration 1.5 Radius 8）。
+        映射关系（内部值 -> 官方字段）：
+
+          Delay        <- damping        阻尼越大越拖后
+          Mobility     <- 1 - stiffness  刚度越高越不跟随
+          Acceleration <- 1 + mass/2     质量越大加速越猛
+          Radius/Y     <- 累计 length×长度单位
+
+        输出必须是 ``Type: "Angle"``、VertexIndex 指向**会动的**顶点（≥1）：
+        实测写成 ``"X"`` 时官方内核完全不产生运动
+        （`drivers/live2d_runtime/moc3_physics_probe.py`，同法在 Haru 上 14 条链全动）。
+        Weight 是 0-100 制，不是 0-1 制。
+        """
+        verts: List[Dict[str, Any]] = [{
+            # 根顶点是锚点：Radius 必须为 0，否则整条链被几何带偏
+            "Position": {"X": 0, "Y": 0},
+            "Mobility": 1, "Delay": 1, "Acceleration": 1, "Radius": 0,
+        }]
+        y = 0.0
+        for pend in group["pendulums"]:
+            y += float(pend.get("length", 0.5)) * _PENDULUM_UNIT
+            mobility = 1.0 - float(pend.get("stiffness", 0.2))
             verts.append({
-                "Position": {"X": i * 0.5, "Y": 0},
-                "Mobility": 1.0,
-                "Delay": 0.0,
-                "Acceleration": 1.0,
-                "Radius": max(1, i) * 50,
+                "Position": {"X": 0, "Y": round(y, 3)},
+                "Mobility": round(min(1.0, max(0.0, mobility)), 3),
+                "Delay": round(min(1.0, max(0.0, float(
+                    pend.get("damping", 0.9)))), 3),
+                "Acceleration": round(
+                    1.0 + float(pend.get("mass", 1.0)) / 2.0, 3),
+                "Radius": round(y, 3),
             })
+        # 顶点数按摆段数生成，保证每个输出引用的索引都存在
+        group["vertices"] = len(verts)
 
-        input_list = []
-        for inp in group["inputs"]:
-            input_list.append({
-                "Source": {
-                    "Target": inp["target"],
-                    "Id": inp["id"],
-                },
-                "Weight": inp.get("weight", 1.0),
-                "Type": "X",
-                "Reflect": False,
-            })
+        input_list = [{
+            "Source": {"Target": inp["target"], "Id": inp["id"]},
+            # 0-100 制；数量级对齐官方同类设置（发型 60/40、身体 50、呼吸 100），
+            # 具体幅度属可调项，不宣称是推导结果。
+            "Weight": _as_percent(inp.get("weight", 1.0)),
+            "Type": "X",
+            "Reflect": bool(inp.get("reflect", False)),
+        } for inp in group["inputs"]]
 
-        output_list = []
-        for out in group["outputs"]:
-            output_list.append({
-                "Destination": {
-                    "Target": out["target"],
-                    "Id": out["id"],
-                },
-                "VertexIndex": max(0, len(verts) - 1),
-                "Scale": out.get("scale", 1.0),
-                "Weight": out.get("weight", 100.0),
-                "Type": "X",
-                "Reflect": out.get("reflect", False),
-            })
+        output_list = [{
+            "Destination": {"Target": out["target"], "Id": out["id"]},
+            "VertexIndex": min(len(verts) - 1, int(out.get("vertex", 1))),
+            "Scale": float(out.get("scale", 1.0)),
+            "Weight": _as_percent(out.get("weight", 100.0)),
+            "Type": "Angle",
+            "Reflect": bool(out.get("reflect", False)),
+        } for out in group["outputs"]]
 
-        # Build pendulum normalisation from the first pendulum's params
-        pend = group["pendulums"][0] if group["pendulums"] else {}
-
+        limit = float(group.get("normalization_angle", 10.0)) or 10.0
         return {
             "Id": group["id"],
             "Name": group["name"],
@@ -423,19 +517,7 @@ class PhysicsBuilder:
             "Output": output_list,
             "Vertices": verts,
             "Normalization": {
-                "Position": {"Minimum": -1, "Default": 0, "Maximum": 1},
-                "Angle": {
-                    "Minimum": -group["normalization_angle"],
-                    "Default": 0,
-                    "Maximum": group["normalization_angle"],
-                },
-            },
-            "Pendulum": {
-                "Length": pend.get("length", 0.5),
-                "Damping": pend.get("damping", 0.9),
-                "Stiffness": pend.get("stiffness", 0.2),
-                "Mass": pend.get("mass", 1.0),
-                "Gravity": 0.0,
-                "Fps": 60,
+                "Position": {"Minimum": -limit, "Default": 0, "Maximum": limit},
+                "Angle": {"Minimum": -limit, "Default": 0, "Maximum": limit},
             },
         }

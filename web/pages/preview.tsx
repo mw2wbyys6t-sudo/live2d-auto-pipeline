@@ -20,6 +20,8 @@ import type { NextPage } from 'next';
 import type { Emotion, ParamMap } from '../types';
 import type { ModelCanvasHandle } from '../components/ModelCanvas';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { apiClient, getBackendWsUrl, type LatestGeneration } from '../lib/api-client';
+import type { Live2DPlayer } from '../lib/live2d-player';
 
 const ModelCanvas = dynamic(() => import('../components/ModelCanvas'), {
   ssr: false,
@@ -56,44 +58,124 @@ const PreviewPage: NextPage = () => {
   });
   const [bg, setBg] = useState<'transparent' | 'dark' | 'light' | 'sky'>('dark');
   const [streamActive, setStreamActive] = useState(false);
+  const [latest, setLatest] = useState<LatestGeneration | null>(null);
+  const [modelUrl, setModelUrl] = useState<string>('');
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const animRef = useRef<number | null>(null);
+  const trackWsRef = useRef<WebSocket | null>(null);
+  const lastReadoutRef = useRef(0);
+  const [error, setError] = useState<string | null>(null);
+  /** Normalised gaze (-1..1) driven by pointer position over the stage. */
+  const gazeRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  /**
+   * 播放器实例，直接由 onReady 取得。
+   * 经 next/dynamic 转发的命令式 ref 在部分环境下拿不到实例，导致
+   * setParameters 静默丢失（UI 参数在动、角色却静止）。这里直接持有实例驱动。
+   */
+  const playerRef = useRef<Live2DPlayer | null>(null);
+
+  /** 后端 HTTP 基地址（与 api-client 同一推导） */
+  const apiBase = () =>
+    (typeof window !== 'undefined' &&
+      (window as unknown as { __LIVE2D_API_URL__?: string }).__LIVE2D_API_URL__) ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    '';
+
+  /** 连接面捕参数推送通道（定义需在 toggleWebcam 之前，避免 TDZ） */
+  const connectTrackingWs = useCallback(() => {
+    try {
+      const ws = new WebSocket(getBackendWsUrl('/ws/tracking'));
+      trackWsRef.current = ws;
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type !== 'params' || !msg.params) return;
+          playerRef.current?.setParameters(msg.params);
+          const now = performance.now();
+          if (now - lastReadoutRef.current > 100) {
+            lastReadoutRef.current = now;
+            setParams((prev) => ({ ...prev, ...msg.params }));
+          }
+        } catch { /* 忽略坏帧 */ }
+      };
+      ws.onclose = () => {
+        trackWsRef.current = null;
+      };
+    } catch { /* 连接失败由按钮状态兜底 */ }
+  }, []);
+
+  // 自动接力最近一次生成的 model3.json，无需手动加载模型
+  useEffect(() => {
+    let cancelled = false;
+    apiClient
+      .getLatestGeneration()
+      .then((gen) => {
+        if (cancelled || !gen) return;
+        setLatest(gen);
+        if (gen.model3_json) setModelUrl(gen.model3_json);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // FPS loop
   useEffect(() => {
     const id = setInterval(() => {
-      const handle = canvasRef.current as (ModelCanvasHandle & { [k: string]: unknown }) | null;
-      if (handle && typeof handle.getFps === 'function') {
-        setFps(handle.getFps());
-      } else {
-        setFps(0);
-      }
+      setFps(playerRef.current?.fps ?? 0);
     }, 500);
     return () => clearInterval(id);
   }, []);
 
-  // Auto-idle animation (breathing/blinking) when nothing tracking
+  // 闲置动画驱动：呼吸 + 自然眨眼 + 视线跟随指针
   useEffect(() => {
     if (streamActive) return;
-    let t = 0;
-    const tick = () => {
-      t += 0.016;
-      const breath = Math.sin(t * 1.5) * 0.3 + 0.5;
-      const blink = Math.sin(t * 0.7) > 0.97 ? 0.2 : 1;
-      const angleZ = Math.sin(t * 0.5) * 3;
+    const t0 = performance.now();
+    const BLINK_MS = 130;
+    let blinkUntil = 0;
+    let nextBlinkAt = t0 + 1500 + Math.random() * 2500;
+    let lastReadout = 0;
+
+    const tick = (now: number) => {
+      const t = (now - t0) / 1000;
+
+      // 呼吸：缓慢正弦 0..1
+      const breath = Math.sin(t * 1.6) * 0.5 + 0.5;
+
+      // 自然眨眼：随机间隔触发，单次约 130ms 闭合并恢复
+      if (now >= nextBlinkAt) {
+        blinkUntil = now + BLINK_MS;
+        nextBlinkAt = now + 1800 + Math.random() * 3200;
+      }
+      let eyeOpen = 1;
+      if (now < blinkUntil) {
+        const p = (blinkUntil - now) / BLINK_MS; // 1 → 0
+        eyeOpen = 1 - Math.sin(p * Math.PI);
+      }
+
+      const gaze = gazeRef.current;
       const p: ParamMap = {
         ParamBreath: breath,
-        ParamAngleZ: angleZ,
-        ParamEyeLOpen: blink,
-        ParamEyeROpen: blink,
+        ParamEyeLOpen: eyeOpen,
+        ParamEyeROpen: eyeOpen,
+        ParamEyeBallX: gaze.x,
+        ParamEyeBallY: gaze.y,
+        ParamAngleX: gaze.x * 12,
+        ParamAngleY: -gaze.y * 8,
+        ParamAngleZ: Math.sin(t * 0.5) * 3,
         ParamBodyAngleX: Math.sin(t * 0.4) * 2,
       };
-      const handle = canvasRef.current as (ModelCanvasHandle & { [k: string]: unknown }) | null;
-      if (handle && typeof handle.setParameters === 'function') {
+
+      const handle = playerRef.current;
+      if (handle) {
         handle.setParameters(p);
       }
-      setParams((prev) => ({ ...prev, ...p }));
+      if (now - lastReadout > 100) {
+        lastReadout = now;
+        setParams((prev) => ({ ...prev, ...p }));
+      }
       animRef.current = requestAnimationFrame(tick);
     };
     animRef.current = requestAnimationFrame(tick);
@@ -102,8 +184,33 @@ const PreviewPage: NextPage = () => {
     };
   }, [streamActive]);
 
+  /** 指针位置 → 归一化视线，驱动眼球与头部朝向 */
+  const handleStageMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    gazeRef.current = {
+      x: ((e.clientX - r.left) / r.width) * 2 - 1,
+      y: ((e.clientY - r.top) / r.height) * 2 - 1,
+    };
+  }, []);
+
+  /** 重新拉取最近一次生成并强制重载模型（同一 URL 也会重新加载） */
+  const reloadLatestModel = useCallback(async () => {
+    const gen = await apiClient.getLatestGeneration().catch(() => null);
+    if (!gen?.model3_json) {
+      setModelUrl('');
+      return;
+    }
+    setLatest(gen);
+    setModelUrl('');
+    window.setTimeout(() => setModelUrl(gen.model3_json), 0);
+  }, []);
+
   const toggleWebcam = useCallback(async () => {
     if (webcamOn) {
+      // 停止真实面捕
+      trackWsRef.current?.close();
+      trackWsRef.current = null;
+      fetch(`${apiBase()}/api/tracking/stop`, { method: 'POST' }).catch(() => undefined);
       mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
       mediaStreamRef.current = null;
       if (videoRef.current) videoRef.current.srcObject = null;
@@ -112,19 +219,21 @@ const PreviewPage: NextPage = () => {
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: micOn });
-      mediaStreamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => undefined);
+      // 真实面捕：摄像头由后端 Python(mediapipe) 接管，参数经 WS 推送。
+      // 浏览器不再自行打开摄像头，避免与后端争抢同一设备。
+      const startRes = await fetch(`${apiBase()}/api/tracking/start`, { method: 'POST' });
+      if (!startRes.ok) {
+        const body = await startRes.json().catch(() => ({}));
+        throw new Error(body.error || `面捕启动失败 (${startRes.status})`);
       }
       setWebcamOn(true);
       setStreamActive(true);
-      runFakeTracking();
-    } catch {
+      connectTrackingWs();
+    } catch (e) {
       setWebcamOn(false);
+      setError(e instanceof Error ? e.message : '面捕启动失败');
     }
-  }, [webcamOn, micOn]);
+  }, [webcamOn, micOn, connectTrackingWs]);
 
   const toggleMic = useCallback(async () => {
     if (micOn) {
@@ -152,10 +261,7 @@ const PreviewPage: NextPage = () => {
         let sum = 0;
         for (let i = 0; i < data.length; i++) sum += data[i];
         const avg = sum / data.length / 255;
-        const handle = canvasRef.current as (ModelCanvasHandle & { [k: string]: unknown }) | null;
-        if (handle && typeof handle.setParameters === 'function') {
-          handle.setParameters({ ParamMouthOpenY: Math.min(1, avg * 2) });
-        }
+        playerRef.current?.setParameters({ ParamMouthOpenY: Math.min(1, avg * 2) });
         setParams((prev) => ({ ...prev, ParamMouthOpenY: Math.min(1, avg * 2) }));
         requestAnimationFrame(readMouth);
       };
@@ -165,45 +271,17 @@ const PreviewPage: NextPage = () => {
     }
   }, [micOn]);
 
-  // Simulated face tracking — real MediaPipe integration would go here
-  const runFakeTracking = () => {
-    if (!mediaStreamRef.current) return;
-    let t = 0;
-    const tick = () => {
-      if (!mediaStreamRef.current) return;
-      t += 0.03;
-      const p: ParamMap = {
-        ParamAngleX: Math.sin(t * 0.8) * 15,
-        ParamAngleY: Math.cos(t * 0.6) * 10,
-        ParamAngleZ: Math.sin(t * 0.5) * 5,
-        ParamEyeBallX: Math.sin(t * 1.2) * 0.5,
-        ParamEyeBallY: Math.cos(t * 1.0) * 0.3,
-        ParamBodyAngleX: Math.sin(t * 0.3) * 3,
-        ParamBreath: Math.sin(t * 1.5) * 0.3 + 0.5,
-      };
-      const handle = canvasRef.current as (ModelCanvasHandle & { [k: string]: unknown }) | null;
-      if (handle && typeof handle.setParameters === 'function') {
-        handle.setParameters(p);
-      }
-      setParams((prev) => ({ ...prev, ...p }));
-      animRef.current = requestAnimationFrame(tick);
-    };
-    animRef.current = requestAnimationFrame(tick);
-  };
-
   useEffect(() => {
     return () => {
       mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
       audioCtxRef.current?.close().catch(() => undefined);
+      trackWsRef.current?.close();
       if (animRef.current) cancelAnimationFrame(animRef.current);
     };
   }, []);
 
   const applyExpression = (emotion: Emotion) => {
-    const handle = canvasRef.current as (ModelCanvasHandle & { [k: string]: unknown }) | null;
-    if (handle && typeof handle.setExpression === 'function') {
-      handle.setExpression(emotion);
-    }
+    playerRef.current?.setExpression(emotion);
     // also set some params for visual feedback
     const map: Record<Emotion, ParamMap> = {
       neutral: { ParamMouthForm: 0, ParamCheek: 0, ParamBrowLY: 0, ParamBrowRY: 0 },
@@ -215,9 +293,7 @@ const PreviewPage: NextPage = () => {
       thinking: { ParamBrowLAngle: 0.3, ParamMouthForm: -0.2, ParamEyeBallX: 0.4 },
       excited: { ParamMouthForm: 0.8, ParamEyeLOpen: 1, ParamBrowLY: 0.2 },
     };
-    if (handle && typeof handle.setParameters === 'function') {
-      handle.setParameters(map[emotion] || {});
-    }
+    playerRef.current?.setParameters(map[emotion] || {});
   };
 
   const screenshot = () => {
@@ -269,8 +345,9 @@ const PreviewPage: NextPage = () => {
             <Camera className="w-3.5 h-3.5" /> Screenshot
           </button>
           <button
-            onClick={() => undefined}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-blue-500/20 border border-blue-500/40 text-blue-300 hover:bg-blue-500/30"
+            disabled
+            title="桌宠部署尚未实现（后端返回 501）"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-blue-500/10 border border-blue-500/20 text-blue-300/40 cursor-not-allowed"
           >
             <Monitor className="w-3.5 h-3.5" /> Launch Desktop Pet
           </button>
@@ -279,24 +356,53 @@ const PreviewPage: NextPage = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4">
         {/* Canvas */}
-        <div className="relative rounded-xl border border-gray-800 overflow-hidden min-h-[520px]" style={bgStyle}>
-          <ModelCanvas ref={canvasRef} />
+        <div
+          className="relative rounded-xl border border-gray-800 overflow-hidden min-h-[520px]"
+          style={bgStyle}
+          onMouseMove={handleStageMove}
+          onMouseLeave={() => {
+            gazeRef.current = { x: 0, y: 0 };
+          }}
+        >
+          <ModelCanvas
+            ref={canvasRef}
+            modelUrl={modelUrl || undefined}
+            onReady={(p) => {
+              playerRef.current = p;
+            }}
+          />
+
+          {!modelUrl && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <p className="text-xs text-gray-300 bg-black/60 px-3 py-2 rounded-lg">
+                暂无可用模型 —— 请先在「Generate」生成一次角色
+              </p>
+            </div>
+          )}
 
           {/* Overlays */}
           <div className="absolute top-3 left-3 flex flex-col gap-2">
             <div className="px-3 py-1.5 rounded-lg bg-black/50 backdrop-blur text-xs text-white/90 flex items-center gap-2">
               <span className={`w-2 h-2 rounded-full ${webcamOn ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`} />
-              {webcamOn ? 'Tracking' : 'Idle'}
+              {webcamOn ? 'Tracking · MediaPipe 面捕' : 'Idle · 鼠标可跟随'}
             </div>
             <div className="px-3 py-1.5 rounded-lg bg-black/50 backdrop-blur text-xs text-white/90 font-mono">
               {fps} FPS
             </div>
           </div>
 
-          {/* Webcam mini */}
+          {error && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-red-500/15 border border-red-500/40 text-xs text-red-200">
+              {error}
+            </div>
+          )}
+
+          {/* Webcam mini：摄像头由后端接管，这里只显示状态 */}
           {webcamOn && (
-            <div className="absolute bottom-3 right-3 w-40 h-28 rounded-lg overflow-hidden border border-gray-700 shadow-xl bg-black">
-              <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
+            <div className="absolute bottom-3 right-3 w-40 h-28 rounded-lg overflow-hidden border border-gray-700 shadow-xl bg-black/80 flex items-center justify-center">
+              <p className="text-[10px] text-gray-300 text-center px-2 leading-relaxed">
+                摄像头由后端<br />MediaPipe 接管
+              </p>
             </div>
           )}
 
@@ -402,11 +508,16 @@ const PreviewPage: NextPage = () => {
               </button>
             </div>
             <button
-              onClick={() => undefined}
+              onClick={reloadLatestModel}
               className="mt-3 w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-gray-900 border border-gray-800 text-gray-300 hover:border-gray-700"
             >
-              <Download className="w-3.5 h-3.5" /> Load model3.json
+              <Download className="w-3.5 h-3.5" /> 重新载入最新模型
             </button>
+            {latest && (
+              <p className="mt-2 text-[10px] text-gray-500 break-all">
+                模型: {latest.model3_json || '—'} · {latest.segmentation_method || ''}
+              </p>
+            )}
           </div>
         </div>
       </div>

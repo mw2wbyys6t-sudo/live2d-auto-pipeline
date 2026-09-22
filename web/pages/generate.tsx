@@ -10,6 +10,7 @@ import {
   Link2,
   Link2Off,
   Layers,
+  Download,
 } from 'lucide-react';
 import type { NextPage } from 'next';
 import type {
@@ -122,38 +123,10 @@ const GeneratePage: NextPage = () => {
             ),
           );
         });
-      } catch {
-        // fallback: simulate progress for demo
-        for (let i = 0; i < PIPELINE_STEPS.length; i++) {
-          setSteps((prev) => {
-            const next = [...prev];
-            if (i > 0) next[i - 1] = { ...next[i - 1], status: 'done', progress: 100 };
-            next[i] = { ...next[i], status: 'active', progress: 0 };
-            return next;
-          });
-          for (let p = 0; p <= 100; p += 25) {
-            await new Promise((r) => setTimeout(r, 60));
-            setSteps((prev) => {
-              const next = [...prev];
-              next[i] = { ...next[i], progress: p };
-              return next;
-            });
-          }
-        }
-        setSteps((prev) => {
-          const next = [...prev];
-          next[next.length - 1] = { ...next[next.length - 1], status: 'done', progress: 100 };
-          next[next.length - 2] = { ...next[next.length - 2], status: 'done', progress: 100 };
-          return next;
-        });
-        gotResult = {
-          id: `demo-${Date.now()}`,
-          requestId: `req-${Date.now()}`,
-          imageUrl: `https://image.pollinations.ai/prompt/${encodeURIComponent(req.prompt)}?width=${resolution}&height=${resolution}&nologo=true`,
-          segmentedLayers: [],
-          metadata: { provider, style, resolution },
-          createdAt: new Date().toISOString(),
-        };
+      } catch (err) {
+        // Do not fabricate a successful result when the backend fails. A demo
+        // image hides configuration and provider errors from the user.
+        throw err;
       }
       setResult(gotResult);
       setHistory((prev) => [gotResult!, ...prev].slice(0, 12));
@@ -357,11 +330,18 @@ const GeneratePage: NextPage = () => {
                   >
                     <RefreshCw className="w-3.5 h-3.5" /> Regenerate
                   </button>
+                  <a
+                    href={result.imageUrl}
+                    download={`character-${Date.now()}.png`}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25 transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" /> 保存图片
+                  </a>
                   <Link
                     href="/layers"
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-gray-800 border border-gray-700 text-gray-200 hover:bg-gray-700 transition-colors"
                   >
-                    <Layers className="w-3.5 h-3.5" /> Open layers
+                    <Layers className="w-3.5 h-3.5" /> 去分层
                   </Link>
                   <Link
                     href="/live2d"
@@ -370,8 +350,9 @@ const GeneratePage: NextPage = () => {
                     Send to Live2D Builder
                   </Link>
                   <button
-                    onClick={() => undefined}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-blue-500/20 border border-blue-500/40 text-blue-300 hover:bg-blue-500/30 transition-colors"
+                    disabled
+                    title="桌宠部署尚未实现（后端返回 501）"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-blue-500/10 border border-blue-500/20 text-blue-300/40 cursor-not-allowed"
                   >
                     <Monitor className="w-3.5 h-3.5" /> Desktop Pet
                   </button>

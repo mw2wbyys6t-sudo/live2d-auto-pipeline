@@ -84,7 +84,7 @@ class PollinationsProvider(ImageProvider):
                     )
 
                 self._report_progress("Downloading", 80)
-                path = self._save_bytes(resp.content, output_path)
+                path = self._save_image(resp.content, output_path)
                 self._report_progress("Done", 100)
 
                 return GenerationResult(
@@ -107,6 +107,24 @@ class PollinationsProvider(ImageProvider):
             provider=self.name,
             retryable=False
         )
+
+    def _save_image(self, data: bytes, output_path: str) -> str:
+        """Save decoded image bytes as a real PNG.
+
+        Pollinations may return JPEG bytes even when the caller requests a
+        .png filename; re-encoding through PIL guarantees a valid PNG on disk
+        so the layering/Live2D pipeline and browsers read it correctly.
+        """
+        import io
+        from PIL import Image
+
+        p = Path(output_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        img = Image.open(io.BytesIO(data))
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGBA" if "A" in img.getbands() else "RGB")
+        img.save(p, format="PNG")
+        return str(p)
 
     def _build_live2d_prompt(self, prompt: str) -> str:
         """Build a Live2D-optimized prompt."""

@@ -288,14 +288,8 @@ type ExportModelRequest struct {
 	Format      string `json:"format,omitempty"`    // "model3", "runtime"
 }
 
-// ExportModelResponse 导出模型响应
-type ExportModelResponse struct {
-	Success    bool   `json:"success"`
-	ModelPath  string `json:"model_path,omitempty"`
-	Model3JSON string `json:"model3_json,omitempty"`
-	Texture    string `json:"texture,omitempty"`
-	Message    string `json:"message,omitempty"`
-}
+// 导出响应没有固定结构体：Handler 直接把 Python 构建结果（含摊平后的
+// runtime_ready / blocker）放进 models.Response.Data。
 
 // ExpressionInfo 表情信息
 type ExpressionInfo struct {
