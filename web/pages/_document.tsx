@@ -9,6 +9,7 @@ export default function Document() {
         <meta name="theme-color" content="#0f0f13" />
         <meta name="color-scheme" content="dark" />
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
+        <link rel="icon" href="/favicon.ico" sizes="any" />
       </Head>
       <body>
         <Main />

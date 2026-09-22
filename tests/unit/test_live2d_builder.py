@@ -13,6 +13,7 @@ from live2d_builder.blendshapes.parameters import ParameterSet
 from live2d_builder.blendshapes.expressions import ExpressionBuilder
 from live2d_builder.physics.config import PhysicsBuilder
 from live2d_builder.exporter.model3_exporter import Model3Exporter
+from live2d_builder.exporter.moc3_model import DEFAULT_PIXELS_PER_UNIT
 from live2d_builder.exporter.texture_atlas import TextureAtlas
 from live2d_builder.validator.model_validator import ModelValidator
 from live2d_builder.pipeline import Live2DBuilder
@@ -165,6 +166,112 @@ class TestPhysicsBuilder:
         assert "Version" in physics3 or "version" in physics3
         assert "PhysicsSettings" in physics3 or "physics_settings" in physics3 or "Groups" in physics3 or "groups" in physics3
 
+    def test_physics3_setting_matches_cubism_shape(self):
+        """字段必须是 Cubism 真正认的那一套 —— 不合形的设置会被静默丢弃。
+
+        实测依据：输出 ``Type`` 写成 ``"X"`` 时整条链的响应恒为 0，改成
+        ``"Angle"`` 才产生运动；而内部那套 length/damping/stiffness/mass
+        摆模型在 physics3 里根本不存在（必须映射到逐顶点的
+        Mobility/Delay/Acceleration/Radius）。判据脚本
+        ``drivers/live2d_runtime/moc3_physics_probe.py``。
+        """
+        pb = PhysicsBuilder()
+        pb.build_hair_physics(["hair_front"])
+        pb.build_body_physics()
+        pb.build_breathing_physics()
+        settings = pb.to_physics3_json()["PhysicsSettings"]
+        assert settings
+        for setting in settings:
+            assert "Pendulum" not in setting, "physics3 没有 Pendulum 段"
+            root = setting["Vertices"][0]
+            assert root["Radius"] == 0, "根顶点必须是锚点"
+            assert root["Position"] == {"X": 0, "Y": 0}
+            for vertex in setting["Vertices"][1:]:
+                assert 0.0 < vertex["Delay"] <= 1.0, (
+                    "Delay=0 会让输出逐帧等于输入，那不是物理")
+                assert 0.0 < vertex["Mobility"] <= 1.0
+                assert vertex["Radius"] > 0
+            for out in setting["Output"]:
+                assert out["Type"] == "Angle"
+                assert out["VertexIndex"] >= 1, "引用不动的根顶点等于没有输出"
+                assert 0 < out["Weight"] <= 100, "Weight 是 0-100 制"
+            for inp in setting["Input"]:
+                assert 0 < inp["Weight"] <= 100
+            position = setting["Normalization"]["Position"]
+            assert position["Minimum"] < 0 < position["Maximum"]
+
+    def test_physics_parameters_do_not_form_a_cycle(self):
+        """同一参数不得既是某组输出又是另一组输入。
+
+        实测：曾经过 ParamBodyAngleY -> ParamBreath -> ParamBodyAngleY 的环让
+        两条链被内核整个丢掉（peak 恒为 0），断环后立刻恢复。
+        """
+        pb = PhysicsBuilder()
+        pb.build_hair_physics(["hair_front"])
+        pb.build_body_physics()
+        pb.build_breathing_physics()
+        settings = pb.to_physics3_json()["PhysicsSettings"]
+        written = {o["Destination"]["Id"] for s in settings for o in s["Output"]}
+        read = {i["Source"]["Id"] for s in settings for i in s["Input"]}
+        assert not (written & read), f"物理参数环：{sorted(written & read)}"
+
+    def test_prune_drops_chains_referencing_undeclared_parameters(self):
+        """引用未声明参数的物理链必须被剪掉 —— 内核是静默丢弃，不是报错。
+
+        剪完一条链的输入或输出为空时整组一起去掉，Meta 计数同步更新，
+        否则 physics3.json 会自称有 N 组而实际只剩 M 组。
+        """
+        from live2d_builder.physics.config import prune_physics_to_parameters
+
+        doc = {
+            "Version": 3,
+            "Meta": {"PhysicsSettingCount": 2, "TotalInputCount": 3,
+                     "TotalOutputCount": 3, "VertexCount": 4,
+                     "PhysicsDictionary": [{"Id": "A", "Name": "A"},
+                                           {"Id": "B", "Name": "B"}]},
+            "PhysicsSettings": [
+                {"Id": "A", "Name": "A",
+                 "Input": [{"Source": {"Target": "Parameter", "Id": "ParamAngleX"},
+                            "Weight": 60, "Type": "X", "Reflect": False},
+                           {"Source": {"Target": "Parameter", "Id": "ParamGhost"},
+                            "Weight": 40, "Type": "X", "Reflect": False}],
+                 "Output": [{"Destination": {"Target": "Parameter",
+                                            "Id": "ParamHairSwing"},
+                             "VertexIndex": 1, "Scale": 1.0, "Weight": 100,
+                             "Type": "Angle", "Reflect": False}],
+                 "Vertices": [{"Position": {"X": 0, "Y": 0}, "Mobility": 1,
+                               "Delay": 1, "Acceleration": 1, "Radius": 0},
+                              {"Position": {"X": 0, "Y": 8}, "Mobility": 0.95,
+                               "Delay": 0.8, "Acceleration": 1.5, "Radius": 8}]},
+                {"Id": "B", "Name": "B",
+                 "Input": [{"Source": {"Target": "Parameter", "Id": "ParamGhost"},
+                            "Weight": 100, "Type": "X", "Reflect": False}],
+                 "Output": [{"Destination": {"Target": "Parameter",
+                                            "Id": "ParamAlsoGhost"},
+                             "VertexIndex": 1, "Scale": 1.0, "Weight": 100,
+                             "Type": "Angle", "Reflect": False}],
+                 "Vertices": []},
+            ],
+        }
+        declared = [{"Id": "ParamAngleX"}, {"Id": "ParamHairSwing"}]
+        kept = prune_physics_to_parameters(doc, declared)
+        assert [s["Id"] for s in kept["PhysicsSettings"]] == ["A"]
+        setting = kept["PhysicsSettings"][0]
+        assert [i["Source"]["Id"] for i in setting["Input"]] == ["ParamAngleX"]
+        assert [o["Destination"]["Id"] for o in setting["Output"]] == ["ParamHairSwing"]
+        assert kept["Meta"]["PhysicsSettingCount"] == 1
+        assert kept["Meta"]["TotalInputCount"] == 1
+        assert kept["Meta"]["TotalOutputCount"] == 1
+        assert kept["Meta"]["PhysicsDictionary"] == [{"Id": "A", "Name": "A"}]
+
+    def test_prune_is_a_no_op_without_a_parameter_table(self):
+        """调用方没给参数表时不剪 —— 没有依据就不敢删东西。"""
+        from live2d_builder.physics.config import prune_physics_to_parameters
+
+        doc = {"PhysicsSettings": [{"Id": "A", "Input": [], "Output": []}]}
+        assert prune_physics_to_parameters(doc, []) is doc
+
+
     def test_skirt_physics(self):
         pb = PhysicsBuilder()
         skirt = pb.build_skirt_physics(["skirt_front", "skirt_back"])
@@ -243,6 +350,41 @@ class TestModel3Exporter:
             result = exporter.export(builder_result=builder_result, output_dir=tmpdir)
             if result.get("physics3_json"):
                 assert Path(result["physics3_json"]).exists()
+
+    def test_model3_layout_uses_the_real_canvas(self):
+        """Layout 必须是真实画布尺寸，不能是固定占位。
+
+        这里以前是 upstream 留下的 2048×2048 常量：画布不是 2048 时，运行时按
+        Layout 算出的模型尺寸会和实际几何对不上（测试层图是 128×128）。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = Model3Exporter().export(
+                builder_result={"layers": make_test_layers(), "meshes": {}},
+                output_dir=tmpdir)
+            with open(result["model3_json"], encoding="utf-8") as f:
+                layout = json.load(f)["Layout"]
+        assert layout["Width"] == 128.0
+        assert layout["Height"] == 128.0
+        # 与 moc3 画布段同一个 pixels_per_unit
+        assert layout["PixelsPerUnit"] == DEFAULT_PIXELS_PER_UNIT
+        # moc3 原点在画布中心
+        assert layout["X"] == 0 and layout["Y"] == 0
+        assert layout["CenterX"] == 0.0 and layout["CenterY"] == 0.0
+
+    def test_layout_follows_the_mesh_canvas_over_the_layer_image(self):
+        """Layout 跟**网格声明的**画布走 —— 那才是 moc3 画布段的来源。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meshes = {"face": {"width": 256.0, "height": 512.0}}
+            result = Model3Exporter().export(
+                builder_result={"layers": make_test_layers(), "meshes": meshes},
+                output_dir=tmpdir)
+            with open(result["model3_json"], encoding="utf-8") as f:
+                layout = json.load(f)["Layout"]
+        assert (layout["Width"], layout["Height"]) == (256.0, 512.0)
+
+    def test_layout_is_omitted_when_the_canvas_is_unknown(self):
+        """既没有网格尺寸也没有层图时**不写** Layout，也不编一个尺寸出来。"""
+        assert Model3Exporter._canvas_size({"meshes": {}}, {}) is None
 
 
 class TestModelValidator:

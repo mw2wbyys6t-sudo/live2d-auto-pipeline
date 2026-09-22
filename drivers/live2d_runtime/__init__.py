@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Software Live2D-like renderer (PNG layer compositing with parameters)."""
+"""Native Cubism renderer and legacy PNG-only preview (not acceptance)."""
 
 from drivers.live2d_runtime.renderer import Live2DRenderer
 
-__all__ = ["Live2DRenderer"]
+from drivers.live2d_runtime.native import CubismRenderer
+
+__all__ = ["Live2DRenderer", "CubismRenderer"]

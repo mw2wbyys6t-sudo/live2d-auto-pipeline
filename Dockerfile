@@ -2,13 +2,13 @@
 # Provides: Python core + Go API + Next.js web UI
 
 # ===== Stage 1: Build Go API =====
-FROM golang:1.22-alpine AS go-builder
+FROM golang:1.25-alpine AS go-builder
 WORKDIR /build
 COPY api/ .
-RUN go mod tidy && CGO_ENABLED=0 go build -o /live2d-api .
+RUN go mod download && CGO_ENABLED=0 go build -o /live2d-api .
 
 # ===== Stage 2: Build Next.js Web =====
-FROM node:20-alpine AS web-builder
+FROM node:22-bookworm-slim AS web-builder
 WORKDIR /app
 COPY web/package*.json ./
 RUN npm ci
@@ -46,6 +46,9 @@ COPY .env.example ./.env.example
 
 # Copy Go binary
 COPY --from=go-builder /live2d-api ./api/live2d-api
+
+# Node runtime matches the glibc web build stage.
+COPY --from=web-builder /usr/local/bin/node /usr/local/bin/node
 
 # Copy built web
 COPY --from=web-builder /app/.next ./web/.next

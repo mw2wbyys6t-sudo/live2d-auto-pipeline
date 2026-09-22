@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { NextPage } from 'next';
 import type { BlendMode, LayerInfo, SegmentationMethod } from '../types';
+import { apiClient, type LatestGeneration, type SegmentedLayer } from '../lib/api-client';
 import LayerCanvas, { getCheckerboardStyle } from '../components/LayerCanvas';
 import ImageUploader from '../components/ImageUploader';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -33,36 +34,24 @@ const BLEND_MODES: BlendMode[] = [
   'hard-light',
 ];
 
-function makeMockLayers(imageUrl: string, w: number, h: number): LayerInfo[] {
-  // synthetic layered mock using region bins
-  const groups: Array<{ name: string; color: string; x: number; y: number; w: number; h: number }> = [
-    { name: 'background', color: '#1e293b', x: 0, y: 0, w, h: h },
-    { name: 'body', color: '#fde2c4', x: w * 0.3, y: h * 0.45, w: w * 0.4, h: h * 0.4 },
-    { name: 'hair_back', color: '#ec4899', x: w * 0.25, y: h * 0.1, w: w * 0.5, h: h * 0.45 },
-    { name: 'face', color: '#fde2c4', x: w * 0.33, y: h * 0.2, w: w * 0.34, h: h * 0.3 },
-    { name: 'eyes', color: '#3b82f6', x: w * 0.38, y: h * 0.32, w: w * 0.24, h: h * 0.06 },
-    { name: 'hair_front', color: '#f472b6', x: w * 0.28, y: h * 0.15, w: w * 0.44, h: h * 0.2 },
-    { name: 'mouth', color: '#ef4444', x: w * 0.45, y: h * 0.42, w: w * 0.1, h: h * 0.03 },
-    { name: 'outfit', color: '#8b5cf6', x: w * 0.25, y: h * 0.55, w: w * 0.5, h: h * 0.35 },
-  ];
-  return groups.map((g, i) => ({
+/**
+ * Map real backend segmentation output into the UI's LayerInfo shape.
+ * Each layer PNG is full-canvas RGBA, so bounds span the whole canvas.
+ */
+function toLayerInfo(segments: SegmentedLayer[], w: number, h: number): LayerInfo[] {
+  return segments.map((s, i) => ({
     id: `layer-${i}`,
-    name: g.name,
+    name: s.name || `layer_${i}`,
     index: i,
     visible: true,
     opacity: 1,
     blendMode: 'normal' as BlendMode,
     offsetX: 0,
     offsetY: 0,
-    width: Math.round(g.w),
-    height: Math.round(g.h),
-    imageUrl: undefined,
-    bounds: {
-      x: Math.round(g.x),
-      y: Math.round(g.y),
-      width: Math.round(g.w),
-      height: Math.round(g.h),
-    },
+    width: w,
+    height: h,
+    imageUrl: s.url,
+    bounds: { x: 0, y: 0, width: w, height: h },
     isGroup: false,
   }));
 }
@@ -79,6 +68,9 @@ const LayersPage: NextPage = () => {
   const [bg, setBg] = useState<'transparent' | 'dark' | 'light'>('transparent');
   const [dragId, setDragId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [latest, setLatest] = useState<LatestGeneration | null>(null);
+  const [psdUrl, setPsdUrl] = useState<string>('');
+  const [segMethod, setSegMethod] = useState<string>('');
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewRendererRef = useRef<LayerRenderer | null>(null);
 
@@ -91,12 +83,30 @@ const LayersPage: NextPage = () => {
     if (!file) {
       setSourceUrl(null);
       setLayers([]);
+      setPsdUrl('');
       return;
     }
     const url = URL.createObjectURL(file);
     setSourceUrl(url);
     setLayers([]);
+    setPsdUrl('');
     setError(null);
+  }, []);
+
+  // 自动接力最近一次生成，分层工作台不再依赖手动上传。
+  useEffect(() => {
+    let cancelled = false;
+    apiClient
+      .getLatestGeneration()
+      .then((gen) => {
+        if (cancelled || !gen) return;
+        setLatest(gen);
+        if (gen.image_url) setSourceUrl((prev) => prev || gen.image_url);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const runSegmentation = useCallback(async () => {
@@ -104,24 +114,32 @@ const LayersPage: NextPage = () => {
     setSegmenting(true);
     setError(null);
     try {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error('Failed to load image'));
-        img.src = sourceUrl;
+      // 真实分层：由后端跑分割模型并导出 PSD
+      const result = await apiClient.segmentImage(latest?.image_path || '', method);
+      const segs = result.layers || [];
+      if (segs.length === 0) throw new Error('后端未返回任何图层');
+
+      const probe = new Image();
+      await new Promise<void>((resolve) => {
+        probe.onload = () => resolve();
+        probe.onerror = () => resolve();
+        probe.src = segs[0].url;
       });
-      // simulate processing delay
-      await new Promise((r) => setTimeout(r, 800));
-      const mock = makeMockLayers(sourceUrl, img.naturalWidth, img.naturalHeight);
-      setLayers(mock);
-      setSelectedId(mock[0]?.id || null);
+      const w = probe.naturalWidth || 512;
+      const h = probe.naturalHeight || 512;
+
+      const mapped = toLayerInfo(segs, w, h);
+      setLayers(mapped);
+      setSelectedId(mapped[0]?.id || null);
+      setPsdUrl(result.psd_url || '');
+      setSegMethod(result.method || method);
+      if (result.source_image_url) setSourceUrl(result.source_image_url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Segmentation failed');
+      setError(err instanceof Error ? err.message : '分层失败');
     } finally {
       setSegmenting(false);
     }
-  }, [sourceUrl]);
+  }, [sourceUrl, method, latest]);
 
   // Preview canvas render (for export composite preview not the LayerCanvas component)
   useEffect(() => {
@@ -188,6 +206,20 @@ const LayersPage: NextPage = () => {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {segMethod && (
+            <span className="text-[11px] text-gray-500">
+              分层方式 <span className="text-pink-300 font-mono">{segMethod}</span>
+            </span>
+          )}
+          {psdUrl && (
+            <a
+              href={psdUrl}
+              download
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25 transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" /> 下载 PSD
+            </a>
+          )}
           {sourceUrl && layers.length > 0 && (
             <button
               onClick={runSegmentation}
@@ -217,7 +249,7 @@ const LayersPage: NextPage = () => {
                   <LoadingSpinner size={14} label="Segmenting…" />
                 ) : (
                   <>
-                    <Grid3x3 className="w-3.5 h-3.5" /> Run segmentation
+                    <Grid3x3 className="w-3.5 h-3.5" /> 运行真实分层
                   </>
                 )}
               </button>
@@ -391,9 +423,11 @@ const LayersPage: NextPage = () => {
                 <div className="w-16 h-16 rounded-2xl bg-gray-800/50 border border-gray-700 flex items-center justify-center mb-3">
                   <LayersIcon className="w-7 h-7 text-gray-600" />
                 </div>
-                <p className="text-sm text-gray-400">Upload an image to get started</p>
+                <p className="text-sm text-gray-400">
+                  {latest ? '已自动载入最近一次生成的图片' : 'Upload an image to get started'}
+                </p>
                 <p className="text-xs text-gray-600 mt-1">
-                  Generate an image first, then open the Layer Workstation to inspect segmentation.
+                  生成页产出的图片会自动接力到这里，无需手动下载再上传。
                 </p>
               </div>
             )}

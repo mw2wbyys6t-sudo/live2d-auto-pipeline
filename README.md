@@ -1,4 +1,4 @@
-# 🎭 Live2D Master Agent v10.0 【非正式版】
+# 🎭 Live2D Master Agent v10.1
 
 > **一句话**：输入一句话，AI 生成你的专属虚拟主播——支持实时面部捕捉、语音对话、表情联动、桌宠运行。
 
@@ -8,7 +8,7 @@
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=for-the-badge)](https://go.dev)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge)](https://nextjs.org)
 [![License](https://img.shields.io/badge/License-Apache--2.0-green?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-10.0-ff69b4?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-10.1-ff69b4?style=for-the-badge)]()
 
 </div>
 
@@ -41,6 +41,22 @@ Live2D Master Agent 是一款**面向人人的 AI 虚拟主播生产工具**。�
 - **二次元社区** — 社团活动、粉丝二创、虚拟偶像企划
 - **教学演示** — 高校/培训机构的虚拟讲师、数字人课堂
 - **MCN/公会** — 批量生产虚拟主播形象，快速搭建虚拟艺人矩阵
+
+---
+
+## ✨ v10.1 重大升级：自研 moc3 导出管线
+
+| 维度 | v10.0 | **v10.1** |
+|------|-------|-----------|
+| `.moc3` 导出 | 外部工具 / 空脚手架 | **自研 moc3 编译器（纯自研，无第三方运行时依赖）** |
+| 部件驱动 | 少量自定义参数 | **对齐 Live2D 官方参数**：`ParamAngleZ` / `ParamBodyAngleZ` / `ParamArm*` / `ParamHair*` / `ParamEyeBallX/Y` / `ParamBreath` |
+| 头部姿态 | 简单位移 | **三轴 keyform**（`ParamAngleX/Y/Z`）：侧转 + 点头/转头各向异性压扁 + 弧位移 + 深度透视（非仿射） |
+| 质量把关 | 结构校验 | **官方 Cubism Core 逐像素验收** + 逐像素回归基线 |
+| 产物 | 近似占位 | **真实 `model3.json` Layout**：画布尺寸 / PixelsPerUnit 由编译结果承载 |
+
+> ✅ 已在 **Live2D 官方 Cubism Native Core** 上通过逐像素验收（`LIVE2D_TEST_PIXELS=1`）：导出模型可被官方内核加载，且参数确实驱动画面。`pytest tests/unit tests/integration` → 379 passed / 38 skipped；官方内核像素验收 108 passed / 3 skipped。
+
+> 📦 相关依赖已并入 [requirements.txt](requirements.txt)：`py-moc3`（容器结构参考与交叉校验）、`live2d-py`（官方内核隔离验证，不进入生产数据路径）。`pip install -r requirements.txt` 即可。
 
 ---
 
@@ -201,7 +217,7 @@ Live2D-Master-Agent/
 │   ├── bones/               #   36 骨骼层级 + 变形器
 │   ├── blendshapes/         #   28 标准表情参数
 │   ├── physics/             #   头发/裙摆/呼吸物理
-│   ├── exporter/            #   model3.json + physics3.json + 纹理图集
+│   ├── exporter/            #   自研 moc3 编译器 + model3.json + physics3.json + 纹理图集
 │   └── validator/           #   模型合法性校验
 ├── drivers/                 # 🎯 实时驱动层
 │   ├── face_tracker/        #   MediaPipe 468 关键点 → BlendShape 映射
@@ -362,7 +378,8 @@ cd web && npm run build
 
 | 阶段 | 版本 | 核心方向 | 状态 |
 |------|------|----------|------|
-| 现在 | **v10.0** | 全流程打通（AI生成→分层→Live2D→驱动→对话→工作台） | ✅ 已发布 |
+| 现在 | **v10.1** | 自研 moc3 导出管线：官方 Cubism 参数驱动 + 官方内核逐像素验收 | ✅ 已发布 |
+| 上一版 | v10.0 | 全流程打通（AI生成→分层→Live2D→驱动→对话→工作台） | ✅ 已发布 |
 | 近期 | v10.5 | 自定义画风 / 多角色换装编辑器 / VTube Studio 插件直连 | 🚧 开发中 |
 | 中期 | v11.0 | ComfyUI 工作流集成 / SDXL 本地推理 / 中文 ASR 优化 | 📋 规划中 |
 | 远期 | v12.0 | 3D VTuber 支持（VRM 导出）/ 实时动作捕捉（全身）/ 多模态输入 | 🔮 构思中 |
@@ -371,7 +388,7 @@ cd web && npm run build
 
 ## 🤝 如何贡献
 
-本项目采用 **Apache-2.0 License**（v9.0 原版许可，已于 2026-07-30 恢复），**欢迎所有形式的贡献（包括商业用途衍生）**；提交 PR 即视为您同意将代码以 Apache-2.0 协议并入本项目，无任何额外限制。
+本项目采用 **Apache-2.0 License**（详见根目录 [LICENSE](LICENSE)），**欢迎所有形式的贡献（包括商业用途衍生）**；提交 PR 即视为您同意将代码以 Apache-2.0 协议并入本项目，无任何额外限制。
 
 ### 贡献方式
 1. **提交 Issue** — 反馈 Bug、功能建议、体验问题

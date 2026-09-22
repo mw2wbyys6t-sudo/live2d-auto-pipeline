@@ -44,6 +44,10 @@ type PythonConfig struct {
 	PythonPath   string `json:"python_path"`
 	ScriptsDir   string `json:"scripts_dir"`
 	TimeoutSec   int    `json:"timeout_sec"`
+	// ExportTimeoutSec 是完整 Live2D 导出（网格 + 图集烘焙 + moc3 编译 + 官方内核
+	// 验收）的预算。实测依据 tools/measure_export_duration.py：26 层 x 1024px
+	// （27 百万像素）中位 6.6s，12 层 x 2048px（50 百万像素）6.5s。
+	ExportTimeoutSec int `json:"export_timeout_sec"`
 }
 
 type OutputConfig struct {
@@ -155,7 +159,10 @@ func DefaultConfig() *Config {
 			WriteTimeout:        180 * time.Second,
 			ReadHeaderTimeout:   5 * time.Second,
 			IdleTimeout:         120 * time.Second,
-			AllowedOrigins:      []string{"*"},
+			// CORS 白名单：默认只放行本地工作台。空列表 = 不启用跨域
+			//（同源请求本就不带 Origin，走 Next.js rewrites 代理时不受影响）。
+			// 绝不可默认 "*"：它会与 Allow-Credentials:true 形成任意站点携带凭据的漏洞。
+			AllowedOrigins: []string{"http://localhost:3000", "http://127.0.0.1:3000"},
 		},
 		SDWebUI: SDWebUIConfig{
 			BaseURL: "http://127.0.0.1:7860",
@@ -166,6 +173,9 @@ func DefaultConfig() *Config {
 			PythonPath: "python3",
 			ScriptsDir: scriptsDir,
 			TimeoutSec: 120,
+			// 实测最慢 6.6s（50 百万像素），150s 留 20 倍以上余量，
+			// 且刻意小于 Server.WriteTimeout（180s），见 GetExportTimeout。
+			ExportTimeoutSec: 150,
 		},
 		Output: OutputConfig{
 			BaseDir:     filepath.Join(baseDir, "output"),
@@ -252,4 +262,20 @@ func (c *Config) GetPythonTimeout() time.Duration {
 		secs = 120
 	}
 	return time.Duration(secs) * time.Second
+}
+
+// GetExportTimeout returns the budget for a full Live2D export.
+//
+// 它必须小于 Server.WriteTimeout：否则 Python 还在跑，HTTP 连接已经先被
+// 掐断，客户端拿到的是无说明的死连接，而不是我们的 504。
+func (c *Config) GetExportTimeout() time.Duration {
+	secs := c.Python.ExportTimeoutSec
+	if secs <= 0 {
+		secs = 150
+	}
+	timeout := time.Duration(secs) * time.Second
+	if write := c.Server.WriteTimeout; write > 0 && timeout >= write {
+		return write - write/10
+	}
+	return timeout
 }

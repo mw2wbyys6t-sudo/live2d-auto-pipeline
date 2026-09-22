@@ -2,6 +2,7 @@ import type { AppProps } from 'next/app';
 import { useEffect } from 'react';
 import { useRouter } from 'next/router';
 import Layout from '../components/Layout';
+import ErrorBoundary from '../components/ErrorBoundary';
 import '../styles/globals.css';
 
 const PAGE_TITLES: Record<string, string> = {
@@ -35,7 +36,9 @@ export default function App({ Component, pageProps }: AppProps) {
 
   return (
     <Layout title={title}>
-      <Component {...pageProps} />
+      <ErrorBoundary>
+        <Component {...pageProps} />
+      </ErrorBoundary>
     </Layout>
   );
 }

@@ -3,19 +3,22 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"live2d-api/config"
 	"live2d-api/models"
 )
+
+// ErrPythonTimeout 标记「子进程被预算掐掉」，与「Python 真的报错」区分开：
+// 前者该回 504 并说明预算，后者该回 500/422。
+var ErrPythonTimeout = errors.New("python 子进程超时")
 
 type PythonBridge struct {
 	cfg *config.Config
@@ -32,6 +35,15 @@ func validatePath(path string) error {
 	}
 	if matched, _ := regexp.MatchString(`[;&|*$\x00]`, path); matched {
 		return fmt.Errorf("路径包含非法字符")
+	}
+	// 拒绝目录穿越：任一 ".." 路径段都不允许。此前只靠后续 os.Stat 的存在性兜底，
+	// 已存在的越界文件仍可被读取。两种分隔符都切分，避免跨平台差异。
+	for _, seg := range strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if seg == ".." {
+			return fmt.Errorf("路径不允许包含 '..' 目录穿越")
+		}
 	}
 	if strings.HasPrefix(filepath.Base(path), "-") {
 		return fmt.Errorf("文件名不能以 - 开头")
@@ -56,25 +68,21 @@ func (pb *PythonBridge) executePythonScript(scriptPath string, args []string, ti
 	cmd := exec.CommandContext(ctx, pb.cfg.Python.PythonPath, fullArgs...)
 	cmd.Dir = pb.cfg.Python.ScriptsDir
 
-	cmd.Env = []string{
+	cmd.Env = append(os.Environ(),
 		"PYTHONIOENCODING=utf-8",
 		"PYTHONPATH=" + pb.cfg.Python.ScriptsDir,
 		"HOME=" + os.Getenv("HOME"),
 		"PATH=" + os.Getenv("PATH"),
 		"LANG=" + os.Getenv("LANG"),
 		"LIVE2D_PROJECT_ROOT=" + pb.cfg.Python.ScriptsDir,
-	}
+	)
 
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Setpgid: true,
-		}
-	}
+	configurePythonProcess(cmd)
 
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		if cmd.Process != nil {
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			killPythonProcess(cmd)
 		}
 		return nil, fmt.Errorf("脚本执行超时（限制%d秒）", int(timeout.Seconds()))
 	}
@@ -273,71 +281,6 @@ func (pb *PythonBridge) RunSeeThroughWorkflow(imagePath string) (*models.SeeThro
 // v10.0: 角色管理（通过 Python CharacterManager）
 // ======================================================================
 
-// CreateCharacter 通过 Python 创建角色
-func (pb *PythonBridge) CreateCharacter(name string, params map[string]interface{}) (map[string]interface{}, error) {
-	// 使用内联 Python 脚本调用 CharacterManager
-	pyCode := fmt.Sprintf(`
-import sys, json
-sys.path.insert(0, %q)
-from core.character.manager import CharacterManager
-mgr = CharacterManager(storage_dir=%q)
-card = mgr.create_character(name=%q, **%s)
-print(json.dumps(card.to_dict(), ensure_ascii=False))
-`, pb.cfg.Python.ScriptsDir, pb.cfg.Character.StorageDir, name, mustMarshal(params))
-
-	return pb.runInlinePython(pyCode)
-}
-
-// ListCharacters 通过 Python 列出所有角色
-func (pb *PythonBridge) ListCharacters() ([]map[string]interface{}, error) {
-	pyCode := fmt.Sprintf(`
-import sys, json
-sys.path.insert(0, %q)
-from core.character.manager import CharacterManager
-mgr = CharacterManager(storage_dir=%q)
-print(json.dumps(mgr.list_characters(), ensure_ascii=False))
-`, pb.cfg.Python.ScriptsDir, pb.cfg.Character.StorageDir)
-
-	result, err := pb.runInlinePython(pyCode)
-	if err != nil {
-		return nil, err
-	}
-	var chars []map[string]interface{}
-	if list, ok := result["result"]; ok {
-		if jsonBytes, err := json.Marshal(list); err == nil {
-			json.Unmarshal(jsonBytes, &chars)
-		}
-	}
-	return chars, nil
-}
-
-// GetCharacter 获取角色详情
-func (pb *PythonBridge) GetCharacter(characterID string) (map[string]interface{}, error) {
-	pyCode := fmt.Sprintf(`
-import sys, json
-sys.path.insert(0, %q)
-from core.character.manager import CharacterManager
-mgr = CharacterManager(storage_dir=%q)
-card = mgr.load_character(%q)
-print(json.dumps(card.to_dict(), ensure_ascii=False))
-`, pb.cfg.Python.ScriptsDir, pb.cfg.Character.StorageDir, characterID)
-	return pb.runInlinePython(pyCode)
-}
-
-// DeleteCharacter 删除角色
-func (pb *PythonBridge) DeleteCharacter(characterID string) error {
-	pyCode := fmt.Sprintf(`
-import sys, json
-sys.path.insert(0, %q)
-from core.character.manager import CharacterManager
-mgr = CharacterManager(storage_dir=%q)
-ok = mgr.delete_character(%q)
-print(json.dumps({"deleted": ok}))
-`, pb.cfg.Python.ScriptsDir, pb.cfg.Character.StorageDir, characterID)
-	_, err := pb.runInlinePython(pyCode)
-	return err
-}
-
 // AddReferenceImage 添加参考图并提取 embedding
 func (pb *PythonBridge) AddReferenceImage(characterID, imagePath, view string) error {
 	if view == "" {
@@ -358,7 +301,7 @@ print(json.dumps({"ref_path": path}))
 // ExportLive2DModel 导出 Live2D 模型
 func (pb *PythonBridge) ExportLive2DModel(characterID, layersDir, outputDir string) (map[string]interface{}, error) {
 	if layersDir == "" {
-		layersDir = filepath.Join(pb.cfg.Output.BaseDir, "layers_"+characterID[:8])
+		layersDir = filepath.Join(pb.cfg.Output.BaseDir, "layers_"+characterID[:min(8, len(characterID))])
 	}
 	if outputDir == "" {
 		outputDir = filepath.Join(pb.cfg.Output.BaseDir, "live2d_exports", characterID)
@@ -372,7 +315,7 @@ sys.path.insert(0, %q)
 from pathlib import Path
 from PIL import Image
 from collections import OrderedDict
-from live2d_builder.exporter.model3_exporter import Model3Exporter
+from live2d_builder.pipeline import Live2DBuilder
 
 layers_dir = %q
 out_dir = %q
@@ -381,33 +324,42 @@ Path(out_dir).mkdir(parents=True, exist_ok=True)
 layers = OrderedDict()
 for p in sorted(glob.glob(os.path.join(layers_dir, "*.png"))):
     name = os.path.splitext(os.path.basename(p))[0]
-    layers[name] = Image.open(p)
+    layers[name] = Image.open(p).convert("RGBA")
 
-exporter = Model3Exporter()
-result = exporter.export(layers, output_dir=out_dir, character_name=%q)
-print(json.dumps(result, ensure_ascii=False, default=str))
+if not layers:
+    print(json.dumps({"success": False, "message":
+                      "图层目录内没有可用 PNG: " + layers_dir}, ensure_ascii=False))
+    raise SystemExit(0)
+
+# 必须走完整构建：只有它生成网格、编译 .moc3 并用官方 Cubism Core 验收。
+# 早期版本直接调用 Model3Exporter.export(meshes={})，产物里根本没有 moc3。
+builder = Live2DBuilder(output_dir=out_dir, character_name=%q)
+result = builder.build(layers)
+
+# 只回传路径与状态；网格 / 骨骼等中间数据可达数 MB，不进 API 响应。
+keys = ("output_dir", "model3_json", "moc3_ref", "textures", "texture_files",
+        "physics", "expressions", "mesh_data", "guide", "validation",
+        "compatibility", "mesh_guide", "build_meta", "elapsed_seconds", "moc3")
+summary = {k: result.get(k) for k in keys if k in result}
+summary["success"] = True
+summary["mesh_count"] = len(result.get("meshes") or {})
+print(json.dumps(summary, ensure_ascii=False, default=str))
 `, pb.cfg.Python.ScriptsDir, layersDir, outputDir, characterID)
-	return pb.runInlinePython(pyCode)
-}
-
-// GetExpressions 获取可用表情列表
-func (pb *PythonBridge) GetExpressions(characterID string) ([]map[string]interface{}, error) {
-	expressions := []map[string]interface{}{
-		{"name": "默认", "id": "default", "params": []string{"ParamEyeLOpen", "ParamMouthForm"}},
-		{"name": "微笑", "id": "smile", "params": []string{"ParamEyeLSmile", "ParamMouthForm"}},
-		{"name": "生气", "id": "angry", "params": []string{"ParamBrowLY", "ParamMouthForm"}},
-		{"name": "惊讶", "id": "surprised", "params": []string{"ParamEyeLOpen", "ParamMouthOpenY"}},
-		{"name": "害羞", "id": "shy", "params": []string{"ParamBrowLAngle", "ParamMouthForm"}},
-		{"name": "闭眼", "id": "closed_eyes", "params": []string{"ParamEyeLOpen", "ParamEyeROpen"}},
-		{"name": "开心", "id": "happy", "params": []string{"ParamEyeLSmile", "ParamMouthForm"}},
-		{"name": "难过", "id": "sad", "params": []string{"ParamBrowLAngle", "ParamMouthForm"}},
-	}
-	return expressions, nil
+	// 完整导出要走网格生成 + 图集烘焙 + 官方内核验收，用独立预算
+	// （实测规模见 tools/measure_export_duration.py 与 config.GetExportTimeout）。
+	return pb.runInlinePythonTimeout(pyCode, pb.cfg.GetExportTimeout())
 }
 
 // runInlinePython 执行内联 Python 代码
 func (pb *PythonBridge) runInlinePython(code string) (map[string]interface{}, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), pb.cfg.GetPythonTimeout())
+	return pb.runInlinePythonTimeout(code, pb.cfg.GetPythonTimeout())
+}
+
+// runInlinePythonTimeout 用给定预算执行内联 Python。
+// 超时返回包装了 ErrPythonTimeout 的错误，调用方据此区分「慢」与「坏」。
+func (pb *PythonBridge) runInlinePythonTimeout(code string,
+	timeout time.Duration) (map[string]interface{}, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, pb.cfg.Python.PythonPath, "-c", code)
@@ -417,47 +369,29 @@ func (pb *PythonBridge) runInlinePython(code string) (map[string]interface{}, er
 		"PYTHONPATH="+pb.cfg.Python.ScriptsDir,
 	)
 
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
+	configurePythonProcess(cmd)
 
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		if cmd.Process != nil {
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			killPythonProcess(cmd)
 		}
-		return nil, fmt.Errorf("Python执行超时")
+		return nil, fmt.Errorf("%w（%s）: Python执行超时",
+			ErrPythonTimeout, timeout)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("Python执行失败: %v\n%s", err, sanitizeOutput(string(output)))
 	}
 
-	// 解析最后一行 JSON
+	// Accept both object and array results; missing JSON is an error.
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		var result map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &result); err == nil {
+		var result interface{}
+		if json.Unmarshal([]byte(strings.TrimSpace(lines[i])), &result) == nil && result != nil {
 			return map[string]interface{}{"result": result}, nil
 		}
 	}
-
-	// 返回原始输出
-	return map[string]interface{}{
-		"raw_output": string(output),
-	}, nil
-}
-
-// mustMarshal 将值序列化为 JSON 字符串，用于嵌入 Python 代码
-func mustMarshal(v interface{}) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "{}"
-	}
-	return string(b)
+	return nil, fmt.Errorf("Python did not return a valid JSON result")
 }
 
 // CheckPythonEnvironment checks Python environment availability

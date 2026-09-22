@@ -2,6 +2,7 @@
   "name": "live2d-master-agent",
   "version": "2.0.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Live2D Master Agent - Full-stack workbench for AI character generation and Live2D model building",
   "scripts": {
     "dev": "next dev",

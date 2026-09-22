@@ -1,0 +1,74 @@
+digraph moc3_export_risks {
+  rankdir=LR;
+  node [fontname="Noto Sans CJK SC", fontsize=11];
+  edge [fontname="Noto Sans CJK SC", fontsize=9];
+
+  /* 质量属性 */
+  qa_honesty   [label="正确性主张可信度\n(禁止虚假成功)", shape=diamond, color=darkblue, fontcolor=darkblue];
+  qa_delivery  [label="端到端可交付性\n(会动的模型)", shape=diamond, color=darkblue, fontcolor=darkblue];
+  qa_reliability [label="可靠性\n(内核崩溃隔离)", shape=diamond, color=darkblue, fontcolor=darkblue];
+  qa_testable  [label="可测试性", shape=diamond, color=darkblue, fontcolor=darkblue];
+  qa_perf      [label="延迟/资源", shape=diamond, color=darkblue, fontcolor=darkblue];
+  qa_legal     [label="素材授权", shape=diamond, color=darkblue, fontcolor=darkblue];
+
+  /* 架构要素 */
+  e_bridge  [label="Go PythonBridge\nExportLive2DModel", shape=box];
+  e_handler [label="Go Handler\nexportResponseData", shape=box];
+  e_ready   [label="api_server\nruntime_readiness", shape=box];
+  e_model   [label="moc3_model\n键型编译器", shape=box];
+  e_deform  [label="bones/deformers\nDeformerHierarchy", shape=box];
+  e_lint    [label="moc3_lint", shape=box];
+  e_verify  [label="moc3_verify\n(子进程隔离)", shape=box];
+  e_spec    [label="moc3_sections\n(逆向布局)", shape=box];
+  e_pix     [label="受控像素验证", shape=box];
+  e_pipe    [label="pipeline.build", shape=box];
+
+  /* 风险（红=高，橙=中） */
+  f03 [label="F-03 变形器未编译\n已证实/高", shape=ellipse, color=red, fontcolor=red];
+  f04 [label="F-04 键型在产品路径不可达\n已证实/高", shape=ellipse, color=red, fontcolor=red];
+  f05 [label="F-05 视觉验收缺失\n已证实/中高", shape=ellipse, color=red, fontcolor=red];
+  f06 [label="F-06 多参数轴序未知\n保守拒绝/中", shape=ellipse, color=orange, fontcolor=orange];
+  f07 [label="F-07 每参数仅1绑定\n已证实/中", shape=ellipse, color=orange, fontcolor=orange];
+  f08 [label="F-08 格式随版本漂移\n已证实/中", shape=ellipse, color=orange, fontcolor=orange];
+  f09 [label="F-09 同步导出未标定超时\n本轮引入/中", shape=ellipse, color=orange, fontcolor=orange];
+  f10 [label="F-10 GPU 用例默认跳过\n已证实/中", shape=ellipse, color=orange, fontcolor=orange];
+  f11 [label="F-11 未提交+367MB产物\n已证实/低中", shape=ellipse, color=orange, fontcolor=orange];
+  c01 [label="F-01 Go 路径不产 moc3\n本轮闭环", shape=ellipse, color=green, fontcolor=green];
+  c02 [label="F-02 按文件存在判就绪\n本轮闭环", shape=ellipse, color=green, fontcolor=green];
+
+  /* 风险 -> 受影响质量属性 */
+  f03 -> qa_delivery;
+  f04 -> qa_delivery;
+  f04 -> qa_honesty [label="易被误认为已完成"];
+  f05 -> qa_honesty [label="全绿≠正确"];
+  f05 -> qa_delivery;
+  f06 -> qa_delivery;
+  f07 -> qa_delivery;
+  f08 -> qa_reliability;
+  f09 -> qa_perf;
+  f10 -> qa_testable;
+  f11 -> qa_delivery [label="工作丢失风险"];
+  c01 -> qa_honesty [style=dashed, label="已消除"];
+  c02 -> qa_honesty [style=dashed, label="已消除"];
+
+  /* 要素之间的依赖与影响路径 */
+  e_bridge -> e_pipe [label="本轮改走完整构建"];
+  e_pipe -> e_deform [label="生成变形器"];
+  e_pipe -> e_model [label="build_rig_spec\n(不传 keyform_shapes)"];
+  e_deform -> f03 [label="非零计数即降级"];
+  e_model -> f04;
+  e_model -> e_lint;
+  e_lint -> e_spec;
+  e_model -> f06 [style=dotted];
+  e_model -> f07 [style=dotted];
+  e_spec -> f08;
+  e_bridge -> f09;
+  e_handler -> qa_honesty [label="缺字段一律 false"];
+  e_ready -> qa_honesty;
+  c01 -> e_bridge [style=dashed];
+  c02 -> e_ready [style=dashed];
+  e_verify -> qa_reliability [label="crash 归类为验证失败", color=green];
+  e_pix -> f05 [label="只证变化，不证正确", color=red];
+  e_pix -> qa_testable;
+  f10 -> e_pix [label="默认 skip"];
+}

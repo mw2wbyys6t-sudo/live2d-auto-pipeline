@@ -57,6 +57,11 @@ class SemanticSegmenter:
             - ``"sam"`` — Segment Anything (supports anime-finetuned weights)
             - ``"rembg"`` — rembg/U2Net (fast, foreground only; parts derived
               from heuristics)
+            - ``"sam2_gd"`` — GroundingDINO (text -> boxes) + SAM2 (boxes ->
+              masks). Delegates to
+              :class:`core.segment_engine.sam2_gd.Sam2GroundingDinoSegmenter`
+              and raises ``ModelUnavailable`` instead of using the HSV
+              fallback below.
     """
 
     STANDARD_PARTS: List[str] = [
@@ -88,11 +93,47 @@ class SemanticSegmenter:
     ]
 
     def __init__(self, device: str = "auto", model_type: str = "isnet") -> None:
-        self.model_type = (model_type or "isnet").lower()
         self.device = self._resolve_device(device)
+        self.model_type = self._resolve_backend((model_type or "isnet").lower())
         self._model = None
         self._model_loaded = False
         log.info(f"SemanticSegmenter initialized (backend={self.model_type}, device={self.device})")
+
+    def _resolve_backend(self, model_type: str) -> str:
+        """``auto`` 优先选择能产出「部位级」掩码的后端。
+
+        SAM 一次输出多个实例掩码，可细分为头发/眼睛/嘴等部位；ISNet/rembg
+        只输出单个前景掩码，无法拆分部位（实测仅 1~2 个部位）。因此 ``auto``
+        在检测到 SAM 及其权重可用时选 ``sam``，否则退回 ``isnet``。
+        """
+        if model_type != "auto":
+            return model_type
+        if HAS_TORCH and self._find_sam_checkpoint() is not None:
+            try:
+                import segment_anything  # noqa: F401
+                return "sam"
+            except Exception:
+                pass
+        return "isnet"
+
+    def _find_sam_checkpoint(self) -> Optional[tuple]:
+        """定位可用的 SAM 权重，返回 ``(checkpoint_path, model_type)``。"""
+        import glob
+
+        patterns = [
+            ("~/.cache/huggingface/hub/models--anime-segmentation--sam-vit-huge-anime/snapshots/*/sam_vit_h_anime.pth", "vit_h"),
+            ("~/.cache/anime-segmentation/sam_vit_h_anime.pth", "vit_h"),
+            ("~/models/sam_vit_h_anime.pth", "vit_h"),
+        ]
+        for pat, mt in patterns:
+            m = glob.glob(os.path.expanduser(pat))
+            if m:
+                return m[0], mt
+        for alt, mt in (("sam_vit_b_01ec64.pth", "vit_b"), ("sam_vit_l_0b3195.pth", "vit_l")):
+            cand = os.path.expanduser(f"~/.cache/sam/{alt}")
+            if os.path.isfile(cand):
+                return cand, mt
+        return None
 
     @staticmethod
     def _resolve_device(device: str) -> str:
@@ -113,7 +154,16 @@ class SemanticSegmenter:
         Returns:
             Dict mapping part name -> ``np.uint8`` or boolean mask.
             Only parts with non-empty masks are included.
+
+        Raises:
+            core.segment_engine.sam2_gd.ModelUnavailable: for
+                ``model_type="sam2_gd"`` when torch/CUDA/weights are missing.
+                That backend never degrades into the HSV fallback below.
         """
+        if self.model_type == "sam2_gd":
+            from core.segment_engine.sam2_gd import Sam2GroundingDinoSegmenter
+            return Sam2GroundingDinoSegmenter(device=self.device).segment(image)
+
         if image.mode != "RGBA":
             image = image.convert("RGBA")
         img_arr = np.array(image)
@@ -143,6 +193,7 @@ class SemanticSegmenter:
             parts = self._classify_masks_anime(masks, np.array(image.convert("RGB")))
         except Exception as exc:
             log.warning(f"Mask classification failed ({exc}); using fallback")
+            self._last_was_fallback = True
             return self._fallback_color_segment(image)
 
         # Validate shapes
@@ -159,6 +210,7 @@ class SemanticSegmenter:
                 clean[name] = m_arr
         # If classification produced nothing useful, fall back.
         if not clean:
+            self._last_was_fallback = True
             return self._fallback_color_segment(image)
         return clean
 
@@ -189,7 +241,17 @@ class SemanticSegmenter:
             dicts with ``index``/``name``/``path``/``pixel_count``/``size``),
             ``output_dir``, ``preview_path``, ``composite_preview``,
             ``layer_count``, ``k_clusters``, ``segmentation_mask``.
+
+        Raises:
+            core.segment_engine.sam2_gd.ModelUnavailable: for
+                ``model_type="sam2_gd"`` when the models cannot be loaded.
         """
+        if self.model_type == "sam2_gd":
+            from core.segment_engine.sam2_gd import Sam2GroundingDinoSegmenter
+            return Sam2GroundingDinoSegmenter(device=self.device).layer(
+                image, output_dir=output_dir, label_layers=label_layers
+            )
+
         if image.mode != "RGBA":
             image = image.convert("RGBA")
 
@@ -397,34 +459,25 @@ class SemanticSegmenter:
             return
         try:  # pragma: no cover - heavy optional dep
             from segment_anything import sam_model_registry, SamAutomaticMaskGenerator  # type: ignore
-            import glob
-            ckpt = None
-            patterns = [
-                os.path.expanduser("~/.cache/huggingface/hub/models--anime-segmentation--sam-vit-huge-anime/snapshots/*/sam_vit_h_anime.pth"),
-                os.path.expanduser("~/.cache/anime-segmentation/sam_vit_h_anime.pth"),
-                os.path.expanduser("~/models/sam_vit_h_anime.pth"),
-            ]
-            for pat in patterns:
-                m = glob.glob(pat)
-                if m:
-                    ckpt = m[0]
-                    break
-            model_type = "vit_h"
-            if ckpt is None:
-                # Try vanilla ViT-B checkpoint from segment-anything
-                for alt in ["sam_vit_b_01ec64.pth", "sam_vit_l_0b3195.pth"]:
-                    cand = os.path.expanduser(f"~/.cache/sam/{alt}")
-                    if os.path.isfile(cand):
-                        ckpt = cand
-                        model_type = "vit_b" if "vit_b" in alt else "vit_l"
-                        break
-            if ckpt is None:
-                log.warning("No SAM checkpoint found; attempting download-less default is not possible")
+            found = self._find_sam_checkpoint()
+            if found is None:
+                log.warning("No SAM checkpoint found; place one under ~/.cache/sam/ to enable SAM")
                 self._model = None
                 return
+            ckpt, model_type = found
             sam = sam_model_registry[model_type](checkpoint=ckpt)
             sam.to(device=self.device)
-            self._model = SamAutomaticMaskGenerator(sam)
+            # CPU 上默认 points_per_side=32 会生成 1024 个提示点，单图耗时可达数分钟；
+            # 按设备自适应采样密度，兼顾耗时与部位召回。
+            is_cpu = str(self.device) == "cpu"
+            self._model = SamAutomaticMaskGenerator(
+                sam,
+                points_per_side=8 if is_cpu else 32,
+                pred_iou_thresh=0.80,
+                stability_score_thresh=0.85,
+                crop_n_layers=0,
+                min_mask_region_area=200,
+            )
             log.success(f"Loaded SAM ({model_type}) from {ckpt} on {self.device}")
         except ImportError:
             log.warning("segment_anything not installed")
@@ -441,14 +494,22 @@ class SemanticSegmenter:
         if self._model is None:
             return []
         rgb = np.array(image.convert("RGB"))
-        # If we got an anime-segmentation ISNet with a predict() method, use it
+        # If we got an anime-segmentation ISNet with a predict() method, use it.
+        # NOTE: rembg sessions expose predict(); it expects a PIL Image (it calls
+        # .convert() internally), so passing a numpy array raises AttributeError.
         if hasattr(self._model, "predict"):
             try:  # pragma: no cover - external API
-                pred = self._model.predict(rgb)
+                pred = self._model.predict(image)
                 # Expect dict label -> mask (H,W) bool; convert to list form
                 if isinstance(pred, dict):
                     return [{"segmentation": np.asarray(m).astype(bool), "label": str(k)}
                             for k, m in pred.items() if np.asarray(m).any()]
+                # rembg sessions return a list of RGBA cutouts -> take alpha as foreground
+                if isinstance(pred, list) and pred and isinstance(pred[0], Image.Image):
+                    arr = np.array(pred[0].convert("RGBA"))
+                    fg = arr[:, :, 3] > 0
+                    if fg.any():
+                        return [{"segmentation": fg, "label": "foreground"}]
             except Exception as exc:
                 log.warning(f"ISNet predict failed: {exc}")
         # rembg ISNet session -> single foreground mask

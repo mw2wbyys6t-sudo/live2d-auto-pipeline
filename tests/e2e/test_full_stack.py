@@ -33,6 +33,17 @@ def _check_service(url, name, retries=5):
     pytest.skip(f"{name} 服务不可达: {url}")
 
 
+@pytest.fixture(autouse=True, scope="module")
+def _require_live_stack():
+    """整个 E2E 模块依赖真实的 Go API 与 Next.js 代理。
+
+    服务未启动时应整模块 skip，而不是在逐个用例里抛连接错误。
+    用 ./run_all_tests.sh 启动完整栈（Go + Next.js）即可得到真实端到端结果。
+    """
+    _check_service(f"{GO_API_URL}/api/health", "Go API")
+    _check_service(f"{WEB_URL}/api/health", "Web")
+
+
 class TestGoAPIDirect:
     """直接调用 Go API"""
 
