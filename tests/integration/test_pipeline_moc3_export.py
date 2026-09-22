@@ -7,6 +7,8 @@
 3. 输入含 warp 变形器时真的编译进 moc3 并通过官方内核；无法表达的变形器
    （rotation、无成员网格）如实标注 runtime_ready=False。
 """
+import json
+import struct
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,7 @@ from PIL import Image
 from drivers.live2d_runtime.moc3_verify import (
     render_probe, verify_moc3_consistency, verify_moc3_load,
 )
+from live2d_builder.exporter import moc3_sections as ms
 from live2d_builder.exporter.model3_exporter import Model3Exporter
 from live2d_builder.exporter.moc3_pipeline import compile_export_moc3
 
@@ -87,6 +90,40 @@ def _export(tmp_path: Path, builder_result):
         output_dir=str(tmp_path / "export"),
         character_name="web_preview",
     )
+
+
+def test_model3_layout_agrees_with_the_moc3_canvas(tmp_path):
+    """model3.json 的 Layout 必须与编译出的 moc3 画布段同值。
+
+    运行时按 Layout 的 Width/Height/PixelsPerUnit 换算模型尺寸（画布像素 ÷
+    pixels_per_unit = 单位坐标跨度），拿到一个和 moc3 对不上的 Layout 就会把模型
+    缩放算错 —— 所以这里直接从 moc3 字节里把画布段读出来逐值对拍。
+    """
+    builder_result = _builder_result()
+    _, export_result = _export(tmp_path, builder_result)
+    result = compile_export_moc3(
+        builder_result=builder_result,
+        atlas_uvs=export_result["atlas_uvs"],
+        output_dir=export_result["output_dir"],
+        character_name="web_preview",
+    )
+    assert result["moc3_written"] is True, result["blocker"]
+
+    data = Path(result["moc3_path"]).read_bytes()
+    sot = struct.unpack_from(f"<{ms.SOT_COUNT}I", data, ms.HEADER_SIZE)
+    ppu, origin_x, _, canvas_w, canvas_h = struct.unpack_from(
+        "<5f", data, sot[1])                     # SOT[1] = 画布段
+
+    layout = json.loads(
+        Path(export_result["model3_json"]).read_text(encoding="utf-8"))["Layout"]
+    assert (canvas_w, canvas_h) == (128.0, 128.0)   # 真实画布，不是 2048 占位
+    assert layout["Width"] == canvas_w
+    assert layout["Height"] == canvas_h
+    assert layout["PixelsPerUnit"] == ppu
+    # moc3 原点在画布中心，所以 Layout 的 X/Y 与 Center 都是 0
+    assert origin_x == canvas_w / 2.0
+    assert layout["X"] == 0 and layout["Y"] == 0
+    assert layout["CenterX"] == 0.0 and layout["CenterY"] == 0.0
 
 
 def test_export_writes_official_accepted_moc3(tmp_path):

@@ -40,6 +40,11 @@ _MAX_MESH_VERTICES = 32767
 # 官方导出器对每个关键形的顶点位置按 64 字节（16 个 f32）对齐
 _KEYFORM_POS_ALIGN = 16
 
+# 画布像素 -> moc3 单位坐标的换算基准，也是 moc3 画布段与 model3.json
+# ``Layout.PixelsPerUnit`` 的唯一来源：两处必须同值，否则运行时按 Layout 算出的
+# 模型尺寸会和实际几何对不上（画布像素 / 本值 = 单位坐标跨度）。
+DEFAULT_PIXELS_PER_UNIT = 100.0
+
 
 class UnsupportedRig(Exception):
     """绑定数据包含本模块尚未支持的形态。"""
@@ -181,7 +186,7 @@ class RigSpec:
     parameters: Sequence[ParameterSpec] = ()
     canvas_width: float = 512.0
     canvas_height: float = 512.0
-    pixels_per_unit: float = 100.0
+    pixels_per_unit: float = DEFAULT_PIXELS_PER_UNIT
     deformers: Sequence[Union[WarpDeformerSpec, "RotationDeformerSpec"]] = ()
     deformer_count: int = 0
     uncompiled_deformers: Sequence[str] = ()   # 未能表达进 moc3 的变形器说明

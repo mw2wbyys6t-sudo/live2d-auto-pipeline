@@ -13,6 +13,7 @@ from live2d_builder.blendshapes.parameters import ParameterSet
 from live2d_builder.blendshapes.expressions import ExpressionBuilder
 from live2d_builder.physics.config import PhysicsBuilder
 from live2d_builder.exporter.model3_exporter import Model3Exporter
+from live2d_builder.exporter.moc3_model import DEFAULT_PIXELS_PER_UNIT
 from live2d_builder.exporter.texture_atlas import TextureAtlas
 from live2d_builder.validator.model_validator import ModelValidator
 from live2d_builder.pipeline import Live2DBuilder
@@ -349,6 +350,41 @@ class TestModel3Exporter:
             result = exporter.export(builder_result=builder_result, output_dir=tmpdir)
             if result.get("physics3_json"):
                 assert Path(result["physics3_json"]).exists()
+
+    def test_model3_layout_uses_the_real_canvas(self):
+        """Layout 必须是真实画布尺寸，不能是固定占位。
+
+        这里以前是 upstream 留下的 2048×2048 常量：画布不是 2048 时，运行时按
+        Layout 算出的模型尺寸会和实际几何对不上（测试层图是 128×128）。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = Model3Exporter().export(
+                builder_result={"layers": make_test_layers(), "meshes": {}},
+                output_dir=tmpdir)
+            with open(result["model3_json"], encoding="utf-8") as f:
+                layout = json.load(f)["Layout"]
+        assert layout["Width"] == 128.0
+        assert layout["Height"] == 128.0
+        # 与 moc3 画布段同一个 pixels_per_unit
+        assert layout["PixelsPerUnit"] == DEFAULT_PIXELS_PER_UNIT
+        # moc3 原点在画布中心
+        assert layout["X"] == 0 and layout["Y"] == 0
+        assert layout["CenterX"] == 0.0 and layout["CenterY"] == 0.0
+
+    def test_layout_follows_the_mesh_canvas_over_the_layer_image(self):
+        """Layout 跟**网格声明的**画布走 —— 那才是 moc3 画布段的来源。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meshes = {"face": {"width": 256.0, "height": 512.0}}
+            result = Model3Exporter().export(
+                builder_result={"layers": make_test_layers(), "meshes": meshes},
+                output_dir=tmpdir)
+            with open(result["model3_json"], encoding="utf-8") as f:
+                layout = json.load(f)["Layout"]
+        assert (layout["Width"], layout["Height"]) == (256.0, 512.0)
+
+    def test_layout_is_omitted_when_the_canvas_is_unknown(self):
+        """既没有网格尺寸也没有层图时**不写** Layout，也不编一个尺寸出来。"""
+        assert Model3Exporter._canvas_size({"meshes": {}}, {}) is None
 
 
 class TestModelValidator:

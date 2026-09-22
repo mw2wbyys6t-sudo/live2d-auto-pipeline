@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
 
 from core.logger import get_logger
+from live2d_builder.exporter.moc3_model import DEFAULT_PIXELS_PER_UNIT
 from live2d_builder.exporter.texture_atlas import TextureAtlas
 from live2d_builder.blendshapes.parameters import ParameterSet
 from live2d_builder.blendshapes.expressions import ExpressionBuilder
@@ -121,6 +122,11 @@ class Model3Exporter:
         # 6. Hit areas
         hit_areas = self._build_hit_areas(layers)
 
+        # 6b. Layout：真实画布尺寸 + 与 moc3 同一 pixels_per_unit。确定不了真实
+        #     画布就**不写**这个键 —— 写一个固定占位尺寸会让运行时把模型缩放算错。
+        canvas = self._canvas_size(builder_result, layers)
+        layout = self._build_layout(*canvas) if canvas else None
+
         # 7. Deformers (warp grids + eye rotation pivots). The eye rotation
         # deformers carry the *measured* eyeball centroid as their pivot so
         # the gaze rotation centre is inspectable from model3.json.
@@ -155,6 +161,8 @@ class Model3Exporter:
             "HitAreas": hit_areas,
             "Parameters": param_list,
         }
+        if layout is not None:
+            model3["Layout"] = layout
 
         model3_path = out / f"{character_name}.model3.json"
         model3_path.write_text(
@@ -345,6 +353,49 @@ class Model3Exporter:
                 entry["Grid"] = {"Rows": d.get("grid_rows", 2), "Cols": d.get("grid_cols", 2)}
             out.append(entry)
         return out
+
+    @staticmethod
+    def _canvas_size(builder_result: Dict[str, Any],
+                     layers: Dict[str, Image.Image]) -> Optional[Tuple[float, float]]:
+        """真实画布尺寸；无从得知时返回 ``None``。
+
+        以**网格声明的** ``width`` / ``height`` 为准 —— ``build_rig_spec`` 编译
+        moc3 时用的就是它，Layout 必须与 moc3 画布段同源。网格还没生成（或尺寸
+        不一致）时退回层图尺寸，再给不出就不写 Layout。
+        """
+        sizes = set()
+        for mesh in (builder_result.get("meshes") or {}).values():
+            width, height = (mesh or {}).get("width"), (mesh or {}).get("height")
+            if width and height:
+                sizes.add((float(width), float(height)))
+        if len(sizes) == 1:
+            return sizes.pop()
+        if len(sizes) > 1:
+            log.warning(f"网格画布尺寸不一致：{sorted(sizes)}；Layout 改用层图尺寸")
+        if layers:
+            first = next(iter(layers.values()))
+            return float(first.width), float(first.height)
+        log.warning("既没有网格尺寸也没有层图，无法确定真实画布尺寸")
+        return None
+
+    @staticmethod
+    def _build_layout(canvas_width: float,
+                      canvas_height: float) -> Dict[str, Any]:
+        """model3.json 的 Layout：真实画布尺寸 + 与 moc3 同一 ``pixels_per_unit``。
+
+        官方语义里 ``Width`` / ``Height`` 是**画布像素**，``PixelsPerUnit`` 是像素到
+        单位坐标的换算基准（``画布像素 / PixelsPerUnit`` = 单位坐标跨度），两者必须
+        与 moc3 画布段一致。moc3 的原点取在画布中心，所以 X/Y 与 Center 都是 0。
+        """
+        return {
+            "Width": float(canvas_width),
+            "Height": float(canvas_height),
+            "X": 0,
+            "Y": 0,
+            "CenterX": 0.0,
+            "CenterY": 0.0,
+            "PixelsPerUnit": float(DEFAULT_PIXELS_PER_UNIT),
+        }
 
     def _build_hit_areas(self, layers: Dict[str, Image.Image]) -> List[Dict[str, Any]]:
         """Build HitAreas section based on available layers.
