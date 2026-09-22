@@ -129,7 +129,26 @@ const Live2DPage: NextPage = () => {
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['root', 'head', 'face']));
   const [activeTab, setActiveTab] = useState<'params' | 'physics' | 'expressions' | 'validate'>('params');
   const [fps, setFps] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  const [currentModelDir, setCurrentModelDir] = useState('');
   const [validation, setValidation] = useState<Array<{ level: 'ok' | 'warn' | 'error'; msg: string }> | null>(null);
+
+  // Keep the export model dir in sync with the pasted model URL: the parent
+  // folder of the .model3.json file is used as the server-side model dir.
+  useEffect(() => {
+    if (!modelUrl) {
+      setCurrentModelDir('');
+      return;
+    }
+    try {
+      const path = modelUrl.split('?')[0];
+      const noExt = path.substring(0, path.lastIndexOf('/'));
+      const dir = decodeURIComponent(noExt.substring(noExt.lastIndexOf('/') + 1));
+      setCurrentModelDir(dir || '');
+    } catch {
+      setCurrentModelDir('');
+    }
+  }, [modelUrl]);
 
   const groups = useMemo(() => {
     const g = new Map<string, ParameterDef[]>();
@@ -198,16 +217,103 @@ const Live2DPage: NextPage = () => {
 
   const runValidation = () => {
     const issues: Array<{ level: 'ok' | 'warn' | 'error'; msg: string }> = [];
-    // mock checks
-    if (!modelUrl) {
-      issues.push({ level: 'warn', msg: 'No model loaded — using layer preview mode' });
+    const handle = canvasRef.current as
+      | (ModelCanvasHandle & {
+          layersLoaded?: number;
+          hasMeshGeometry?: boolean;
+          paramsCount?: number;
+          modelMeta?: unknown;
+          triangleCount?: number;
+        })
+      | null;
+
+    // 1. Layers loaded
+    const layersLoaded = handle?.layersLoaded ?? 0;
+    if (layersLoaded > 0) {
+      issues.push({ level: 'ok', msg: `Layers loaded: ${layersLoaded}` });
+    } else {
+      issues.push({ level: 'error', msg: 'No layers loaded — load a model to preview it' });
     }
-    issues.push({ level: 'ok', msg: 'Parameter groups: Head, Eyes, Brows, Mouth, Body' });
-    issues.push({ level: 'ok', msg: `${ALL_PARAMS.length} parameters configured` });
-    issues.push({ level: 'warn', msg: 'Physics: hair swing dampening could be stronger' });
-    issues.push({ level: 'error', msg: 'Expression "blink" references missing ParamEyeBlink' });
-    issues.push({ level: 'ok', msg: 'Mesh topology valid' });
+
+    // 2. Mesh geometry (real vertex deformation vs legacy sprite)
+    const hasMesh = handle?.hasMeshGeometry ?? false;
+    if (hasMesh) {
+      issues.push({ level: 'ok', msg: 'Mesh deformation: ENABLED' });
+    } else {
+      issues.push({ level: 'warn', msg: 'Mesh deformation: LEGACY SPRITE' });
+    }
+
+    // 3. Parameter count
+    const paramsCount = handle?.paramsCount ?? 0;
+    if (paramsCount >= 20) {
+      issues.push({ level: 'ok', msg: `Parameters available: ${paramsCount}` });
+    } else {
+      issues.push({ level: 'warn', msg: `Only ${paramsCount} parameters (expected ≥20)` });
+    }
+
+    // 4. Model3 metadata
+    if (handle?.modelMeta) {
+      issues.push({ level: 'ok', msg: 'Model3 metadata: Loaded' });
+    } else {
+      issues.push({ level: 'warn', msg: 'Model3 metadata: not loaded' });
+    }
+
+    // 5. Triangle count
+    const triCount = handle?.triangleCount ?? 0;
+    if (hasMesh) {
+      if (triCount > 0) {
+        issues.push({ level: 'ok', msg: `Mesh triangles: ${triCount}` });
+      } else {
+        issues.push({ level: 'error', msg: 'Mesh mode active but triangle count is 0' });
+      }
+    } else {
+      issues.push({ level: 'ok', msg: 'Mesh triangles: N/A (sprite mode)' });
+    }
+
     setValidation(issues);
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const payload: Record<string, unknown> = {
+        character_id: 'web_preview',
+        download: true,
+      };
+      if (currentModelDir) {
+        payload.model_dir = currentModelDir;
+      }
+      const res = await fetch('/api/export/live2d', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        let detail = '';
+        try {
+          const errBody = await res.json();
+          detail = errBody?.error || '';
+        } catch {
+          /* ignore parse error */
+        }
+        throw new Error(detail || `Export failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `live2d_${Date.now()}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Export failed';
+      // eslint-disable-next-line no-alert
+      alert(`导出失败: ${msg}`);
+    } finally {
+      setExporting(false);
+    }
   };
 
   const renderTree = (nodes: TreeNode[], depth = 0): React.ReactNode =>
@@ -291,10 +397,12 @@ const Live2DPage: NextPage = () => {
             <Bug className="w-3.5 h-3.5" /> Validate
           </button>
           <button
-            onClick={() => undefined}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-gradient-to-r from-pink-500 to-purple-600 text-white hover:shadow-lg hover:shadow-pink-500/30 transition-all"
+            onClick={handleExport}
+            disabled={exporting}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-gradient-to-r from-pink-500 to-purple-600 text-white hover:shadow-lg hover:shadow-pink-500/30 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            <Download className="w-3.5 h-3.5" /> Export model3.zip
+            <Download className="w-3.5 h-3.5" />
+            {exporting ? 'Exporting…' : 'Export model3.zip'}
           </button>
         </div>
       </div>

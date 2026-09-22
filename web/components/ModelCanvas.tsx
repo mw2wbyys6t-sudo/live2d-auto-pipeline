@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { Live2DPlayer } from '../lib/live2d-player';
-import type { ParamMap } from '../types';
+import type { ParamMap, Model3Json } from '../types';
 
 export interface ModelCanvasHandle {
   player: Live2DPlayer | null;
@@ -9,6 +9,12 @@ export interface ModelCanvasHandle {
   setExpression: (name: string) => void;
   getFps: () => number;
   resize: (w: number, h: number) => void;
+  // Validation introspection (used by the Validate tab)
+  readonly layersLoaded: number;
+  readonly hasMeshGeometry: boolean;
+  readonly paramsCount: number;
+  readonly modelMeta: Model3Json | null;
+  readonly triangleCount: number;
 }
 
 interface ModelCanvasProps {
@@ -51,6 +57,22 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, ModelCanvasProps>(function Mod
     },
     resize(w: number, h: number) {
       playerRef.current?.resize(w, h);
+    },
+    // Validation introspection getters
+    get layersLoaded() {
+      return playerRef.current?.layersLoaded ?? 0;
+    },
+    get hasMeshGeometry() {
+      return playerRef.current?.hasMeshGeometry ?? false;
+    },
+    get paramsCount() {
+      return playerRef.current?.paramsCount ?? 0;
+    },
+    get modelMeta() {
+      return playerRef.current?.modelMeta ?? null;
+    },
+    get triangleCount() {
+      return playerRef.current?.triangleCount ?? 0;
     },
   }));
 

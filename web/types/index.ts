@@ -203,6 +203,16 @@ export interface Model3Json {
   }>;
   HitAreas?: Array<{ Id: string; Name: string }>;
   Layout?: Record<string, number>;
+  Parameters?: Array<{ Id: string; Min?: number; Max?: number; Default?: number }>;
+  Deformers?: Array<Record<string, unknown>>;
+  PreviewLayers?: Array<{
+    Name: string;
+    Texture: string;
+    Group: string;
+    Width: number;
+    Height: number;
+    Z: number;
+  }>;
 }
 
 export interface PhysicsConfig {
