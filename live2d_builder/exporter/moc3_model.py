@@ -57,8 +57,12 @@ class MeshSpec:
     texture_index: int = 0
     part_id: str = ""
     deformer_id: str = ""                      # 挂在该 warp 变形器下（空=不挂）
-    keyform_parameter_id: str = ""             # 驱动本网格的参数（须在 parameters 声明）
+    keyform_parameter_id: str = ""             # 单参数驱动（须在 parameters 声明）
     keyform_shapes: Sequence["KeyformShape"] = ()   # 逐键形状；非空则启用参数形变
+    # 多参数带：((参数 id, 键值...), ...)，**第一个轴步长为 1**（F-06 实测定论，
+    # 见 tools/probe_multiband_axis_order.py）。给出时 keyform_shapes 必须按展平序
+    # index = Σ_j i_j·Π_{m<j}k_m 排列，且 keyform_parameter_id 可留空。
+    keyform_axes: Sequence[Sequence] = ()
 
     @property
     def effective_part_id(self) -> str:
@@ -329,30 +333,61 @@ def _validate_parameters(parameters: Sequence[ParameterSpec]) -> None:
                 f"{param.parameter_id}: default 超出 min/max 区间")
 
 
+def _mesh_axes(mesh: MeshSpec) -> tuple:
+    """网格的驱动轴：``((参数 id, 键值元组), ...)``，**第一个轴步长为 1**。
+
+    多轴必须显式给出 ``keyform_axes``（轴序由实测定论钉住，不猜）；单轴沿用
+    ``keyform_parameter_id``，键值取自逐键形状。
+    """
+    if mesh.keyform_axes:
+        return tuple((str(pid), tuple(float(v) for v in keys))
+                     for pid, keys in mesh.keyform_axes)
+    return ((mesh.keyform_parameter_id,
+             tuple(float(k.key_value) for k in mesh.keyform_shapes)),)
+
+
+def keyform_grid_size(axes) -> int:
+    """展平后的关键形数 = 各轴键数之积。"""
+    size = 1
+    for _, keys in axes:
+        size *= len(keys)
+    return size
+
+
 def _validate_keyforms(mesh: MeshSpec,
                        param_by_id: Dict[str, ParameterSpec]) -> None:
-    if not mesh.keyform_parameter_id:
-        raise UnsupportedRig(
-            f"{mesh.mesh_id}: 给了 keyform_shapes 但缺少 keyform_parameter_id")
-    param = param_by_id.get(mesh.keyform_parameter_id)
-    if param is None:
-        raise UnsupportedRig(
-            f"{mesh.mesh_id}: 参数 {mesh.keyform_parameter_id} 未在 RigSpec.parameters 声明")
+    axes = _mesh_axes(mesh)
+    # 先查「至少两个键形」——顺序与文案都保持与旧行为一致。
     if len(mesh.keyform_shapes) < 2:
         raise UnsupportedRig(
             f"{mesh.mesh_id}: 参数形变至少需要 2 个键形（当前 "
             f"{len(mesh.keyform_shapes)}），无参数形变请走静态路径")
-    values = tuple(float(s.key_value) for s in mesh.keyform_shapes)
-    if any(not math.isfinite(v) for v in values):
-        raise UnsupportedRig(f"{mesh.mesh_id}: 键值非有限值")
-    if not all(a < b for a, b in zip(values, values[1:])):
-        raise UnsupportedRig(
-            f"{mesh.mesh_id}: 键值必须严格递增（{list(values)}）")
-    for v in values:
-        if not param.minimum <= v <= param.maximum:
+    for pid, keys in axes:
+        if not pid:
             raise UnsupportedRig(
-                f"{mesh.mesh_id}: 键值 {v} 超出参数 {param.parameter_id} 的 "
-                f"[{param.minimum}, {param.maximum}] 区间")
+                f"{mesh.mesh_id}: 给了 keyform_shapes 但缺少 keyform_parameter_id")
+        param = param_by_id.get(pid)
+        if param is None:
+            raise UnsupportedRig(
+                f"{mesh.mesh_id}: 参数 {pid} 未在 RigSpec.parameters 声明")
+        if len(keys) < 2:
+            raise UnsupportedRig(
+                f"{mesh.mesh_id}: 参数 {pid} 至少需要 2 个键值")
+        if any(not math.isfinite(v) for v in keys):
+            raise UnsupportedRig(f"{mesh.mesh_id}: 参数 {pid} 的键值非有限值")
+        if not all(a < b for a, b in zip(keys, keys[1:])):
+            raise UnsupportedRig(
+                f"{mesh.mesh_id}: 参数 {pid} 的键值必须严格递增（{list(keys)}）")
+        for v in keys:
+            if not param.minimum <= v <= param.maximum:
+                raise UnsupportedRig(
+                    f"{mesh.mesh_id}: 键值 {v} 超出参数 {pid} 的 "
+                    f"[{param.minimum}, {param.maximum}] 区间")
+    expected = keyform_grid_size(axes)
+    if len(mesh.keyform_shapes) != expected:
+        raise UnsupportedRig(
+            f"{mesh.mesh_id}: 键形数 {len(mesh.keyform_shapes)} 与各轴键数之积 "
+            f"{expected} 不符（展平序 = 第一个轴步长为 1）")
     vertex_count = len(mesh.vertices)
     for shape in mesh.keyform_shapes:
         if len(shape.vertices) != vertex_count:
@@ -364,29 +399,48 @@ def _validate_keyforms(mesh: MeshSpec,
                 raise UnsupportedRig(f"{mesh.mesh_id}: 键形顶点坐标非有限值")
 
 
-def keyform_groups(spec: RigSpec) -> List[tuple]:
-    """被驱动的 (参数 id, 键值元组) 组，顺序确定。
+def keyform_groups(spec: RigSpec) -> tuple:
+    """返回 ``(bindings, bands)``。
 
-    一个组 = 一个 keyform_binding = 一个单参数带。来源有两类：带逐键形状的
-    网格，以及带多个控制网格的变形器。同一参数可以有多个组（不同键布局），
-    此时 parameter.keyform_binding_counts > 1；按参数声明顺序成组，保证该参数
-    名下的 binding 编号连续。
+    * ``binding`` = ``(参数 id, 键值元组)``，**按参数声明顺序去重排列** —— 这样同名
+      参数名下的 binding 编号连续，``parameter.keyform_binding_begin/counts`` 才是
+      合法区间（同一参数可有多个 binding，不同键布局）。
+    * ``band`` = ``binding`` 的有序元组；**带内顺序即 keyform 展平轴序**，第一个
+      binding 步长为 1（实测定论：F-06 / tools/probe_multiband_axis_order.py）。
+      单参数带就是只含一个 binding 的带。
+
+    来源两类：带逐键形状的网格，以及带多个控制网格的变形器。
     """
-    grouped: Dict[str, List[tuple]] = {}
-    def offer(pid: str, values: tuple) -> None:
-        sets = grouped.setdefault(pid, [])
-        if values not in sets:
-            sets.append(values)
+    order = [p.parameter_id for p in spec.parameters]
+    position = {pid: i for i, pid in enumerate(order)}
+    bindings: List[tuple] = []
+    seen: Dict[tuple, int] = {}
 
+    def register(pid: str, values: tuple) -> tuple:
+        key = (pid, tuple(values))
+        if key not in seen:
+            seen[key] = len(bindings)
+            bindings.append(key)
+        return key
+
+    bands: List[tuple] = []
     for mesh in spec.meshes:
         if mesh.keyform_shapes:
-            offer(mesh.keyform_parameter_id,
-                  tuple(float(s.key_value) for s in mesh.keyform_shapes))
+            bands.append(tuple(register(pid, values)
+                               for pid, values in _mesh_axes(mesh)))
     for deformer in spec.deformers:
         if len(deformer.key_values) > 1:
-            offer(deformer.parameter_id, deformer.key_values)
-    return [(pid, values) for pid in (p.parameter_id for p in spec.parameters)
-            for values in grouped.get(pid, [])]
+            bands.append((register(deformer.parameter_id, deformer.key_values),))
+
+    bindings.sort(key=lambda b: position.get(b[0], len(order)))
+    # 同一个键值布局（含多轴组合）只占一个带：多个网格/变形器共用同一带。
+    unique: List[tuple] = []
+    seen_bands: set = set()
+    for band in bands:
+        if band not in seen_bands:
+            seen_bands.add(band)
+            unique.append(band)
+    return bindings, unique
 
 
 def compile_static_rig(spec: RigSpec) -> Moc3Container:
@@ -409,9 +463,10 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
     rotations = [d for d in spec.deformers
                  if isinstance(d, RotationDeformerSpec)]
 
-    # 被驱动的 (参数 id, 键值元组) 组：一组 = 一个 binding = 一个单参数带
-    groups = keyform_groups(spec)
-    band_of_group = {group: 1 + j for j, group in enumerate(groups)}
+    # bindings = 去重的 (参数 id, 键值元组)；bands = 每个被驱动元素一个带，
+    # 带内可含多个 binding（多参数带），其顺序即 keyform 展平轴序。
+    bindings, bands = keyform_groups(spec)
+    band_of_group = {band: 1 + j for j, band in enumerate(bands)}
 
     uv: List[float] = []
     indices: List[int] = []
@@ -502,7 +557,7 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
     total_warp_keyforms = running
 
     _set_counts(doc, count, params, uv, indices, positions,
-                total_keyforms, groups, len(spec.deformers),
+                total_keyforms, bindings, bands, len(spec.deformers),
                 total_warp_keyforms, len(rotations),
                 sum(len(d.keyforms) for d in rotations))
     _write_parts(doc, meshes)
@@ -514,14 +569,14 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
                   spec)
     _write_geometry(doc, uv, indices, positions,
                     keyform_pos_begin, keyform_opacities, keyform_draw_orders)
-    _write_bands(doc, groups)
-    _write_parameters(doc, params, groups)
+    _write_bands(doc, bindings, bands)
+    _write_parameters(doc, params, bindings)
     _write_draw_order(doc, count)
     return doc
 
 
 def _deformer_group(deformer) -> tuple:
-    return (deformer.parameter_id, deformer.key_values)
+    return ((deformer.parameter_id, deformer.key_values),)
 
 
 def reference_rect(deformer: WarpDeformerSpec,
@@ -702,13 +757,13 @@ def _index_of(spec: RigSpec, part_id: str) -> int:
 
 
 def _group_of(mesh: MeshSpec) -> tuple:
-    return (mesh.keyform_parameter_id,
-            tuple(float(s.key_value) for s in mesh.keyform_shapes))
+    return _mesh_axes(mesh)
 
 
 def _set_counts(doc: Moc3Container, count: int, params: List[ParameterSpec],
                 uv: List[float], indices: List[int], positions: List[float],
-                total_keyforms: int, groups: List[tuple],
+                total_keyforms: int, bindings: List[tuple],
+                bands: List[tuple],
                 n_deformers: int = 0,
                 total_warp_keyforms: int = 0,
                 n_rotations: int = 0,
@@ -727,11 +782,11 @@ def _set_counts(doc: Moc3Container, count: int, params: List[ParameterSpec],
     c[ms.CountIdx.UVS] = len(uv)
     c[ms.CountIdx.POSITION_INDICES] = len(indices)
     c[ms.CountIdx.PARAMETERS] = len(params)
-    # band 0 是空带；每个 (参数, 键值组) 再占一个单 binding 带
-    c[ms.CountIdx.KEYFORM_BINDING_BANDS] = 1 + len(groups)
-    c[ms.CountIdx.KEYFORM_BINDING_INDICES] = len(groups)
-    c[ms.CountIdx.KEYFORM_BINDINGS] = len(groups)
-    c[ms.CountIdx.KEYS] = sum(len(values) for _, values in groups)
+    # band 0 是空带；此后每个 band 一个带（可引用多个 binding = 多参数带）
+    c[ms.CountIdx.KEYFORM_BINDING_BANDS] = 1 + len(bands)
+    c[ms.CountIdx.KEYFORM_BINDING_INDICES] = sum(len(b) for b in bands)
+    c[ms.CountIdx.KEYFORM_BINDINGS] = len(bindings)
+    c[ms.CountIdx.KEYS] = sum(len(values) for _, values in bindings)
     c[ms.CountIdx.DRAW_ORDER_GROUPS] = 1
     c[ms.CountIdx.DRAW_ORDER_GROUP_OBJECTS] = count
 
@@ -793,21 +848,29 @@ def _write_geometry(doc: Moc3Container, uv: List[float], indices: List[int],
             keyform_pos_begin)
 
 
-def _write_bands(doc: Moc3Container, groups: List[tuple]) -> None:
-    """band 0 为空带；每个 (参数, 键值组) 一个单 binding 带。
+def _write_bands(doc: Moc3Container, bindings: List[tuple],
+                 bands: List[tuple]) -> None:
+    """band 0 为空带；此后每个 band 一个带，**可引用多个 binding**（多参数带）。
 
-    binding 编号 == 组的序号，与 parameter 侧的 [begin, begin+count) 划分
-    一致（组的编号顺序按参数声明顺序，同参数内按键值组首次使用顺序）。
+    binding 编号 == ``bindings`` 的下标；带内引用顺序
+    （``keyform_binding_index.indices``）就是 keyform 的展平轴序。
     """
-    n = len(groups)
-    doc.set("keyform_binding_band.begin_indices", [0] + list(range(n)))
-    doc.set("keyform_binding_band.counts", [0] + [1] * n)
-    doc.set("keyform_binding_index.indices", list(range(n)))
+    index_of = {binding: j for j, binding in enumerate(bindings)}
+    begins: List[int] = [0]
+    counts: List[int] = [0]
+    indices: List[int] = []
+    for band in bands:
+        begins.append(len(indices))
+        counts.append(len(band))
+        indices.extend(index_of[b] for b in band)
+    doc.set("keyform_binding_band.begin_indices", begins)
+    doc.set("keyform_binding_band.counts", counts)
+    doc.set("keyform_binding_index.indices", indices)
 
     keys_begin: List[int] = []
     keys_counts: List[int] = []
     keys_values: List[float] = []
-    for _, values in groups:
+    for _, values in bindings:
         keys_begin.append(len(keys_values))
         keys_counts.append(len(values))
         keys_values.extend(values)
@@ -817,13 +880,13 @@ def _write_bands(doc: Moc3Container, groups: List[tuple]) -> None:
 
 
 def _write_parameters(doc: Moc3Container, params: List[ParameterSpec],
-                      groups: List[tuple]) -> None:
+                      bindings: List[tuple]) -> None:
     if not params:
         return
     count = len(params)
     begins: Dict[str, int] = {}
     counts: Dict[str, int] = {}
-    for j, (pid, _) in enumerate(groups):
+    for j, (pid, _) in enumerate(bindings):
         begins.setdefault(pid, j)
         counts[pid] = counts.get(pid, 0) + 1
     doc.set("parameter.ids", [p.parameter_id for p in params])

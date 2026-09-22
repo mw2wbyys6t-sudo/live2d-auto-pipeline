@@ -220,16 +220,41 @@ default 键逐字复现静止姿态。
 触发重评的阈值：单次导出中位数接近预算的 1/3（≈50s），或并发导出成为常态
 （那时先加并发闸，再谈任务化）。
 
-### F-06 多参数带的 keyform 轴序未知 —— 已证实（缺口）/ 中
+### F-06 多参数带的 keyform 轴序 —— **2 binding 带已实测定论** / 3 binding 仍未验 / 原为中
 
-官方 Haru 中存在引用 2 个 binding 的带 15 条、3 个 binding 的带 5 条，
-但「哪个参数轴对应 keyform 序号的步长」无法只靠结构读出。
-当前 `moc3_model.py` 只编译单参数带，多参数输入直接报错而不是猜。
+官方 Haru 中存在引用 2 个 binding 的带 15 条、3 个 binding 的带 5 条。
+「哪个参数轴对应 keyform 序号的步长」曾无法只靠结构读出。
 
-- 风险评估：这是**有意的保守**。若按直觉猜轴序，产出的 rig 会被内核接受但形状
-  错乱 —— 属于最难发现的一类缺陷。
-- 验证方法：对官方模型做受控实验（固定其他参数、扫单一参数、比对顶点位移），
-  或用 py-moc3 读出多带网格并逐格比对位置。
+**2026-09-22 受控实验定论（2 binding 带）** —— `tools/probe_multiband_axis_order.py`：
+对官方 Haru 做**单点变异 + 官方内核渲染**（同一设置下只差被改的那一个关键形，
+因此"像素是否变化"只可能来自变异本身）：
+
+- 对象：band 6，binding 列表 `[ParamAngleY, ParamAngleX]`（键均 −30/0/30），
+  成员 mesh #19（keyforms = 9 = 3×3，乘积规则成立）。
+- 做法：**只改该网格 keyform 序号 1** 的顶点位置，在三个设置下渲染并比对像素 sha。
+- 结果：`S0(Y=−30,X=−30)` 不变（天然对照通过）、`S1(Y=−30,X=0)` 不变、
+  `S2(Y=0,X=−30)` **改变**；变异后内核一致性仍为 `True`。
+- 推论：序号 1 = (Y 第 0 键, X 第 1 键) ⇒ `index = i_X*3 + i_Y`。
+
+**规则（已实测并在通用版上复验）**：带的 binding 列表按 **[内层 → 外层]** 排列 ——
+列表**第一个** binding 步长为 1（变化最快），**最后一个**变化最慢：
+`index = Σ_j i_j · Π_{m<j} k_m`（j 为列表下标，k_j 为该 binding 的键数）。
+
+通用版 `tools/probe_multiband_axis_order.py` 对**每个轴独立**判定（只改 H 预测的
+"仅第 j 轴取第 1 键"那个序号，再看是否恰好只有 `S_j` 发生变化）：
+
+| 带 | binding 列表（键数） | 预测步长 | 实测"变化的设置" | 结果 |
+|---|---|---|---|---|
+| band 6（n=2） | ParamAngleY(3), ParamAngleX(3) | 1, 3 | 轴0→S1、轴1→S2 | ✅ |
+| band 15（n=3） | ParamEyeRSmile(2), ParamEyeROpen(4), ParamEyeBallForm(2) | 1, 2, 8 | 轴0→S1、轴1→S2、轴2→S3 | ✅ |
+
+即 **3 binding 带**与**各轴键数不等（2/4/2）**的情形均已在官方内核上验通；
+每次变异后内核一致性仍为 `True`。产物与复现件落在 `Work/multiband-axis/`（不入库）。
+
+**仍未做（不属本实验范围）**：把该规则**接进编译器** —— `moc3_model.py` 当前仍只编译
+单参数带、多参数输入直接报错。接入前应先把 `moc3_lint` 的
+"关键形数 == 带内各 binding 键数之积"规则扩展为**同时校验步长布局**，
+否则"能编出来但形状错乱"仍可能溜过静态校验。
 
 ### F-07 每个参数只支持一个 binding —— 已证实 / 中
 
@@ -411,31 +436,31 @@ F-05（几何三项）、F-07、F-09（导出预算标定 + 504 分流）、F-14
 
 目标：用**独立实现**为我们的 moc3 理解做第三方交叉验证，降低"只有我们自己这么认为"的风险。
 
-方法：**源码级对账**（只读作对照、**不复制任何代码**）。因本机无 Rust/.NET 工具链，
-**运行时**对账待环境就绪后执行。
+**对照对象（已调整）**：本仓库**不再使用** `AyagamiDev/ayagami` 做对账 —— 该项目的
+`AGENTS.md` 明确要求 **AI 代理不得以任何形式参与（含研究、源码分析与文档）**，并声明
+一经使用会使其贡献被永久拒绝。为尊重维护者边界，已停止使用并**删除本地副本**。
 
-对照对象：`AyagamiDev/ayagami`（Rust，**Apache-2.0 / MIT 双许可**），其
-`ayagami/src/file/parse.rs` 是一份**独立实现**的 moc3 读取器。
+改用**无此限制**的两个 oracle：
 
-| 我们的结论 | 独立实现的做法 | 对账 |
-|---|---|---|
-| 头部 `MOC3` + version u32；section 偏移表起于 `0x40`(64) | `FILE_MAGIC=b"MOC3"`、version@0x04、`advance_to(0x40)` 后读 offsets | ✅ 一致 |
-| 段间填充必须为 0 | `advance_to()` 逐字节校验，非零即 `InvalidPadding`（且单次 skip ≤ 0x2000） | ✅ 一致 |
-| canvas 段 = scale / center / width / height | 第二段顺序相同 | ✅ 一致 |
-| 变形器 = 公共表 + 每类型稠密子索引 + `parent_deformer_indices` 指公共表（F-03a/b） | `TypedDeformerView::Warp/Rotation(t)`，`t.idx` 为**类型内**索引；`find_refs()` 反填公共表 | ✅ **独立佐证** |
-| lint 需穷尽引用/边界校验 | `validate_ref` / `validate_opt_ref` / `validate_arrayref` + 重复引用检测 | ✅ 同构 |
+1. **`py-moc3`（MIT，已在依赖内）**：我方 section 布局与它逐项对账 ——
+   `tests/unit/test_moc3_sections.py`（常量 / `SECTION_LAYOUT` / `ADDITIONAL_V303` /
+   `ELEM_SIZES` 全等）与 `tests/unit/test_moc3_container.py`（字节结构往返）。
+2. **官方 Cubism Core（经 `live2d-py` 隔离调用）**：一致性与加载由内核裁决 ——
+   `tests/integration/test_moc3_official_acceptance.py`。
 
-**新线索（未定论，禁止据此改导出）**：ayagami 显式枚举版本演进
-`V3_3 → V4_0 → V4_2 → V5_0 → V5_3`，其中 V3_3 追加 `warp_deformer.bilinear_interpolation`、
-V4_2/V5_0 追加颜色/混合形、V5_3 追加 `offscreen_part` 与 `blend_config`。这与 **F-08
-（逆向格式随 Cubism 版本漂移）** 同源，并提示我们遇到的 `additional.quad_transforms`
-可能属于同一套"按版本追加段"机制 —— 需受控实验确认，**不作为结论**。
+2026-09-22 本机实测：`tests/unit` **286 passed**、`tests/integration` **63 passed**
+（开 `LIVE2D_TEST_PIXELS=1` 后 **87 passed**）—— 即上面两条 oracle 均已通过。
+
+**关于 F-08（格式随版本漂移）**：此处曾记录一条**源自第三方实现**的版本演进线索；
+因该来源项目明确要求 AI 代理不得参与，已按要求**移除**，不再引用其内部信息。
+F-08 仍按受控实验处理：`build_layout(version)` 已按版本分支，对**未识别版本拒绝写出**
+而不是尽力写出。
 
 ### oracle 许可登记（准入表）
 
 | 候选 | 许可（实测） | 准入结论 |
 |---|---|---|
-| `AyagamiDev/ayagami` | **Apache-2.0** | 源码对照已用；如需复用须保留 NOTICE |
+| `AyagamiDev/ayagami` | **Apache-2.0** | **不使用**：其 `AGENTS.md` 要求 AI 代理不得参与（含研究/源码分析） |
 | `EasyLive2D/relive2d`（= `live2d-py` 所属组织） | **MIT** | 准用（仅隔离验证路径） |
 | `py-moc3` | **MIT** | 准用（结构转录 / 交叉校验） |
 | `shitagaki-lab/see-through` | **Apache-2.0** | 准用（与本项目同协议） |
@@ -445,7 +470,8 @@ V4_2/V5_0 追加颜色/混合形、V5_3 追加 `offscreen_part` 与 `blend_confi
 
 ### 本地跑验收的 runbook（工具链就绪后）
 
-前置：Python 用本项目目标版本（CI 为 3.10–3.12）；Rust 可选（仅供把 ayagami 当**可执行** oracle）。
+前置：Python 用本项目目标版本（CI 为 3.10–3.12）。**Rust 不是本流程的依赖** ——
+第三方可执行 oracle 因对方维护者政策已放弃（见上文"对照对象（已调整）"）。
 
 ```bash
 pip install -r requirements.txt            # 含 py-moc3(MIT) 与 live2d-py(仅隔离验证)
@@ -467,7 +493,9 @@ LIVE2D_TEST_PIXELS=1 python -m pytest tests/integration -q
 - 证据：`Work/moc3-keyform-verification.json`、`Work/moc3-p0-verification.json`
   （`Work/` 不入库）
 - 风险网络：`docs/reviews/2026-09-20-moc3-risk-map.dot`
-  （本机未安装 graphviz，`dot` 渲染未验证，仅作为文本化的风险关系图）
+  —— **2026-09-22 已用 Graphviz 实际渲染验证**（`dot -Tsvg` 成功，产物 `Work/moc3-risk-map.svg`，不入库）。
+  注意：本机在 PATH/默认目录里找到的是 **GIMP 自带的 Graphviz 14.1.4**（用户自装的 16.1.0 未出现在 PATH），
+  该副本缺 `libgvplugin_core-8.dll` 且中文字体回退 —— 图可读，但排版非最佳。
 - 复核脚本：`tools/probe_haru_keyforms.py`、`tools/verify_keyform_evidence.py`、
   `tools/check_go_export_path.py`
 - 现状文档：`docs/native-runtime.md`

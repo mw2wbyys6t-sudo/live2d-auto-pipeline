@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from drivers.live2d_runtime.moc3_verify import (
+    render_probe,
     verify_moc3_consistency,
     verify_moc3_load,
     verify_moc3_runtime,
@@ -98,6 +99,111 @@ def _package(tmp_path: Path, doc, name: str) -> Path:
         },
     }), encoding="utf-8")
     return manifest
+
+
+_EYE_KEYS = (-30.0, 0.0, 30.0)
+_STEP_X = 50.0         # 每上一档 X 键的水平位移（画布像素）
+_STEP_Y = 40.0         # 每上一档 Y 键的垂直位移
+
+
+def _two_axis_rig():
+    """一个网格由 ParamEyeBallX / ParamEyeBallY **两轴**驱动（各 3 键 → 9 个键形）。
+
+    键形按**展平序** ``index = i_X + 3*i_Y`` 排列 —— 即带的 binding 列表里
+    ``ParamEyeBallX`` 在前、步长为 1（F-06 实测定论）。第 (i_X, i_Y) 个键形把方块
+    平移 (i_X*50, i_Y*40)，于是"内核选了哪个键形"可以从画面上读出来。
+    """
+    verts, uvs, tris = _square(0.0, 0.0)
+    shapes = []
+    for i_y in range(len(_EYE_KEYS)):
+        for i_x in range(len(_EYE_KEYS)):
+            shapes.append(KeyformShape(
+                key_value=float(i_x + len(_EYE_KEYS) * i_y),   # 展平序号（仅备注）
+                vertices=[(x + i_x * _STEP_X, y + i_y * _STEP_Y)
+                          for x, y in verts]))
+    mesh = MeshSpec(
+        mesh_id="ArtMeshEye", vertices=verts, triangles=tris, uvs=uvs,
+        keyform_shapes=shapes,
+        keyform_axes=(("ParamEyeBallX", _EYE_KEYS), ("ParamEyeBallY", _EYE_KEYS)),
+    )
+    return RigSpec(
+        meshes=[mesh],
+        parameters=[
+            ParameterSpec("ParamEyeBallX", minimum=-30.0, maximum=30.0,
+                          default=0.0),
+            ParameterSpec("ParamEyeBallY", minimum=-30.0, maximum=30.0,
+                          default=0.0),
+        ],
+        canvas_width=_CANVAS, canvas_height=_CANVAS, pixels_per_unit=_PPU)
+
+
+def _shifted_static_rig(shift_x: float, shift_y: float):
+    """参照：**不带任何键形**、顶点已按期望姿态平移好的网格。
+
+    仍须声明参数（本模型没有绑定）：``render_probe`` 对"没有任何原生参数"的模型会
+    直接拒绝验收（"No native parameters loaded"）。
+    """
+    verts, uvs, tris = _square(0.0, 0.0)
+    mesh = MeshSpec(
+        mesh_id="ArtMeshTest", triangles=tris, uvs=uvs,
+        vertices=[(x + shift_x, y + shift_y) for x, y in verts])
+    return RigSpec(meshes=[mesh], parameters=[
+        ParameterSpec("ParamEyeBallX", minimum=-30.0, maximum=30.0, default=0.0),
+        ParameterSpec("ParamEyeBallY", minimum=-30.0, maximum=30.0, default=0.0),
+    ], canvas_width=_CANVAS, canvas_height=_CANVAS, pixels_per_unit=_PPU)
+
+
+@requires_live2d
+def test_two_axis_band_is_one_band_with_two_bindings(tmp_path):
+    """两轴（眼球 X+Y）必须写成一个**引用 2 个 binding 的带**，且内核接受。
+
+    单参数带是只含一个 binding 的带，所以旧的单轴路径字节不变；这里验证新增的多轴。
+    """
+    doc = compile_static_rig(_two_axis_rig())
+    assert lint_document(doc) == [], [str(i) for i in lint_document(doc)]
+    assert doc.get("keyform_binding_band.counts") == [0, 2]
+    assert doc.get("keyform_binding_index.indices") == [0, 1]
+    assert doc.get("keyform_binding.keys_counts") == [3, 3]
+    assert doc.counts[ms.CountIdx.KEYFORM_BINDINGS] == 2
+    assert doc.get("art_mesh.keyform_counts") == [9]      # 3 x 3
+    moc3 = tmp_path / "twoaxis.moc3"
+    moc3.write_bytes(doc.to_bytes())
+    result = verify_moc3_consistency(str(moc3))
+    assert result["ok"] is True, result["blocker"]
+
+
+@requires_live2d
+@requires_pixels
+def test_two_axis_band_follows_the_flattened_axis_order(tmp_path):
+    """官方内核按 ``index = i_X + 3*i_Y`` 选键形 —— 轴序搞反则 sha 立刻不同。
+
+    判据与旋转验收同源：与「顶点已按期望姿态平移好的无键形网格」逐像素比对。
+    """
+    doc = compile_static_rig(_two_axis_rig())
+    manifest = _package(tmp_path, doc, "twoaxis")
+
+    def reference(name, shift_x, shift_y):
+        ref_doc = compile_static_rig(_shifted_static_rig(shift_x, shift_y))
+        ref = render_probe(str(_package(tmp_path, ref_doc, name)))
+        assert ref["ok"] is True, ref["blocker"]
+        return ref["pixels_sha256"]
+
+    # (i_X=2, i_Y=1) -> (100, 40)：X 取最大键、Y 取中间键
+    got = render_probe(str(manifest),
+                       {"ParamEyeBallX": 30.0, "ParamEyeBallY": 0.0})
+    assert got["ok"] is True, got["blocker"]
+    want = reference("ref_xy", 2 * _STEP_X, 1 * _STEP_Y)
+    assert got["pixels_sha256"] == want
+
+    # (i_X=1, i_Y=2) -> (50, 80)：X 取中间键、Y 取最大键
+    got2 = render_probe(str(manifest),
+                        {"ParamEyeBallX": 0.0, "ParamEyeBallY": 30.0})
+    assert got2["ok"] is True, got2["blocker"]
+    want2 = reference("ref_yx", 1 * _STEP_X, 2 * _STEP_Y)
+    assert got2["pixels_sha256"] == want2
+
+    # 两个期望姿态本身必须可区分，否则该测试无法证伪轴序
+    assert want != want2
 
 
 @requires_live2d
