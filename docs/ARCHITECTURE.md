@@ -81,7 +81,7 @@
 | 模块 | 技术 | 原因 |
 |------|------|------|
 | 图像生成 | Pollinations/Seedream/SenseNova | 免费+高质量双保险 |
-| 语义分割 | ISNet + SAM + CV2 inpaint | 二次元专用+通用+补全 |
+| 语义分割 | ISNet / SAM / **SAM2 + GroundingDINO**（`segmentation_backend="sam2_gd"`）/ CV2 inpaint | 二次元专用 + 通用 + **开放词汇按部位名分层**；SAM2 后端不降级成颜色启发式，缺权重直接抛 `ModelUnavailable` |
 | 网格生成 | OpenCV 轮廓 + SciPy Delaunay | 自动化三角剖分 |
 | 骨骼/变形器 | 程序化标准层级 | 无需手动绑定 |
 | 面部捕捉 | MediaPipe Face Mesh | 轻量、跨平台、468点 |

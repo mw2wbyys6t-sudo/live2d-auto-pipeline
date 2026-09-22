@@ -33,8 +33,20 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+
+  // 不拦截 API、输出文件、WebSocket 等动态请求
   if (event.request.method !== 'GET') return;
-  
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/output/') ||
+    url.pathname.startsWith('/generated/') ||
+    url.pathname === '/ws' ||
+    url.pathname.startsWith('/ws/')
+  ) {
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then((response) => {
       if (response) return response;

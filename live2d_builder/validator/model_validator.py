@@ -295,20 +295,27 @@ class ModelValidator:
         elif expr_refs:
             warnings.append("Expressions referenced but directory not found")
 
-        # 5. moc3 existence (Cubism Editor output — will be missing pre-build)
+        # A manifest is not a deployable model. Require an actual moc3 binary.
         moc_ref = model3_data.get("FileReferences", {}).get("Moc", "")
-        if moc_ref:
-            moc_path = base_dir / moc_ref
-            if not moc_path.exists():
-                warnings.append(
-                    f"moc3 file not found ({moc_ref}). Generate via Cubism Editor export."
-                )
-            else:
-                checks["moc3"] = {"valid": True, "path": str(moc_path)}
+        moc_ok = False
+        try:
+            moc_path = (base_dir / moc_ref).resolve()
+            if not moc_ref or not moc_path.is_relative_to(base_dir.resolve()):
+                raise ValueError("Missing or unsafe Moc reference")
+            with moc_path.open("rb") as stream:
+                header = stream.read(64)
+            if len(header) < 64 or header[:4] != b"MOC3":
+                raise ValueError("Invalid or truncated moc3 header")
+            moc_ok = True
+        except (OSError, ValueError) as exc:
+            errors.append(f"moc3 unavailable: {exc}. Export from Cubism Editor is required.")
+        checks["moc3"] = {"valid": moc_ok}
 
         valid = len(errors) == 0
         report = {
             "valid": valid,
+            "runtime_verified": False,
+            "deployment_status": "requires_runtime_verification" if valid else "blocked",
             "model_dir": str(d),
             "model3_json": str(model3_path),
             "checks": checks,
@@ -361,43 +368,21 @@ class ModelValidator:
 
         results: Dict[str, Any] = {}
 
-        # Cubism Editor
-        cubism_notes: List[str] = []
-        if model3_data.get("Version") == 3:
-            cubism_notes.append("model3.json Version 3 — compatible with Cubism 4.x")
-        else:
-            cubism_notes.append("Version mismatch; Cubism 4 expects Version 3")
-        if not moc_exists:
-            cubism_notes.append("moc3 missing — import model3.json into Cubism Editor and export moc3")
+        # Runtime manifests cannot establish editor-project or SDK compatibility.
         results["cubism_editor"] = {
-            "compatible": model3_data.get("Version") == 3,
-            "notes": cubism_notes,
+            "compatible": False,
+            "notes": ["Import PSD into Cubism Editor; model3.json is not an editable cmo3 project."],
         }
-
-        # VTube Studio
-        vts_notes: List[str] = []
-        missing_vts = [p for p in self.VTS_TRACKING_PARAMS if p not in param_ids]
-        if missing_vts:
-            vts_notes.append(f"Missing tracking parameters: {', '.join(missing_vts)}")
-        if not moc_exists:
-            vts_notes.append("moc3 missing — VTube Studio requires moc3 binary")
-        if not textures:
-            vts_notes.append("No textures referenced")
-        vts_ok = len(missing_vts) == 0 and moc_exists and bool(textures)
-        results["vtube_studio"] = {"compatible": vts_ok, "notes": vts_notes}
-
-        # VSeeFace
-        vseeface_notes: List[str] = []
-        # VSeeFace needs similar params but tolerates missing some
-        essential = ["ParamAngleX", "ParamAngleY", "ParamEyeLOpen", "ParamEyeROpen",
-                     "ParamMouthOpenY", "ParamMouthForm"]
-        missing_vsf = [p for p in essential if p not in param_ids]
-        if missing_vsf:
-            vseeface_notes.append(f"Missing essential params: {', '.join(missing_vsf)}")
-        if not moc_exists:
-            vseeface_notes.append("moc3 missing — VSeeFace requires moc3")
-        vsf_ok = len(missing_vsf) == 0 and moc_exists
-        results["vseeface"] = {"compatible": vsf_ok, "notes": vseeface_notes}
+        structural = self.validate_all(str(d))
+        results["vtube_studio"] = {
+            "compatible": False,
+            "structurally_valid": structural["valid"],
+            "notes": ["Actual SDK/runtime loading is required before compatibility can be confirmed."],
+        }
+        results["vseeface"] = {
+            "compatible": False,
+            "notes": ["VSeeFace uses VRM 3D avatars, not Cubism model3/moc3 packages."],
+        }
 
         ce = results["cubism_editor"]["compatible"]
         vt = results["vtube_studio"]["compatible"]

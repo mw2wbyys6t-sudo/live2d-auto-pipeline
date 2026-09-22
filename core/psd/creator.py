@@ -37,16 +37,22 @@ class PSDCreator:
         output_path: Optional[str] = None,
         canvas_size: Optional[tuple] = None,
         layer_order: Optional[List[str]] = None,
+        ordered_names: Optional[List[str]] = None,
     ) -> Dict:
         """Create a PSD file from a directory of layer PNG files.
 
         If psd-tools is unavailable, creates a PNG package with composite preview.
 
         Args:
-            layers_dir: Directory containing layer_XXX.png files
+            layers_dir: Directory containing layer PNG files
             output_path: Output .psd path (default: layers_dir/character.psd)
             canvas_size: (width, height) override; auto-detected if not provided
             layer_order: Explicit list of filenames in back-to-front order
+            ordered_names: Semantic layer names in back-to-front order. When
+                given, each name maps to ``<name>.png`` inside ``layers_dir``
+                and is written into the PSD as the layer name, so the file opens
+                in Photoshop/GIMP with meaningful part names
+                (``hair_back``/``face``/``eye_L``...) instead of ``layer_000``.
 
         Returns:
             Dict with keys: success, psd_path, fallback, layer_count
@@ -63,8 +69,17 @@ class PSDCreator:
         if output_path is None:
             output_path = str(layers_path / "character.psd")
 
-        # Collect layer PNGs
-        layer_files = sorted(layers_path.glob("layer_*.png"))
+        # Collect layer PNGs. An explicit semantic order wins over filename globbing.
+        display_names: Optional[List[str]] = None
+        layer_files: List[Path] = []
+        if ordered_names:
+            matched = [(n, layers_path / f"{n}.png") for n in ordered_names]
+            matched = [(n, p) for n, p in matched if p.is_file()]
+            if matched:
+                display_names = [n for n, _ in matched]
+                layer_files = [p for _, p in matched]
+        if not layer_files:
+            layer_files = sorted(layers_path.glob("layer_*.png"))
         if not layer_files:
             # Try all PNG files
             layer_files = sorted([f for f in layers_path.glob("*.png") if f.name != "preview.png"])
@@ -93,24 +108,25 @@ class PSDCreator:
         log.info(f"Creating PSD from {len(layer_files)} layers, canvas {w}x{h}")
 
         if self._has_psd_tools:
-            return self._create_with_psd_tools(layer_files, output_path, w, h)
+            return self._create_with_psd_tools(layer_files, output_path, w, h, display_names)
         else:
             return self._create_png_package(layer_files, output_path, w, h, layers_dir)
 
-    def _create_with_psd_tools(self, layer_files: List[Path], output_path: str, w: int, h: int) -> Dict:
+    def _create_with_psd_tools(self, layer_files: List[Path], output_path: str, w: int, h: int,
+                               display_names: Optional[List[str]] = None) -> Dict:
         """Create actual PSD using psd-tools."""
         try:
             psd = self._PSDImage.new(mode='RGBA', size=(w, h))
 
-            # psd-tools adds layers from top; we want first layer = back
-            # So reverse to add front layers first
-            for i, lf in enumerate(reversed(layer_files)):
+            # PSD layer order is back-to-front; frompil appends to its parent.
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            for idx, lf in enumerate(layer_files):
                 img = Image.open(lf).convert('RGBA')
                 if img.size != (w, h):
                     img = img.resize((w, h), Image.LANCZOS)
-                layer_name = lf.stem
-                layer = self._PixelLayer.frompil(img, psd, name=layer_name)
-                psd.append(layer)
+                layer_name = (display_names[idx]
+                              if display_names and idx < len(display_names) else lf.stem)
+                self._PixelLayer.frompil(img, psd, name=layer_name)
 
             psd.save(output_path)
             log.success(f"PSD created: {output_path}")

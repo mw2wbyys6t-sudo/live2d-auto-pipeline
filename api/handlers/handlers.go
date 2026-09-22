@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -42,6 +43,11 @@ func NewHandler(cfg *config.Config, imageGenerator *services.ImageGenerator, cac
 	// 启动缓存清理守护进程
 	if cache != nil {
 		cache.StartCleanupDaemon(5 * time.Minute)
+	}
+
+	// 应用配置的最大连接数（WebSocket.MaxConnections 此前声明但无人读取）
+	if cfg.WebSocket.MaxConnections > 0 {
+		h.wsHub.SetMaxConns(cfg.WebSocket.MaxConnections)
 	}
 
 	// 启动 WebSocket hub
@@ -555,6 +561,36 @@ func (h *Handler) WSHandle(c *gin.Context) {
 // v10.0: Live2D 模型导出
 // ======================================================================
 
+// exportFailureResponse 把导出失败映射成对外状态码。
+//
+// 超时不是模型的错，也不该伪装成 500：回 504 并带上预算，调用方才能区分
+// 「素材太大要改异步」和「构建真的坏了」。
+func (h *Handler) exportFailureResponse(c *gin.Context, err error) {
+	if errors.Is(err, services.ErrPythonTimeout) {
+		c.JSON(http.StatusGatewayTimeout, models.Response{
+			Success: false,
+			Error:   err.Error(),
+			Data: map[string]interface{}{
+				"blocker": fmt.Sprintf("导出在 %s 预算内没有完成",
+					h.exportTimeoutBudget()),
+				"timeout_budget_seconds": int(h.exportTimeoutBudget().Seconds()),
+			},
+		})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, models.Response{
+		Success: false, Error: err.Error(),
+	})
+}
+
+// exportTimeoutBudget 返回当前配置的完整导出预算。
+func (h *Handler) exportTimeoutBudget() time.Duration {
+	if h.cfg == nil {
+		return 150 * time.Second
+	}
+	return h.cfg.GetExportTimeout()
+}
+
 // ExportLive2D 导出 Live2D 模型
 func (h *Handler) ExportLive2D(c *gin.Context) {
 	var req models.ExportModelRequest
@@ -562,12 +598,226 @@ func (h *Handler) ExportLive2D(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "参数错误: " + err.Error()})
 		return
 	}
-	result, err := h.pythonBridge.ExportLive2DModel(req.CharacterID, req.LayersDir, req.OutputDir)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, models.Response{Success: false, Error: err.Error()})
+
+	if req.CharacterID == "" {
+		req.CharacterID = "character"
+	}
+
+	// Zip download mode (used by the web preview's Export button).
+	if req.Download {
+		modelDir, err := h.resolveExportModelDir(req)
+		if err != nil {
+			if errors.Is(err, services.ErrPythonTimeout) {
+				h.exportFailureResponse(c, err)
+			} else {
+				c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: err.Error()})
+			}
+			return
+		}
+		zipBytes, err := zipDirectory(modelDir)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.Response{Success: false, Error: "打包失败: " + err.Error()})
+			return
+		}
+		if len(zipBytes) == 0 {
+			c.JSON(http.StatusNotFound, models.Response{Success: false, Error: "模型目录为空或不存在"})
+			return
+		}
+		c.Header("Content-Disposition",
+			"attachment; filename=live2d_model.zip")
+		c.Data(http.StatusOK, "application/zip", zipBytes)
 		return
 	}
-	c.JSON(http.StatusOK, models.Response{Success: true, Message: "模型导出成功", Data: result})
+
+	// JSON mode (backward compatible).
+	result, err := h.exportLive2DModelTracked(req.CharacterID, req.LayersDir, req.OutputDir)
+	if err != nil {
+		h.exportFailureResponse(c, err)
+		return
+	}
+	data := exportResponseData(result)
+	if ok, _ := data["success"].(bool); !ok {
+		message, _ := data["message"].(string)
+		if message == "" {
+			message = "导出未产生模型"
+		}
+		c.JSON(http.StatusUnprocessableEntity, models.Response{
+			Success: false, Error: message, Data: data,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Message: "模型导出成功", Data: data})
+}
+
+// unwrapPythonResult 摊平 runInlinePython 的 {"result": ...} 包装。
+//
+// 桥接层总是把 Python 返回的字典塞在 "result" 键下，直接读顶层键的代码
+// 因此永远读不到值（导出下载模式就是这样丢掉 output_dir 的）。
+func unwrapPythonResult(raw map[string]interface{}) map[string]interface{} {
+	if inner, ok := raw["result"].(map[string]interface{}); ok {
+		return inner
+	}
+	return raw
+}
+
+// exportResponseData 把 Python 的导出结果整理成对外 data 字段。
+//
+// moc3 的编译 / 验收状态摊平成前端直接读取的 runtime_ready 与 blocker；
+// 任何缺字段的情况一律按「未就绪」处理，不默认成功。
+func exportResponseData(raw map[string]interface{}) map[string]interface{} {
+	inner := unwrapPythonResult(raw)
+	data := make(map[string]interface{}, len(inner)+3)
+	for key, value := range inner {
+		if key != "moc3" {
+			data[key] = value
+		}
+	}
+	moc3, _ := inner["moc3"].(map[string]interface{})
+	data["moc3"] = moc3
+	data["runtime_ready"], data["blocker"] = moc3Readiness(inner, moc3)
+	return data
+}
+
+func moc3Readiness(inner, moc3 map[string]interface{}) (bool, string) {
+	if ready, _ := moc3["runtime_ready"].(bool); ready {
+		return true, ""
+	}
+	for _, candidate := range []string{
+		stringField(moc3, "moc3_blocker"),
+		stringField(inner, "message"),
+	} {
+		if candidate != "" {
+			return false, candidate
+		}
+	}
+	return false, "导出结果缺少 moc3 就绪信息：未经官方 Cubism Core 验收，不能视为可部署"
+}
+
+func stringField(values map[string]interface{}, key string) string {
+	if text, ok := values[key].(string); ok {
+		return text
+	}
+	return ""
+}
+
+// resolveExportModelDir determines the on-disk model directory to zip.
+//
+// Precedence:
+//  1. An explicit model_dir (resolved under Output.BaseDir, traversal-safe).
+//  2. A fresh export via the Python bridge; its output_dir is used.
+func (h *Handler) resolveExportModelDir(req models.ExportModelRequest) (string, error) {
+	if req.ModelDir != "" {
+		candidate := req.ModelDir
+		if !filepath.IsAbs(candidate) {
+			candidate = filepath.Join(h.cfg.Output.BaseDir, candidate)
+		}
+		candidate = filepath.Clean(candidate)
+		if !isPathSafe(candidate, h.cfg.Output.BaseDir) {
+			return "", fmt.Errorf("非法的模型目录")
+		}
+		info, err := os.Stat(candidate)
+		if err != nil || !info.IsDir() {
+			return "", fmt.Errorf("模型目录不存在: %s", req.ModelDir)
+		}
+		return candidate, nil
+	}
+
+	result, err := h.exportLive2DModelTracked(req.CharacterID, req.LayersDir, req.OutputDir)
+	if err != nil {
+		return "", err
+	}
+	inner := unwrapPythonResult(result)
+	if d := stringField(inner, "output_dir"); d != "" {
+		return d, nil
+	}
+	if d := stringField(inner, "model3_json"); d != "" {
+		return filepath.Dir(d), nil
+	}
+	return "", fmt.Errorf("导出未产生模型目录")
+}
+
+// ExportPSD 导出 PSD 分层文件
+func (h *Handler) ExportPSD(c *gin.Context) {
+	var req models.PSDLayerRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "参数错误: " + err.Error()})
+		return
+	}
+	result, err := h.pythonBridge.CreatePSDPlan(req.ImagePath)
+	if err != nil {
+		// Fail-open: return a structured error rather than crashing.
+		c.JSON(http.StatusInternalServerError, models.Response{Success: false, Error: "PSD导出失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Message: "PSD导出成功", Data: result})
+}
+
+// ExportSpine 导出 Spine 格式（占位/兼容端点）。
+//
+// 本平台以 Live2D Cubism4 为一等导出目标；Spine 导出作为兼容端点返回
+// 可用的 model3 产物路径，调用方可据此自行转换，而不会收到 404。
+func (h *Handler) ExportSpine(c *gin.Context) {
+	var req models.ExportModelRequest
+	_ = c.ShouldBindJSON(&req)
+	if req.CharacterID == "" {
+		req.CharacterID = "character"
+	}
+	result, err := h.pythonBridge.ExportLive2DModel(req.CharacterID, req.LayersDir, req.OutputDir)
+	if err != nil {
+		c.JSON(http.StatusOK, models.Response{
+			Success: true,
+			Message: "Spine 导出暂未启用；已返回 Live2D model3 产物",
+			Data:    map[string]interface{}{"format": "spine", "available": false, "live2d": result},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{
+		Success: true,
+		Message: "Spine 导出暂未启用；已返回 Live2D model3 产物",
+		Data:    map[string]interface{}{"format": "spine", "available": false, "live2d": result},
+	})
+}
+
+// TrackingUnavailable 摄像头面捕的**显式**"未实现"响应。
+//
+// 前端 /preview 会调用 /api/tracking/start|stop 并连接 /ws/tracking；这套端点
+// 目前只在 Python 侧 api_server.py 实现，Go 后端没有面捕管线。这里回 501 +
+// 明确指引，避免调用方收到 404 而误以为"路由写错了"。
+func (h *Handler) TrackingUnavailable(c *gin.Context) {
+	c.JSON(http.StatusNotImplemented, models.Response{
+		Success: false,
+		Error:   "本后端未实现摄像头面捕；请改用 Python 后端（api_server.py）",
+		Data: map[string]interface{}{
+			"backend":     "go",
+			"available":   false,
+			"endpoints":   []string{"/api/tracking/start", "/api/tracking/stop", "/ws/tracking"},
+			"alternative": "python api_server.py",
+		},
+	})
+}
+
+// DeployDesktop verifies model pixels, then waits for the native pet first frame.
+func (h *Handler) DeployDesktop(c *gin.Context) {
+	var req models.ExportModelRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.ModelDir == "" {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Message: "需要提供真实导出模型的 model_dir"})
+		return
+	}
+	result, err := h.pythonBridge.DeployDesktopModel(req.ModelDir)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, models.Response{Success: false, Message: err.Error(), Data: map[string]interface{}{"deployed": false, "runtime_verified": false}})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Message: "桌宠已完成真实模型验收并绘制首帧；桌面透明外观仍需视觉确认", Data: result})
+}
+
+func (h *Handler) DesktopStatus(c *gin.Context) {
+ c.JSON(http.StatusOK, models.Response{Success: true, Data: services.DesktopDeploymentStatus()})
+}
+
+// WSProgress WebSocket 进度推送端点（/ws/progress 的兼容别名）。
+func (h *Handler) WSProgress(c *gin.Context) {
+	h.wsHub.HandleConnection(c)
 }
 
 // GetExpressions 获取可用表情列表

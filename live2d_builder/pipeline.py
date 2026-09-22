@@ -79,6 +79,7 @@ class Live2DBuilder:
 
         # Build state (populated during build())
         self._meshes: Dict[str, Dict] = {}
+        self._bone_positions: Dict[str, Any] = {}
         self._uv_data: Dict[str, Dict] = {}
         self._bone_tree: Dict[str, Any] = {}
         self._deformer_tree: Dict[str, Any] = {}
@@ -148,16 +149,38 @@ class Live2DBuilder:
             "meshes": self._meshes,
             "uv_data": self._uv_data,
             "bone_tree": self._bone_tree,
+            "bone_positions": self._bone_positions,
             "deformer_tree": self._deformer_tree,
             "parameters": param_defs,
             "expressions": expr_list,
             "physics3": self._physics3,
         }
+        from live2d_builder.exporter.moc3_pipeline import drivable_parameters
+
         export_result = self.exporter.export(
             builder_result=builder_result,
             output_dir=str(self.output_dir),
             character_name=self.character_name,
+            # motion 只排真有键形驱动的参数，与第 9b 步实际编译出的键形保持一致
+            drivable_parameters=drivable_parameters(builder_result),
         )
+
+        # Step 9b: Compile real moc3 and gate it on official Core acceptance
+        log.step(9, self.TOTAL_STEPS, "Compiling moc3")
+        from live2d_builder.exporter.moc3_pipeline import (
+            compile_export_moc3,
+            summarize_for_meta,
+        )
+        moc3_result = compile_export_moc3(
+            builder_result=builder_result,
+            atlas_uvs=export_result.get("atlas_uvs", {}),
+            output_dir=str(self.output_dir),
+            character_name=self.character_name,
+        )
+        if not moc3_result["moc3_written"]:
+            log.error(f"moc3 编译失败: {moc3_result['blocker']}")
+        elif moc3_result["dropped"]:
+            log.warning(f"moc3 已写出但存在未编译特性: {moc3_result['dropped']}")
 
         # Step 10: Validate
         log.step(10, self.TOTAL_STEPS, "Validating model")
@@ -188,6 +211,7 @@ class Live2DBuilder:
             },
             "output_dir": str(self.output_dir),
             "model3_json": export_result["model3_json"],
+            "moc3": summarize_for_meta(moc3_result),
         }
         meta_path = self.output_dir / "build_meta.json"
         meta_path.write_text(
@@ -209,6 +233,7 @@ class Live2DBuilder:
             "physics3": self._physics3,
             "validation": validation,
             "compatibility": compatibility,
+            "moc3": summarize_for_meta(moc3_result),
             "mesh_guide": str(mesh_guide),
             "build_meta": str(meta_path),
             "elapsed_seconds": round(elapsed, 2),
@@ -270,6 +295,32 @@ class Live2DBuilder:
     ) -> Dict[str, Any]:
         """Build the 32-bone hierarchy adapting to available layer groups."""
         return self.bones.build(list(layers.keys()), centroids=centroids)
+
+    def _assign_bone_weights(self) -> None:
+        """Attach per-vertex skinning weights to every generated mesh.
+
+        Fail-open: any problem (missing bone tree, degenerate mesh) leaves
+        the mesh without weights rather than aborting the build, so the
+        exported model3.json remains loadable.
+        """
+        try:
+            if not self._meshes or not self._bone_tree:
+                return
+            bone_positions = self.bones.get_bone_positions(self._centroids or {})
+            # 留给导出阶段用：骨骼枢轴是烘焙参数旋转键形所必需的
+            self._bone_positions = bone_positions
+            assignments = self._bone_tree.get("layer_assignments", {})
+            for name, mesh in self._meshes.items():
+                try:
+                    assigned = assignments.get(name, "Head")
+                    parent = BoneHierarchy.STANDARD_BONES.get(assigned, {}).get("parent")
+                    mesh["weights"] = self.mesh_gen.compute_bone_weights(
+                        mesh, bone_positions, assigned, parent
+                    )
+                except Exception as exc:
+                    log.debug(f"Skinning weights skipped for '{name}': {exc}")
+        except Exception as exc:
+            log.warning(f"Bone weight assignment failed (non-fatal): {exc}")
 
     def _setup_deformers(
         self,

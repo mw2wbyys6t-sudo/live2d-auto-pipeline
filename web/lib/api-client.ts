@@ -212,12 +212,10 @@ export class APIClient {
     const name = raw.name || '';
     const createdAt = raw.createdAt || raw.created_at || new Date().toISOString();
     const updatedAt = raw.updatedAt || raw.updated_at || createdAt;
-    // Try backend-provided thumbnails, then fall back to a local convention:
-    //   /generated/{characterId}.png — populated when a real workflow image
-    //   was generated for this character.
+    // 缩略图只能使用后端实际返回的地址（/output/xxx.png）。
+    // 后端未返回时留空，由卡片组件显示占位图标，避免请求必然 404 的路径。
     const apiThumb = raw.thumbnailUrl || raw.thumbnail_url || raw.image_url || raw.imageUrl || '';
-    const localThumb = id ? `/generated/${id}.png` : '';
-    const thumbnailUrl = apiThumb || localThumb;
+    const thumbnailUrl = apiThumb;
     const description = raw.description || raw.persona?.personality || raw.persona?.backstory || '';
     return {
       ...raw,
@@ -460,7 +458,15 @@ export class APIClient {
     characterId: string,
     format: ExportFormat,
     layersDir?: string,
-  ): Promise<{ model3_json?: string; texture?: string; model_path?: string; success: boolean }> {
+  ): Promise<{
+    model3_json?: string;
+    texture?: string;
+    model_path?: string;
+    success: boolean;
+    /** 该模型包能否被 Live2D 运行时直接加载（构建期官方 Cubism Core 验收通过才为 true）。 */
+    runtime_ready?: boolean;
+    blocker?: string;
+  }> {
     // v10.1: POST /api/export/live2d with JSON body (not GET with query params)
     const payload: Record<string, unknown> = {
       character_id: characterId,
@@ -528,6 +534,77 @@ export class APIClient {
       return null;
     }
   }
+
+  // ---------- cross-page pipeline ----------
+
+  async getLatestGeneration(): Promise<LatestGeneration | null> {
+    try {
+      const res = await this.request<unknown>('/api/generations/latest', undefined, 15_000);
+      return extractData<LatestGeneration>(res);
+    } catch {
+      return null;
+    }
+  }
+
+  async segmentImage(
+    imagePath = '',
+    method: 'semantic' | 'kmeans' = 'semantic',
+  ): Promise<SegmentResult> {
+    // Segmentation runs a real model (SAM on CPU ≈ 25s+, K-means is fast),
+    // hence the generous timeout.
+    const res = await this.request<unknown>(
+      '/api/segment',
+      { method: 'POST', body: JSON.stringify({ image_path: imagePath, method }) },
+      30 * 60_000,
+    );
+    return extractData<SegmentResult>(res);
+  }
+}
+
+export interface LatestGeneration {
+  character_id: string;
+  image_path: string;
+  image_url: string;
+  layers_dir: string;
+  layer_count: number;
+  segmentation_method: string;
+  psd_path: string;
+  psd_url: string;
+  model3_json: string;
+  created_at: string;
+}
+
+export interface SegmentedLayer {
+  name: string;
+  part_name: string;
+  url: string;
+  pixel_count: number;
+}
+
+export interface SegmentResult {
+  method: string;
+  layers_dir: string;
+  layer_count: number;
+  layers: SegmentedLayer[];
+  composite_preview: string;
+  source_image_url: string;
+  psd_path: string;
+  psd_url: string;
+  psd_success: boolean;
+}
+
+/**
+ * 推导后端 WebSocket 地址。
+ * WS 不受 CORS 约束，可直连后端；优先用注入/内联的后端地址，
+ * 否则退回当前源（依赖 dev server 代理转发 upgrade）。
+ */
+export function getBackendWsUrl(path: string): string {
+  const httpBase =
+    (typeof window !== 'undefined' &&
+      (window as unknown as { __LIVE2D_API_URL__?: string }).__LIVE2D_API_URL__) ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    (typeof window !== 'undefined' ? window.location.origin : '');
+  return httpBase.replace(/^http/, 'ws').replace(/\/$/, '') + path;
 }
 
 export const apiClient = new APIClient();

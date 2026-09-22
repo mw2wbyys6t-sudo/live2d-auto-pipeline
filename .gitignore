@@ -45,6 +45,17 @@ api/live2d-api
 tmp/
 *.tmp
 
+# Local scratch & verification fixtures (never shipped)
+Work/
+
+# Machine-local toolchains (367 MB; a stale venv plus the Go module cache)
+.venv-runtime/
+.go-cache/
+
+# Local agent/skill working state (the distilled versions live in docs/)
+.autocase/
+.superpowers/
+
 # Assets (keep directory structure but ignore large files)
 assets/characters/*.json
 assets/models/
