@@ -269,6 +269,145 @@ def eye_track_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
     return axes, shapes
 
 
+# 头部整体：ParamAngleX / ParamAngleY 在 Live2D 里不是纯旋转，而是**点头/转头的
+# 透视复合** —— 正面轮廓按 cos θ 各向异性压扁（转头压水平、点头压垂直，与压扁方向
+# 交叉的弧位移 ∝ sin θ 模拟颈关节在枢轴下方），且离枢轴远的点深度变化大、透视缩放
+# 更强（远侧比近侧扁，非仿射）。只有 Z 是无歧义的刚体旋转。所以头部网格升级为
+# **(X, Y, Z) 三轴带**，每个键形 = [绕 Head 关节旋转 Z] ∘ [点头/转头的透视压缩]。
+#
+# 轴序按 F-06 实测定论（第一个轴步长为 1）：index = i_X + kX·i_Y + kX·kY·i_Z。
+# 幅度取网格自身尺寸的比例（相对值，随网格自适应；美术可调），并且**必须 X/Y/Z
+# 三参数都已声明才会生效** —— 这让本次升级是显式 opt-in，不会悄然改变既有导出。
+HEAD_ANGLE_AXES = ("ParamAngleX", "ParamAngleY", "ParamAngleZ")
+HEAD_SHIFT_X = 0.04          # 转头(ParamAngleY)的水平弧位移 = 网格宽 × 比例 × sin θ
+HEAD_SHIFT_Y = 0.03          # 点头(ParamAngleX)的垂直弧位移 = 网格高 × 比例 × sin θ
+HEAD_DEPTH_SPANS = 4.0       # 透视参考深度 = 网格最大跨度的 4 倍（相机距离的近似）
+
+
+def _sincos(degrees: float) -> tuple:
+    """角度 -> (sin, cos)；度 -> 弧度换算与 Z 轴旋转同一约定。"""
+    theta = math.radians(float(degrees) * _DEGREES_PER_UNIT)
+    return math.sin(theta), math.cos(theta)
+
+
+def _head_transform(x, y, px, py, shift_x, shift_y,
+                    sin_x, cos_x, sin_y, cos_y, sin_z, cos_z, depth, weight):
+    """线性蒙皮：v' = v + w·(T(v) − v)，T = 绕 Head 关节的 点头/转头/侧转 复合。
+
+    * 点头 θx（ParamAngleX）：垂直偏移 × cos θx（上下轮廓压扁）；
+    * 转头 θy（ParamAngleY）：水平偏移 × cos θy（左右轮廓压扁）；
+    * 侧转 θz（ParamAngleZ）：绕枢轴刚体旋转（模型空间逆时针，同 ``_blend``）；
+    * 弧位移 ∝ sin θ：颈关节在枢轴下方，头绕它转动时整体平移 —— 点头推垂直、
+      转头推水平（与压扁方向交叉，和真人转头时头心划弧一致）；
+    * 透视 p = 1 + z/depth：转动把一侧推近、另一侧推远，近大远小。压缩量随顶点
+      距枢轴的距离连续变化 —— 非仿射部分（keyform 存的是逐顶点位置，装得下）；
+      竖直特征线因此倾斜，剪切效果由此而来，无需显式剪切项。
+
+    ``sin_x`` / ``cos_x`` = sin/cos θx，``sin_y`` / ``cos_y`` = sin/cos θy。
+    ``weight`` 是顶点在头部总成骨骼上的合计权重（0 = 不随头动）。
+    """
+    if weight <= 0.0:
+        return [x, y]
+    dx, dy = x - px, y - py
+    # 深度：两个轴的转动各贡献一份（扁平卡近似，静止深度记 0；θy > 0 时枢轴右侧
+    # 远去、左侧近来 —— 近侧选哪边只是约定，耦合关系才是要点）
+    z = -(dx * sin_y + dy * sin_x)
+    p = 1.0 + z / depth
+    # 弧位移加在枢轴深度上（枢轴处 p = 1），不参与透视缩放
+    tx = px + dx * cos_y * p + shift_x * sin_y
+    ty = py + dy * cos_x * p + shift_y * sin_x
+    rx, ry = tx - px, ty - py
+    return [x + weight * (px + cos_z * rx - sin_z * ry - x),
+            y + weight * (py + sin_z * rx + cos_z * ry - y)]
+
+
+# 头部总成**按骨骼表的 ``group`` 判定**，不用 ``parent`` 链推导：实测层级里
+# ``Neck``(group=body) 是 ``Head`` 的父级，用层级会把躯干误算进头部总成。
+HEAD_ASSEMBLY_GROUPS = frozenset(
+    {"head", "face", "hair", "ears", "eyes", "brows", "nose", "mouth"})
+
+
+def _head_assembly(standard_bones: Dict[str, Dict]) -> set:
+    """``Head`` 及其头上各部位（脸、眼、眉、口、鼻、耳、发……）。
+
+    ``head`` / ``face`` / ``hair`` / ``ears`` / ``eyes`` / ``brows`` / ``nose`` /
+    ``mouth`` 随头一起运动；``body`` / ``arms`` / ``clothes`` / ``legs`` 不随
+    （``Neck`` 属 ``body`` 组，是躯干的一部分）。
+    """
+    return {name for name, info in standard_bones.items()
+            if (info or {}).get("group") in HEAD_ASSEMBLY_GROUPS}
+
+
+def head_angle_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
+                        parameters_by_id: Dict[str, ParameterSpec],
+                        standard_bones: Dict[str, Dict],
+                        bone_positions: Dict[str, Any],
+                        width: float, height: float):
+    """头部网格 -> ``((X, Y, Z) 轴, 逐键形状)``；不适用时返回 ``((), [])``。
+
+    条件：网格受**头部总成**中任一骨骼影响（``Head`` 及其后代，见
+    ``_head_assembly``）、``Head`` **关节位置已知**、且 ``ParamAngleX/Y/Z``
+    **三者都已声明**（缺任一则退回原有的单轴 Z 路径，保证既有产物不变）。
+
+    枢轴取 **Head 骨骼关节点**（贴近官方习惯），不是网格包围盒中心；骨骼位置是图像
+    坐标，按与顶点同一换算（原点居中、y 向上）转到模型坐标。关节位置未知时**不生成**
+    —— 不拿包围盒中心顶替一个说不清的枢轴。
+
+    顶点的形变量按其**在整个头部总成上的合计权重**线性混合，所以只绑 ``Face`` /
+    ``Eye_L`` 等子骨骼的网格同样会跟着头动。
+    """
+    skin = mesh.get("weights") or {}
+    bone_names = skin.get("bone_names") or []
+    per_vertex = skin.get("weights") or []
+    if not bone_names or not per_vertex or not vertices:
+        return (), []
+    if any(parameters_by_id.get(pid) is None for pid in HEAD_ANGLE_AXES):
+        return (), []
+    joint = bone_positions.get("Head")
+    if joint is None:
+        return (), []
+    assembly = _head_assembly(standard_bones)
+    indices = [i for i, b in enumerate(bone_names) if b in assembly]
+    if not indices:
+        return (), []
+    if _peak_influence(per_vertex, indices) <= _MIN_INFLUENCE:
+        return (), []
+
+    px = float(joint[0]) - width / 2.0
+    py = height / 2.0 - float(joint[1])
+    xs = [float(v[0]) for v in vertices]
+    ys = [float(v[1]) for v in vertices]
+    span_x = max(xs) - min(xs)
+    span_y = max(ys) - min(ys)
+    shift_x = span_x * HEAD_SHIFT_X
+    shift_y = span_y * HEAD_SHIFT_Y
+    depth = max(span_x, span_y, 1.0) * HEAD_DEPTH_SPANS
+
+    keys = [tuple(_key_times(parameters_by_id[pid])) for pid in HEAD_ANGLE_AXES]
+    axes = tuple(zip(HEAD_ANGLE_AXES, keys))
+    weight_of = [_vertex_weight(per_vertex, i, indices)
+                 for i in range(len(vertices))]
+    trig_x = [_sincos(k) for k in keys[0]]
+    trig_y = [_sincos(k) for k in keys[1]]
+    shapes = []
+    for i_z, key_z in enumerate(keys[2]):
+        sin_z, cos_z = _sincos(key_z)
+        for i_y, key_y in enumerate(keys[1]):
+            sin_y, cos_y = trig_y[i_y]
+            for i_x, key_x in enumerate(keys[0]):
+                sin_x, cos_x = trig_x[i_x]
+                index = (i_x + len(keys[0]) * i_y
+                         + len(keys[0]) * len(keys[1]) * i_z)
+                shapes.append(KeyformShape(
+                    key_value=float(index),           # 展平序号（仅备注）
+                    vertices=[_head_transform(x, y, px, py, shift_x, shift_y,
+                                              sin_x, cos_x, sin_y, cos_y,
+                                              sin_z, cos_z, depth,
+                                              weight_of[i])
+                              for i, (x, y) in enumerate(vertices)]))
+    return axes, shapes
+
+
 def _peak_influence(per_vertex, indices) -> float:
     peak = 0.0
     for row in per_vertex:
@@ -507,7 +646,7 @@ def build_rig_spec(
     bone_positions = builder_result.get("bone_positions") or {}
     from live2d_builder.bones.deformers import BoneHierarchy
     standard_bones = BoneHierarchy.STANDARD_BONES
-    keyformed, multi_hit, eyes_tracked = [], [], []
+    keyformed, multi_hit, eyes_tracked, head_tracked = [], [], [], []
 
     for order, (name, mesh) in enumerate(meshes.items()):
         width = float(mesh.get("width") or 0)
@@ -554,6 +693,22 @@ def build_rig_spec(
                 keyform_axes=eye_axes,
             ))
             continue
+        head_axes, head_shapes = head_angle_keyforms(
+            mesh, vertices, params_by_id, standard_bones,
+            bone_positions, width, height)
+        if head_axes:
+            # 头部整体：X/Y 位移+缩放 与 Z 旋转合成一个三轴带（优先于单轴 Z 路径）。
+            head_tracked.append(name)
+            specs.append(MeshSpec(
+                mesh_id=str(name),
+                vertices=vertices,
+                triangles=triangles,
+                uvs=uvs,
+                draw_order=float(order),
+                keyform_shapes=head_shapes,
+                keyform_axes=head_axes,
+            ))
+            continue
         pid, shapes, candidates = rotation_keyforms(
             mesh, params_by_id, bone_positions, standard_bones, width, height)
         if len(candidates) > 1:
@@ -574,6 +729,9 @@ def build_rig_spec(
         raise UnsupportedRig(f"各网格画布尺寸不一致: {sorted(extents)}")
     width, height = extents.pop()
 
+    if head_tracked:
+        log.info(f"头部三轴复合已烘焙（{'+'.join(HEAD_ANGLE_AXES)}）："
+                 f"{len(head_tracked)} 个网格 {head_tracked[:5]}")
     if eyes_tracked:
         log.info(f"眼球跟随已烘焙（{'+'.join(EYE_TRACK_AXES)} 双轴）："
                  f"{len(eyes_tracked)} 个网格 {eyes_tracked[:5]}")
