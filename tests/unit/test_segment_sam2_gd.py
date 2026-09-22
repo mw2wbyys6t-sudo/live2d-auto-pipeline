@@ -237,6 +237,7 @@ class TestLazyConstruction:
 
 
 class TestModelUnavailable:
+    @pytest.mark.skipif(not mod.HAS_TORCH, reason="needs torch installed to isolate the transformers-missing path")
     def test_missing_transformers_raises(self, monkeypatch):
         monkeypatch.setattr(mod, "HAS_TRANSFORMERS", False)
         seg = Sam2GroundingDinoSegmenter(device="cpu")
@@ -249,6 +250,7 @@ class TestModelUnavailable:
         with pytest.raises(ModelUnavailable, match="PyTorch"):
             seg.load()
 
+    @pytest.mark.skipif(not mod.HAS_TORCH, reason="needs torch installed to inspect torch.cuda")
     def test_explicit_cuda_without_cuda_raises(self, monkeypatch):
         monkeypatch.setattr(mod, "HAS_TORCH", True)
         monkeypatch.setattr(mod.torch.cuda, "is_available", lambda: False)
@@ -393,6 +395,7 @@ class TestMethodHonesty:
         assert report["method"] != METHOD_SAM2
         assert report["promptable_segmenter"] == "sam1"
 
+    @pytest.mark.skipif(not mod.HAS_TRANSFORMERS, reason="needs transformers installed to reach the promptable stage")
     def test_sam1_fallback_can_be_disabled(self, monkeypatch):
         # No weights, no network: only the promptable-segmenter stage is driven.
         seg = Sam2GroundingDinoSegmenter(
