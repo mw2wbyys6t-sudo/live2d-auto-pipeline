@@ -264,6 +264,86 @@ def test_arm_and_hair_deformers_bind_official_params(bone, pid):
     assert spec.static_deformers == []
 
 
+_HEAD_PARAMS = [{"Id": "ParamAngleX", "Min": -30, "Max": 30, "Value": 0},
+                {"Id": "ParamAngleY", "Min": -30, "Max": 30, "Value": 0},
+                {"Id": "ParamAngleZ", "Min": -30, "Max": 30, "Value": 0}]
+
+
+def _head_mesh():
+    mesh = _mesh()
+    mesh["weights"] = {"bone_names": ["Head"], "weights": [[1.0]] * 4}
+    return mesh
+
+
+def test_head_mesh_gets_three_axis_composite_when_all_three_angles_declared():
+    """头部网格：点头/转头透视压缩 与 Z 旋转合成三轴带；展平序 index = i_X + 3·i_Y + 9·i_Z。"""
+    result = _builder_result({"head": _head_mesh()}, params=_HEAD_PARAMS)
+    # 枢轴取 Head 关节位置（未知则不生成三轴带），所以这里必须给出它
+    result["bone_positions"] = {"Head": (0.0, -40.0)}
+    spec = build_rig_spec(result, {"head": _uv()})
+    mesh = spec.meshes[0]
+    assert [pid for pid, _ in mesh.keyform_axes] == [
+        "ParamAngleX", "ParamAngleY", "ParamAngleZ"]
+    assert [len(keys) for _, keys in mesh.keyform_axes] == [3, 3, 3]
+    assert len(mesh.keyform_shapes) == 27          # 3 × 3 × 3
+    base = mesh.vertices[0]
+    # 枢轴 = Head 关节 (0,-40) 图像坐标 -> 模型坐标 (-64, 72)，在网格左上方
+    # (i_X=2, i_Y=1, i_Z=1) -> 14：只有 X 到极值（点头）=> 纯垂直压缩，不水平动
+    v14 = mesh.keyform_shapes[14].vertices[0]
+    assert v14[1] > base[1]                        # 向枢轴（上方）收拢
+    assert v14[0] == pytest.approx(base[0])        # 点头不产生水平位移（交叉映射）
+    # (i_X=1, i_Y=2, i_Z=1) -> 16：只有 Y 到极值（转头）=> 水平位移 + 水平压扁
+    v16 = mesh.keyform_shapes[16].vertices
+    assert v16[0][0] > base[0]                     # 转头产生水平弧位移
+    assert v16[0][1] == pytest.approx(base[1])     # 转头不产生垂直位移（交叉映射）
+    assert v16[1][0] < mesh.vertices[1][0]         # 远侧（右侧）被压扁
+    # 非仿射：同一排（y 相同）的两个顶点转头后 y 不再相同 —— 透视随 x 连续变化
+    assert abs(v16[1][1] - v16[0][1]) > 1.0
+    # 默认键（i_X=i_Y=i_Z=1）必须逐顶点复现静止姿态
+    for shape_v, rest_v in zip(mesh.keyform_shapes[13].vertices, mesh.vertices):
+        assert shape_v == pytest.approx(rest_v)
+
+
+def test_head_mesh_falls_back_to_single_axis_z_unless_all_three_are_declared():
+    """只声明 ParamAngleZ 时**不**升级为三轴 —— 保证既有导出的产物不变。"""
+    result = _builder_result(
+        {"head": _head_mesh()},
+        params=[{"Id": "ParamAngleZ", "Min": -30, "Max": 30, "Value": 0}])
+    # Z 的单轴网格路径也需要枢轴；只给 Head，X/Y 未声明时不会命中，故只有 1 个参数。
+    result["bone_positions"] = {"Head": (0.0, -40.0)}
+    spec = build_rig_spec(result, {"head": _uv()})
+    mesh = spec.meshes[0]
+    assert mesh.keyform_axes == ()
+    assert mesh.keyform_parameter_id == "ParamAngleZ"
+    assert len(mesh.keyform_shapes) == 3          # 退回单轴 Z
+
+
+def test_mesh_weighted_to_a_head_child_bone_also_follows_the_head():
+    """只绑 Face（Head 的后代）的网格也要跟着头动 —— 覆盖子骨骼，不只 Head 本身。"""
+    result = _builder_result({"face": _skinned_mesh(["Face"])},
+                             params=_HEAD_PARAMS)
+    result["bone_positions"] = {"Head": (0.0, -40.0)}
+    spec = build_rig_spec(result, {"face": _uv()})
+    mesh = spec.meshes[0]
+    assert [pid for pid, _ in mesh.keyform_axes] == list(
+        ("ParamAngleX", "ParamAngleY", "ParamAngleZ"))
+    assert len(mesh.keyform_shapes) == 27
+
+
+def test_mesh_weighted_below_the_head_is_not_dragged_by_the_head():
+    """Neck 属 ``body`` 组（躯干）—— 只绑它的网格不该被头部总成拖动。
+
+    不能用 ``_skinned_mesh``：那个辅助函数总会把 ``Head`` 以权重 1.0 一起塞进
+    ``bone_names``，构造出来的其实是头部加权网格（本用例第一版就栽在这上面）。
+    """
+    mesh = _mesh()
+    mesh["weights"] = {"bone_names": ["Neck"], "weights": [[1.0]] * 4}
+    result = _builder_result({"neck": mesh}, params=_HEAD_PARAMS)
+    result["bone_positions"] = {"Head": (0.0, -40.0)}
+    spec = build_rig_spec(result, {"neck": _uv()})
+    assert spec.meshes[0].keyform_axes == ()
+
+
 _CHEST_XY = (0.0, 100.0)
 
 
