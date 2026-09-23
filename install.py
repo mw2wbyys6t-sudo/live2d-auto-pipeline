@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent v10.1 - One-Click Installer
+Live2D Master Agent v0.10.1 - One-Click Installer
 
 Usage:
     python install.py              # Full install (core + desktop pet)
@@ -35,7 +35,7 @@ class C:
 def print_header():
     print(f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
-║       🎭 Live2D Master Agent v10.1 - Installer           ║
+║       🎭 Live2D Master Agent v0.10.1 - Installer           ║
 ║       AI Character → Live2D Model → Desktop Pet          ║
 ╚══════════════════════════════════════════════════════════╝{C.RESET}
 """)

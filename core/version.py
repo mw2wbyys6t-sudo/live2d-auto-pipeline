@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Live2D Master Agent - Version information (single source of truth)"""
 
-__version__ = "10.1.0"
-__version_info__ = (10, 1, 0)
+__version__ = "0.10.1"
+__version_info__ = (0, 10, 1)
 __release_date__ = "2026-09-23"
 __codename__ = "moc3 Self-Developed Pipeline"
 

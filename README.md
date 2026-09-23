@@ -1,4 +1,4 @@
-# 🎭 Live2D Master Agent v10.1
+# 🎭 Live2D Master Agent v0.10.1
 
 > **一句话**：输入一句话，AI 生成你的专属虚拟主播——支持实时面部捕捉、语音对话、表情联动、桌宠运行。
 
@@ -8,7 +8,7 @@
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=for-the-badge)](https://go.dev)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge)](https://nextjs.org)
 [![License](https://img.shields.io/badge/License-Apache--2.0-green?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-10.1-ff69b4?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-0.10.1-ff69b4?style=for-the-badge)]()
 
 </div>
 
@@ -44,9 +44,9 @@ Live2D Master Agent 是一款**面向人人的 AI 虚拟主播生产工具**。�
 
 ---
 
-## ✨ v10.1 重大升级：自研 moc3 导出管线
+## ✨ v0.10.1 重大升级：自研 moc3 导出管线
 
-| 维度 | v10.0 | **v10.1** |
+| 维度 | v0.10.0 | **v0.10.1** |
 |------|-------|-----------|
 | `.moc3` 导出 | 外部工具 / 空脚手架 | **自研 moc3 编译器（纯自研，无第三方运行时依赖）** |
 | 部件驱动 | 少量自定义参数 | **对齐 Live2D 官方参数**：`ParamAngleZ` / `ParamBodyAngleZ` / `ParamArm*` / `ParamHair*` / `ParamEyeBallX/Y` / `ParamBreath` |
@@ -60,9 +60,9 @@ Live2D Master Agent 是一款**面向人人的 AI 虚拟主播生产工具**。�
 
 ---
 
-## ✨ v10.0 重大升级
+## ✨ v0.10.0 重大升级
 
-| 功能 | v9.0 | **v10.0** |
+| 功能 | v0.9.0 | **v0.10.0** |
 |------|------|-----------|
 | 图像分层 | K-means 颜色聚类 | **SAM+ISNet 语义分割 + Amodal 补全** |
 | Live2D 导出 | 空脚手架 model3.json | **完整 Cubism4 模型包（28 表情 + 物理 + 骨骼）** |
@@ -378,11 +378,11 @@ cd web && npm run build
 
 | 阶段 | 版本 | 核心方向 | 状态 |
 |------|------|----------|------|
-| 现在 | **v10.1** | 自研 moc3 导出管线：官方 Cubism 参数驱动 + 官方内核逐像素验收 | ✅ 已发布 |
-| 上一版 | v10.0 | 全流程打通（AI生成→分层→Live2D→驱动→对话→工作台） | ✅ 已发布 |
-| 近期 | v10.5 | 自定义画风 / 多角色换装编辑器 / VTube Studio 插件直连 | 🚧 开发中 |
-| 中期 | v11.0 | ComfyUI 工作流集成 / SDXL 本地推理 / 中文 ASR 优化 | 📋 规划中 |
-| 远期 | v12.0 | 3D VTuber 支持（VRM 导出）/ 实时动作捕捉（全身）/ 多模态输入 | 🔮 构思中 |
+| 现在 | **v0.10.1** | 自研 moc3 导出管线：官方 Cubism 参数驱动 + 官方内核逐像素验收 | ✅ 已发布 |
+| 上一版 | v0.10.0 | 全流程打通（AI生成→分层→Live2D→驱动→对话→工作台） | ✅ 已发布 |
+| 近期 | v0.10.5 | 自定义画风 / 多角色换装编辑器 / VTube Studio 插件直连 | 🚧 开发中 |
+| 中期 | v0.11.0 | ComfyUI 工作流集成 / SDXL 本地推理 / 中文 ASR 优化 | 📋 规划中 |
+| 远期 | v0.12.0 | 3D VTuber 支持（VRM 导出）/ 实时动作捕捉（全身）/ 多模态输入 | 🔮 构思中 |
 
 > 💡 欢迎在 **Issues** 里提需求，每一条 Star 和 Issue 都是我们迭代的方向。
 
