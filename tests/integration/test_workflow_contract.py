@@ -1,7 +1,7 @@
 """
 接口一致性测试 - 验证 Python CLI 输出的 JSON 结构符合 Go API 解析契约。
 
-这是 v10.1 最重要的接口契约测试：Go API 通过解析 workflow.py --json 的输出来
+这是 v0.10.1 最重要的接口契约测试：Go API 通过解析 workflow.py --json 的输出来
 填充 GenerateImageResponse。如果 Python 输出的 JSON 字段发生变化，Go 端解析会
 静默失败或返回空值。这类测试能提前发现接口漂移。
 """
@@ -223,7 +223,7 @@ class TestWorkflowCLIFlags:
 
 
 class TestWorkflowHelpOutput:
-    """验证 --help 输出包含 v10.1 关键参数"""
+    """验证 --help 输出包含 v0.10.1 关键参数"""
 
     def test_help_shows_new_flags(self):
         proc = subprocess.run(

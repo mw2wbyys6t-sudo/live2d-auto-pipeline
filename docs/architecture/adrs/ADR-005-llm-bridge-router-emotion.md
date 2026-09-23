@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | Accepted（v10.0 起） |
+| **状态** | Accepted（v0.10.0 起） |
 | **日期** | 2026-07-30 |
 | **决策者** | Live2D Master Agent Team |
 | **本地校验** | [`llm_bridge/providers/router.py`](file:///workspace/llm_bridge/providers/router.py)、[`llm_bridge/emotion/analyzer.py`](file:///workspace/llm_bridge/emotion/analyzer.py)、[`llm_bridge/chat_session.py`](file:///workspace/llm_bridge/chat_session.py)、[`llm_bridge/asr/`](file:///workspace/llm_bridge/asr/) / [`tts/`](file:///workspace/llm_bridge/tts/) 多 Provider |

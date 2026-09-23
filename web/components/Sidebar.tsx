@@ -96,7 +96,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                 Enable character consistency to keep visual identity across generations.
               </p>
             </div>
-            <p className="text-[10px] text-gray-600 text-center mt-3">v2.0.0 · Made with ♥</p>
+            <p className="text-[10px] text-gray-600 text-center mt-3">v0.10.1 · Made with ♥</p>
           </div>
         </div>
       </aside>

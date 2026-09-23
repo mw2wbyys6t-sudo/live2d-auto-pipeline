@@ -40,7 +40,7 @@ func (g *ImageGenerator) GenerateImage(req models.GenerateImageRequest) (*models
 	return g.generateWithLocalGenerator(req)
 }
 
-// GenerateWithCharacter 使用角色一致性和语义分割生成（v10.0）
+// GenerateWithCharacter 使用角色一致性和语义分割生成（v0.10.0）
 func (g *ImageGenerator) GenerateWithCharacter(req models.GenerateRequest) (*models.GenerateImageResponse, error) {
 	// 设置默认值
 	if req.Width <= 0 {
@@ -87,7 +87,7 @@ type pythonWorkflowResult struct {
 	Steps          map[string]interface{} `json:"steps,omitempty"`
 }
 
-// generateWithWorkflow 使用 core/workflow.py 新工作流（v10.1: 使用 --json 模式）
+// generateWithWorkflow 使用 core/workflow.py 新工作流（v0.10.1: 使用 --json 模式）
 func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*models.GenerateImageResponse, error) {
 	scriptPath := filepath.Join(g.cfg.Python.ScriptsDir, "core", "workflow.py")
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
@@ -216,7 +216,7 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 		Seed:        req.Seed,
 		Width:       req.Width,
 		Height:      req.Height,
-		Source:      "workflow_v10.1",
+		Source:      "workflow_v0.10.1",
 		CreatedAt:   time.Now(),
 		LayersDir:   pyResult.LayersDir,
 		OutputDir:   pyResult.OutputDir,
@@ -366,7 +366,7 @@ func (g *ImageGenerator) CheckLocalGeneratorStatus() (bool, string) {
 	// 检查新工作流
 	workflowPath := filepath.Join(g.cfg.Python.ScriptsDir, "core", "workflow.py")
 	if _, err := os.Stat(workflowPath); err == nil {
-		return true, "v10.0 工作流就绪"
+		return true, "v0.10.0 工作流就绪"
 	}
 
 	cmd := exec.Command(g.cfg.Python.PythonPath, "-c", "import diffusers; import torch; import PIL")

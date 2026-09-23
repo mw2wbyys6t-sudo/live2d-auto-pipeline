@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent v10.0 - Core Package
+Live2D Master Agent v0.10.0 - Core Package
 
 Production-grade AI character creation pipeline:
 - Image generation (Pollinations, Seedream, SenseNova)

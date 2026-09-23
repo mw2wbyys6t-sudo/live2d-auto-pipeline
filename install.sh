@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Live2D Master Agent v10.0 - Linux/macOS Installer
+# Live2D Master Agent v0.10.0 - Linux/macOS Installer
 set -e
 
-echo "🎭 Live2D Master Agent v10.0 Installer"
+echo "🎭 Live2D Master Agent v0.10.0 Installer"
 echo "========================================"
 
 # Check Python

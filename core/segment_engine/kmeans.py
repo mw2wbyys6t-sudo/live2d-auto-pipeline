@@ -306,7 +306,7 @@ class KMeansLayerer:
         guide_path = out_dir / "LAYER_GUIDE.txt"
         w, h = size
         with open(guide_path, "w", encoding="utf-8") as f:
-            f.write("Live2D Master Agent v9.0 - K-Means Layer Guide\n")
+            f.write("Live2D Master Agent v0.9.0 - K-Means Layer Guide\n")
             f.write("=" * 60 + "\n\n")
             f.write(f"Image size: {w}x{h}\n")
             f.write(f"Clusters (k): {self.k_clusters}\n")

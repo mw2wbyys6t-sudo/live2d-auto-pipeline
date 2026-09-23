@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | Accepted（v10.0 起） |
+| **状态** | Accepted（v0.10.0 起） |
 | **日期** | 2026-07-30 |
 | **决策者** | Live2D Master Agent Team |
 | **本地校验** | [`drivers/desktop_pet/`](file:///workspace/drivers/desktop_pet/)：`window.py`（透明窗口）、`animator.py`（参数→动画）、`pet.py`（角色主循环）、`runner.py`（CLI 入口）、`runner_template.py` |

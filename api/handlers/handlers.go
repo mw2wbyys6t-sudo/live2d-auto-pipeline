@@ -62,7 +62,7 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 		Success: true,
 		Message: "Live2D API 服务正常运行",
 		Data: map[string]interface{}{
-			"version": "v10.1-go",
+			"version": "v0.10.1-go",
 			"uptime":  time.Since(h.startTime).String(),
 		},
 	})
@@ -118,7 +118,7 @@ func (h *Handler) GetSystemStatus(c *gin.Context) {
 		Success: true,
 		Data: models.SystemStatus{
 			Services: services,
-			Version:  "v10.1-go",
+			Version:  "v0.10.1-go",
 			Uptime:   time.Since(h.startTime).String(),
 		},
 	})
@@ -178,7 +178,7 @@ func (h *Handler) GenerateImage(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// GenerateCharacter v10.0: 增强版生成（角色一致性 + 语义分割 + Live2D导出）
+// GenerateCharacter v0.10.0: 增强版生成（角色一致性 + 语义分割 + Live2D导出）
 func (h *Handler) GenerateCharacter(c *gin.Context) {
 	var req models.GenerateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -364,7 +364,7 @@ func (h *Handler) GetAPIInfo(c *gin.Context) {
 		Success: true,
 		Data: map[string]interface{}{
 			"name":        "Live2D Master Agent API",
-			"version":     "v10.1-go",
+			"version":     "v0.10.1-go",
 			"description": "AI角色生成、一致性维护、LLM聊天、Live2D导出 API",
 			"features": []string{
 				"角色一致性系统",
@@ -438,7 +438,7 @@ func (h *Handler) ClearCache(c *gin.Context) {
 }
 
 // ======================================================================
-// v10.0: 角色管理 API
+// v0.10.0: 角色管理 API
 // ======================================================================
 
 // ListCharacters 获取角色列表
@@ -504,7 +504,7 @@ func (h *Handler) DeleteCharacter(c *gin.Context) {
 }
 
 // ======================================================================
-// v10.0: LLM 聊天 API (SSE 流式)
+// v0.10.0: LLM 聊天 API (SSE 流式)
 // ======================================================================
 
 // ChatStream 流式聊天 (SSE)
@@ -549,7 +549,7 @@ func (h *Handler) ChatStream(c *gin.Context) {
 }
 
 // ======================================================================
-// v10.0: WebSocket 连接
+// v0.10.0: WebSocket 连接
 // ======================================================================
 
 // WSHandle WebSocket 连接处理
@@ -558,7 +558,7 @@ func (h *Handler) WSHandle(c *gin.Context) {
 }
 
 // ======================================================================
-// v10.0: Live2D 模型导出
+// v0.10.0: Live2D 模型导出
 // ======================================================================
 
 // exportFailureResponse 把导出失败映射成对外状态码。

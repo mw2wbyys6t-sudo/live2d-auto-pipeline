@@ -95,7 +95,7 @@ const Dashboard: NextPage = () => {
         <div className="absolute -bottom-20 -left-20 w-72 h-72 bg-purple-500/20 rounded-full blur-3xl" />
         <div className="relative">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-pink-500/10 border border-pink-500/30 text-xs text-pink-300 mb-4">
-            <Sparkles className="w-3 h-3" /> Live2D Master Agent · v2.0
+            <Sparkles className="w-3 h-3" /> Live2D Master Agent · v0.10.1
           </div>
           <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold mb-3">
             <span className="text-white">Build anime characters</span>

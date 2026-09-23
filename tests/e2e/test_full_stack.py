@@ -185,7 +185,7 @@ class TestWebFrontendProxy:
         data = r.json()
         assert data.get("success") is True
         # 通过代理应能拿到 Go API 的版本号
-        assert "v10" in data.get("data", {}).get("version", "")
+        assert "v0.10" in data.get("data", {}).get("version", "")
 
     def test_info_via_web(self):
         r = requests.get(f"{WEB_URL}/api/info", timeout=5)

@@ -155,7 +155,7 @@ export class APIClient {
   }
 
   async createCharacter(data: CharacterCreate): Promise<Character> {
-    // v10.1: Send as JSON matching Go CharacterRequest structure (snake_case)
+    // v0.10.1: Send as JSON matching Go CharacterRequest structure (snake_case)
     // referenceImages file upload is handled separately via addReferenceImage
     const body: Record<string, unknown> = {
       name: data.name,
@@ -233,7 +233,7 @@ export class APIClient {
     id: string,
     data: Partial<Character>,
   ): Promise<Character> {
-    // v10.1: Backend uses PUT (not PATCH)
+    // v0.10.1: Backend uses PUT (not PATCH)
     const body: Record<string, unknown> = {};
     if (data.name) body.name = data.name;
     if (data.personality || data.description) {
@@ -290,7 +290,7 @@ export class APIClient {
   }
 
   async generateCharacter(req: GenerationRequest): Promise<GenerationResult> {
-    // v10.1: Full pipeline generation via /api/generate/character (image→QA→segment→rig→Live2D)
+    // v0.10.1: Full pipeline generation via /api/generate/character (image→QA→segment→rig→Live2D)
     const payload = this.buildGenerationPayload(req);
     const res = await this.request<unknown>('/api/generate/character', {
       method: 'POST',
@@ -303,7 +303,7 @@ export class APIClient {
     req: GenerationRequest,
     onProgress: (step: GenerationStep) => void,
   ): Promise<GenerationResult> {
-    // v10.1: Stream endpoint returns progress via SSE from WebSocket hub,
+    // v0.10.1: Stream endpoint returns progress via SSE from WebSocket hub,
     // but for simplicity we fall back to calling generateCharacter with progress
     // simulated from the returned steps. If true SSE is needed, use /ws endpoint.
     const payload = this.buildGenerationPayload(req);
@@ -351,7 +351,7 @@ export class APIClient {
   }
 
   private mapGenerationResult(data: any): GenerationResult {
-    // v10.1: Map full workflow result (with layers, model3, psd, etc.)
+    // v0.10.1: Map full workflow result (with layers, model3, psd, etc.)
     const imageUrl = data.image_url || (data.image_path ? `/output/${data.image_path.split('/').pop()}` : '');
     const model3Url = data.model3_json || '';
     const layersDir = data.layers_dir || '';
@@ -366,7 +366,7 @@ export class APIClient {
         seed: data.seed ?? 0,
         width: data.width ?? 1024,
         height: data.height ?? 1024,
-        source: data.source ?? 'workflow_v10.1',
+        source: data.source ?? 'workflow_v0.10.1',
         layers_dir: layersDir,
         psd_path: data.psd_path || '',
         output_dir: data.output_dir || '',
@@ -383,7 +383,7 @@ export class APIClient {
     onChunk: (text: string) => void,
     characterId?: string,
   ): Promise<void> {
-    // v10.1: Use SSE chat/stream endpoint with snake_case payload matching Go ChatRequest
+    // v0.10.1: Use SSE chat/stream endpoint with snake_case payload matching Go ChatRequest
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2 * 60_000);
     try {
@@ -467,7 +467,7 @@ export class APIClient {
     runtime_ready?: boolean;
     blocker?: string;
   }> {
-    // v10.1: POST /api/export/live2d with JSON body (not GET with query params)
+    // v0.10.1: POST /api/export/live2d with JSON body (not GET with query params)
     const payload: Record<string, unknown> = {
       character_id: characterId,
       format,
@@ -522,7 +522,7 @@ export class APIClient {
         apiConnected: true,
         latencyMs: 0,
         gpuAvailable: false,
-        version: (data.version as string) ?? 'v10.1',
+        version: (data.version as string) ?? 'v0.10.1',
         modelsLoaded: services.map((s) => s.name),
         providers: services.map((s) => ({
           id: s.name as never,

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Unified Workflow Engine (v10.0)
+Live2D Master Agent - Unified Workflow Engine (v0.10.0)
 
 Full pipeline: Text-to-Image -> QA -> Optimize -> Layer -> PSD -> 52-layer mapping -> Pet
 
-P0-3 FIX: Uses KMeansLayerer (v6) as default layerer.
+P0-3 FIX: Uses KMeansLayerer (v0.6) as default layerer.
 P1-2 FIX: Cleans up temporary files on failure.
 P1-4 FIX: Uses configurable timeout from config.
 DEF-003: Seedream/ARK provider integrated.
 DEF-004: 52-layer standard mapping with parameter/physics config.
 DEF-007: Unified logging throughout.
-v10.0:  Character consistency system, semantic segmentation, Live2D export.
+v0.10.0:  Character consistency system, semantic segmentation, Live2D export.
 """
 
 import os
@@ -49,7 +49,7 @@ class WorkflowEngine:
     1. idle -> generating -> qa_check -> optimizing -> layering -> psd_export -> mapping -> done
     Each state transition is logged and state is serializable.
 
-    v10.0 additions:
+    v0.10.0 additions:
     - character_consistency: lock generation to a CharacterCard
     - use_semantic_segmentation: use SemanticLayerer with KMeans fallback
     - export_live2d: invoke Live2DBuilder for model3 export
@@ -368,7 +368,7 @@ class WorkflowEngine:
             # Model3Exporter.export(), producing a complete model3.json bundle.
             # The separate Step 6b live2d_export in earlier versions redundantly
             # called Model3Exporter a second time with wrong args (raw layers
-            # instead of builder_result), producing an empty model. Removed in v10.1.
+            # instead of builder_result), producing an empty model. Removed in v0.10.1.
             should_rig = generate_52_config or self.export_live2d
             rig_result: Optional[Dict[str, Any]] = None
             if should_rig:
@@ -440,7 +440,7 @@ class WorkflowEngine:
                 }
                 log.info(f"52-layer config: {mapping['mapped_layers']}/52 mapped")
 
-            # Step 6b (redundant live2d_export) removed in v10.1:
+            # Step 6b (redundant live2d_export) removed in v0.10.1:
             # RiggingPipeline already exports a complete, valid model3 bundle.
 
             # === Step 7: Desktop pet (optional) ===
@@ -615,7 +615,7 @@ if __name__ == "__main__":
     parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--height", type=int, default=1024)
     parser.add_argument("--version", "-V", action="version", version=FULL_VERSION_STRING)
-    # v10.0 new options
+    # v0.10.0 new options
     parser.add_argument("--character-id", help="Character ID for consistency (loads or creates)")
     parser.add_argument("--semantic", dest="semantic", action="store_true", default=True,
                         help="Use semantic segmentation (default)")
@@ -623,7 +623,7 @@ if __name__ == "__main__":
                         help="Disable semantic segmentation, use K-means")
     parser.add_argument("--live2d-export", action="store_true",
                         help="Export Live2D model3 scaffold after rigging")
-    # v10.1 new options for API integration
+    # v0.10.1 new options for API integration
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
     parser.add_argument("--negative-prompt", "-n", default=None, help="Negative prompt")
     parser.add_argument("--json", action="store_true", help="Output result as JSON to stdout")
