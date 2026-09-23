@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Live2D Master Agent - Version information (single source of truth)"""
 
-__version__ = "10.0.0"
-__version_info__ = (10, 0, 0)
-__release_date__ = "2026-07-22"
-__codename__ = "Full Production Upgrade"
+__version__ = "10.1.0"
+__version_info__ = (10, 1, 0)
+__release_date__ = "2026-09-23"
+__codename__ = "moc3 Self-Developed Pipeline"
 
 VERSION = __version__
 VERSION_STRING = f"v{__version__}"
