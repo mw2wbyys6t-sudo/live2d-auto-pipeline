@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent v10.0 - One-Click Installer
+Live2D Master Agent v10.1 - One-Click Installer
 
 Usage:
     python install.py              # Full install (core + desktop pet)
@@ -35,7 +35,7 @@ class C:
 def print_header():
     print(f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
-║       🎭 Live2D Master Agent v10.0 - Installer           ║
+║       🎭 Live2D Master Agent v10.1 - Installer           ║
 ║       AI Character → Live2D Model → Desktop Pet          ║
 ╚══════════════════════════════════════════════════════════╝{C.RESET}
 """)
@@ -134,7 +134,7 @@ def install_core():
                 "urllib3>=2.0.0", "httpx>=0.24.0", "aiohttp>=3.9.0",
                 "psd-tools>=1.9.0", "scipy>=1.10.0", "scikit-learn>=1.3.0",
                 "cryptography>=41.0.0", "rich>=13.0.0",
-                "opencv-python-headless>=4.8.0", "onnxruntime>=1.14.0",
+                "opencv-python>=4.8.0", "onnxruntime>=1.14.0",
                 "aiofiles>=23.0", "websockets>=12.0",
             ]
             run_pip(core_pkgs, "Installing individual packages...")
