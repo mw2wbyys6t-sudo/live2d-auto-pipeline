@@ -3,7 +3,7 @@
 
 __version__ = "0.10.1"
 __version_info__ = (0, 10, 1)
-__release_date__ = "2026-07-22"
+__release_date__ = "2026-09-23"
 __codename__ = "Full Production Upgrade"
 
 VERSION = __version__
