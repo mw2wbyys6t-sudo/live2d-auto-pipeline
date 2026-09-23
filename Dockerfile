@@ -1,4 +1,4 @@
-# Live2D Master Agent v10.0 - Multi-stage Dockerfile
+# Live2D Master Agent v10.1 - Multi-stage Dockerfile
 # Provides: Python core + Go API + Next.js web UI
 
 # ===== Stage 1: Build Go API =====
@@ -20,7 +20,7 @@ FROM python:3.11-slim-bookworm
 
 LABEL maintainer="Live2D Master Agent"
 LABEL description="AI Character → Live2D Model → Desktop Pet"
-LABEL version="10.0"
+LABEL version="10.1"
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

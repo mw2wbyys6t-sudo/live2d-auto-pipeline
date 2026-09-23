@@ -56,7 +56,7 @@ Live2D Master Agent 是一款**面向人人的 AI 虚拟主播生产工具**。�
 
 > ✅ 已在 **Live2D 官方 Cubism Native Core** 上通过逐像素验收（`LIVE2D_TEST_PIXELS=1`）：导出模型可被官方内核加载，且参数确实驱动画面。`pytest tests/unit tests/integration` → 379 passed / 38 skipped；官方内核像素验收 108 passed / 3 skipped。
 
-> 📦 相关依赖已并入 [requirements.txt](requirements.txt)：`py-moc3`（容器结构参考与交叉校验）、`live2d-py`（官方内核隔离验证，不进入生产数据路径）。`pip install -r requirements.txt` 即可。
+> 📦 相关依赖见 [requirements.txt](requirements.txt)：`py-moc3`（容器结构参考与交叉校验，默认安装）；`live2d-py`（官方内核隔离验证，**需单独安装** `pip install live2d-py`，不进入默认依赖以避免 Docker / CI 构建失败）。
 
 ---
 
