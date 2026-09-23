@@ -56,6 +56,9 @@ Work/
 .autocase/
 .superpowers/
 
+# Local agent HTML share packages (large binary artifacts, never shipped)
+.trae-html-share-packages/
+
 # Assets (keep directory structure but ignore large files)
 assets/characters/*.json
 assets/models/
