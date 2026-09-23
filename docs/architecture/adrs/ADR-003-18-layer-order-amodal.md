@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | Accepted（v10.0 起） |
+| **状态** | Accepted（v0.10.0 起） |
 | **日期** | 2026-07-30 |
 | **决策者** | Live2D Master Agent Team |
 | **本地校验** | [`composer.py::STANDARD_LAYER_ORDER`](file:///workspace/core/segment_engine/composer.py#L34-L53) 与 `AMODAL_PARTS` 集合；`core/psd/creator.py` 层写回顺序 |
@@ -93,7 +93,7 @@ AMODAL_PARTS = {"hair_back", "hair_mid", "clothes_top", "clothes_inner", "neck"}
 
 | 项 | 说明 |
 |----|------|
-| **撤销成本** | **高（单向门）**。18 层顺序已写进 PSD 模板、绑定管线、BlendShape 映射、物理参数模板、PSD 校验规则，是整个项目事实上的**层接口规范**。改成其他数量 = 大版本升级（v10→v11）。 |
+| **撤销成本** | **高（单向门）**。18 层顺序已写进 PSD 模板、绑定管线、BlendShape 映射、物理参数模板、PSD 校验规则，是整个项目事实上的**层接口规范**。改成其他数量 = 大版本升级（v0.10→v0.11）。 |
 | **重新考虑触发条件** | ① 引入全身模型（现只上半身）→ 腿/裙摆层需下钻；② 切换到 Cubism 5 且官方层规范有剧变；③ 用户大规模反馈 18 层仍不够用。 |
 | **责任方** | 图像管线负责人 + Live2D 绑定负责人共同签字，需要提 ADR-003 修订版。 |
 

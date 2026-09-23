@@ -167,7 +167,7 @@ class PSDCreator:
         # Write info file
         info_path = pkg_dir / "PACKAGE_INFO.txt"
         with open(info_path, 'w', encoding='utf-8') as f:
-            f.write(f"Live2D Master Agent v9.0 - PNG Layer Package\n")
+            f.write(f"Live2D Master Agent v0.9.0 - PNG Layer Package\n")
             f.write("=" * 50 + "\n\n")
             f.write(f"Canvas size: {w}x{h}\n")
             f.write(f"Layers: {len(layer_files)}\n\n")

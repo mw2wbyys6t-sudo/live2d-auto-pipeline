@@ -111,10 +111,10 @@ func sanitizeOutput(output string) string {
 	return result
 }
 
-// GenerateImageViaPython generates image via Python workflow (v10.1: delegates to WorkflowEngine via --json)
+// GenerateImageViaPython generates image via Python workflow (v0.10.1: delegates to WorkflowEngine via --json)
 // Deprecated: Use ImageGenerator.GenerateWithCharacter() instead, which properly returns structured results.
 func (pb *PythonBridge) GenerateImageViaPython(prompt string, width, height, seed int) (string, error) {
-	// v10.1: Use core/workflow.py --json mode
+	// v0.10.1: Use core/workflow.py --json mode
 	scriptPath := filepath.Join(pb.cfg.Python.ScriptsDir, "core", "workflow.py")
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 		return "", fmt.Errorf("工作流脚本不存在: %s", scriptPath)
@@ -176,7 +176,7 @@ func (pb *PythonBridge) GenerateImageViaPython(prompt string, width, height, see
 }
 
 // CreatePSDPlan creates PSD layer plan using the core segment engine
-// v10.1: Uses the same KMeans/semantic pipeline as workflow, returns PSD path
+// v0.10.1: Uses the same KMeans/semantic pipeline as workflow, returns PSD path
 func (pb *PythonBridge) CreatePSDPlan(imagePath string) (*models.PSDLayerResponse, error) {
 	if err := validatePath(imagePath); err != nil {
 		return nil, fmt.Errorf("路径验证失败: %v", err)
@@ -278,7 +278,7 @@ func (pb *PythonBridge) RunSeeThroughWorkflow(imagePath string) (*models.SeeThro
 }
 
 // ======================================================================
-// v10.0: 角色管理（通过 Python CharacterManager）
+// v0.10.0: 角色管理（通过 Python CharacterManager）
 // ======================================================================
 
 // AddReferenceImage 添加参考图并提取 embedding
@@ -419,15 +419,15 @@ func (pb *PythonBridge) CheckSeeThroughInstalled() bool {
 	return err == nil
 }
 
-// GetPythonScripts lists available Python scripts (v10.1)
+// GetPythonScripts lists available Python scripts (v0.10.1)
 func (pb *PythonBridge) GetPythonScripts() []map[string]string {
 	scripts := []map[string]string{}
 	scriptFiles := []struct {
 		Name string
 		Desc string
 	}{
-		{"core/workflow.py", "完整工作流引擎 v10.1（图像生成→QA→分割→绑定→PSD→Live2D导出）"},
-		{"core/cli.py", "交互式命令行工具 v10.1"},
+		{"core/workflow.py", "完整工作流引擎 v0.10.1（图像生成→QA→分割→绑定→PSD→Live2D导出）"},
+		{"core/cli.py", "交互式命令行工具 v0.10.1"},
 		{"install.py", "项目安装脚本（依赖+模型）"},
 		{"install.sh", "Linux/macOS 一键安装脚本"},
 	}

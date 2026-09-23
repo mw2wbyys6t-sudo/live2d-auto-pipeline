@@ -32,7 +32,7 @@ type GenerateImageResponse struct {
 	Source       string            `json:"source"`
 	Features     map[string]string `json:"features,omitempty"`
 	CreatedAt    time.Time         `json:"created_at"`
-	// v10.1: 完整工作流产物
+	// v0.10.1: 完整工作流产物
 	LayersDir    string            `json:"layers_dir,omitempty"`
 	PSDPath      string            `json:"psd_path,omitempty"`
 	Model3JSON   string            `json:"model3_json,omitempty"`
@@ -104,7 +104,7 @@ type TaskStatus struct {
 }
 
 // ======================================================================
-// v10.0: 角色一致性系统相关类型
+// v0.10.0: 角色一致性系统相关类型
 // ======================================================================
 
 // CharacterCard 角色卡片 - 与 Python CharacterCard 对应

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent v10.0 - Interactive CLI
+Live2D Master Agent v0.10.0 - Interactive CLI
 
 Usage:
     python -m core.cli                    # Interactive menu

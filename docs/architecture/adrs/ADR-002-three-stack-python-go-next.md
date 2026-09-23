@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 |------|------|
-| **状态** | Accepted（v10.0 起生效） |
+| **状态** | Accepted（v0.10.0 起生效） |
 | **日期** | 2026-07-30 |
 | **决策者** | Live2D Master Agent Team |
 | **本地校验** | `requirements.txt`（Python）、`api/go.mod`（Go 1.25）、`web/package.json`（Next.js 16 + PixiJS 7）、`docker-compose.yml` 单容器编排 |

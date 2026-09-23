@@ -191,7 +191,7 @@ func DefaultConfig() *Config {
 			MaxSizeMB:  100,
 			TTLSeconds: 3600,
 		},
-		// v10.0: LLM配置
+		// v0.10.0: LLM配置
 		LLM: LLMConfig{
 			Provider:    "ollama",
 			APIKey:      "",
@@ -200,19 +200,19 @@ func DefaultConfig() *Config {
 			MaxTokens:   2048,
 			Temperature: 0.7,
 		},
-		// v10.0: TTS配置
+		// v0.10.0: TTS配置
 		TTS: TTSConfig{
 			Provider: "edge-tts",
 			Voice:    "zh-CN-XiaoxiaoNeural",
 			Rate:     "+0%%",
 			Enabled:  true,
 		},
-		// v10.0: 角色存储配置
+		// v0.10.0: 角色存储配置
 		Character: CharacterConfig{
 			StorageDir:      filepath.Join(baseDir, "assets", "characters"),
 			MaxEmbeddingDim: 512,
 		},
-		// v10.0: WebSocket配置
+		// v0.10.0: WebSocket配置
 		WebSocket: WebSocketConfig{
 			Enabled:        true,
 			MaxConnections: 100,
@@ -220,13 +220,13 @@ func DefaultConfig() *Config {
 			WriteWait:      10,
 			PongWait:       60,
 		},
-		// v10.0: Redis配置（可选）
+		// v0.10.0: Redis配置（可选）
 		Redis: RedisConfig{
 			URL:     "redis://127.0.0.1:6379/0",
 			Enabled: false,
 			DB:      0,
 		},
-		// v10.0: MediaPipe配置
+		// v0.10.0: MediaPipe配置
 		MediaPipe: MediaPipeConfig{
 			Enabled:                true,
 			ModelComplexity:        1,

@@ -1,4 +1,4 @@
-# Live2D Master Agent v10.0 - Python Requirements
+# Live2D Master Agent v0.10.0 - Python Requirements
 # Installation: python -m pip install -r requirements.txt
 
 # ====== Core Dependencies (Required) ======

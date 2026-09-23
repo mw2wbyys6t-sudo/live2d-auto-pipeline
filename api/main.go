@@ -154,7 +154,7 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 
 		// 生成 & 导出
 		api.POST("/generate", h.GenerateImage)
-		api.POST("/generate/character", h.GenerateCharacter) // v10: 角色一致性生成
+		api.POST("/generate/character", h.GenerateCharacter) // v0.10: 角色一致性生成
 		api.POST("/psd-plan", h.CreatePSDPlan)
 		api.POST("/see-through", h.RunSeeThrough)
 		api.POST("/export/live2d", h.ExportLive2D)
@@ -163,7 +163,7 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 		api.POST("/deploy/desktop", h.DeployDesktop)
 		api.GET("/deploy/desktop/status", h.DesktopStatus)
 
-		// 角色管理 v10
+		// 角色管理 v0.10
 		chars := api.Group("/characters")
 		{
 			chars.GET("", h.ListCharacters)
@@ -173,11 +173,11 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 			chars.DELETE("/:id", h.DeleteCharacter)
 		}
 
-		// LLM 聊天 v10
+		// LLM 聊天 v0.10
 		api.POST("/chat", h.Chat)
 		api.POST("/chat/stream", h.ChatStream)
 
-		// WebSocket v10
+		// WebSocket v0.10
 		api.GET("/ws", h.WSHandle)
 
 		// 摄像头面捕：Go 后端未实现，显式回 501（前端 /preview 会调用这两个端点）
@@ -200,7 +200,7 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 func printServerInfo(cfg *config.Config, addr string) {
 	separator := strings.Repeat("=", 80)
 	fmt.Println("\n" + separator)
-	fmt.Println("║     🎨 Live2D Master Agent API v10.0 (Go Edition)          ║")
+	fmt.Println("║     🎨 Live2D Master Agent API v0.10.0 (Go Edition)          ║")
 	fmt.Println("║     高性能优化版本 - 支持连接池、并发处理、请求缓存          ║")
 	fmt.Println(separator)
 	fmt.Printf("║  服务地址: http://%s\n", addr)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Live2D Master Agent - ComfyUI 集成工具
-版本: 1.0
+版本: 0.10.1
 功能: 连接 ComfyUI 和 Live2D 工作流
 """
 

@@ -37,7 +37,7 @@ CHARACTERS_DIR = ASSETS_DIR / "characters"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 CHARACTERS_DIR.mkdir(parents=True, exist_ok=True)
 
-VERSION = "v10.1-py"
+VERSION = "v0.10.1-py"
 START_TIME = time.time()
 
 
@@ -228,7 +228,7 @@ async def get_system_status():
     services = [
         {"name": "image_generator", "available": True, "version": "pollinations+core", "last_checked": datetime.now().isoformat()},
         {"name": "python_env", "available": True, "version": sys.version.split()[0], "last_checked": datetime.now().isoformat()},
-        {"name": "segment_engine", "available": True, "version": "v10.1", "last_checked": datetime.now().isoformat()},
+        {"name": "segment_engine", "available": True, "version": "v0.10.1", "last_checked": datetime.now().isoformat()},
         {"name": "live2d_builder", "available": True, "version": "cubism4", "last_checked": datetime.now().isoformat()},
     ]
     return ok({

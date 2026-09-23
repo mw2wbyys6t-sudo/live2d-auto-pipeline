@@ -519,7 +519,7 @@ class Layer52Generator:
         params_path = out / "parameters.json"
         params_data = {
             "character": character_name,
-            "version": "v9.0",
+            "version": "v0.9.0",
             "parameters": self.standard_params,
             "notes": "Import these parameters in Cubism Editor after PSD import",
         }
@@ -536,7 +536,7 @@ class Layer52Generator:
         # 4. Human-readable guide
         guide_path = out / "52_LAYER_GUIDE.txt"
         with open(guide_path, 'w', encoding='utf-8') as f:
-            f.write(f"Live2D Master Agent v9.0 - 52-Layer Standard Configuration\n")
+            f.write(f"Live2D Master Agent v0.9.0 - 52-Layer Standard Configuration\n")
             f.write("=" * 70 + "\n\n")
             f.write(f"Character: {character_name}\n")
             f.write(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")

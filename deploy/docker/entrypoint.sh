@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🎭 Live2D Master Agent v10.0"
+echo "🎭 Live2D Master Agent v0.10.0"
 echo "============================"
 
 # Create .env if not exists

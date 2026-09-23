@@ -368,4 +368,4 @@ pip install -r requirements.txt
 ---
 
 *最后更新：2026-05-22*
-*版本：v5.0*
+*版本：v0.10.1*

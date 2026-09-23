@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-echo 🎭 Live2D Master Agent v10.0 Installer
+echo 🎭 Live2D Master Agent v0.10.0 Installer
 echo ========================================
 echo.
 

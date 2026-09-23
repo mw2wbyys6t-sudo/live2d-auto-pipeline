@@ -235,7 +235,7 @@ if __name__ == "__main__":
     storage = SecureStorage()
     test_key = "sk-test-v8-abcdefghijklmnopqrstuvwx1234"
 
-    print("=== Secure Storage v9.0 Test ===")
+    print("=== Secure Storage v0.9.0 Test ===")
     print(f"PBKDF2 iterations: {SecureStorage.PBKDF2_ITERATIONS}")
 
     encrypted = storage.encrypt(test_key)
