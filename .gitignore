@@ -82,5 +82,9 @@ web/public/mediapipe/
 
 # 桌面版构建产物（由 scripts/build_desktop.bat 生成）
 dist/
+# 注意：`dist/` 会连同目录本身一起忽略，父目录被排除后其下的 `!...` 反选不生效。
+# 因此先显式放行目录，再忽略其内容、保留占位文件，
+# 否则未打包 UI 时 dist 目录为空，go:embed all:dist 会直接报 "no matching files found"。
+!api/webui/dist/
 api/webui/dist/*
 !api/webui/dist/.gitkeep
