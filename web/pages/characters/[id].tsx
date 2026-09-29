@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import type { NextPage } from 'next';
 import type { Character, ColorPalette } from '../../types';
-import { apiClient } from '../../lib/api-client';
+import { apiClient, type LatestGeneration } from '../../lib/api-client';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import ColorPicker from '../../components/ColorPicker';
 import ImageUploader from '../../components/ImageUploader';
@@ -30,9 +30,23 @@ const DEFAULT_PALETTE: ColorPalette = {
   accent: '#f472b6',
 };
 
+const OUTPUT_UPLOADS_PREFIX = '/output/uploads/';
+
 const CharacterDetailPage: NextPage = () => {
   const router = useRouter();
-  const { id } = router.query;
+  const { id: queryId } = router.query;
+
+  // 桌面版静态导出：直载 /characters/<id> 时 query 为空（服务端无法预填
+  // 动态路由参数），从 location.pathname 提取 id 作为回退。
+  const [id, setId] = useState('');
+  useEffect(() => {
+    if (typeof queryId === 'string' && queryId) {
+      setId(queryId);
+      return;
+    }
+    const fromUrl = window.location.pathname.split('/').pop();
+    if (fromUrl) setId(decodeURIComponent(fromUrl));
+  }, [queryId]);
 
   const [character, setCharacter] = useState<Character | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,6 +55,7 @@ const CharacterDetailPage: NextPage = () => {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [form, setForm] = useState<Partial<Character>>({});
   const [dirty, setDirty] = useState(false);
+  const [latestRecord, setLatestRecord] = useState<LatestGeneration | null>(null);
 
   // Defer locale-dependent date formatting to client-side to avoid SSR/CSR hydration mismatch
   // NOTE: This must be declared before any early return to follow the Rules of Hooks.
@@ -49,6 +64,11 @@ const CharacterDetailPage: NextPage = () => {
 
   useEffect(() => {
     setMounted(true);
+    // 拉取最近一次生成记录（当前只有全局一条，属于该角色时才展示产物）
+    apiClient
+      .getLatestGeneration()
+      .then(setLatestRecord)
+      .catch(() => setLatestRecord(null));
   }, []);
 
   useEffect(() => {
@@ -132,6 +152,51 @@ const CharacterDetailPage: NextPage = () => {
       router.push('/characters');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete');
+    }
+  };
+
+  /** 重算视觉 embedding：真实调用 POST /api/characters/:id/embedding */
+  const handleRecomputeEmbedding = async () => {
+    if (!id || typeof id !== 'string') return;
+    setCharacter((prev) => (prev ? { ...prev, embeddingStatus: 'processing' } : prev));
+    setError(null);
+    try {
+      const result = await apiClient.recomputeCharacterEmbedding(id);
+      if (result.has_embedding) {
+        setCharacter((prev) => (prev ? { ...prev, embeddingStatus: 'ready' } : prev));
+      } else {
+        setCharacter((prev) => (prev ? { ...prev, embeddingStatus: 'failed' } : prev));
+        setError(result.reason || 'embedding 生成失败：角色缺少参考图。');
+      }
+    } catch (err) {
+      setCharacter((prev) => (prev ? { ...prev, embeddingStatus: 'failed' } : prev));
+      setError(err instanceof Error ? err.message : 'embedding 生成失败');
+    }
+  };
+
+  /** 上传参考图并登记到角色卡（后端尽力提取 embedding） */
+  const handleReferenceUpload = async (view: 'front' | 'side' | 'back', file: File | null) => {
+    if (!id || typeof id !== 'string' || !file) return;
+    setError(null);
+    try {
+      const uploaded = await apiClient.uploadImage(file);
+      const res = await apiClient.addCharacterReference(id, uploaded.path, view);
+      setCharacter((prev) => {
+        if (!prev) return prev;
+        const others = (prev.referenceImages || []).filter((r) => r.view !== view);
+        return {
+          ...prev,
+          referenceImages: [
+            ...others,
+            { id: `${view}-${Date.now()}`, view, url: uploaded.url, filename: file.name },
+          ],
+        };
+      });
+      if (!res.embedding_extracted) {
+        setError(res.embedding_note || '参考图已登记，但 embedding 提取失败。');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '参考图上传失败');
     }
   };
 
@@ -252,12 +317,12 @@ const CharacterDetailPage: NextPage = () => {
                 )}
               </div>
               <button
-                className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 transition-colors"
-                onClick={() =>
-                  setForm((f) => ({ ...f, embeddingStatus: 'processing' }))
-                }
+                className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={embedding === 'processing' || !id}
+                onClick={handleRecomputeEmbedding}
               >
-                <Sparkles className="w-3.5 h-3.5 text-pink-400" /> Regenerate embedding
+                <Sparkles className="w-3.5 h-3.5 text-pink-400" />
+                {embedding === 'processing' ? 'Computing…' : 'Regenerate embedding'}
               </button>
             </div>
           </div>
@@ -268,12 +333,17 @@ const CharacterDetailPage: NextPage = () => {
             <div className="grid grid-cols-3 gap-2">
               {(['front', 'side', 'back'] as const).map((view) => {
                 const ref = character.referenceImages?.find((r) => r.view === view);
+                // Go 卡片的 references.<view> 是服务器路径；uploads 内的文件可映射为 Web URL
+                const serverPath = (character as unknown as { references?: Record<string, string> }).references?.[view];
+                const serverUrl = serverPath
+                  ? OUTPUT_UPLOADS_PREFIX.concat(serverPath.split(/[\\/]/).pop() || '')
+                  : '';
                 return (
                   <div key={view}>
                     <p className="text-[10px] text-gray-500 mb-1 capitalize">{view}</p>
                     <ImageUploader
-                      value={ref?.url}
-                      onChange={() => undefined}
+                      value={ref?.url || serverUrl || undefined}
+                      onChange={(file) => handleReferenceUpload(view, file)}
                       label={view}
                     />
                   </div>
@@ -366,15 +436,41 @@ const CharacterDetailPage: NextPage = () => {
               <Clock className="w-4 h-4 text-pink-400" /> Generation history
             </h2>
             <ol className="relative border-l border-gray-800 ml-2 space-y-4">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <li key={i} className="ml-4">
+              {latestRecord ? (
+                <li className="ml-4">
                   <span className="absolute -left-1.5 w-3 h-3 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 border-2 border-[#0f0f13]" />
-                  <p className="text-xs text-gray-400">
-                    Generation #{character.generationCount - i} — pending results
+                  <p className="text-xs text-gray-300">
+                    最近一次生成
+                    {latestRecord.character_id && latestRecord.character_id !== id ? '（属于其他角色）' : ''}
                   </p>
-                  <p className="text-[11px] text-gray-600">Pipeline logs will appear here</p>
+                  <p className="text-[11px] text-gray-500 mt-0.5 break-all">
+                    {latestRecord.created_at || '—'} · 分层 {latestRecord.layer_count || 0} 层 ·{' '}
+                    {latestRecord.segmentation_method || ''}
+                  </p>
+                  <div className="flex gap-3 mt-1.5 text-[11px]">
+                    {latestRecord.image_url && (
+                      <a href={latestRecord.image_url} target="_blank" rel="noreferrer" className="text-pink-400 hover:text-pink-300">
+                        查看立绘
+                      </a>
+                    )}
+                    {latestRecord.psd_url && (
+                      <a href={latestRecord.psd_url} download className="text-pink-400 hover:text-pink-300">
+                        下载 PSD
+                      </a>
+                    )}
+                    {(latestRecord.model3_url || latestRecord.model3_json) && (
+                      <Link href="/preview" className="text-pink-400 hover:text-pink-300">
+                        在预览页加载模型
+                      </Link>
+                    )}
+                  </div>
                 </li>
-              ))}
+              ) : (
+                <li className="ml-4">
+                  <p className="text-xs text-gray-500">还没有生成记录。</p>
+                  <p className="text-[11px] text-gray-600 mt-0.5">在「Generate」页完成一次生成后，产物会显示在这里。</p>
+                </li>
+              )}
             </ol>
           </div>
         </div>

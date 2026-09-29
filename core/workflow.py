@@ -185,6 +185,59 @@ class WorkflowEngine:
     # Main pipeline
     # ------------------------------------------------------------------
 
+    #: Live2D canvas limits. Mirrors the literals in
+    #: ``core/qa/engine.py:_check_canvas_size`` (E001 below 1000, W001 outside
+    #: 2000-4000); they are local to that method, so they are restated here
+    #: rather than reaching into a private helper.
+    MIN_CANVAS_HEIGHT = 1000
+    #: Deliberately NOT ``OPTIMAL``: measured, growing the canvas *degrades*
+    #: segmentation, because SAM2 resizes to 1024 and GroundingDINO to
+    #: shortest_edge 800 regardless. Same images, layering defects:
+    #: demo_input 900px=9, 1000px=10, 2000px=11; character_1790515599
+    #: 512px=15, 2000px=23. So we clear the E001 error and stop there, and let
+    #: W001 (not in the 2000-4000 "optimal" band) stay reported.
+    UPSCALE_TARGET_HEIGHT = 1000
+    #: Beyond this, "upscaling" invents detail instead of resampling.
+    MAX_UPSCALE_FACTOR = 4.0
+
+    def _ensure_min_height(self, image):
+        """Scale a too-short input up to the Live2D canvas minimum, and say so.
+
+        Returns ``(image, record)``; ``record`` is ``None`` when nothing was
+        changed. The record exists because silently resizing someone's artwork
+        is exactly the kind of thing this pipeline must not do — and because
+        the upscale is a *gate* fix only: measured on docs/assets/demo_input.png
+        it took QA from 54 to 95 while layering defects went 9 -> 10 -> 11 at
+        900 / 1000 / 2000 px.
+        """
+        w, h = image.size
+        if h >= self.MIN_CANVAS_HEIGHT:
+            return image, None
+        target = self.UPSCALE_TARGET_HEIGHT
+        if target / h > self.MAX_UPSCALE_FACTOR:
+            log.warning(
+                f"输入只有 {h}px 高，补到 {target}px 需 {target / h:.1f} 倍，"
+                f"超过 {self.MAX_UPSCALE_FACTOR} 倍上限就是凭空造细节；"
+                "不做插值，E001 保持上报")
+            return image, {
+                "from": [w, h], "to": [w, h], "method": "none",
+                "reason": "E001 height below Live2D minimum",
+                "note": f"需放大 {target / h:.1f} 倍，超过上限 "
+                        f"{self.MAX_UPSCALE_FACTOR}，拒绝插值补救",
+            }
+        new_w = max(1, round(w * target / h))
+        log.warning(
+            f"输入 {w}x{h} 低于 Live2D 最低高度 {self.MIN_CANVAS_HEIGHT}px，"
+            f"等比放大到 {new_w}x{target}（LANCZOS 插值，只为过画布门槛，"
+            f"不新增细节、也不改善分层）")
+        return image.resize((new_w, target), Image.LANCZOS), {
+            "from": [w, h],
+            "to": [new_w, target],
+            "method": "LANCZOS",
+            "reason": "E001 height below Live2D minimum",
+            "note": "只为满足画布门槛的插值放大，不增加画面细节，也不改善分层质量",
+        }
+
     def _step_layering(self, optimized_img, result: Dict, timestamp: int):
         """分层一步。K-means 只作最后兜底：只要语义分层产出了图层（即使退化为
         HSV 颜色回落，它仍带部位名），就保留它用于 PSD —— 换成 K-means 的
@@ -228,6 +281,69 @@ class WorkflowEngine:
             log.warning("Semantic segmentation degraded to HSV color fallback; "
                         "keeping named layers")
         return (layer_result.get("output_dir", layers_output), layer_result)
+
+    def _record_layering_step(self, result: Dict, layers_output: str,
+                              layer_result: Dict,
+                              image: Optional[Image.Image] = None) -> Dict[str, Any]:
+        """Merge the layering step into ``result['steps']['layering']``.
+
+        A plain assignment here used to wipe the ``degraded`` / ``requested_backend``
+        / ``reason`` record that :meth:`_step_layering` writes when a named backend
+        produced nothing — the pipeline then reported a clean run while quietly
+        having switched algorithm. The unit tests missed it because they call
+        ``_step_layering`` directly and never reach this line.
+
+        Also scores the emitted layers (:mod:`core.segment_engine.layer_quality`)
+        so "the step ran" and "the parts are actually separated" are two separate
+        facts in the result.
+        """
+        step = dict(result["steps"].get("layering") or {})
+        step.update({
+            "output_dir": layers_output,
+            "layer_count": layer_result["layer_count"],
+            "preview": layer_result.get("preview_path"),
+            "composite_preview": layer_result.get("composite_preview"),
+            "method": layer_result.get("method", "kmeans"),
+        })
+        step["quality"] = self._score_layering_quality(layers_output, image)
+        result["steps"]["layering"] = step
+        return step
+
+    def _score_layering_quality(self, layers_output: str,
+                                image: Optional[Image.Image]) -> Dict[str, Any]:
+        """Internal-consistency score of the layers just written.
+
+        Never fatal: a missing directory or a mask-set the checks disagree with
+        must not take the run down, but a failed gate is recorded and logged —
+        the run may not read as a clean success while parts are scrambled.
+        """
+        from core.segment_engine import layer_quality as lq
+
+        try:
+            masks = lq.load_masks(Path(layers_output))
+            if not masks:
+                return {"ok": False, "error": f"没有可度量的图层 PNG: {layers_output}",
+                        "reasons": ["分层目录里没有部件 PNG"]}
+            scored = lq.score_masks(masks, lq.REQUIRED_PARTS,
+                                    lq.foreground_of(image) if image else None)
+        except Exception as exc:  # pragma: no cover - fs / optional cv2 boundary
+            log.warning(f"分层质量度量未完成: {exc}")
+            return {"ok": False, "error": str(exc)}
+
+        verdict = lq.verdict(scored)
+        quality = {
+            "ok": verdict["ok"],
+            "reasons": verdict["reasons"],
+            "defect_count": scored["defect_count"],
+            "defects": scored["defects"],
+            "part_count": scored["part_count"],
+            "missing_parts": scored["missing_parts"],
+            "explained_fraction": scored["explained_fraction"],
+        }
+        if not verdict["ok"]:
+            log.warning(f"分层质量未达门槛（{scored['defect_count']} 条缺陷）："
+                        + "；".join(verdict["reasons"]))
+        return quality
 
     def run(
         self,
@@ -318,6 +434,11 @@ class WorkflowEngine:
 
             # Load the character image
             character_img = Image.open(character_path).convert('RGBA')
+
+            # === Step 2a: clear the Live2D minimum height before judging it ===
+            character_img, upscale_record = self._ensure_min_height(character_img)
+            if upscale_record:
+                result["steps"]["upscale"] = upscale_record
             log.info(f"Image size: {character_img.size}")
 
             # === Step 2: Quality assessment ===
@@ -353,13 +474,8 @@ class WorkflowEngine:
             layers_with_parts = self.part_identifier.identify_layers(
                 layer_result["layers"], optimized_img.height, optimized_img.width
             )
-            result["steps"]["layering"] = {
-                "output_dir": layers_output,
-                "layer_count": layer_result["layer_count"],
-                "preview": layer_result.get("preview_path"),
-                "composite_preview": layer_result.get("composite_preview"),
-                "method": layer_result.get("method", "kmeans"),
-            }
+            layering_step = self._record_layering_step(
+                result, layers_output, layer_result, optimized_img)
             log.success(f"Layering complete: {layer_result['layer_count']} layers "
                         f"({layer_result.get('method', 'kmeans')})")
 

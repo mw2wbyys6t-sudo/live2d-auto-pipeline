@@ -1,19 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/router';
 import {
   Download,
   FileImage,
   FileJson,
   FileArchive,
-  Package,
-  Layers,
-  Image as ImageIcon,
   CheckCircle2,
   Loader2,
   RefreshCw,
+  ExternalLink,
 } from 'lucide-react';
 import type { NextPage } from 'next';
 import type { Character, ExportDownload, ExportFormat, ExportJob } from '../types';
-import { apiClient } from '../lib/api-client';
+import { apiClient, modelUrlFromRecord } from '../lib/api-client';
+import { getBackendWsUrl } from '../lib/api-client';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 interface FormatOption {
@@ -25,19 +25,18 @@ interface FormatOption {
 }
 
 const FORMATS: FormatOption[] = [
-  { id: 'psd', label: 'PSD', desc: 'Layered Photoshop document', icon: Layers, ext: '.psd' },
-  { id: 'png-sequence', label: 'PNG Sequence', desc: 'Layer PNGs in a folder', icon: ImageIcon, ext: '.zip' },
   { id: 'live2d-package', label: 'Live2D Package', desc: 'model3.json + textures + physics (.zip)', icon: FileJson, ext: '.zip' },
-  { id: 'desktop-pet', label: 'Desktop Pet', desc: 'Bundle with run scripts (.zip)', icon: Package, ext: '.zip' },
-  { id: 'character-card', label: 'Character Card', desc: 'Portable JSON persona card', icon: FileJson, ext: '.json' },
-  { id: 'texture-atlas', label: 'Texture Atlas', desc: 'Merged texture PNG + JSON', icon: FileImage, ext: '.zip' },
 ];
 
 const ExportPage: NextPage = () => {
+  const router = useRouter();
   const [characters, setCharacters] = useState<Character[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | undefined>();
+  const [layersDir, setLayersDir] = useState<string>('');
+  const [lastModelUrl, setLastModelUrl] = useState<string>('');
+  const [lastRuntimeReady, setLastRuntimeReady] = useState<boolean | null>(null);
   const [formats, setFormats] = useState<Set<ExportFormat>>(
-    new Set(['live2d-package', 'character-card']),
+    new Set(['live2d-package']),
   );
   const [includePhysics, setIncludePhysics] = useState(true);
   const [includeExpressions, setIncludeExpressions] = useState(true);
@@ -68,6 +67,21 @@ const ExportPage: NextPage = () => {
       .catch(() => setCharacters([]));
   }, []);
 
+  // 链路交接：分层页「发送到导出」带来 ?layers_dir=；否则回退最近生成记录
+  useEffect(() => {
+    const fromQuery = router.query.layers_dir;
+    if (typeof fromQuery === 'string' && fromQuery) {
+      setLayersDir(fromQuery);
+      return;
+    }
+    apiClient
+      .getLatestGeneration()
+      .then((rec) => {
+        if (rec?.layers_dir) setLayersDir(rec.layers_dir);
+      })
+      .catch(() => undefined);
+  }, [router.query.layers_dir]);
+
   const toggleFormat = (id: ExportFormat) => {
     setFormats((prev) => {
       const next = new Set(prev);
@@ -91,36 +105,60 @@ const ExportPage: NextPage = () => {
       createdAt: new Date().toISOString(),
     });
 
-    // simulate progress, trying real API for each
+    // The API currently exports one real format: Live2D package.
     const downloads: ExportDownload[] = [];
-    for (let i = 0; i < formats.size; i++) {
-      await new Promise((r) => setTimeout(r, 400));
-      setJob((j) => (j ? { ...j, progress: Math.round(((i + 1) / formats.size) * 100) } : j));
-    }
+    let exportError: string | null = null;
 
-    for (const format of Array.from(formats)) {
-      try {
-        const result = await apiClient.exportModel(selectedId, format).catch(() => null);
-        const opt = FORMATS.find((f) => f.id === format)!;
-        const filename = `${(selected?.name || 'character').replace(/\s+/g, '_')}_${format}${opt.ext}`;
-        if (!result || !result.success) {
-          throw new Error(`Export failed for ${format}`);
+    // 真实进度：导出期间 Go 向 /api/ws 广播 Python 阶段事件（StageTracker）
+    let ws: WebSocket | null = null;
+    try {
+      ws = new WebSocket(getBackendWsUrl('/api/ws'));
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data) as { type?: string; progress?: number; stage?: string; message?: string };
+          if (msg.type === 'progress' && typeof msg.progress === 'number' && msg.progress > 0) {
+            setJob((j) => (j ? { ...j, progress: Math.min(99, msg.progress!) } : j));
+          }
+        } catch { /* 忽略坏帧 */ }
+      };
+    } catch { /* WS 不可用时退化为无过程进度 */ }
+
+    try {
+      for (const format of Array.from(formats)) {
+        try {
+          const result = await apiClient
+            .exportModel(selectedId, format, layersDir || undefined)
+            .catch(() => null);
+          const opt = FORMATS.find((f) => f.id === format)!;
+          const filename = `${(selected?.name || 'character').replace(/\s+/g, '_')}_${format}${opt.ext}`;
+          if (!result || !result.success) {
+            throw new Error(`Export failed for ${format}`);
+          }
+          // 链路交接：记录模型 Web 地址（预览页自动加载同一份最新记录）
+          const modelUrl = modelUrlFromRecord({
+            model3_json: result.model3_json || '',
+            model3_url: (result as { model3_url?: string }).model3_url,
+          });
+          if (modelUrl) setLastModelUrl(modelUrl);
+          if (typeof result.runtime_ready === 'boolean') setLastRuntimeReady(result.runtime_ready);
+          const payload = modelUrl || result.model3_json || '';
+          if (!payload) {
+            throw new Error(`Export returned no file for ${format}`);
+          }
+          downloads.push({ format, filename, size: payload.length, url: payload });
+          // 如实反映「能否直接运行」：缺 .moc3 时给出明确阻塞原因
+          if (result.runtime_ready === false && result.blocker) {
+            setBlocker(result.blocker);
+          }
+        } catch (err) {
+          exportError = err instanceof Error ? err.message : `Export failed for ${format}`;
+          setError(exportError);
         }
-        const payload = result.model3_json || result.texture || result.model_path || '';
-        if (!payload) {
-          throw new Error(`Export returned no file for ${format}`);
-        }
-        const size = typeof payload === 'string' ? payload.length : 0;
-        const url = result.model_path
-          ? result.model_path
-          : `data:text/plain;charset=utf-8,${encodeURIComponent(payload)}`;
-        downloads.push({ format, filename, size, url });
-        // 如实反映「能否直接运行」：缺 .moc3 时给出明确阻塞原因
-        if (result.runtime_ready === false && result.blocker) {
-          setBlocker(result.blocker);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : `Export failed for ${format}`);
+      }
+    } finally {
+      if (ws) {
+        ws.onmessage = null;
+        try { ws.close(); } catch { /* ignore */ }
       }
     }
 
@@ -129,15 +167,16 @@ const ExportPage: NextPage = () => {
       characterId: selectedId,
       characterName: selected?.name || 'Character',
       formats: Array.from(formats),
-      status: 'done',
+      status: downloads.length > 0 && !exportError ? 'done' : 'error',
       progress: 100,
       downloads,
       createdAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
+      error: downloads.length > 0 && !exportError ? undefined : exportError || 'Export failed',
     };
     setJob(completed);
     setHistory((prev) => [completed, ...prev].slice(0, 10));
-  }, [selectedId, formats, characters]);
+  }, [selectedId, formats, characters, layersDir]);
 
   const downloadFile = (dl: ExportDownload) => {
     if (dl.url.startsWith('#')) {
@@ -297,10 +336,16 @@ const ExportPage: NextPage = () => {
                 <p className="text-sm font-semibold text-white flex items-center gap-2">
                   {job.status === 'processing' ? (
                     <Loader2 className="w-4 h-4 animate-spin text-pink-400" />
-                  ) : (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  )}
-                  {job.status === 'processing' ? 'Exporting…' : 'Export complete'}
+                  ) : job.status === 'error' ? (
+                      <span className="text-red-400">Failed</span>
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    )}
+                  {job.status === 'processing'
+                    ? 'Exporting…'
+                    : job.status === 'error'
+                      ? 'Export failed'
+                      : 'Export complete'}
                 </p>
                 <span className="text-xs text-gray-400 font-mono">{job.progress}%</span>
               </div>
@@ -328,6 +373,18 @@ const ExportPage: NextPage = () => {
                   );
                 })}
               </div>
+
+              {/* 链路交接：导出成功后一步进预览 */}
+              {job.status === 'done' && lastModelUrl && (
+                <a
+                  href={lastModelUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 mb-2 rounded-lg text-xs bg-blue-500/15 border border-blue-500/40 text-blue-300 hover:bg-blue-500/25 transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" /> 查看模型文件 / 去预览页自动加载
+                </a>
+              )}
 
               {job.downloads && job.downloads.length > 0 && (
                 <div className="mt-4 space-y-2">

@@ -267,8 +267,9 @@ func TestExportWithoutHubKeepsLegacyPath(t *testing.T) {
 	if result != nil {
 		t.Errorf("失败时不该有结果: %v", result)
 	}
-	if !strings.Contains(err.Error(), "Python执行失败") {
-		t.Errorf("错误文本应与旧路径一致，实得 %v", err)
+	// v0.10.1 导出改走 runBridgeTask（argv 传参），错误文案为「脚本执行失败」
+	if !strings.Contains(err.Error(), "脚本执行失败") {
+		t.Errorf("错误文本应与桥接路径一致，实得 %v", err)
 	}
 }
 
@@ -284,8 +285,9 @@ func TestExportWithHubStillReturnsSameContract(t *testing.T) {
 	if err == nil || result != nil {
 		t.Fatalf("失败情形要与旧路径一致，实得 result=%v err=%v", result, err)
 	}
+	// hub 启用时走 runInlinePythonStreaming（流式阶段推送），文案保持旧契约
 	if !strings.Contains(err.Error(), "Python执行失败") {
-		t.Errorf("错误文本应与旧路径一致，实得 %v", err)
+		t.Errorf("错误文本应与流式路径一致，实得 %v", err)
 	}
 	data := exportResponseData(map[string]interface{}{"result": map[string]interface{}{
 		"success": true,

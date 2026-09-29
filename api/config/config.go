@@ -4,46 +4,56 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
+// defaultPythonPath 返回当前平台最常见的 Python 解释器名。
+// Windows 没有 python3 别名（只有 python / py），Unix 反之。
+func defaultPythonPath() string {
+	if runtime.GOOS == "windows" {
+		return "python"
+	}
+	return "python3"
+}
+
 type Config struct {
-	Server   ServerConfig   `json:"server"`
-	SDWebUI  SDWebUIConfig  `json:"sd_webui"`
-	Python   PythonConfig   `json:"python"`
-	Output   OutputConfig   `json:"output"`
-	ComfyUI  ComfyUIConfig  `json:"comfyui"`
-	Cache    CacheConfig    `json:"cache"`
-	LLM      LLMConfig      `json:"llm"`
-	TTS      TTSConfig      `json:"tts"`
+	Server    ServerConfig    `json:"server"`
+	SDWebUI   SDWebUIConfig   `json:"sd_webui"`
+	Python    PythonConfig    `json:"python"`
+	Output    OutputConfig    `json:"output"`
+	ComfyUI   ComfyUIConfig   `json:"comfyui"`
+	Cache     CacheConfig     `json:"cache"`
+	LLM       LLMConfig       `json:"llm"`
+	TTS       TTSConfig       `json:"tts"`
 	Character CharacterConfig `json:"character"`
 	WebSocket WebSocketConfig `json:"websocket"`
-	Redis    RedisConfig    `json:"redis"`
+	Redis     RedisConfig     `json:"redis"`
 	MediaPipe MediaPipeConfig `json:"mediapipe"`
 }
 
 type ServerConfig struct {
-	Host                string        `json:"host"`
-	Port                int           `json:"port"`
-	MaxRequestBodySize  int64         `json:"max_request_body_size"`
-	MaxHeaderBytes      int           `json:"max_header_bytes"`
-	ReadTimeout         time.Duration `json:"read_timeout"`
-	WriteTimeout        time.Duration `json:"write_timeout"`
-	ReadHeaderTimeout   time.Duration `json:"read_header_timeout"`
-	IdleTimeout         time.Duration `json:"idle_timeout"`
-	AllowedOrigins      []string      `json:"allowed_origins"`
+	Host               string        `json:"host"`
+	Port               int           `json:"port"`
+	MaxRequestBodySize int64         `json:"max_request_body_size"`
+	MaxHeaderBytes     int           `json:"max_header_bytes"`
+	ReadTimeout        time.Duration `json:"read_timeout"`
+	WriteTimeout       time.Duration `json:"write_timeout"`
+	ReadHeaderTimeout  time.Duration `json:"read_header_timeout"`
+	IdleTimeout        time.Duration `json:"idle_timeout"`
+	AllowedOrigins     []string      `json:"allowed_origins"`
 }
 
 type SDWebUIConfig struct {
-	BaseURL      string `json:"base_url"`
-	Timeout      int    `json:"timeout"`
-	Enabled      bool   `json:"enabled"`
+	BaseURL string `json:"base_url"`
+	Timeout int    `json:"timeout"`
+	Enabled bool   `json:"enabled"`
 }
 
 type PythonConfig struct {
-	PythonPath   string `json:"python_path"`
-	ScriptsDir   string `json:"scripts_dir"`
-	TimeoutSec   int    `json:"timeout_sec"`
+	PythonPath string `json:"python_path"`
+	ScriptsDir string `json:"scripts_dir"`
+	TimeoutSec int    `json:"timeout_sec"`
 	// ExportTimeoutSec 是完整 Live2D 导出（网格 + 图集烘焙 + moc3 编译 + 官方内核
 	// 验收）的预算。实测依据 tools/measure_export_duration.py：26 层 x 1024px
 	// （27 百万像素）中位 6.6s，12 层 x 2048px（50 百万像素）6.5s。
@@ -51,29 +61,29 @@ type PythonConfig struct {
 }
 
 type OutputConfig struct {
-	BaseDir      string `json:"base_dir"`
-	MaxFileSize  int64  `json:"max_file_size"`
+	BaseDir     string `json:"base_dir"`
+	MaxFileSize int64  `json:"max_file_size"`
 }
 
 type ComfyUIConfig struct {
-	BaseDir      string `json:"base_dir"`
-	Enabled      bool   `json:"enabled"`
+	BaseDir string `json:"base_dir"`
+	Enabled bool   `json:"enabled"`
 }
 
 type CacheConfig struct {
-	Enabled     int `json:"enabled"`
-	MaxEntries  int `json:"max_entries"`
-	MaxSizeMB   int `json:"max_size_mb"`
-	TTLSeconds  int `json:"ttl_seconds"`
+	Enabled    int `json:"enabled"`
+	MaxEntries int `json:"max_entries"`
+	MaxSizeMB  int `json:"max_size_mb"`
+	TTLSeconds int `json:"ttl_seconds"`
 }
 
 // LLMConfig LLM提供商设置
 type LLMConfig struct {
-	Provider string `json:"provider"` // openai, anthropic, ollama, etc.
-	APIKey   string `json:"api_key"`
-	BaseURL  string `json:"base_url"`
-	Model    string `json:"model"`
-	MaxTokens int   `json:"max_tokens"`
+	Provider    string  `json:"provider"` // openai, anthropic, ollama, etc.
+	APIKey      string  `json:"api_key"`
+	BaseURL     string  `json:"base_url"`
+	Model       string  `json:"model"`
+	MaxTokens   int     `json:"max_tokens"`
 	Temperature float64 `json:"temperature"`
 }
 
@@ -87,17 +97,17 @@ type TTSConfig struct {
 
 // CharacterConfig 角色存储设置
 type CharacterConfig struct {
-	StorageDir string `json:"storage_dir"`
-	MaxEmbeddingDim int `json:"max_embedding_dim"`
+	StorageDir      string `json:"storage_dir"`
+	MaxEmbeddingDim int    `json:"max_embedding_dim"`
 }
 
 // WebSocketConfig WebSocket设置
 type WebSocketConfig struct {
-	Enabled       bool   `json:"enabled"`
-	MaxConnections int   `json:"max_connections"`
-	PingInterval  int    `json:"ping_interval_sec"`
-	WriteWait     int    `json:"write_wait_sec"`
-	PongWait      int    `json:"pong_wait_sec"`
+	Enabled        bool `json:"enabled"`
+	MaxConnections int  `json:"max_connections"`
+	PingInterval   int  `json:"ping_interval_sec"`
+	WriteWait      int  `json:"write_wait_sec"`
+	PongWait       int  `json:"pong_wait_sec"`
 }
 
 // RedisConfig Redis设置（可选，用于任务队列）
@@ -110,10 +120,10 @@ type RedisConfig struct {
 
 // MediaPipeConfig MediaPipe人脸追踪设置
 type MediaPipeConfig struct {
-	Enabled       bool    `json:"enabled"`
-	ModelComplexity int   `json:"model_complexity"`
+	Enabled                bool    `json:"enabled"`
+	ModelComplexity        int     `json:"model_complexity"`
 	MinDetectionConfidence float64 `json:"min_detection_confidence"`
-	MinTrackingConfidence float64  `json:"min_tracking_confidence"`
+	MinTrackingConfidence  float64 `json:"min_tracking_confidence"`
 }
 
 func DefaultConfig() *Config {
@@ -136,7 +146,16 @@ func DefaultConfig() *Config {
 	// core/ and live2d_builder/ markers.
 	if baseDir != "" {
 		if _, err := os.Stat(filepath.Join(baseDir, "core", "workflow.py")); err != nil {
-			for _, candidate := range []string{"/workspace", "/app", "/repo", "/project"} {
+			// 桌面版：exe 可能被双击于任意目录（cwd = exe 所在目录）。
+			// 优先从 exe 自身位置向上找项目根（推荐把 exe 放在项目根目录，
+			// 或项目根的 dist/ 子目录），再退回容器约定路径。
+			candidates := []string{}
+			if exe, err := os.Executable(); err == nil {
+				exeDir := filepath.Dir(exe)
+				candidates = append(candidates, exeDir, filepath.Dir(exeDir), filepath.Dir(filepath.Dir(exeDir)))
+			}
+			candidates = append(candidates, "/workspace", "/app", "/repo", "/project")
+			for _, candidate := range candidates {
 				if _, err := os.Stat(filepath.Join(candidate, "core", "workflow.py")); err == nil {
 					baseDir = candidate
 					break
@@ -151,14 +170,14 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		Server: ServerConfig{
-			Host:                "0.0.0.0",
-			Port:                8080,
-			MaxRequestBodySize:  10 * 1024 * 1024,
-			MaxHeaderBytes:      1 * 1024 * 1024,
-			ReadTimeout:         30 * time.Second,
-			WriteTimeout:        180 * time.Second,
-			ReadHeaderTimeout:   5 * time.Second,
-			IdleTimeout:         120 * time.Second,
+			Host:               "0.0.0.0",
+			Port:               8080,
+			MaxRequestBodySize: 10 * 1024 * 1024,
+			MaxHeaderBytes:     1 * 1024 * 1024,
+			ReadTimeout:        30 * time.Second,
+			WriteTimeout:       180 * time.Second,
+			ReadHeaderTimeout:  5 * time.Second,
+			IdleTimeout:        120 * time.Second,
 			// CORS 白名单：默认只放行本地工作台。空列表 = 不启用跨域
 			//（同源请求本就不带 Origin，走 Next.js rewrites 代理时不受影响）。
 			// 绝不可默认 "*"：它会与 Allow-Credentials:true 形成任意站点携带凭据的漏洞。
@@ -170,7 +189,9 @@ func DefaultConfig() *Config {
 			Enabled: true,
 		},
 		Python: PythonConfig{
-			PythonPath: "python3",
+			// 桌面版默认解释器随平台自适应：Windows 无 python3 别名。
+			// 可执行文件发现兜底见 validateExecutablePath（services）。
+			PythonPath: defaultPythonPath(),
 			ScriptsDir: scriptsDir,
 			TimeoutSec: 120,
 			// 实测最慢 6.6s（50 百万像素），150s 留 20 倍以上余量，

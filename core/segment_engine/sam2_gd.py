@@ -51,7 +51,7 @@ import time  # noqa: E402
 from collections import OrderedDict  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
@@ -140,6 +140,10 @@ DEFAULT_SAM2_IDS: Tuple[str, ...] = ("facebook/sam2-hiera-small", "facebook/sam2
 #: Last-resort substitute, only reachable when SAM2 itself cannot load. The
 #: ``method`` string changes accordingly.
 DEFAULT_SAM1_IDS: Tuple[str, ...] = ("facebook/sam-vit-base",)
+
+#: Distinguishes "attribute absent" from "attribute set to None" when the
+#: face-crop pass saves and restores the per-instance prompt table.
+_UNSET = object()
 
 
 @dataclass
@@ -678,6 +682,137 @@ class Sam2GroundingDinoSegmenter:
         masks = [np.asarray(m, dtype=bool) for m in mask_tensor.squeeze(1)]
         return masks, [0.0] * len(masks)
 
+    # ------------------------------------------- region re-detection passes
+
+    #: ROI re-detections. A spec runs only when one of its ``missing`` parts
+    #: came back empty **and** one of its ``anchors`` has a mask to localise
+    #: that region.
+    #:
+    #: Why this exists and why thresholds cannot: GroundingDINO resizes
+    #: ``shortest_edge`` to 800 and SAM2 to ``size={1024,1024}``, so on a
+    #: 1333x2000 canvas the head enters the model at ~110x130 px and the mouth
+    #: at ~15x8 px. No score cut recognises what the encoder never resolved;
+    #: cropping spends the same resolution budget where the part actually is.
+    #: Measured on docs/assets/demo_input.png the face pass recovered a mouth
+    #: sitting 1.00 inside the face mask, where the whole-canvas pass found
+    #: nothing or the character's knees.
+    #:
+    #: hair / upper / lower variants were tried and **removed**: on a controlled
+    #: A-B (same 2000x2000 cutout, only the round count differing) they changed
+    #: nothing -- parts 13, defects 23, explained 0.1295 in both arms -- while
+    #: costing +25s of CPU per run. Re-add one only with a measured case where
+    #: it recovers a part.
+    ROI_SPECS: Tuple[Dict[str, Any], ...] = (
+        {"name": "face", "missing": ("mouth", "nose", "eyes_left", "eyes_right"),
+         "prompts": ("face", "eyebrows", "eyes", "nose", "mouth"),
+         "anchors": ("face",), "grow": 1.2},
+    )
+
+    #: A recovered mask this far outside the character silhouette is a false
+    #: positive, not a find: refuse it instead of trusting the detector.
+    ROI_LEAK_MAX = 0.05
+
+    def _roi_box(self, masks: Dict[str, np.ndarray], anchors: Tuple[str, ...],
+                 grow: float, image_size: Tuple[int, int]
+                 ) -> Optional[Tuple[int, int, int, int]]:
+        """Union bbox of whichever anchor masks exist, grown by ``grow``."""
+        acc: Optional[Tuple[int, int, int, int]] = None
+        for part in anchors:
+            m = masks.get(part)
+            if m is None or not m.any():
+                continue
+            ys, xs = np.nonzero(m)
+            box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
+            acc = box if acc is None else (min(acc[0], box[0]), min(acc[1], box[1]),
+                                           max(acc[2], box[2]), max(acc[3], box[3]))
+        if acc is None:
+            return None
+        x0, y0, x1, y1 = acc
+        gw, gh = x1 - x0, y1 - y0
+        if gw < 8 or gh < 8:
+            return None
+        w, h = image_size
+        return (max(0, int(x0 - gw * grow)), max(0, int(y0 - gh * grow)),
+                min(w, int(x1 + gw * grow)), min(h, int(y1 + gh * grow)))
+
+    def _run_roi(self, image: Image.Image, box: Tuple[int, int, int, int],
+                 spec: Dict[str, Any], missing: Tuple[str, ...],
+                 fg: Optional[np.ndarray]
+                 ) -> Tuple[Dict[str, np.ndarray], List[str]]:
+        """One ROI round: restrict the prompts, re-segment, paste back."""
+        prompts = {k: v for k, v in dict(self.PART_PROMPTS).items()
+                   if k in spec["prompts"]}
+        saved_prompts = self.__dict__.get("PART_PROMPTS", _UNSET)
+        saved_dropped = list(self.dropped_boxes)
+        saved_report = getattr(self, "last_report", None)
+        self.__dict__["PART_PROMPTS"] = prompts
+        self._in_roi_pass = True
+        try:
+            crop_masks, _ = self.segment_detailed(image.crop(box))
+        except ModelUnavailable as exc:
+            log.warning(f"ROI {spec['name']} 二次检测失败，保留主检测结果: {exc}")
+            crop_masks = {}
+        finally:
+            self._in_roi_pass = False
+            self.dropped_boxes = saved_dropped
+            self.last_report = saved_report
+            if saved_prompts is _UNSET:
+                self.__dict__.pop("PART_PROMPTS", None)
+            else:
+                self.__dict__["PART_PROMPTS"] = saved_prompts
+
+        h, w = image.size[1], image.size[0]
+        recovered: Dict[str, np.ndarray] = {}
+        notes: List[str] = []
+        for part, cm in crop_masks.items():
+            if part not in missing or part in recovered:
+                continue
+            full = np.zeros((h, w), dtype=bool)
+            ch = min(cm.shape[0], box[3] - box[1])
+            cw = min(cm.shape[1], box[2] - box[0])
+            full[box[1]:box[1] + ch, box[0]:box[0] + cw] = cm[:ch, :cw]
+            if not full.any():
+                continue
+            if fg is not None:
+                leak = int((full & ~fg).sum()) / int(full.sum())
+                if leak > self.ROI_LEAK_MAX:
+                    notes.append(
+                        f"ROI {spec['name']} 检出的 {part} 有 {leak:.2f} 在角色"
+                        f"轮廓外（上限 {self.ROI_LEAK_MAX}），拒收")
+                    continue
+            recovered[part] = full
+            notes.append(f"ROI {spec['name']} 二次检测补回 {part}"
+                         f"（crop={box}，{int(full.sum())} px）")
+        return recovered, notes
+
+    def _roi_redetect(
+        self, image: Image.Image, masks: Dict[str, np.ndarray]
+    ) -> Tuple[Dict[str, np.ndarray], List[str]]:
+        """Fill missing parts region by region. Never overwrites a real mask."""
+        if getattr(self, "_in_roi_pass", False):
+            return masks, []
+
+        from core.segment_engine.layer_quality import foreground_of
+
+        merged = dict(masks)
+        notes: List[str] = []
+        fg = foreground_of(image)
+        for spec in self.ROI_SPECS:
+            missing = tuple(p for p in spec["missing"] if p not in merged)
+            if not missing:
+                continue
+            box = self._roi_box(merged, spec["anchors"], spec["grow"], image.size)
+            if box is None:
+                notes.append(f"ROI {spec['name']} 缺 {'/'.join(missing)}，"
+                             "但没有任何锚点掩码可定位，跳过")
+                continue
+            recovered, roi_notes = self._run_roi(image, box, spec, missing, fg)
+            merged.update(recovered)
+            notes.extend(roi_notes)
+        # The notes ride along in the report; layer() surfaces each one as a
+        # warning already, so this pass does not log them again.
+        return merged, notes
+
     # ----------------------------------------------------------------- segment
 
     def segment_detailed(
@@ -732,6 +867,11 @@ class Sam2GroundingDinoSegmenter:
                 masks[part] = mask if part not in masks else (masks[part] | mask)
                 confs.setdefault(part, []).append(float(det_score))
                 ious.setdefault(part, []).append(float(iou))
+
+        # Parts the whole-canvas pass could not resolve get one more chance at
+        # region scale, before any accounting is derived from `masks`.
+        masks, roi_notes = self._roi_redetect(image, masks)
+        notes.extend(roi_notes)
 
         # Per-part accounting over the *merged* mask.
         parts_report: Dict[str, Dict[str, object]] = {}

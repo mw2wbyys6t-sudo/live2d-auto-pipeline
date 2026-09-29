@@ -1,5 +1,8 @@
-# Live2D Master Agent v0.10.0 - Python Requirements
+# Live2D Master Agent v0.10.2 - Python Requirements
 # Installation: python -m pip install -r requirements.txt
+# 官方内核验收（moc3-acceptance / 逐像素形变判据）额外需要：
+#   pip install live2d-py pygame-ce
+# 版本号单一真源见 core/version.py
 
 # ====== Core Dependencies (Required) ======
 Pillow>=10.0.0
@@ -65,7 +68,12 @@ py-moc3>=0.1.0
 # live2d-py>=0.7.0
 
 # ====== Optional: AI Models (large, install separately with install_models.py) ======
+# sam2_gd 后端（core/segment_engine/sam2_gd.py）需要下面三件，缺任一改抛 ModelUnavailable：
+# 实测 Sam2ImageProcessor 在没有 torchvision 时报 "requires the Torchvision library"。
 # segment-anything>=1.0
+# torch>=2.0.0
+# torchvision>=0.15.0
+# transformers>=4.30.0
 # diffusers>=0.20.0
 # accelerate>=0.20.0
 # open-clip-torch>=2.20.0

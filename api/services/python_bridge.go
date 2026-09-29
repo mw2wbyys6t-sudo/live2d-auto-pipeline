@@ -20,6 +20,17 @@ import (
 // 前者该回 504 并说明预算，后者该回 500/422。
 var ErrPythonTimeout = errors.New("python 子进程超时")
 
+// strictIDPattern 桥接函数内部使用的角色 ID 白名单：这些 ID 会被拼进
+// 内联 Python 源码与文件路径，不能依赖调用方校验（纵深防御）。
+var strictIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+func validateStrictID(id string) error {
+	if !strictIDPattern.MatchString(id) {
+		return fmt.Errorf("非法角色 ID: %.64q", id)
+	}
+	return nil
+}
+
 type PythonBridge struct {
 	cfg *config.Config
 }
@@ -70,11 +81,11 @@ func (pb *PythonBridge) executePythonScript(scriptPath string, args []string, ti
 
 	cmd.Env = append(os.Environ(),
 		"PYTHONIOENCODING=utf-8",
-		"PYTHONPATH=" + pb.cfg.Python.ScriptsDir,
-		"HOME=" + os.Getenv("HOME"),
-		"PATH=" + os.Getenv("PATH"),
-		"LANG=" + os.Getenv("LANG"),
-		"LIVE2D_PROJECT_ROOT=" + pb.cfg.Python.ScriptsDir,
+		"PYTHONPATH="+pb.cfg.Python.ScriptsDir,
+		"HOME="+os.Getenv("HOME"),
+		"PATH="+os.Getenv("PATH"),
+		"LANG="+os.Getenv("LANG"),
+		"LIVE2D_PROJECT_ROOT="+pb.cfg.Python.ScriptsDir,
 	)
 
 	configurePythonProcess(cmd)
@@ -278,28 +289,326 @@ func (pb *PythonBridge) RunSeeThroughWorkflow(imagePath string) (*models.SeeThro
 }
 
 // ======================================================================
+// 桥接任务执行：常量脚本 + JSON 参数文件（argv 传参，无代码拼接）
+// ======================================================================
+
+// runBridgeTask 把「常量 Python 任务脚本 + JSON 参数文件」交给
+// executePythonScript 以 argv 参数列表执行。
+//
+// 安全设计：任务脚本是**不含任何外部输入的常量**，参数经 JSON 文件
+// 从 sys.argv[1] 读取 —— 源码字符串零拼接，从根源上消除注入面。
+// 返回 stdout 最后一个可解析的 JSON 对象（与 runInlinePython 同契约）。
+func (pb *PythonBridge) runBridgeTask(script string,
+	params map[string]interface{}, timeout time.Duration) (map[string]interface{}, error) {
+	tmpDir, err := os.MkdirTemp("", "live2d_bridge_")
+	if err != nil {
+		return nil, fmt.Errorf("创建桥接临时目录失败: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	paramsPath := filepath.Join(tmpDir, "params.json")
+	b, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("序列化桥接参数失败: %v", err)
+	}
+	if err := os.WriteFile(paramsPath, b, 0o600); err != nil {
+		return nil, fmt.Errorf("写入桥接参数失败: %v", err)
+	}
+	scriptPath := filepath.Join(tmpDir, "task.py")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+		return nil, fmt.Errorf("写入桥接脚本失败: %v", err)
+	}
+
+	output, err := pb.executePythonScript(scriptPath, []string{paramsPath}, timeout)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		var result interface{}
+		if json.Unmarshal([]byte(strings.TrimSpace(lines[i])), &result) == nil && result != nil {
+			return map[string]interface{}{"result": result}, nil
+		}
+	}
+	return nil, fmt.Errorf("桥接任务未返回 JSON 结果")
+}
+
+// ======================================================================
 // v0.10.0: 角色管理（通过 Python CharacterManager）
 // ======================================================================
 
+// bridgeAddReferenceScript 常量任务脚本：登记参考图并提取 embedding。
+// 参数从 argv[1] 指向的 JSON 文件读取，脚本本身不含任何外部输入。
+const bridgeAddReferenceScript = `
+import sys, json
+from core.character.manager import CharacterManager
+params = json.loads(open(sys.argv[1], encoding="utf-8").read())
+mgr = CharacterManager(storage_dir=params["storage_dir"])
+path = mgr.add_reference_image(params["character_id"], params["image_path"], params["view"])
+print(json.dumps({"ref_path": path}))
+`
+
 // AddReferenceImage 添加参考图并提取 embedding
 func (pb *PythonBridge) AddReferenceImage(characterID, imagePath, view string) error {
+	if err := validateStrictID(characterID); err != nil {
+		return err
+	}
 	if view == "" {
 		view = "front"
 	}
-	pyCode := fmt.Sprintf(`
-import sys, json
-sys.path.insert(0, %q)
-from core.character.manager import CharacterManager
-mgr = CharacterManager(storage_dir=%q)
-path = mgr.add_reference_image(%q, %q, %q)
-print(json.dumps({"ref_path": path}))
-`, pb.cfg.Python.ScriptsDir, pb.cfg.Character.StorageDir, characterID, imagePath, view)
-	_, err := pb.runInlinePython(pyCode)
+	_, err := pb.runBridgeTask(bridgeAddReferenceScript, map[string]interface{}{
+		"storage_dir":  pb.cfg.Character.StorageDir,
+		"character_id": characterID,
+		"image_path":   imagePath,
+		"view":         view,
+	}, pb.cfg.GetPythonTimeout())
 	return err
 }
 
+// SegmentImage 对单张立绘运行真实语义/聚类分层并导出 PSD。
+// 与 Python 后端 api_server.py 的 _run_segment 完全同构，供「分层工作台」
+// 在 Go 后端部署下使用。语义分割在 CPU 上可能耗时数分钟，预算给足。
+// bridgeSegmentScript 常量任务脚本：对单张立绘运行真实分层并导出 PSD。
+const bridgeSegmentScript = `
+import sys, json
+from pathlib import Path
+from PIL import Image
+
+params = json.loads(open(sys.argv[1], encoding="utf-8").read())
+img = Image.open(params["image_path"]).convert("RGBA")
+out_dir = Path(params["out_dir"])
+out_dir.mkdir(parents=True, exist_ok=True)
+method = params["method"]
+if method == "kmeans":
+    from core.segment_engine.kmeans import KMeansLayerer
+    result = KMeansLayerer().layer(img, output_dir=str(out_dir))
+else:
+    from core.segment_engine.semantic import SemanticSegmenter
+    result = SemanticSegmenter(model_type="auto").layer(img, output_dir=str(out_dir))
+names = [l.get("name") for l in (result.get("layers") or []) if l.get("name")]
+from core.psd.creator import PSDCreator
+psd_result = PSDCreator().create_psd(str(out_dir), str(out_dir / "character.psd"), ordered_names=names or None)
+layers = [{"name": l.get("name", ""), "part_name": l.get("part_name", l.get("name", "")), "path": l.get("path", ""), "pixel_count": l.get("pixel_count", 0)} for l in (result.get("layers") or [])]
+print(json.dumps({"method": result.get("method", method), "layers_dir": str(out_dir), "layers": layers, "composite_preview": result.get("composite_preview", "") or "", "psd_path": psd_result.get("psd_path", "") or "", "psd_success": bool(psd_result.get("success"))}))
+`
+
+func (pb *PythonBridge) SegmentImage(imagePath, method string) (map[string]interface{}, error) {
+	if err := validatePath(imagePath); err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(imagePath); err != nil {
+		return nil, fmt.Errorf("源图片不存在: %s", imagePath)
+	}
+	if method != "kmeans" {
+		method = "semantic"
+	}
+	outDir := filepath.Join(pb.cfg.Output.BaseDir, fmt.Sprintf("layers_%d", time.Now().Unix()))
+	// 语义分割在 CPU 上可能耗时数分钟，预算给足
+	res, err := pb.runBridgeTask(bridgeSegmentScript, map[string]interface{}{
+		"image_path": imagePath,
+		"out_dir":    outDir,
+		"method":     method,
+	}, 15*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	inner, ok := res["result"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("分层脚本返回了意外的结果结构")
+	}
+	return inner, nil
+}
+
+// bridgeRecomputeEmbeddingScript 常量任务脚本：重算角色视觉 embedding。
+const bridgeRecomputeEmbeddingScript = `
+import sys, json
+from core.character.manager import CharacterManager
+
+params = json.loads(open(sys.argv[1], encoding="utf-8").read())
+mgr = CharacterManager(storage_dir=params["storage_dir"])
+card = mgr.load_character(params["character_id"])
+img_path = None
+for attr in ("front_view_path", "side_view_path", "back_view_path"):
+    p = getattr(card, attr, None)
+    if p:
+        img_path = p
+        break
+if not img_path:
+    print(json.dumps({"has_embedding": False, "dim": 0, "reason": "角色没有任何参考图，无法提取视觉 embedding"}))
+else:
+    from PIL import Image
+    emb = mgr.extract_embedding(Image.open(img_path).convert("RGB"))
+    card.visual_embedding = emb
+    mgr.save_character(card)
+    print(json.dumps({"has_embedding": True, "dim": len(emb)}))
+`
+
+// RecomputeCharacterEmbedding 为角色重新提取视觉 embedding（CLIP 可用时用
+// CLIP，否则退化为直方图 embedding —— 由 core/character/embedding.py 决定）。
+// 返回 {has_embedding, dim, reason?}，让前端能如实展示降级情况。
+func (pb *PythonBridge) RecomputeCharacterEmbedding(characterID string) (map[string]interface{}, error) {
+	if err := validateStrictID(characterID); err != nil {
+		return nil, err
+	}
+	res, err := pb.runBridgeTask(bridgeRecomputeEmbeddingScript, map[string]interface{}{
+		"storage_dir":  pb.cfg.Character.StorageDir,
+		"character_id": characterID,
+	}, 10*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	inner, ok := res["result"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("embedding 脚本返回了意外的结果结构")
+	}
+	return inner, nil
+}
+
+// bridgeListProvidersScript 常量任务脚本：查询上游生成服务状态。
+const bridgeListProvidersScript = `
+import sys, json
+from core.image_gen.router import ProviderRouter
+router = ProviderRouter()
+info = router.get_provider_info()
+print(json.dumps({
+    "available": router.get_available_providers(),
+    "registered": [i.get("name") for i in info],
+    "detail": info,
+}))
+`
+
+// ListImageProviders 查询 Python ProviderRouter 的上游生成服务状态：
+// 哪些已配置可用（含新接入的 openai 兼容端点）、哪些已注册但缺 Key。
+func (pb *PythonBridge) ListImageProviders() ([]map[string]interface{}, []string, error) {
+	res, err := pb.runBridgeTask(bridgeListProvidersScript, nil, 60*time.Second)
+	if err != nil {
+		return nil, nil, err
+	}
+	inner, ok := res["result"].(map[string]interface{})
+	if !ok {
+		return nil, nil, fmt.Errorf("provider 查询返回了意外的结果结构")
+	}
+	available, _ := inner["available"].([]interface{})
+	registered, _ := inner["registered"].([]interface{})
+	registeredNames := make([]string, 0, len(registered))
+	for _, r := range registered {
+		if s, ok := r.(string); ok {
+			registeredNames = append(registeredNames, s)
+		}
+	}
+	outAvailable := make([]map[string]interface{}, 0, len(available))
+	for _, a := range available {
+		if m, ok := a.(map[string]interface{}); ok {
+			outAvailable = append(outAvailable, m)
+		}
+	}
+	return outAvailable, registeredNames, nil
+}
+
+// ImportPSDLayers 用 psd-tools 把外部 PSD 的每个像素图层按原始坐标
+// 合成为整幅画布 RGBA PNG（底层在前、前景在后），供分层工作台直接
+// 预览与后续 Live2D 导出使用。
+func (pb *PythonBridge) ImportPSDLayers(psdPath string) (map[string]interface{}, error) {
+	if err := validatePath(psdPath); err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(psdPath); err != nil {
+		return nil, fmt.Errorf("PSD 文件不存在: %s", psdPath)
+	}
+	outDir := filepath.Join(pb.cfg.Output.BaseDir, fmt.Sprintf("psd_import_%d", time.Now().Unix()))
+	// psd-tools 逐层导出在超大 PSD 上可能较慢，预算给足
+	res, err := pb.runBridgeTask(bridgeImportPSDScript, map[string]interface{}{
+		"psd_path": psdPath,
+		"out_dir":  outDir,
+	}, 10*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	inner, ok := res["result"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("PSD 导入脚本返回了意外的结果结构")
+	}
+	if okFlag, _ := inner["ok"].(bool); !okFlag {
+		msg, _ := inner["error"].(string)
+		return nil, fmt.Errorf("PSD 导入失败: %s", msg)
+	}
+	return inner, nil
+}
+
+// bridgeImportPSDScript 常量任务脚本：外部 PSD 逐层导出为整幅画布 PNG，
+// 并按图层名识别语义部件（借鉴 psd2live 的思路）。
+const bridgeImportPSDScript = `
+import sys, json, re
+from pathlib import Path
+from psd_tools import PSDImage
+from core.psd.part_naming import recognize_part
+
+params = json.loads(open(sys.argv[1], encoding="utf-8").read())
+psd_path = params["psd_path"]
+out_dir = Path(params["out_dir"])
+out_dir.mkdir(parents=True, exist_ok=True)
+psd = PSDImage.open(psd_path)
+if psd.width < 64 or psd.height < 64 or psd.width > 8192 or psd.height > 8192:
+    print(json.dumps({"ok": False, "error": "画布尺寸异常: %dx%d，需在 64~8192 之间" % (psd.width, psd.height)}))
+    raise SystemExit
+
+leaves = []
+def walk(group):
+    for child in group:
+        if child.is_group():
+            walk(child)
+        else:
+            leaves.append(child)
+walk(psd)
+
+layers = []
+for idx, child in enumerate(reversed(leaves)):  # 底层在前，前景最后绘制
+    if idx >= 500:
+        break
+    try:
+        comp = child.composite(viewport=psd.viewbox)
+    except Exception:
+        continue
+    if comp is None:
+        continue
+    comp = comp.convert("RGBA")
+    if not comp.getbbox():
+        continue
+    raw_name = child.name or "layer"
+    safe = re.sub(r"[^0-9A-Za-z_-]+", "_", raw_name)[:40] or "layer"
+    out = out_dir / ("%03d_%s.png" % (len(layers), safe))
+    comp.save(out)
+    alpha_hist = comp.getchannel("A").histogram()
+    opaque = sum(alpha_hist[1:])
+    # 中/英/日图层名 -> 语义部件 + 左右侧向，为下游参数绑定提供稳定目标
+    named = recognize_part(raw_name)
+    layers.append({
+        "name": raw_name,
+        "part_name": named.get("part") or safe,
+        "part": named.get("part"),
+        "side": named.get("side"),
+        "mouth_vowel": named.get("mouth_vowel"),
+        "path": str(out),
+        "pixel_count": opaque,
+        "group": getattr(child.parent, "name", "") or "",
+    })
+
+print(json.dumps({
+    "ok": True,
+    "canvas": [psd.width, psd.height],
+    "layers_dir": str(out_dir),
+    "layer_count": len(layers),
+    "layers": layers,
+    "total_found": len(leaves),
+    "recognized_count": sum(1 for l in layers if l["part"]),
+}))
+`
+
 // ExportLive2DModel 导出 Live2D 模型
 func (pb *PythonBridge) ExportLive2DModel(characterID, layersDir, outputDir string) (map[string]interface{}, error) {
+	if err := validateStrictID(characterID); err != nil {
+		return nil, err
+	}
 	if layersDir == "" {
 		layersDir = filepath.Join(pb.cfg.Output.BaseDir, "layers_"+characterID[:min(8, len(characterID))])
 	}
@@ -309,16 +618,27 @@ func (pb *PythonBridge) ExportLive2DModel(characterID, layersDir, outputDir stri
 	if _, err := os.Stat(layersDir); os.IsNotExist(err) {
 		return nil, fmt.Errorf("图层目录不存在: %s", layersDir)
 	}
-	pyCode := fmt.Sprintf(`
+	// 完整导出要走网格生成 + 图集烘焙 + 官方内核验收，用独立预算
+	// （实测规模见 tools/measure_export_duration.py 与 config.GetExportTimeout）。
+	return pb.runBridgeTask(bridgeExportLive2DScript, map[string]interface{}{
+		"layers_dir":   layersDir,
+		"out_dir":      outputDir,
+		"character_id": characterID,
+	}, pb.cfg.GetExportTimeout())
+}
+
+// bridgeExportLive2DScript 常量任务脚本：完整 Live2D 构建（网格 + moc3 + 官方内核验收）。
+const bridgeExportLive2DScript = `
 import sys, json, os, glob
-sys.path.insert(0, %q)
 from pathlib import Path
 from PIL import Image
 from collections import OrderedDict
 from live2d_builder.pipeline import Live2DBuilder
 
-layers_dir = %q
-out_dir = %q
+params = json.loads(open(sys.argv[1], encoding="utf-8").read())
+layers_dir = params["layers_dir"]
+out_dir = params["out_dir"]
+character_id = params["character_id"]
 Path(out_dir).mkdir(parents=True, exist_ok=True)
 
 layers = OrderedDict()
@@ -333,7 +653,7 @@ if not layers:
 
 # 必须走完整构建：只有它生成网格、编译 .moc3 并用官方 Cubism Core 验收。
 # 早期版本直接调用 Model3Exporter.export(meshes={})，产物里根本没有 moc3。
-builder = Live2DBuilder(output_dir=out_dir, character_name=%q)
+builder = Live2DBuilder(output_dir=out_dir, character_name=character_id)
 result = builder.build(layers)
 
 # 只回传路径与状态；网格 / 骨骼等中间数据可达数 MB，不进 API 响应。
@@ -344,11 +664,7 @@ summary = {k: result.get(k) for k in keys if k in result}
 summary["success"] = True
 summary["mesh_count"] = len(result.get("meshes") or {})
 print(json.dumps(summary, ensure_ascii=False, default=str))
-`, pb.cfg.Python.ScriptsDir, layersDir, outputDir, characterID)
-	// 完整导出要走网格生成 + 图集烘焙 + 官方内核验收，用独立预算
-	// （实测规模见 tools/measure_export_duration.py 与 config.GetExportTimeout）。
-	return pb.runInlinePythonTimeout(pyCode, pb.cfg.GetExportTimeout())
-}
+`
 
 // runInlinePython 执行内联 Python 代码
 func (pb *PythonBridge) runInlinePython(code string) (map[string]interface{}, error) {
@@ -426,8 +742,8 @@ func (pb *PythonBridge) GetPythonScripts() []map[string]string {
 		Name string
 		Desc string
 	}{
-		{"core/workflow.py", "完整工作流引擎 v0.10.1（图像生成→QA→分割→绑定→PSD→Live2D导出）"},
-		{"core/cli.py", "交互式命令行工具 v0.10.1"},
+		{"core/workflow.py", "完整工作流引擎 v0.10.2（图像生成→QA→分割→绑定→PSD→Live2D导出）"},
+		{"core/cli.py", "交互式命令行工具 v0.10.2"},
 		{"install.py", "项目安装脚本（依赖+模型）"},
 		{"install.sh", "Linux/macOS 一键安装脚本"},
 	}

@@ -7,7 +7,6 @@ import { apiClient } from '../../lib/api-client';
 import CharacterCard from '../../components/CharacterCard';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import Modal from '../../components/Modal';
-import ImageUploader from '../../components/ImageUploader';
 import ColorPicker from '../../components/ColorPicker';
 
 const DEFAULT_PALETTE: ColorPalette = {
@@ -33,7 +32,6 @@ const CharactersPage: NextPage = () => {
   const [personality, setPersonality] = useState('');
   const [appearance, setAppearance] = useState('');
   const [palette, setPalette] = useState<ColorPalette>(DEFAULT_PALETTE);
-  const [refFiles, setRefFiles] = useState<File[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -69,7 +67,6 @@ const CharactersPage: NextPage = () => {
     setPersonality('');
     setAppearance('');
     setPalette(DEFAULT_PALETTE);
-    setRefFiles([]);
   };
 
   const handleCreate = async () => {
@@ -83,22 +80,8 @@ const CharactersPage: NextPage = () => {
         personality: personality.trim() || undefined,
         appearance: appearance.trim() || undefined,
         colorPalette: palette,
-        referenceImages: refFiles,
       };
-      const created = await apiClient.createCharacter(data).catch((err) => {
-        // fallback: optimistic if API not available
-        return {
-          id: `local-${Date.now()}`,
-          name: data.name!,
-          description: data.description,
-          personality: data.personality,
-          appearance: data.appearance,
-          colorPalette: data.colorPalette,
-          generationCount: 0,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        } as Character;
-      });
+      const created = await apiClient.createCharacter(data);
       setCharacters((prev) => [created, ...(prev || [])]);
       setModalOpen(false);
       resetForm();
@@ -267,45 +250,8 @@ const CharactersPage: NextPage = () => {
             </div>
           </div>
 
-          <div>
-            <p className="text-xs font-medium text-gray-400 mb-2">Reference images</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <ImageUploader
-                label="Front view"
-                onChange={(f) =>
-                  setRefFiles((prev) => {
-                    const next = prev.filter((_, i) => i !== 0);
-                    if (f) next[0] = f;
-                    return next;
-                  })
-                }
-              />
-              <ImageUploader
-                label="Side view"
-                onChange={(f) =>
-                  setRefFiles((prev) => {
-                    const next = [...prev];
-                    if (f) next[1] = f;
-                    else next.splice(1, 1);
-                    return next;
-                  })
-                }
-              />
-              <ImageUploader
-                label="Back view"
-                onChange={(f) =>
-                  setRefFiles((prev) => {
-                    const next = [...prev];
-                    if (f) next[2] = f;
-                    else next.splice(2, 1);
-                    return next;
-                  })
-                }
-              />
-            </div>
-          </div>
           <p className="text-[11px] text-gray-500">
-            Tip: Character consistency in Generation uses these references as visual ground truth.
+            Reference image upload will be available when the backend upload endpoint is connected.
           </p>
         </div>
       </Modal>

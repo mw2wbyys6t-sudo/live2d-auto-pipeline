@@ -215,7 +215,7 @@ param=0 时与无变形器逐像素相同，param=+30 时整体平移 —— 见
 模型加载 17.6s、显存 0.92GB 实占 / 3.07GB 预留；**15 个部件里 14 个出真掩码**，
 平均覆盖率 0.0277。
 
-四条只能靠跑才知道的事实：
+五条只能靠跑才知道的事实：
 
 1. **transformers 5.17 的 SAM2 图提示路径是** `Sam2Processor(images, input_boxes=[[[x0,y0,x1,y1],…]])`
    → `get_image_embeddings()` → `forward(input_boxes=, image_embeddings=, multimask_output=False)`
@@ -228,6 +228,10 @@ param=0 时与无变形器逐像素相同，param=+30 时整体平移 —— 见
 4. **开放词汇会认错位置**：`"mouth . lips"` 把分数最高的两个框落在角色**膝盖**上。
    处理方式不是加颜色启发式，而是用检测器自己给出的脸部包络做门控 —— 越界就判该部件
    **缺失**（`missing_parts`，不落 PNG），而不是产出一张错掩码。
+5. **`Sam2ImageProcessor` 硬依赖 torchvision**：只装 torch + transformers 时 `load()`
+   直接抛 `ModelUnavailable: Sam2ImageProcessor requires the Torchvision library`。
+   `install_models.py --segment` 过去只声明 `segment-anything`，装完仍然跑不起
+   `sam2_gd`；现已补上 torch/torchvision/transformers 三件。
 
 诚实性接线：点名后端没产出部件而回落 K-means 时，`result["steps"]["layering"]` 会写
 `{requested_backend, used_backend, degraded, reason, missing_parts}`（`auto` 的常规回落
@@ -235,7 +239,72 @@ param=0 时与无变形器逐像素相同，param=+30 时整体平移 —— 见
 测试：`tests/unit/test_workflow_segmentation_backend.py`。
 
 **未验证**：SAM v1 替代路径（`method="sam1_groundingdino"`，SAM2 权重从未加载失败过，
-该分支一次都没跑过）；`sam2-hiera-tiny`；冷缓存下载；CPU 设备。
+该分支一次都没跑过）；`sam2-hiera-tiny`；冷缓存下载。
+
+**CPU 设备已实测**（`.venv` + torch 2.14.0+cpu，同一张 `demo_input.png`）：
+`14/15 出掩码`、`mean coverage 0.027700`、`boxes=23`，与上面的 GPU 结果**逐位一致**
+—— 分层质量与设备无关。耗时两次分别 158.0s / 253.3s（相差 38%），CPU 计时不足以支撑
+任何性能结论。复核入口需显式 `--allow-cpu`；不带该开关时缺 CUDA 仍按原语义退出码 2 拒绝。
+
+#### 分层质量用什么度量：defects 而不是 mean coverage
+
+`tools/score_layering.py` 按逐部件**内部一致性**打分：五官像素须落在 face 掩码内、
+非 amodal 层不得吞掉别的层、掩码不得碎成多块、身体竖直顺序不得颠倒、必需部件不得缺席。
+不需要人工标注，纯 numpy/cv2（不 import torch），一次约 1 秒，可以嵌进参数扫描。
+
+`--selftest` 是这个度量自己的负对照：干净集须 0 缺陷（证明不是系统性误报），
+五组单点破坏须各自命中所属判据（证明判据真的会响）。没有它，"defects=2"
+可能只是仪器不响。
+
+为什么不以 `mean_coverage` 为目标：demo 图上七个最小部件（眼/鼻/眉/手）覆盖率
+0.0007~0.0027 却**目视正确**（600×900 全身像，头只占顶部一小块），而 `face`(0.0084)
+位置正确、只是没填满自身框。按覆盖率排名调阈值会把本来就对的部件一起调坏。
+
+已实测排除的杠杆（`tools/tune_sam2_gd.py`：缓存 GroundingDINO 原始框、只重跑生产侧
+后处理与合成；`--verify-floor 0.26` 已证明「0.05 跑一次再复筛」≡「直接以 0.26 跑」）：
+
+| 试过的 | 实测结果 |
+|---|---|
+| `max_boxes_per_query` 6→10、`nms_iou` 0.55→0.75、`face_gate_margin` 0.6→1.2 | 与基线**完全相同**（defects 2、union 0.2202）：0.26 下总共 23 框，这三道闸门从未咬合 |
+| `box_threshold` 0.20 / 0.15 / 0.10 / 0.05 | defects 7 / 8 / 17 / 10，单调变差；0.15 时 mouth 回来了但只有 0.14 落在脸上 |
+| `mouth` / `face` / `arms` 提示词改写 | mouth 改写后掩码仅 0.39 在脸上（假胜利，按本仓库原则不如判缺失）；face/arms 改写无可测收益 |
+
+所以这三条缺陷不是阈值形状的。没试过的只剩两处：`text_threshold`（参与 HF 的 token
+掩码计算，缓存无法复现，必须 `--no-cache-prompts` 逐格重跑网络），以及
+`sam2_gd.py:645` 硬编码的 `multimask_output=False`。
+
+#### 脸部裁剪二次检测（阈值之外唯一有物理依据的一招，已实测生效）
+
+分辨率天花板是配置写死的：GroundingDINO `shortest_edge=800`、SAM2 `size={1024,1024}`。
+1333×2000 的画布进模型会被缩到约 0.6 倍，头部只剩 ~110×130 px、**嘴约 15×8 px** ——
+这种尺寸下任何阈值都认不出来，只能把有限的分辨率预算花在脸上。
+
+实现：`Sam2GroundingDinoSegmenter._maybe_face_crop_pass`，在主检测之后、逐部件记账之前触发。
+规则是保守的：只在 `mouth/nose/eyes_left/eyes_right` 有任一缺失**且** face 掩码存在时跑；
+裁剪框 = face bbox 外扩 1.2 倍自身；提示词表临时收窄到 5 条面部项；结果按偏移回填且
+**只补缺、不覆盖**主检测已产出的掩码；限一层递归（`_in_crop_pass`），并原样还原
+`PART_PROMPTS` / `dropped_boxes` / `last_report`，不污染外层报告。
+
+整链实测（原始 `demo_input.png` 600×900 → 自动放大 1333×2000 → `sam2_gd`）：
+
+| | 接入前 | 接入后 |
+|---|---|---|
+| `layer_count` | 14 | **15** |
+| `missing_parts` | `["mouth"]` | **`[]`** |
+| mouth 掩码 | 无 | 130 px，bbox `653,390–679,395`，**`mouth_in_face = 1.00`** |
+| `defect_count` | 12 | **11** |
+
+三条不能美化成事实的限制：① 补回的嘴只有 130 px（26×5 的一条线），做"张嘴"动作可能仍偏薄；
+② `defects` 仍远高于门槛 4，`eyebrows∩face` 只从 0.61 升到 0.67 —— 这一招收解决的是
+**有没有嘴**，不是**脸分得好不好**；③ 代价是缺失时多跑一轮（实测 5 条提示词 40.4s CPU）。
+
+**推广到 hair / upper / lower 三条后被删掉了**（`ROI_SPECS` 现只剩 face 一条）。受控 A/B：
+同一张 2000×2000 去背图、同一套权重，只切换额外轮数，结果两臂完全相同
+（parts 13、defects 23、explained 0.1295、缺失仍是 hair_back/hair_front），
+代价是每次多烧 25s CPU。也就是说"缺部件就裁区域"这条思路**对脸部成立、对头发和身体不成立**——
+后两者缺的不是分辨率，而是检测器压根没在这些区域提出候选框。要再加一条 spec，
+必须先有一张"它确实补回了某个部件"的实测图。
+复核：`tests/unit/test_roi_redetect.py`（6 条）、`Work/roi_ab.py`（A/B 探针）。
 
 ### 坐标系与渲染映射（已实测确定）
 

@@ -7,6 +7,7 @@ import type {
   GenerationRequest,
   GenerationResult,
   GenerationStep,
+  PipelineStatus,
   SystemStatus,
 } from '../types';
 
@@ -303,12 +304,32 @@ export class APIClient {
     req: GenerationRequest,
     onProgress: (step: GenerationStep) => void,
   ): Promise<GenerationResult> {
-    // v0.10.1: Stream endpoint returns progress via SSE from WebSocket hub,
-    // but for simplicity we fall back to calling generateCharacter with progress
-    // simulated from the returned steps. If true SSE is needed, use /ws endpoint.
+    // v0.10.1: POST /api/generate/character 是同步接口；进度来自后端在生成
+    // 期间向 /api/ws 广播的 {type:"progress"} 消息（此前该通道无人订阅，
+    // onProgress 从未被调用，进度条全程静止）。WS 不可用时静默退化为
+    // 一次性请求，只是没有过程反馈。
     const payload = this.buildGenerationPayload(req);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10 * 60_000);
+
+    let ws: WebSocket | null = null;
+    try {
+      ws = new WebSocket(getBackendWsUrl('/api/ws'));
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data) as {
+            type?: string;
+            stage?: string;
+            progress?: number;
+            message?: string;
+          };
+          if (msg.type !== 'progress') return;
+          onProgress(progressMessageToStep(msg.stage || '', msg.progress ?? 0, msg.message));
+        } catch { /* 忽略坏帧 */ }
+      };
+      ws.onerror = () => { /* 由 HTTP 请求本身兜底 */ };
+    } catch { /* WS 建连失败不阻断生成 */ }
+
     try {
       const res = await fetch(`${this.baseURL}/api/generate/character`, {
         method: 'POST',
@@ -329,6 +350,10 @@ export class APIClient {
       return this.mapGenerationResult(result);
     } finally {
       clearTimeout(timeout);
+      if (ws) {
+        ws.onmessage = null;
+        try { ws.close(); } catch { /* ignore */ }
+      }
     }
   }
 
@@ -366,7 +391,7 @@ export class APIClient {
         seed: data.seed ?? 0,
         width: data.width ?? 1024,
         height: data.height ?? 1024,
-        source: data.source ?? 'workflow_v0.10.1',
+        source: data.source ?? 'workflow_v0.10.2',
         layers_dir: layersDir,
         psd_path: data.psd_path || '',
         output_dir: data.output_dir || '',
@@ -522,7 +547,7 @@ export class APIClient {
         apiConnected: true,
         latencyMs: 0,
         gpuAvailable: false,
-        version: (data.version as string) ?? 'v0.10.1',
+        version: (data.version as string) ?? 'v0.10.2',
         modelsLoaded: services.map((s) => s.name),
         providers: services.map((s) => ({
           id: s.name as never,
@@ -559,6 +584,173 @@ export class APIClient {
     );
     return extractData<SegmentResult>(res);
   }
+
+  // ---------- generation providers ----------
+
+  /**
+   * 查询图像生成的上游路由状态：哪些 provider 已配置可用（含外部
+   * OpenAI 兼容大模型端点）、哪些已注册但缺 Key。
+   */
+  async listProviders(): Promise<{
+    available: Array<{ name: string; display_name: string; requires_key: boolean }>;
+    registered: string[];
+    query_ok: boolean;
+  }> {
+    try {
+      const res = await this.request<unknown>('/api/providers', undefined, 15_000);
+      return extractData<any>(res);
+    } catch {
+      return { available: [], registered: [], query_ok: false };
+    }
+  }
+
+  // ---------- external asset import ----------
+
+  /** 导入外部 PSD：提取全部像素图层为整幅画布 PNG + 图层目录。 */
+  async importPSD(file: File): Promise<ImportResult> {
+    return this.uploadMultipart<ImportResult>('/api/import/psd', file, 'file', 10 * 60_000);
+  }
+
+  /** 导入多张 PNG（按提交顺序作为图层集）。 */
+  async importPNGs(files: File[]): Promise<ImportResult> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10 * 60_000);
+    try {
+      const form = new FormData();
+      for (const f of files) form.append('files', f);
+      const res = await fetch(`${this.baseURL}/api/import/pngs`, {
+        method: 'POST',
+        body: form,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        let errMsg = `Import failed: ${res.status} ${res.statusText}`;
+        try {
+          const errData = await res.json();
+          if (errData.error) errMsg = errData.error;
+        } catch { /* ignore */ }
+        throw new APIError(errMsg, res.status);
+      }
+      return extractData<ImportResult>(await res.json());
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async uploadMultipart<T>(
+    path: string,
+    file: File,
+    field: string,
+    timeoutMs: number,
+  ): Promise<T> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const form = new FormData();
+      form.append(field, file);
+      const res = await fetch(`${this.baseURL}${path}`, {
+        method: 'POST',
+        body: form,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        let errMsg = `Import failed: ${res.status} ${res.statusText}`;
+        try {
+          const errData = await res.json();
+          if (errData.error) errMsg = errData.error;
+        } catch { /* ignore */ }
+        throw new APIError(errMsg, res.status);
+      }
+      return extractData<T>(await res.json());
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  // ---------- exported model list ----------
+
+  /** 列出 output 下全部已导出的 Live2D 模型（新→旧）。 */
+  async listExportedModels(): Promise<ExportedModelInfo[]> {
+    try {
+      const res = await this.request<unknown>('/api/generations/models', undefined, 15_000);
+      const data = extractData<{ models?: ExportedModelInfo[] }>(res);
+      return Array.isArray(data?.models) ? data.models : [];
+    } catch {
+      return [];
+    }
+  }
+
+  // ---------- upload ----------
+
+  /** 上传一张图片到 output/uploads/，返回服务器路径与 Web URL。 */
+  async uploadImage(file: File): Promise<{ path: string; url: string }> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120_000);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(`${this.baseURL}/api/upload`, {
+        method: 'POST',
+        body: form,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        let errMsg = `Upload failed: ${res.status} ${res.statusText}`;
+        try {
+          const errData = await res.json();
+          if (errData.error) errMsg = errData.error;
+        } catch { /* ignore */ }
+        throw new APIError(errMsg, res.status);
+      }
+      return extractData<{ path: string; url: string }>(await res.json());
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  // ---------- desktop pet ----------
+
+  /**
+   * 部署桌面桌宠：后端会先用官方 Cubism Core 做像素级验收，
+   * 通过后拉起原生透明窗口并等待首帧。需要 Windows + live2d-py。
+   */
+  async deployDesktop(
+    modelDir: string,
+  ): Promise<{ deployed?: boolean; runtime_verified?: boolean; [key: string]: unknown }> {
+    const res = await this.request<unknown>(
+      '/api/deploy/desktop',
+      { method: 'POST', body: JSON.stringify({ model_dir: modelDir }) },
+      120_000,
+    );
+    return extractData<any>(res);
+  }
+
+  // ---------- character references & embedding ----------
+
+  /** 为角色登记某个视角的参考图（imagePath 来自 uploadImage().path）。 */
+  async addCharacterReference(
+    id: string,
+    imagePath: string,
+    view: 'front' | 'side' | 'back',
+  ): Promise<{ card: Character; embedding_extracted: boolean; embedding_note?: string }> {
+    const res = await this.request<unknown>(
+      `/api/characters/${encodeURIComponent(id)}/references`,
+      { method: 'POST', body: JSON.stringify({ image_path: imagePath, view }) },
+    );
+    return extractData<any>(res);
+  }
+
+  /** 重新提取角色视觉 embedding（CLIP 可用时用 CLIP，否则直方图）。 */
+  async recomputeCharacterEmbedding(
+    id: string,
+  ): Promise<{ has_embedding: boolean; dim: number; reason?: string }> {
+    const res = await this.request<unknown>(
+      `/api/characters/${encodeURIComponent(id)}/embedding`,
+      { method: 'POST' },
+      10 * 60_000,
+    );
+    return extractData<any>(res);
+  }
 }
 
 export interface LatestGeneration {
@@ -572,6 +764,80 @@ export interface LatestGeneration {
   psd_url: string;
   model3_json: string;
   created_at: string;
+  /** Go 后端补充的派生字段：Web 可加载的 model3.json 地址 */
+  model3_url?: string;
+  /** Go 后端补充的派生字段：模型目录（桌宠部署 model_dir） */
+  output_dir?: string;
+}
+
+/**
+ * 后端 progress 广播的 stage 名 → 前端流水线步骤 id。
+ * 覆盖 GenerateCharacter 的粗粒度阶段与导出 StageTracker 的 Python 阶段名；
+ * 未识别的阶段退回 generating（仅更新 message，不推进步骤）。
+ */
+function progressMessageToStep(
+  stage: string,
+  progress: number,
+  message?: string,
+): GenerationStep {
+  const id: PipelineStatus = (() => {
+    switch (stage) {
+      case 'starting':
+        return 'queued';
+      case 'generating':
+      case 'generate':
+        return 'generating';
+      case 'qa':
+      case 'qa_check':
+        return 'qa';
+      case 'optimizing':
+        return 'optimizing';
+      case 'segmenting':
+      case 'layering':
+        return 'segmenting';
+      case 'rigging':
+        return 'rigging';
+      case 'done':
+        return 'done';
+      case 'error':
+        return 'error';
+      default:
+        return 'generating';
+    }
+  })();
+  return {
+    id,
+    label: '',
+    status: stage === 'error' ? 'error' : stage === 'done' ? 'done' : 'active',
+    progress,
+    message,
+  };
+}
+
+const OUTPUT_URL_PREFIX = '/output/';
+const OUTPUT_PATH_SEP = '/output/';
+
+/** 从 latest_generation.json 记录里的 model3_json 服务器路径推导 Web URL。 */
+export function modelUrlFromRecord(
+  record: Pick<LatestGeneration, 'model3_url' | 'model3_json'>,
+): string {
+  if (record.model3_url) return record.model3_url;
+  const normalized = String(record.model3_json || '').split('\\').join('/');
+  const idx = normalized.indexOf(OUTPUT_PATH_SEP);
+  if (idx < 0) return '';
+  const rel = normalized.substring(idx + OUTPUT_PATH_SEP.length);
+  return OUTPUT_URL_PREFIX.concat(rel);
+}
+
+/** 从 model3_json 服务器路径推导模型目录（桌宠部署所需 model_dir）。 */
+export function modelDirFromRecord(
+  record: Pick<LatestGeneration, 'output_dir' | 'model3_json'>,
+): string {
+  if (record.output_dir) return record.output_dir;
+  const normalized = String(record.model3_json || '').split('\\').join('/');
+  const idx = normalized.lastIndexOf('/');
+  if (idx < 0) return '';
+  return normalized.substring(0, idx);
 }
 
 export interface SegmentedLayer {
@@ -591,6 +857,24 @@ export interface SegmentResult {
   psd_path: string;
   psd_url: string;
   psd_success: boolean;
+}
+
+export interface ImportResult {
+  ok?: boolean;
+  layers_dir: string;
+  layer_count: number;
+  layers: Array<{ name: string; path: string; url?: string; pixel_count?: number; group?: string }>;
+  psd_url?: string;
+  canvas?: [number, number];
+  total_found?: number;
+}
+
+export interface ExportedModelInfo {
+  model3_json: string;
+  output_dir: string;
+  model3_url: string;
+  name: string;
+  mod_time?: string;
 }
 
 /**

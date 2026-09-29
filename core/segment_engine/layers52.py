@@ -506,6 +506,8 @@ class Layer52Generator:
         Returns dict of filename -> filepath for generated files.
         """
         out = Path(output_dir)
+        if ".." in out.parts:
+            raise ValueError("output_dir 不允许包含 '..' 路径穿越")
         out.mkdir(parents=True, exist_ok=True)
         generated = {}
 

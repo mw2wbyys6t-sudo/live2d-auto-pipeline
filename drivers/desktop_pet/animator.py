@@ -140,7 +140,11 @@ class DesktopPetAnimator:
             return {"success": False, "error": reason}
 
         out = Path(output_dir)
+        if ".." in out.parts:
+            return {"success": False, "error": "output_dir 不允许包含 '..' 路径穿越"}
         pet_name = sanitize_filename(pet_name)
+        if not pet_name or pet_name in (".", ".."):
+            return {"success": False, "error": "pet_name 非法"}
         pkg_dir = out / pet_name
         pkg_dir.mkdir(parents=True, exist_ok=True)
 

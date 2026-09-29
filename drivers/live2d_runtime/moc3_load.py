@@ -23,7 +23,7 @@ def main(argv: list[str]) -> int:
     try:
         import live2d.v3 as sdk
     except ImportError:
-        print(json.dumps({"ok": False, "error": "未安装 live2d-py"}))
+        print(json.dumps({"ok": False, "error": "未安装 live2d-py（执行: pip install live2d-py）"}))
         return 2
 
     from drivers.live2d_runtime.native import CubismRenderer

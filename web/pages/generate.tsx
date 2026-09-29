@@ -23,15 +23,16 @@ import type {
   Resolution,
   StylePreset,
 } from '../types';
-import { apiClient } from '../lib/api-client';
+import { apiClient, modelDirFromRecord, type LatestGeneration } from '../lib/api-client';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ProgressSteps from '../components/ProgressSteps';
 
 const PROVIDERS: { id: ProviderId; name: string; desc: string }[] = [
-  { id: 'pollinations', name: 'Pollinations', desc: 'Open, free, fast' },
-  { id: 'seedream', name: 'Seedream', desc: 'High fidelity' },
-  { id: 'sensenova', name: 'SenseNova', desc: 'Anime-specialized' },
-  { id: 'local', name: 'Local', desc: 'On-device / self-hosted' },
+  { id: 'seedream', name: 'Seedream', desc: '火山方舟 · 高保真' },
+  { id: 'sensenova', name: 'SenseNova', desc: '商汤 · 二次元特化' },
+  { id: 'openai', name: 'OpenAI Compatible', desc: '任意 OpenAI Images API 兼容端点 / 中转网关' },
+  { id: 'pollinations', name: 'Pollinations', desc: '免费兜底 · 质量不稳定' },
+  { id: 'local', name: 'Local', desc: '本地占位图（离线保底）' },
 ];
 
 const RESOLUTIONS: Resolution[] = [512, 768, 1024, 2048];
@@ -80,7 +81,51 @@ const GeneratePage: NextPage = () => {
   const [result, setResult] = useState<GenerationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<GenerationResult[]>([]);
+  const [latestRecord, setLatestRecord] = useState<LatestGeneration | null>(null);
+  const [petBusy, setPetBusy] = useState(false);
+  const [petMsg, setPetMsg] = useState<string | null>(null);
+  const [providerQuery, setProviderQuery] = useState<{
+    available: Array<{ name: string; display_name: string; requires_key: boolean }>;
+    registered: string[];
+    query_ok: boolean;
+  } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // 上游路由体检：展示各 provider 是否已配置可用；默认选中第一个可用项
+  useEffect(() => {
+    apiClient
+      .listProviders()
+      .then((pq) => {
+        setProviderQuery(pq);
+        const names = pq.available.map((a) => a.name);
+        setProvider((current) => {
+          if (current !== 'pollinations' && names.includes(current)) return current;
+          const best = PROVIDERS.find((p) => p.id !== 'local' && names.includes(p.id));
+          return best ? best.id : current;
+        });
+      })
+      .catch(() => setProviderQuery(null));
+  }, []);
+
+  /** 部署桌面桌宠：后端验收模型 → 拉起原生透明窗口 */
+  const launchPet = useCallback(async () => {
+    if (petBusy) return;
+    const modelDir = latestRecord ? modelDirFromRecord(latestRecord) : '';
+    if (!modelDir) {
+      setPetMsg('没有可部署的模型目录 —— 请先生成并导出一次角色。');
+      return;
+    }
+    setPetBusy(true);
+    setPetMsg('正在验收模型并启动桌宠…');
+    try {
+      await apiClient.deployDesktop(modelDir);
+      setPetMsg('桌宠已启动并完成首帧验收；透明外观请在桌面确认。');
+    } catch (e) {
+      setPetMsg(e instanceof Error ? e.message : '桌宠启动失败');
+    } finally {
+      setPetBusy(false);
+    }
+  }, [latestRecord, petBusy]);
 
   useEffect(() => {
     apiClient
@@ -119,7 +164,9 @@ const GeneratePage: NextPage = () => {
         gotResult = await apiClient.generateStream(req, (step) => {
           setSteps((prev) =>
             prev.map((s) =>
-              s.id === step.id ? { ...s, ...step, status: step.status || 'active' } : s,
+              s.id === step.id
+                ? { ...s, ...step, label: step.label || s.label, status: step.status || 'active' }
+                : s,
             ),
           );
         });
@@ -130,6 +177,8 @@ const GeneratePage: NextPage = () => {
       }
       setResult(gotResult);
       setHistory((prev) => [gotResult!, ...prev].slice(0, 12));
+      // 后端已把本次产物写入 latest_generation.json，拉取后供桌宠部署使用
+      apiClient.getLatestGeneration().then((rec) => setLatestRecord(rec)).catch(() => undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Generation failed');
       setSteps((prev) =>
@@ -177,22 +226,38 @@ const GeneratePage: NextPage = () => {
           </div>
 
           <div>
-            <label className="text-xs font-medium text-gray-400 block mb-2">Provider</label>
+            <label className="text-xs font-medium text-gray-400 block mb-2">
+              Provider
+              {providerQuery && !providerQuery.query_ok && (
+                <span className="ml-2 text-[10px] text-amber-400">上游状态查询失败</span>
+              )}
+            </label>
             <div className="grid grid-cols-2 gap-2">
-              {PROVIDERS.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => setProvider(p.id)}
-                  className={`text-left p-2.5 rounded-lg border text-xs transition-all ${
-                    provider === p.id
-                      ? 'bg-pink-500/10 border-pink-500/40 text-white'
-                      : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
-                  }`}
-                >
-                  <p className="font-semibold">{p.name}</p>
-                  <p className="text-[10px] opacity-70 mt-0.5">{p.desc}</p>
-                </button>
-              ))}
+              {PROVIDERS.map((p) => {
+                const availableNames = providerQuery?.available.map((a) => a.name) ?? [];
+                const isUp = p.id === 'local' || availableNames.includes(p.id);
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => setProvider(p.id)}
+                    className={`text-left p-2.5 rounded-lg border text-xs transition-all ${
+                      provider === p.id
+                        ? 'bg-pink-500/10 border-pink-500/40 text-white'
+                        : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
+                    }`}
+                  >
+                    <p className="font-semibold flex items-center gap-1.5">
+                      {p.name}
+                      {isUp ? (
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="已配置可用" />
+                      ) : (
+                        <span className="w-1.5 h-1.5 rounded-full bg-gray-600" title="未配置 API Key，选中后会自动降级" />
+                      )}
+                    </p>
+                    <p className="text-[10px] opacity-70 mt-0.5">{p.desc}</p>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -350,14 +415,20 @@ const GeneratePage: NextPage = () => {
                     Send to Live2D Builder
                   </Link>
                   <button
-                    disabled
-                    title="桌宠部署尚未实现（后端返回 501）"
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-blue-500/10 border border-blue-500/20 text-blue-300/40 cursor-not-allowed"
+                    onClick={launchPet}
+                    disabled={petBusy || !latestRecord}
+                    title={latestRecord ? '验收模型并在桌面启动透明桌宠（需 Windows + live2d-py）' : '先完成一次生成'}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-blue-500/15 border border-blue-500/40 text-blue-300 hover:bg-blue-500/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
-                    <Monitor className="w-3.5 h-3.5" /> Desktop Pet
+                    <Monitor className="w-3.5 h-3.5" /> {petBusy ? 'Launching…' : 'Desktop Pet'}
                   </button>
                 </div>
               </div>
+              {petMsg && (
+                <p className="text-xs text-blue-200/80 bg-blue-500/10 border border-blue-500/30 rounded-lg px-3 py-2">
+                  {petMsg}
+                </p>
+              )}
               <div className="rounded-lg overflow-hidden bg-[#0f0f13] border border-gray-800 flex items-center justify-center">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img

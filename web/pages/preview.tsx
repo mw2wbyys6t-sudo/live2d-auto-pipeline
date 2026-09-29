@@ -20,7 +20,15 @@ import type { NextPage } from 'next';
 import type { Emotion, ParamMap } from '../types';
 import type { ModelCanvasHandle } from '../components/ModelCanvas';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { apiClient, getBackendWsUrl, type LatestGeneration } from '../lib/api-client';
+import {
+  apiClient,
+  modelDirFromRecord,
+  modelUrlFromRecord,
+  type ExportedModelInfo,
+  type LatestGeneration,
+} from '../lib/api-client';
+import { loadFaceLandmarker, resultToLive2DParams } from '../lib/face-tracker';
+import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import type { Live2DPlayer } from '../lib/live2d-player';
 
 const ModelCanvas = dynamic(() => import('../components/ModelCanvas'), {
@@ -60,10 +68,15 @@ const PreviewPage: NextPage = () => {
   const [streamActive, setStreamActive] = useState(false);
   const [latest, setLatest] = useState<LatestGeneration | null>(null);
   const [modelUrl, setModelUrl] = useState<string>('');
+  const [petBusy, setPetBusy] = useState(false);
+  const [petMsg, setPetMsg] = useState<string | null>(null);
+  const [models, setModels] = useState<ExportedModelInfo[]>([]);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const animRef = useRef<number | null>(null);
-  const trackWsRef = useRef<WebSocket | null>(null);
+  const trackRafRef = useRef<number | null>(null);
+  const landmarkerRef = useRef<FaceLandmarker | null>(null);
+  const lastVideoTimeRef = useRef(-1);
   const lastReadoutRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   /** Normalised gaze (-1..1) driven by pointer position over the stage. */
@@ -82,43 +95,118 @@ const PreviewPage: NextPage = () => {
     process.env.NEXT_PUBLIC_API_URL ||
     '';
 
-  /** 连接面捕参数推送通道（定义需在 toggleWebcam 之前，避免 TDZ） */
-  const connectTrackingWs = useCallback(() => {
+  /** 拉取最近一次生成产物并加载其 model3.json（同一 URL 也会强制重载） */
+  const reloadLatestModel = useCallback(async () => {
     try {
-      const ws = new WebSocket(getBackendWsUrl('/ws/tracking'));
-      trackWsRef.current = ws;
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data);
-          if (msg.type !== 'params' || !msg.params) return;
-          playerRef.current?.setParameters(msg.params);
-          const now = performance.now();
-          if (now - lastReadoutRef.current > 100) {
-            lastReadoutRef.current = now;
-            setParams((prev) => ({ ...prev, ...msg.params }));
-          }
-        } catch { /* 忽略坏帧 */ }
-      };
-      ws.onclose = () => {
-        trackWsRef.current = null;
-      };
-    } catch { /* 连接失败由按钮状态兜底 */ }
+      const record = await apiClient.getLatestGeneration();
+      setLatest(record);
+      if (!record) {
+        setModelUrl('');
+        setError('尚未有任何生成记录 —— 请先在「Generate」生成一次角色。');
+        return;
+      }
+      const url = modelUrlFromRecord(record);
+      if (!url) {
+        setModelUrl('');
+        setError('最近一次生成没有可加载的 Live2D 模型，请先完成一次导出。');
+        return;
+      }
+      setError(null);
+      setModelUrl('');
+      // 用 setTimeout 强制重挂载（同一 URL 也重新加载）。
+      // 不能用 requestAnimationFrame：后台标签页的 rAF 会被浏览器冻结，
+      // 导致模型永不挂载（切换走再切回来才加载的幽灵状态）。
+      window.setTimeout(() => setModelUrl(url), 50);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '读取最近生成记录失败');
+    }
   }, []);
 
-  // 自动接力最近一次生成的 model3.json，无需手动加载模型
+  // 进入页面即自动载入最近模型，并拉取全部可切换的已导出模型
   useEffect(() => {
-    let cancelled = false;
+    reloadLatestModel();
     apiClient
-      .getLatestGeneration()
-      .then((gen) => {
-        if (cancelled || !gen) return;
-        setLatest(gen);
-        if (gen.model3_json) setModelUrl(gen.model3_json);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
+      .listExportedModels()
+      .then(setModels)
+      .catch(() => setModels([]));
+  }, [reloadLatestModel]);
+
+  /** 手动切换到列表中的某个模型 */
+  const loadModel = useCallback((model3Url: string) => {
+    if (!model3Url) return;
+    setError(null);
+    setModelUrl('');
+    requestAnimationFrame(() => setModelUrl(model3Url));
+  }, []);
+
+  /** 启动桌面桌宠（后端先做官方 Cubism Core 像素验收，再拉起原生窗口） */
+  const launchPet = useCallback(async () => {
+    if (!latest || petBusy) return;
+    const modelDir = modelDirFromRecord(latest);
+    if (!modelDir) {
+      setPetMsg('没有可部署的模型目录 —— 请先生成并导出一次角色。');
+      return;
+    }
+    setPetBusy(true);
+    setPetMsg('正在验收模型并启动桌宠…');
+    try {
+      await apiClient.deployDesktop(modelDir);
+      setPetMsg('桌宠已启动并完成首帧验收；透明外观请在桌面确认。');
+    } catch (e) {
+      setPetMsg(e instanceof Error ? e.message : '桌宠启动失败');
+    } finally {
+      setPetBusy(false);
+    }
+  }, [latest, petBusy]);
+
+  /** 浏览器端面捕主循环：getUserMedia + MediaPipe FaceLandmarker(WASM) */
+  const startBrowserTracking = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video) throw new Error('视频元素未就绪');
+    const landmarker = await loadFaceLandmarker();
+    landmarkerRef.current = landmarker;
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' },
+    });
+    mediaStreamRef.current = stream;
+    video.srcObject = stream;
+    await video.play().catch(() => undefined);
+
+    const tick = () => {
+      const v = videoRef.current;
+      const lm = landmarkerRef.current;
+      if (v && lm && v.readyState >= 2 && v.currentTime !== lastVideoTimeRef.current) {
+        lastVideoTimeRef.current = v.currentTime;
+        try {
+          const result = lm.detectForVideo(v, performance.now());
+          const params = resultToLive2DParams(result);
+          if (Object.keys(params).length > 0) {
+            playerRef.current?.setParameters(params);
+            const now = performance.now();
+            if (now - lastReadoutRef.current > 100) {
+              lastReadoutRef.current = now;
+              setParams((prev) => ({ ...prev, ...params }));
+            }
+          }
+        } catch { /* 单帧失败不中断跟踪 */ }
+      }
+      trackRafRef.current = requestAnimationFrame(tick);
     };
+    trackRafRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const stopBrowserTracking = useCallback(() => {
+    if (trackRafRef.current !== null) {
+      cancelAnimationFrame(trackRafRef.current);
+      trackRafRef.current = null;
+    }
+    // FaceLandmarker.close() 是同步的，且实例可能已释放
+    try {
+      landmarkerRef.current?.close();
+    } catch { /* 已释放 */ }
+    landmarkerRef.current = null;
+    lastVideoTimeRef.current = -1;
   }, []);
 
   // FPS loop
@@ -193,24 +281,9 @@ const PreviewPage: NextPage = () => {
     };
   }, []);
 
-  /** 重新拉取最近一次生成并强制重载模型（同一 URL 也会重新加载） */
-  const reloadLatestModel = useCallback(async () => {
-    const gen = await apiClient.getLatestGeneration().catch(() => null);
-    if (!gen?.model3_json) {
-      setModelUrl('');
-      return;
-    }
-    setLatest(gen);
-    setModelUrl('');
-    window.setTimeout(() => setModelUrl(gen.model3_json), 0);
-  }, []);
-
   const toggleWebcam = useCallback(async () => {
     if (webcamOn) {
-      // 停止真实面捕
-      trackWsRef.current?.close();
-      trackWsRef.current = null;
-      fetch(`${apiBase()}/api/tracking/stop`, { method: 'POST' }).catch(() => undefined);
+      stopBrowserTracking();
       mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
       mediaStreamRef.current = null;
       if (videoRef.current) videoRef.current.srcObject = null;
@@ -219,21 +292,20 @@ const PreviewPage: NextPage = () => {
       return;
     }
     try {
-      // 真实面捕：摄像头由后端 Python(mediapipe) 接管，参数经 WS 推送。
-      // 浏览器不再自行打开摄像头，避免与后端争抢同一设备。
-      const startRes = await fetch(`${apiBase()}/api/tracking/start`, { method: 'POST' });
-      if (!startRes.ok) {
-        const body = await startRes.json().catch(() => ({}));
-        throw new Error(body.error || `面捕启动失败 (${startRes.status})`);
-      }
+      // 面捕完全在浏览器内运行：摄像头 getUserMedia + MediaPipe WASM 推理，
+      // 参数直接驱动播放器（不经后端，Go/Python 部署行为一致）。
+      await startBrowserTracking();
       setWebcamOn(true);
       setStreamActive(true);
-      connectTrackingWs();
+      setError(null);
     } catch (e) {
+      stopBrowserTracking();
+      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
       setWebcamOn(false);
       setError(e instanceof Error ? e.message : '面捕启动失败');
     }
-  }, [webcamOn, micOn, connectTrackingWs]);
+  }, [webcamOn, startBrowserTracking, stopBrowserTracking]);
 
   const toggleMic = useCallback(async () => {
     if (micOn) {
@@ -275,10 +347,10 @@ const PreviewPage: NextPage = () => {
     return () => {
       mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
       audioCtxRef.current?.close().catch(() => undefined);
-      trackWsRef.current?.close();
       if (animRef.current) cancelAnimationFrame(animRef.current);
+      stopBrowserTracking();
     };
-  }, []);
+  }, [stopBrowserTracking]);
 
   const applyExpression = (emotion: Emotion) => {
     playerRef.current?.setExpression(emotion);
@@ -334,7 +406,7 @@ const PreviewPage: NextPage = () => {
             <Eye className="w-6 h-6 text-pink-400" /> Live Preview
           </h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Real-time tracking — webcam face & mic drive the character
+            Local preview — mouse and microphone controls are available
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -345,14 +417,20 @@ const PreviewPage: NextPage = () => {
             <Camera className="w-3.5 h-3.5" /> Screenshot
           </button>
           <button
-            disabled
-            title="桌宠部署尚未实现（后端返回 501）"
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-blue-500/10 border border-blue-500/20 text-blue-300/40 cursor-not-allowed"
+            onClick={launchPet}
+            disabled={petBusy || !latest}
+            title={latest ? '验收模型并在桌面启动透明桌宠（需 Windows + live2d-py）' : '先在「Generate」生成一次角色'}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-blue-500/15 border border-blue-500/40 text-blue-300 hover:bg-blue-500/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            <Monitor className="w-3.5 h-3.5" /> Launch Desktop Pet
+            <Monitor className="w-3.5 h-3.5" /> {petBusy ? 'Launching…' : 'Launch Desktop Pet'}
           </button>
         </div>
       </div>
+      {petMsg && (
+        <p className="mb-3 text-xs text-blue-200/80 bg-blue-500/10 border border-blue-500/30 rounded-lg px-3 py-2">
+          {petMsg}
+        </p>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4">
         {/* Canvas */}
@@ -397,14 +475,19 @@ const PreviewPage: NextPage = () => {
             </div>
           )}
 
-          {/* Webcam mini：摄像头由后端接管，这里只显示状态 */}
-          {webcamOn && (
-            <div className="absolute bottom-3 right-3 w-40 h-28 rounded-lg overflow-hidden border border-gray-700 shadow-xl bg-black/80 flex items-center justify-center">
-              <p className="text-[10px] text-gray-300 text-center px-2 leading-relaxed">
-                摄像头由后端<br />MediaPipe 接管
-              </p>
-            </div>
-          )}
+          {/* Webcam mini：浏览器端 MediaPipe 接管，显示摄像头小窗（单一 video 元素） */}
+          <div
+            className={`absolute bottom-3 right-3 w-40 h-28 rounded-lg overflow-hidden border border-gray-700 shadow-xl bg-black/80 ${
+              webcamOn ? '' : 'hidden'
+            }`}
+          >
+            <video
+              ref={videoRef}
+              muted
+              playsInline
+              className="w-full h-full object-cover scale-x-[-1]"
+            />
+          </div>
 
           {/* Param readout */}
           <div className="absolute top-3 right-3 w-48 rounded-lg bg-black/60 backdrop-blur p-3 text-[10px] font-mono space-y-1">
@@ -439,7 +522,7 @@ const PreviewPage: NextPage = () => {
                 }`}
               >
                 {webcamOn ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
-                <span className="text-[11px]">{webcamOn ? 'Stop cam' : 'Webcam'}</span>
+                <span className="text-[11px]">{webcamOn ? 'Stop tracking' : 'Webcam tracking'}</span>
               </button>
               <button
                 onClick={toggleMic}
@@ -498,20 +581,28 @@ const PreviewPage: NextPage = () => {
           </div>
 
           <div className="bg-[#1a1a23] border border-gray-800 rounded-xl p-4">
-            <p className="text-xs font-medium text-gray-400 mb-2">Display</p>
-            <div className="flex items-center justify-between text-xs text-gray-400">
-              <span className="flex items-center gap-1.5">
-                <Maximize2 className="w-3.5 h-3.5" /> Full-screen ready
-              </span>
-              <button className="text-pink-400 hover:text-pink-300" onClick={() => document.documentElement.requestFullscreen?.()}>
-                Open
-              </button>
-            </div>
+            <p className="text-xs font-medium text-gray-400 mb-2">Model source</p>
+            {models.length > 0 ? (
+              <select
+                value={modelUrl}
+                onChange={(e) => loadModel(e.target.value)}
+                className="w-full px-2 py-2 bg-gray-900 border border-gray-700 rounded-md text-xs text-white focus:outline-none focus:border-pink-500"
+              >
+                {models.map((m) => (
+                  <option key={m.model3_json} value={m.model3_url}>
+                    {m.name}
+                    {m.mod_time ? ` · ${m.mod_time.slice(0, 16).replace('T', ' ')}` : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="text-[11px] text-gray-600">尚无已导出模型 —— 完成一次生成/导出后可在此切换。</p>
+            )}
             <button
               onClick={reloadLatestModel}
-              className="mt-3 w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-gray-900 border border-gray-800 text-gray-300 hover:border-gray-700"
+              className="mt-3 w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-gray-900 border border-gray-800 text-gray-300 hover:border-pink-500/40 hover:text-white transition-colors"
             >
-              <Download className="w-3.5 h-3.5" /> 重新载入最新模型
+              <Download className="w-3.5 h-3.5" /> 重新载入最近模型
             </button>
             {latest && (
               <p className="mt-2 text-[10px] text-gray-500 break-all">

@@ -5,6 +5,7 @@ __pycache__/
 
 # Build artifacts
 .next/
+web/out/
 dist/
 build/
 output/
@@ -51,6 +52,12 @@ Work/
 # Machine-local toolchains (367 MB; a stale venv plus the Go module cache)
 .venv-runtime/
 .go-cache/
+# Local dev venv (install.bat / install.sh create it; ~500 MB, never shipped)
+.venv/
+# Portable runtime built by scripts/build_portable.py (multi-GB) and the
+# machine-specific config that points the desktop exe at it.
+runtime/
+config.portable.json
 
 # Local agent/skill working state (the distilled versions live in docs/)
 .autocase/
@@ -62,3 +69,18 @@ Work/
 # Assets (keep directory structure but ignore large files)
 assets/characters/*.json
 assets/models/
+
+# Mimosa security hook state (local tooling, never commit)
+.mimosa/
+
+# Local dev-only server config (machine-specific absolute paths)
+api/config.dev.json
+
+# 浏览器面捕 WASM 运行时（约 33MB Emscripten 产物，第三方胶水代码）
+# 已 vendored 到 web/public/mediapipe/wasm 供离线使用；不入库，缺失时前端自动回退 CDN
+web/public/mediapipe/
+
+# 桌面版构建产物（由 scripts/build_desktop.bat 生成）
+dist/
+api/webui/dist/*
+!api/webui/dist/.gitkeep

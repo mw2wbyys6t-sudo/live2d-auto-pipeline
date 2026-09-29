@@ -24,12 +24,12 @@ import (
 // ======================================================================
 
 const (
-	wsGUID       = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-	wsTextFrame  = 0x1
+	wsGUID        = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+	wsTextFrame   = 0x1
 	wsBinaryFrame = 0x2
-	wsCloseFrame = 0x8
-	wsPingFrame  = 0x9
-	wsPongFrame  = 0xA
+	wsCloseFrame  = 0x8
+	wsPingFrame   = 0x9
+	wsPongFrame   = 0xA
 )
 
 // WSConn 封装一个 WebSocket 连接
@@ -44,12 +44,12 @@ type WSConn struct {
 
 // WSHub WebSocket 中心：管理所有客户端连接
 type WSHub struct {
-	mu          sync.RWMutex
-	clients     map[string]*WSConn
-	register    chan *WSConn
-	unregister  chan *WSConn
-	broadcast   chan []byte
-	maxConns    int
+	mu         sync.RWMutex
+	clients    map[string]*WSConn
+	register   chan *WSConn
+	unregister chan *WSConn
+	broadcast  chan []byte
+	maxConns   int
 }
 
 // NewWSHub 创建 WebSocket Hub（默认最大连接数 100）
@@ -152,6 +152,18 @@ func (h *WSHub) TryBroadcast(frame []byte) bool {
 // Publish 广播一条已构造好的消息；永不阻塞调用方。
 func (h *WSHub) Publish(msg models.WSMessage) bool {
 	b, err := json.Marshal(msg)
+	if err != nil {
+		return false
+	}
+	return h.TryBroadcast(b)
+}
+
+// PublishJSON 广播任意 JSON 结构。
+// 与 Publish(models.WSMessage) 的区别：保留原始字段形状，用于前端已有
+// 明确契约的通道（如 {"type":"params","params":{...}}），避免为了复用
+// 通用信封迫使前端做无谓的拆包。
+func (h *WSHub) PublishJSON(v interface{}) bool {
+	b, err := json.Marshal(v)
 	if err != nil {
 		return false
 	}

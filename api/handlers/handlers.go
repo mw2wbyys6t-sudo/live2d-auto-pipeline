@@ -62,7 +62,7 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 		Success: true,
 		Message: "Live2D API 服务正常运行",
 		Data: map[string]interface{}{
-			"version": "v0.10.1-go",
+			"version": "v0.10.2-go",
 			"uptime":  time.Since(h.startTime).String(),
 		},
 	})
@@ -118,7 +118,7 @@ func (h *Handler) GetSystemStatus(c *gin.Context) {
 		Success: true,
 		Data: models.SystemStatus{
 			Services: services,
-			Version:  "v0.10.1-go",
+			Version:  "v0.10.2-go",
 			Uptime:   time.Since(h.startTime).String(),
 		},
 	})
@@ -213,6 +213,7 @@ func (h *Handler) GenerateCharacter(c *gin.Context) {
 		return
 	}
 	h.wsHub.BroadcastProgress(taskID, "done", 100, "生成完成！")
+	services.RecordLatestGeneration(h.cfg, result)
 	c.JSON(http.StatusOK, models.Response{Success: true, Message: "角色生成成功", Data: result})
 }
 
@@ -304,9 +305,15 @@ func (h *Handler) GetPythonScripts(c *gin.Context) {
 	})
 }
 
-// ServeOutput 提供输出文件访问
+// ServeOutput 提供输出文件访问（支持子目录，如 /output/layers_123/hair.png）
 func (h *Handler) ServeOutput(c *gin.Context) {
-	filename := c.Param("filename")
+	// 路由从 /output/:filename 升级为 /output/*filepath 后，
+	// filepath 形如 "/layers_123/hair.png"；同时兼容旧的单段参数名。
+	filename := c.Param("filepath")
+	if filename == "" {
+		filename = c.Param("filename")
+	}
+	filename = strings.TrimPrefix(filename, "/")
 	if filename == "" {
 		c.JSON(http.StatusBadRequest, models.Response{
 			Success: false,
@@ -358,13 +365,271 @@ func isPathSafe(path, baseDir string) bool {
 	return !strings.HasPrefix(rel, "..") && rel != ".."
 }
 
+// ======================================================================
+// 跨页面流水线接力：最近生成 / 分层 / 上传 / 角色参考图与 embedding
+// ======================================================================
+
+// LatestGeneration 返回最近一次成功生成的产物，供前端跨页面接力
+// （生成 → 分层 → 导出 → 桌宠）。与 Python 后端 /api/generations/latest 同契约。
+func (h *Handler) LatestGeneration(c *gin.Context) {
+	record, err := services.GetLatestGeneration(h.cfg)
+	if err != nil {
+		c.JSON(http.StatusNotFound, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Data: record})
+}
+
+// UploadImage 接收一张图片（multipart 字段名 file），保存到 output/uploads/
+// 并返回 {path, url}。path 供 /api/segment 与参考图端点使用。
+func (h *Handler) UploadImage(c *gin.Context) {
+	fh, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "缺少上传文件字段 file"})
+		return
+	}
+	path, url, err := services.SaveUpload(h.cfg, fh)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Message: "上传成功", Data: map[string]string{"path": path, "url": url}})
+}
+
+// SegmentImage 对图片运行真实分层并写出 PSD。
+// body: {"image_path": "...", "method": "semantic"|"kmeans"}；image_path 为空时
+// 回退为最近一次生成图（与 Python 后端 /api/segment 行为一致）。
+func (h *Handler) SegmentImage(c *gin.Context) {
+	var req struct {
+		ImagePath string `json:"image_path"`
+		Method    string `json:"method"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "参数错误: " + err.Error()})
+		return
+	}
+	imagePath := req.ImagePath
+	if imagePath == "" {
+		record, err := services.GetLatestGeneration(h.cfg)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "未指定 image_path 且没有可用的最近生成图，请先上传图片或生成角色"})
+			return
+		}
+		imagePath, _ = record["image_path"].(string)
+		if imagePath == "" {
+			c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "最近生成记录中没有源图片路径，请上传图片"})
+			return
+		}
+	}
+	if !filepath.IsAbs(imagePath) {
+		imagePath = filepath.Join(h.cfg.Python.ScriptsDir, imagePath)
+	}
+
+	result, err := h.pythonBridge.SegmentImage(imagePath, req.Method)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, services.ErrPythonTimeout) {
+			status = http.StatusGatewayTimeout
+		}
+		c.JSON(status, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	// 补充前端可直接使用的 URL 字段
+	layers, _ := result["layers"].([]interface{})
+	outLayers := make([]map[string]interface{}, 0, len(layers))
+	for _, l := range layers {
+		lm, ok := l.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		p, _ := lm["path"].(string)
+		lm["url"] = services.OutputURLFor(h.cfg, p)
+		outLayers = append(outLayers, lm)
+	}
+	result["layers"] = outLayers
+	result["layer_count"] = len(outLayers)
+	if psdPath, _ := result["psd_path"].(string); psdPath != "" {
+		result["psd_url"] = services.OutputURLFor(h.cfg, psdPath)
+	}
+	if cp, _ := result["composite_preview"].(string); cp != "" {
+		result["composite_preview_url"] = services.OutputURLFor(h.cfg, cp)
+	}
+	result["source_image_url"] = services.OutputURLFor(h.cfg, imagePath)
+	c.JSON(http.StatusOK, models.Response{Success: true, Message: "分层完成", Data: result})
+}
+
+// AddCharacterReference 为角色登记某个视角的参考图（先经 /api/upload 上传），
+// 并尽力触发 Python 侧 embedding 提取；提取失败不影响路径落卡。
+func (h *Handler) AddCharacterReference(c *gin.Context) {
+	characterID := c.Param("id")
+	var req struct {
+		ImagePath string `json:"image_path" binding:"required"`
+		View      string `json:"view"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "参数错误: " + err.Error()})
+		return
+	}
+	if req.View == "" {
+		req.View = "front"
+	}
+	if _, err := h.charSvc.GetCharacter(characterID); err != nil {
+		c.JSON(http.StatusNotFound, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	if err := services.ValidateUploadedImagePath(h.cfg, req.ImagePath); err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	card, err := h.charSvc.UpdateReference(characterID, req.View, req.ImagePath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	// embedding 提取尽力而为：失败时参考图路径已在卡上，前端可稍后重算
+	embedErr := h.pythonBridge.AddReferenceImage(characterID, req.ImagePath, req.View)
+	data := gin.H{"card": card, "embedding_extracted": embedErr == nil}
+	if embedErr != nil {
+		data["embedding_note"] = "参考图已登记，但 embedding 提取失败（可稍后重算）"
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Message: "参考图已登记", Data: data})
+}
+
+// RecomputeCharacterEmbedding 为角色重新提取视觉 embedding。
+func (h *Handler) RecomputeCharacterEmbedding(c *gin.Context) {
+	characterID := c.Param("id")
+	if _, err := h.charSvc.GetCharacter(characterID); err != nil {
+		c.JSON(http.StatusNotFound, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	result, err := h.pythonBridge.RecomputeCharacterEmbedding(characterID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, services.ErrPythonTimeout) {
+			status = http.StatusGatewayTimeout
+		}
+		c.JSON(status, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Message: "embedding 已更新", Data: result})
+}
+
+// ======================================================================
+// 上游生成服务状态 / 外部素材导入（PSD + 多 PNG）
+// ======================================================================
+
+// ListImageProviders 报告图像生成的上游路由状态：哪些 provider 已配置可用、
+// 哪些已注册但缺 Key。前端生成页据此展示可选项，避免选中后才发现没 Key。
+func (h *Handler) ListImageProviders(c *gin.Context) {
+	available, registered, err := h.pythonBridge.ListImageProviders()
+	if err != nil {
+		// 查询失败不阻塞前端：如实报告错误并附空列表
+		c.JSON(http.StatusOK, models.Response{
+			Success: true,
+			Message: "上游状态查询失败：" + err.Error(),
+			Data:    map[string]interface{}{"available": []map[string]interface{}{}, "registered": []string{}, "query_ok": false},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Data: map[string]interface{}{
+		"available":  available,
+		"registered": registered,
+		"query_ok":   true,
+	}})
+}
+
+// ListExportedModels 列出 output 下全部已导出的 Live2D 模型（新→旧），
+// 供预览页的模型选择列表使用。
+func (h *Handler) ListExportedModels(c *gin.Context) {
+	modelList := services.ListExportedModels(h.cfg)
+	c.JSON(http.StatusOK, models.Response{Success: true, Data: map[string]interface{}{
+		"models": modelList,
+		"count":  len(modelList),
+	}})
+}
+
+// ImportPSD 接收外部 PSD 文件，提取全部像素图层为整幅画布 PNG，
+// 返回图层列表 + 图层目录，供分层工作台与后续导出直接使用。
+func (h *Handler) ImportPSD(c *gin.Context) {
+	fh, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "缺少上传文件字段 file"})
+		return
+	}
+	if ext := strings.ToLower(filepath.Ext(fh.Filename)); ext != ".psd" {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "仅支持 .psd 文件"})
+		return
+	}
+	if fh.Size > 500<<20 {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "PSD 文件超过 500MB 限制"})
+		return
+	}
+	// 先落到 uploads，再交给 psd-tools 解析
+	path, err := services.SavePSD(h.cfg, fh)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	result, err := h.pythonBridge.ImportPSDLayers(path)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, services.ErrPythonTimeout) {
+			status = http.StatusGatewayTimeout
+		}
+		c.JSON(status, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	layers, _ := result["layers"].([]interface{})
+	for _, l := range layers {
+		if lm, ok := l.(map[string]interface{}); ok {
+			if p, _ := lm["path"].(string); p != "" {
+				lm["url"] = services.OutputURLFor(h.cfg, p)
+			}
+		}
+	}
+	result["psd_url"] = services.OutputURLFor(h.cfg, path)
+	c.JSON(http.StatusOK, models.Response{Success: true, Message: "PSD 导入完成", Data: result})
+}
+
+// ImportPNGs 接收多张 PNG（multipart 字段 files，可多选），按提交顺序
+// 组装成一个图层集目录，供分层工作台与后续导出使用。
+func (h *Handler) ImportPNGs(c *gin.Context) {
+	form, err := c.MultipartForm()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "解析 multipart 失败: " + err.Error()})
+		return
+	}
+	files := form.File["files"]
+	if len(files) == 0 {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "缺少上传文件字段 files"})
+		return
+	}
+	dir, layers, err := services.ImportPNGSet(h.cfg, files)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	for _, l := range layers {
+		if p, ok := l["path"].(string); ok {
+			l["url"] = services.OutputURLFor(h.cfg, p)
+		}
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Message: "PNG 导入完成", Data: map[string]interface{}{
+		"layers_dir":  dir,
+		"layers":      layers,
+		"layer_count": len(layers),
+	}})
+}
+
 // GetAPIInfo 获取 API 信息
 func (h *Handler) GetAPIInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, models.Response{
 		Success: true,
 		Data: map[string]interface{}{
 			"name":        "Live2D Master Agent API",
-			"version":     "v0.10.1-go",
+			"version":     "v0.10.2-go",
 			"description": "AI角色生成、一致性维护、LLM聊天、Live2D导出 API",
 			"features": []string{
 				"角色一致性系统",
@@ -646,6 +911,20 @@ func (h *Handler) ExportLive2D(c *gin.Context) {
 		})
 		return
 	}
+	// 导出成功：把模型产物并入最近生成记录 —— 这是「导出 → 预览 / 桌宠」
+	// 的交接点，预览页自动加载与桌宠部署的 model_dir 都来自这份记录。
+	model3JSON, _ := data["model3_json"].(string)
+	if model3JSON == "" {
+		if m, ok := data["model_dir"].(string); ok {
+			model3JSON = filepath.Join(m, filepath.Base(m)+".model3.json")
+		}
+	}
+	outputDir, _ := data["output_dir"].(string)
+	if outputDir == "" && model3JSON != "" {
+		outputDir = filepath.Dir(model3JSON)
+	}
+	runtimeReady, _ := data["runtime_ready"].(bool)
+	services.RecordLatestExport(h.cfg, model3JSON, outputDir, runtimeReady)
 	c.JSON(http.StatusOK, models.Response{Success: true, Message: "模型导出成功", Data: data})
 }
 
@@ -756,28 +1035,6 @@ func (h *Handler) ExportPSD(c *gin.Context) {
 //
 // 本平台以 Live2D Cubism4 为一等导出目标；Spine 导出作为兼容端点返回
 // 可用的 model3 产物路径，调用方可据此自行转换，而不会收到 404。
-func (h *Handler) ExportSpine(c *gin.Context) {
-	var req models.ExportModelRequest
-	_ = c.ShouldBindJSON(&req)
-	if req.CharacterID == "" {
-		req.CharacterID = "character"
-	}
-	result, err := h.pythonBridge.ExportLive2DModel(req.CharacterID, req.LayersDir, req.OutputDir)
-	if err != nil {
-		c.JSON(http.StatusOK, models.Response{
-			Success: true,
-			Message: "Spine 导出暂未启用；已返回 Live2D model3 产物",
-			Data:    map[string]interface{}{"format": "spine", "available": false, "live2d": result},
-		})
-		return
-	}
-	c.JSON(http.StatusOK, models.Response{
-		Success: true,
-		Message: "Spine 导出暂未启用；已返回 Live2D model3 产物",
-		Data:    map[string]interface{}{"format": "spine", "available": false, "live2d": result},
-	})
-}
-
 // TrackingUnavailable 摄像头面捕的**显式**"未实现"响应。
 //
 // 前端 /preview 会调用 /api/tracking/start|stop 并连接 /ws/tracking；这套端点
@@ -812,7 +1069,7 @@ func (h *Handler) DeployDesktop(c *gin.Context) {
 }
 
 func (h *Handler) DesktopStatus(c *gin.Context) {
- c.JSON(http.StatusOK, models.Response{Success: true, Data: services.DesktopDeploymentStatus()})
+	c.JSON(http.StatusOK, models.Response{Success: true, Data: services.DesktopDeploymentStatus()})
 }
 
 // WSProgress WebSocket 进度推送端点（/ws/progress 的兼容别名）。

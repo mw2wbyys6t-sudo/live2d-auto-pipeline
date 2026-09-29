@@ -60,7 +60,16 @@ def run(manifest_path: str, frames: int, dt: float, mode: str = "update") -> dic
     分开跑是为了分辨「物理没生效」的两类原因：内核的 Update 不驱动物理，
     还是我们的 physics3.json 本身无效 —— 结论不同，修法也不同。
     """
-    import pygame
+    try:
+        import pygame
+    except ImportError:
+        return {"ok": False,
+                "error": "缺少 pygame，无法运行官方内核物理验收（执行: pip install pygame-ce）"}
+    try:
+        import live2d.v3 as sdk
+    except ImportError:
+        return {"ok": False,
+                "error": "缺少 live2d-py，无法运行官方内核验收（执行: pip install live2d-py）"}
 
     from drivers.live2d_runtime.native import CubismRenderer
 
@@ -73,7 +82,6 @@ def run(manifest_path: str, frames: int, dt: float, mode: str = "update") -> dic
                 "error": "产物里没有可验的 physics 参数链（没有 Physics 引用，"
                          "或 Input/Output 不是 Parameter）"}
 
-    import live2d.v3 as sdk
     pygame.display.init()
     pygame.display.gl_set_attribute(pygame.GL_ALPHA_SIZE, 8)
     pygame.display.set_mode((64, 64), pygame.OPENGL | pygame.DOUBLEBUF)

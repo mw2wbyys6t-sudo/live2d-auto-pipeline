@@ -36,12 +36,20 @@ class ProviderRouter:
 
     def _register_defaults(self):
         """Register built-in providers."""
+        from core.image_gen.openai_compat import OpenAICompatProvider
         from core.image_gen.pollinations import PollinationsProvider
         from core.image_gen.sensenova import SenseNovaProvider
         from core.image_gen.seedream import SeedreamProvider
         self.register_provider("pollinations", PollinationsProvider)
         self.register_provider("sensenova", SenseNovaProvider)
         self.register_provider("seedream", SeedreamProvider)
+        # OpenAI Images API 兼容端点（官方/one-api 等网关/本地自建），
+        # 使任意外部生成大模型都能接入上游路由。
+        self.register_provider("openai", OpenAICompatProvider)
+
+    # 统一的路由优先级：配置了高质量付费 Key 的 provider 永远先被尝试，
+    # OpenAI 兼容网关次之，免费 Pollinations 兜底。
+    PRIORITY = ["seedream", "sensenova", "openai", "pollinations"]
 
     def register_provider(self, name: str, provider_cls: Type[ImageProvider]):
         """Register a new provider class."""
@@ -67,7 +75,7 @@ class ProviderRouter:
         """Return list of available providers with metadata."""
         result = []
         # Priority order
-        priority = ["seedream", "sensenova", "pollinations"]
+        priority = self.PRIORITY
         for name in priority:
             if name in self._registry:
                 p = self._get_provider(name)
@@ -81,8 +89,7 @@ class ProviderRouter:
 
     def auto_select(self) -> Optional[ImageProvider]:
         """Auto-select the best available provider."""
-        priority = ["seedream", "sensenova", "pollinations"]
-        for name in priority:
+        for name in self.PRIORITY:
             p = self._get_provider(name)
             if p and p.is_available():
                 log.debug(f"Auto-selected provider: {p.display_name}")
@@ -117,7 +124,7 @@ class ProviderRouter:
         if provider:
             providers_to_try = [provider]
         else:
-            providers_to_try = ["seedream", "sensenova", "pollinations"]
+            providers_to_try = list(self.PRIORITY)
 
         last_error = None
         temp_files = set()

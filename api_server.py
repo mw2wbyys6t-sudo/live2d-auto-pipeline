@@ -17,6 +17,7 @@ import shutil
 import asyncio
 import tempfile
 import zipfile
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -37,7 +38,7 @@ CHARACTERS_DIR = ASSETS_DIR / "characters"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 CHARACTERS_DIR.mkdir(parents=True, exist_ok=True)
 
-VERSION = "v0.10.1-py"
+VERSION = "v0.10.2-py"
 START_TIME = time.time()
 
 
@@ -160,11 +161,24 @@ def to_output_url(abs_path: str) -> str:
         return ""
 
 
+_SAFE_CHAR_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _safe_char_path(char_id: str) -> Path:
+    """角色 ID -> 卡片路径；拒绝包含路径穿越字符的 ID。"""
+    if not _SAFE_CHAR_ID.match(char_id or ""):
+        raise ValueError(f"非法角色 ID: {char_id!r}")
+    return CHARACTERS_DIR / f"{char_id}.json"
+
+
 def update_character_image(char_id: str, image_url: str) -> None:
     """生成成功后把图片 URL 回写到角色记录，供角色列表展示缩略图。"""
     if not char_id or not image_url:
         return
-    path = CHARACTERS_DIR / f"{char_id}.json"
+    try:
+        path = _safe_char_path(char_id)
+    except ValueError:
+        return
     if not path.exists():
         return
     try:
@@ -228,7 +242,7 @@ async def get_system_status():
     services = [
         {"name": "image_generator", "available": True, "version": "pollinations+core", "last_checked": datetime.now().isoformat()},
         {"name": "python_env", "available": True, "version": sys.version.split()[0], "last_checked": datetime.now().isoformat()},
-        {"name": "segment_engine", "available": True, "version": "v0.10.1", "last_checked": datetime.now().isoformat()},
+        {"name": "segment_engine", "available": True, "version": "v0.10.2", "last_checked": datetime.now().isoformat()},
         {"name": "live2d_builder", "available": True, "version": "cubism4", "last_checked": datetime.now().isoformat()},
     ]
     return ok({
@@ -298,7 +312,7 @@ def _load_characters() -> List[Dict[str, Any]]:
 def _save_character(char: Dict[str, Any]):
     CHARACTERS_DIR.mkdir(parents=True, exist_ok=True)
     char_id = char.get("character_id", char.get("id", ""))
-    path = CHARACTERS_DIR / f"{char_id}.json"
+    path = _safe_char_path(str(char_id))
     with open(path, "w", encoding="utf-8") as f:
         json.dump(char, f, ensure_ascii=False, indent=2)
 

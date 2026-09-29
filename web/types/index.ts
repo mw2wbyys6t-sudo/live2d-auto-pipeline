@@ -62,7 +62,7 @@ export interface Outfit {
 
 // ---------- Generation ----------
 
-export type ProviderId = 'pollinations' | 'seedream' | 'sensenova' | 'local';
+export type ProviderId = 'pollinations' | 'seedream' | 'sensenova' | 'openai' | 'local';
 export type Resolution = 512 | 768 | 1024 | 2048;
 export type StylePreset =
   | 'moe'

@@ -14,12 +14,14 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 import type { NextPage } from 'next';
+import Link from 'next/link';
 import type { BlendMode, LayerInfo, SegmentationMethod } from '../types';
-import { apiClient, type LatestGeneration, type SegmentedLayer } from '../lib/api-client';
+import type { SegmentedLayer } from '../lib/api-client';
 import LayerCanvas, { getCheckerboardStyle } from '../components/LayerCanvas';
 import ImageUploader from '../components/ImageUploader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { LayerRenderer } from '../lib/layer-renderer';
+import { apiClient, type ImportResult } from '../lib/api-client';
 
 const BLEND_MODES: BlendMode[] = [
   'normal',
@@ -68,11 +70,61 @@ const LayersPage: NextPage = () => {
   const [bg, setBg] = useState<'transparent' | 'dark' | 'light'>('transparent');
   const [dragId, setDragId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [latest, setLatest] = useState<LatestGeneration | null>(null);
   const [psdUrl, setPsdUrl] = useState<string>('');
   const [segMethod, setSegMethod] = useState<string>('');
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const previewRendererRef = useRef<LayerRenderer | null>(null);
+  /** 上传的原始文件：运行真实分层前需要先 POST /api/upload 送到后端 */
+  const fileRef = useRef<File | null>(null);
+  const dimsRef = useRef<{ w: number; h: number }>({ w: 1024, h: 1024 });
+  const psdInputRef = useRef<HTMLInputElement>(null);
+  const pngsInputRef = useRef<HTMLInputElement>(null);
+  /** 分层/导入产物目录：交给导出页复用（?layers_dir= 交接） */
+  const [layersDir, setLayersDir] = useState<string>('');
+  const [importing, setImporting] = useState(false);
+
+  /** 把导入结果渲染进工作台（各层 PNG 均为整幅画布） */
+  const applyImportResult = useCallback((result: ImportResult, dims?: { w: number; h: number }) => {
+    const w = dims?.w || 1024;
+    const h = dims?.h || 1024;
+    const segmented = (result.layers || []).map((l) => ({
+      name: l.name,
+      part_name: l.name,
+      url: l.url || '',
+      pixel_count: l.pixel_count || 0,
+    }));
+    setLayers(toLayerInfo(segmented, w, h));
+    setLayersDir(result.layers_dir || '');
+    setPsdUrl(result.psd_url || '');
+    setSegMethod('import');
+    setError(null);
+  }, []);
+
+  const handleImportPSD = useCallback(async (file: File | null) => {
+    if (!file || importing) return;
+    setImporting(true);
+    try {
+      const result = await apiClient.importPSD(file);
+      applyImportResult(result);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'PSD 导入失败');
+    } finally {
+      setImporting(false);
+    }
+  }, [importing, applyImportResult]);
+
+  const handleImportPNGs = useCallback(async (files: FileList | null) => {
+    if (!files || files.length === 0 || importing) return;
+    setImporting(true);
+    try {
+      const result = await apiClient.importPNGs(Array.from(files));
+      applyImportResult(result);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'PNG 导入失败');
+    } finally {
+      setImporting(false);
+    }
+  }, [importing, applyImportResult]);
 
   const selected = useMemo(
     () => layers.find((l) => l.id === selectedId) || null,
@@ -80,6 +132,7 @@ const LayersPage: NextPage = () => {
   );
 
   const handleFile = useCallback((file: File | null) => {
+    fileRef.current = file;
     if (!file) {
       setSourceUrl(null);
       setLayers([]);
@@ -90,56 +143,69 @@ const LayersPage: NextPage = () => {
     setSourceUrl(url);
     setLayers([]);
     setPsdUrl('');
+    setSegMethod('');
     setError(null);
+    // 记录源图尺寸：分层产物为整幅画布 PNG，预览按此尺寸摆放
+    const img = new Image();
+    img.onload = () => {
+      dimsRef.current = { w: img.naturalWidth || 1024, h: img.naturalHeight || 1024 };
+    };
+    img.src = url;
   }, []);
 
-  // 自动接力最近一次生成，分层工作台不再依赖手动上传。
+  // 进入页面时拉取最近生成记录：无上传文件时也能直接对最近生成图跑分层
   useEffect(() => {
-    let cancelled = false;
     apiClient
       .getLatestGeneration()
-      .then((gen) => {
-        if (cancelled || !gen) return;
-        setLatest(gen);
-        if (gen.image_url) setSourceUrl((prev) => prev || gen.image_url);
+      .then((rec) => {
+        if (rec?.image_url) {
+          setSourceUrl(rec.image_url);
+          fileRef.current = null;
+        }
       })
       .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   const runSegmentation = useCallback(async () => {
-    if (!sourceUrl) return;
+    if (segmenting) return;
     setSegmenting(true);
     setError(null);
     try {
-      // 真实分层：由后端跑分割模型并导出 PSD
-      const result = await apiClient.segmentImage(latest?.image_path || '', method);
-      const segs = result.layers || [];
-      if (segs.length === 0) throw new Error('后端未返回任何图层');
+      // 1) 新上传的文件先送到后端；页面重进后没有 File 对象时回退为最近生成图
+      let imagePath = '';
+      if (fileRef.current) {
+        const uploaded = await apiClient.uploadImage(fileRef.current);
+        imagePath = uploaded.path;
+      } else {
+        const record = await apiClient.getLatestGeneration();
+        imagePath = record?.image_path || '';
+      }
+      if (!imagePath) {
+        throw new Error('找不到可用的源图片 —— 请上传图片，或先在「Generate」生成角色。');
+      }
 
-      const probe = new Image();
-      await new Promise<void>((resolve) => {
-        probe.onload = () => resolve();
-        probe.onerror = () => resolve();
-        probe.src = segs[0].url;
-      });
-      const w = probe.naturalWidth || 512;
-      const h = probe.naturalHeight || 512;
+      // 2) 调用真实分层（Go 端桥接 Python：SAM/ISNet 语义分割 + PSD 导出）
+      const result = await apiClient.segmentImage(imagePath, method);
 
-      const mapped = toLayerInfo(segs, w, h);
-      setLayers(mapped);
-      setSelectedId(mapped[0]?.id || null);
+      // 3) 渲染分层结果；各层 PNG 为整幅画布，bounds 覆盖全图
+      const { w, h } = dimsRef.current;
+      setLayers(toLayerInfo(result.layers || [], w, h));
+      setLayersDir(result.layers_dir || '');
       setPsdUrl(result.psd_url || '');
       setSegMethod(result.method || method);
-      if (result.source_image_url) setSourceUrl(result.source_image_url);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '分层失败');
+      if (result.source_image_url) {
+        setSourceUrl(result.source_image_url);
+        fileRef.current = null; // 源图已是服务器产物，无需重复上传
+      }
+      if (!result.psd_success && result.psd_url) {
+        setError('分层完成，但 PSD 写出失败 —— 可在导出页重试。');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '分层失败');
     } finally {
       setSegmenting(false);
     }
-  }, [sourceUrl, method, latest]);
+  }, [segmenting, method]);
 
   // Preview canvas render (for export composite preview not the LayerCanvas component)
   useEffect(() => {
@@ -253,6 +319,52 @@ const LayersPage: NextPage = () => {
                   </>
                 )}
               </button>
+            )}
+            {/* 外部素材导入：自有 PSD / 零散 PNG 直接进入工作台与导出链路 */}
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <button
+                onClick={() => psdInputRef.current?.click()}
+                disabled={importing}
+                className="inline-flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg text-[11px] bg-gray-900 border border-gray-800 text-gray-300 hover:border-pink-500/40 disabled:opacity-50 transition-colors"
+              >
+                <Upload className="w-3.5 h-3.5" /> 导入 PSD
+              </button>
+              <button
+                onClick={() => pngsInputRef.current?.click()}
+                disabled={importing}
+                className="inline-flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg text-[11px] bg-gray-900 border border-gray-800 text-gray-300 hover:border-pink-500/40 disabled:opacity-50 transition-colors"
+              >
+                <Upload className="w-3.5 h-3.5" /> 导入 PNG…
+              </button>
+            </div>
+            <input
+              ref={psdInputRef}
+              type="file"
+              accept=".psd"
+              className="hidden"
+              onChange={(e) => {
+                handleImportPSD(e.target.files?.[0] || null);
+                e.target.value = '';
+              }}
+            />
+            <input
+              ref={pngsInputRef}
+              type="file"
+              accept=".png"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                handleImportPNGs(e.target.files);
+                e.target.value = '';
+              }}
+            />
+            {layersDir && (
+              <Link
+                href={`/export?layers_dir=${encodeURIComponent(layersDir)}`}
+                className="mt-2 w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/25 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" /> 发送到导出
+              </Link>
             )}
             <div className="mt-3 flex gap-1">
               {(['semantic', 'kmeans'] as SegmentationMethod[]).map((m) => (
@@ -424,10 +536,10 @@ const LayersPage: NextPage = () => {
                   <LayersIcon className="w-7 h-7 text-gray-600" />
                 </div>
                 <p className="text-sm text-gray-400">
-                  {latest ? '已自动载入最近一次生成的图片' : 'Upload an image to get started'}
+                  Upload an image to get started
                 </p>
                 <p className="text-xs text-gray-600 mt-1">
-                  生成页产出的图片会自动接力到这里，无需手动下载再上传。
+                  请手动上传需要处理的图片。
                 </p>
               </div>
             )}

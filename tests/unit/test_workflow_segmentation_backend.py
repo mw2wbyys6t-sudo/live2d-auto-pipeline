@@ -35,7 +35,9 @@ def _kmeans_returns(engine, monkeypatch):
 
     def fake(image, output_dir=None):
         called["yes"] = True
+        # 与 core/segment_engine/kmeans.py:175 的真实返回同构（含 layer_count）。
         return {"layers": [{"name": "layer_000", "path": "x.png"}],
+                "layer_count": 1,
                 "method": "kmeans", "output_dir": str(output_dir)}
 
     monkeypatch.setattr(engine.kmeans_layerer, "layer", fake)
@@ -69,6 +71,48 @@ def test_named_backend_falling_back_is_recorded(tmp_path, monkeypatch):
     assert layering["used_backend"] == "kmeans"
     assert layering["missing_parts"] == ["face"]
     assert "权重不可用" in layering["reason"]
+
+
+def test_recording_the_step_does_not_erase_the_degradation(tmp_path, monkeypatch):
+    """降级记录必须活过 run() 里那步「写 output_dir/layer_count」。
+
+    曾经 ``result["steps"]["layering"] = {...}`` 是普通赋值，把
+    ``_step_layering`` 刚写的 degraded/requested_backend/reason 整份覆盖掉；
+    上面的单测直调 ``_step_layering`` 就断言，所以从没经过那一行。
+    同时这里写入真图层 PNG，验证质量度量确实挂在这一步上。
+    """
+    engine = _engine(tmp_path, "sam2_gd")
+    engine.semantic_layerer.next_result = {
+        "layers": [], "method": "sam2_gd", "missing_parts": ["face"],
+        "error": "权重不可用"}
+    _kmeans_returns(engine, monkeypatch)
+
+    layers_dir = tmp_path / "layers"
+    layers_dir.mkdir()
+    for name in ("hair_back", "hair_front", "face"):
+        img = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+        px = img.load()
+        for x in range(2, 6):
+            for y in range(2, 6):
+                px[x, y] = (200, 30, 30, 255)
+        img.save(layers_dir / f"{name}.png")
+
+    result = {"steps": {}}
+    engine._step_layering(Image.new("RGBA", (8, 8)), result, 1)
+    engine._record_layering_step(result, str(layers_dir), layer_result={"layer_count": 1})
+
+    layering = result["steps"]["layering"]
+    assert layering["degraded"] is True, "降级记录被覆盖掉了"
+    assert layering["requested_backend"] == "sam2_gd"
+    assert "权重不可用" in layering["reason"]
+    assert layering["method"] == "kmeans"      # 新字段照常写入
+    assert layering["layer_count"] == 1
+
+    quality = layering["quality"]
+    assert quality["defect_count"] >= 1, "只出了 3 个部件，必须被度量抓到"
+    assert quality["ok"] is False
+    assert any("必需部件" in m
+               for m in quality["defects"].get("required_parts", []))
 
 
 def test_auto_backend_fallback_is_not_labelled_degraded(tmp_path, monkeypatch):

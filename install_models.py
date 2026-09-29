@@ -32,6 +32,11 @@ GROUPS: Dict[str, List[str]] = {
     ],
     "segment": [
         "segment-anything>=1.0",
+        # core/segment_engine/sam2_gd.py 点名后端硬依赖这三件：
+        # Sam2ImageProcessor 缺 torchvision 会直接 ModelUnavailable。
+        "torch>=2.0.0",
+        "torchvision>=0.15.0",
+        "transformers>=4.30.0",
     ],
     "clip": [
         "torch>=2.0.0",
@@ -50,7 +55,7 @@ GROUPS: Dict[str, List[str]] = {
 
 GROUP_DESC: Dict[str, str] = {
     "generation": "本地扩散模型图像生成",
-    "segment": "语义分割 (SAM / ISNet，提升分层质量)",
+    "segment": "语义分割 (SAM2 + GroundingDINO / ISNet，提升分层质量；含 torch/torchvision/transformers)",
     "clip": "角色视觉嵌入 (角色一致性)",
     "asr": "语音识别 (本地 Whisper / FunASR)",
     "hub": "HuggingFace 模型下载工具",

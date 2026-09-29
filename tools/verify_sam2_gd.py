@@ -139,6 +139,9 @@ def main() -> int:
     ap.add_argument("--image", default=DEFAULT_IMAGE)
     ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--allow-cpu", action="store_true",
+                    help="run without CUDA; quality gates still apply, timing "
+                         "and VRAM numbers are not comparable to the GPU baseline")
     args = ap.parse_args()
 
     out_dir = Path(args.out)
@@ -158,11 +161,17 @@ def main() -> int:
     print(f"[env] torch       = {torch.__version__}")
     print(f"[env] HF_ENDPOINT = {os.environ.get('HF_ENDPOINT')}")
     if not torch.cuda.is_available():
-        print("[FAIL] torch.cuda.is_available() is False - no CUDA device. "
-              "This verification requires a real GPU run.")
-        return 2
-    props = torch.cuda.get_device_properties(0)
-    print(f"[env] gpu         = {props.name} ({props.total_memory / 1e9:.1f} GB)")
+        if not args.allow_cpu:
+            print("[FAIL] torch.cuda.is_available() is False - no CUDA device. "
+                  "This verification requires a real GPU run. Pass --allow-cpu "
+                  "to measure the same quality gates on CPU.")
+            return 2
+        print("[warn] CPU run (--allow-cpu): coverage gates below are real, "
+              "but elapsed/VRAM are not comparable to the GPU baseline.")
+        args.device = "cpu"
+    else:
+        props = torch.cuda.get_device_properties(0)
+        print(f"[env] gpu         = {props.name} ({props.total_memory / 1e9:.1f} GB)")
 
     img_path = Path(args.image)
     if not img_path.is_file():
@@ -280,15 +289,19 @@ def main() -> int:
     print(f"\n[out] montage  -> {montage}")
     print(f"[out] layers   -> {result['output_dir']}  "
           f"({result['layer_count']} PNGs)")
-    print(f"[out] vram     -> {torch.cuda.memory_allocated() / 1e9:.2f} GB alloc, "
-          f"{torch.cuda.memory_reserved() / 1e9:.2f} GB reserved")
+    vram = (
+        f"{torch.cuda.memory_allocated() / 1e9:.2f} GB alloc, "
+        f"{torch.cuda.memory_reserved() / 1e9:.2f} GB reserved"
+        if torch.cuda.is_available() else "n/a (CPU run)"
+    )
+    print(f"[out] vram     -> {vram}")
 
     if failures:
         print("\n=== FAILURES ===")
         for f in failures:
             print(f"  FAIL: {f}")
         return 1
-    print("\n=== PASS: every check verified on GPU ===")
+    print(f"\n=== PASS: every check verified on {result['device']} ===")
     return 0
 
 

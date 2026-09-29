@@ -1,4 +1,4 @@
-# 🎭 Live2D Master Agent v0.10.1
+# 🎭 Live2D Master Agent v0.10.2
 
 > **一句话**：输入一句话，AI 生成你的专属虚拟主播——支持实时面部捕捉、语音对话、表情联动、桌宠运行。
 
@@ -8,7 +8,7 @@
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=for-the-badge)](https://go.dev)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge)](https://nextjs.org)
 [![License](https://img.shields.io/badge/License-Apache--2.0-green?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.10.1-ff69b4?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-0.10.2-ff69b4?style=for-the-badge)]()
 
 </div>
 
@@ -164,9 +164,21 @@ npm run dev
 ### 方式三：Docker 一键部署
 
 ```bash
-docker compose up -d
+# 可选：填写自己的 API Key；不创建也可以使用默认免费服务
+cp .env.example .env
+# Windows PowerShell 使用：Copy-Item .env.example .env
+
+# 首次运行需要从 Docker Hub 拉取基础镜像
+docker pull python:3.11-slim-bookworm
+docker pull node:22-bookworm-slim
+docker pull golang:1.25-alpine
+
+docker compose up -d --build
 # Web: http://localhost:3000  API: http://localhost:8080
 ```
+
+如果 `docker pull` 报 `failed to fetch oauth token` 或连接 `auth.docker.io` 超时，
+请先在 Docker Desktop 的 **Settings → Resources → Proxies** 中配置可用代理，或切换到能访问 Docker Hub 的网络；这是 Docker Desktop 的网络问题，不是项目代码错误。
 
 ### 方式四：命令行快速体验（无需启动 Web）
 
@@ -378,8 +390,8 @@ cd web && npm run build
 
 | 阶段 | 版本 | 核心方向 | 状态 |
 |------|------|----------|------|
-| 现在 | **v0.10.1** | 自研 moc3 导出管线：官方 Cubism 参数驱动 + 官方内核逐像素验收 | ✅ 已发布 |
-| 上一版 | v0.10.0 | 全流程打通（AI生成→分层→Live2D→驱动→对话→工作台） | ✅ 已发布 |
+| 现在 | **v0.10.2** | 离线兜底生成器 + PSD 图层名识别 + 桌面打包工具链 + 相关项目调研 | ✅ 已发布 |
+| 上一版 | v0.10.1 | 自研 moc3 导出管线：官方 Cubism 参数驱动 + 官方内核逐像素验收 | ✅ 已发布 |
 | 近期 | v0.10.5 | 自定义画风 / 多角色换装编辑器 / VTube Studio 插件直连 | 🚧 开发中 |
 | 中期 | v0.11.0 | ComfyUI 工作流集成 / SDXL 本地推理 / 中文 ASR 优化 | 📋 规划中 |
 | 远期 | v0.12.0 | 3D VTuber 支持（VRM 导出）/ 实时动作捕捉（全身）/ 多模态输入 | 🔮 构思中 |

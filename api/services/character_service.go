@@ -180,6 +180,31 @@ func (s *CharacterService) UpdateCharacter(characterID string, req models.Charac
 	return card, nil
 }
 
+// UpdateReference 记录角色某个视角的参考图路径到卡片上。
+// 与 CreateCharacter 的 RefImage 语义一致：路径总是落卡（即使 Python 桥
+// 的 embedding 提取不可用），embedding 由调用方另行触发。
+func (s *CharacterService) UpdateReference(characterID, view, imagePath string) (*models.CharacterCard, error) {
+	card, err := s.GetCharacter(characterID)
+	if err != nil {
+		return nil, err
+	}
+	switch view {
+	case "front":
+		card.References.Front = imagePath
+	case "side":
+		card.References.Side = imagePath
+	case "back":
+		card.References.Back = imagePath
+	default:
+		return nil, fmt.Errorf("未知参考图视角: %s（允许 front/side/back）", view)
+	}
+	card.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := s.save(card); err != nil {
+		return nil, err
+	}
+	return card, nil
+}
+
 // DeleteCharacter 删除角色
 func (s *CharacterService) DeleteCharacter(characterID string) error {
 	if err := validateCharacterID(characterID); err != nil {
