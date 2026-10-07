@@ -87,6 +87,10 @@ class TestUnimplementedEndpointsAreHonest:
             ("post", "/api/see-through"),
             ("post", "/api/export/psd"),
             ("get", "/api/export/package"),
+            # 路由收缩：Python 降级服务无缓存层，cache 端点早期回的是假成功
+            # （enabled:True / cleared:True），现统一改为 501 引导到 Go 服务。
+            ("get", "/api/cache/stats"),
+            ("post", "/api/cache/clear"),
         ],
     )
     def test_returns_501_and_success_false(self, client, method, path):
@@ -95,6 +99,30 @@ class TestUnimplementedEndpointsAreHonest:
         body = r.json()
         assert body["success"] is False
         assert isinstance(body["error"], str) and body["error"]
+
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("post", "/api/see-through"),
+            ("post", "/api/export/psd"),
+            ("get", "/api/export/package"),
+            ("get", "/api/cache/stats"),
+            ("post", "/api/cache/clear"),
+        ],
+    )
+    def test_501_envelope_is_contractual(self, client, method, path):
+        """路由收缩后的 501 必须带统一的指引字段，不能只剩一个 error 字符串。"""
+        r = getattr(client, method)(path)
+        assert r.status_code == 501
+        body = r.json()
+        assert body["error"] == "not_implemented"
+        # message 用中文指引到 Go 服务，且必须明确说出哪个后端可用
+        message = body.get("message", "")
+        assert isinstance(message, str) and message
+        assert "Go API" in message or "live2d-api" in message
+        # go_endpoint 给前端做自动切换用，必须是非空字符串
+        go_endpoint = body.get("go_endpoint", "")
+        assert isinstance(go_endpoint, str) and go_endpoint.startswith("/")
 
     def test_psd_plan_marks_itself_as_template(self, client):
         r = client.post("/api/psd-plan")

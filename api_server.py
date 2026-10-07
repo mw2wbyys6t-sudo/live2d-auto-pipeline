@@ -2,6 +2,62 @@
 Live2D Master Agent - Python API Server (FastAPI)
 兼容 Go API 接口格式，直接调用 core 模块。
 
+⚠️ 降级模式：本服务是 Go API（./api/live2d-api）的降级替代实现，
+   仅提供只读端点与已落地的写操作，用于无 Go 编译能力的环境。
+   完整功能请运行 ./api/live2d-api（Go 服务）。
+   详细缺口见 docs/LIMITATIONS.md §6「API 层」。
+
+路由状态约定：
+- 完整实现 / 降级可用 → 路由保留，返回真实结构化数据；
+- 仅在 Go API 才有真实实现的桩能力 → 一律回 501 Not Implemented，
+  并在响应里给出 go_endpoint 指引，避免给前端造成「功能对等」的错觉。
+
+SUPPORTED_ENDPOINTS（降级模式下可用）：
+    # 基础信息（只读）
+    GET  /                       根信息
+    GET  /api/health             健康检查
+    GET  /api/status             系统状态（部分字段静态声明）
+    GET  /api/info               API 元信息
+    GET  /api/models             可用模型列表（声明性）
+    GET  /api/expressions        表情列表（静态模板）
+    GET  /api/scripts            scripts/ 目录脚本列表
+
+    # 角色管理（完整 CRUD，落盘到 assets/characters/*.json）
+    GET    /api/characters
+    POST   /api/characters
+    GET    /api/characters/{char_id}
+    PUT    /api/characters/{char_id}
+    DELETE /api/characters/{char_id}
+
+    # 生成 / 分层 / 导出 / 桌宠（真实调用 core、live2d_builder、drivers）
+    POST /api/generate
+    POST /api/generate/character
+    GET  /api/generations/latest
+    POST /api/segment
+    POST /api/psd-plan                       # 返回静态模板，已诚实标注 applied=False
+    POST /api/export/live2d                  # 支持下载 ZIP（download=true）
+    POST /api/deploy/desktop
+
+    # LLM 对话（含降级路径，不会静默失败）
+    POST /api/chat
+    POST /api/chat/stream                    # SSE
+
+    # 静态资源与面捕（服务端面捕管线，浏览器面捕走 /preview 的 WASM）
+    GET  /output/{filepath:path}
+    GET  /api/preview/{filepath:path}
+    POST /api/tracking/start
+    POST /api/tracking/stop
+    WS   /ws/tracking
+    WS   /api/ws
+    GET  /ws/progress                        # 仅返回指引，引导到 /api/ws
+
+NOT_IMPLEMENTED（仅 Go API 实现，本服务回 501）：
+    POST /api/see-through
+    GET  /api/export/package
+    POST /api/export/psd
+    GET  /api/cache/stats
+    POST /api/cache/clear
+
 启动方式:
     python api_server.py
     # 或
@@ -141,9 +197,29 @@ def err(error: str, code: int = 400) -> JSONResponse:
     )
 
 
-def not_implemented(feature: str) -> JSONResponse:
-    """统一的「尚未实现」响应：501 + 明确错误，绝不返回假成功。"""
-    return err(f"{feature}尚未实现", 501)
+def not_implemented(feature: str, go_endpoint: str = "") -> JSONResponse:
+    """统一的「尚未实现」响应：501 + 明确错误，绝不返回假成功。
+
+    降级模式（本 Python 服务）只提供只读 / 已落地的端点；凡是仅在 Go API
+    模式下才有真实实现的能力，统一回 501 并指引调用方启动 Go 服务，
+    避免给前端造成「202 = 功能对等」的错觉。
+
+    feature  : 人可读的能力名（用于 message 开头，方便排障定位）。
+    go_endpoint : 对应的 Go API 路由，调用方可据此直接切换目标。
+    """
+    return JSONResponse(
+        status_code=501,
+        content={
+            "success": False,
+            "error": "not_implemented",
+            "message": (
+                f"{feature}：此功能仅在 Go API 模式下可用。"
+                "请启动 ./api/live2d-api 而非本 Python 降级服务。"
+            ),
+            "go_endpoint": go_endpoint,
+            "data": None,
+        },
+    )
 
 
 def generate_id(prefix: str = "") -> str:
@@ -554,7 +630,7 @@ async def create_psd_plan():
 
 @app.post("/api/see-through")
 async def run_see_through():
-    return not_implemented("See-through 抠图")
+    return not_implemented("See-through 抠图", go_endpoint="/api/see-through")
 
 
 # ---------- 导出 ----------
@@ -684,12 +760,18 @@ async def export_live2d(req: ExportLive2DRequest):
 
 @app.get("/api/export/package")
 async def export_model_zip(character_id: str = ""):
-    return not_implemented("打包下载（请改用 /api/export/live2d 并传 download=true）")
+    return not_implemented(
+        "打包下载整个 Live2D 模型（请改用 /api/export/live2d 并传 download=true）",
+        go_endpoint="/api/export/live2d",
+    )
 
 
 @app.post("/api/export/psd")
 async def export_psd():
-    return not_implemented("PSD 导出（可通过 /api/export/live2d 获取模型包）")
+    return not_implemented(
+        "PSD 导出（可通过 /api/export/live2d 获取模型包）",
+        go_endpoint="/api/export/psd",
+    )
 
 
 def _run_deploy_desktop(layers_dir: str) -> Dict[str, Any]:
@@ -1012,14 +1094,18 @@ async def ws_progress():
 
 
 # ---------- 缓存管理 ----------
+# 说明：本 Python 降级服务没有内存缓存层（Go API 才有 RequestCache）。
+# 早期版本这里回 {enabled:True, ...} / {cleared:True} 是假成功 —— 给前端
+# 造成「缓存可用」的错觉，但 entries 永远是 0、cleared 也没真正清理任何
+# 东西。按路由收缩原则改为 501，让调用方明确知道要切到 Go 服务。
 @app.get("/api/cache/stats")
 async def get_cache_stats():
-    return ok({"enabled": True, "entries": 0, "size_mb": 0, "hit_rate": 0})
+    return not_implemented("缓存统计", go_endpoint="/api/cache/stats")
 
 
 @app.post("/api/cache/clear")
 async def clear_cache():
-    return ok({"cleared": True}, "缓存已清除")
+    return not_implemented("缓存清理", go_endpoint="/api/cache/clear")
 
 
 @app.get("/api/scripts")
