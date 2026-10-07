@@ -159,7 +159,7 @@
 
 | # | 属性（Property） | 度量（Metric） | 阈值 / 规则 | 测量来源 | 频率 | 失败响应（Failure Response） | 关联 ADR |
 |---|------------------|---------------|-------------|---------|------|------------------------------|----------|
-| **FF-1** | **依赖方向正确性（三栈解耦）** | import 扫描 + 调用方向分析 | ① Python 不 import Go/TS 包；② Go 不 import Python 源码（仅通过 subprocess + FS）；③ 前端只有 HTTP/WS 调用，不直接读磁盘；④ 不允许反向依赖 | 自定义 import-lint 脚本（待落地 `scripts/lint_architecture.py`） | **PR 阻断** | 阻断合并，要求重构 | ADR-002 |
+| **FF-1** | **依赖方向正确性（三栈解耦）** | import 扫描 + 调用方向分析 | ① Python 不 import Go/TS 包；② Go 不 import Python 源码（仅通过 subprocess + FS）；③ 前端只有 HTTP/WS 调用，不直接读磁盘；④ 不允许反向依赖 | `scripts/lint_architecture.py`（**已落地**，warn-only baseline；CI 上传 `ff1-architecture-lint` artifact） | **warn-only baseline**（每次 PR 跑、上传报告；待 8 处历史违规清理后切换为 PR 阻断） | 当前仅记录 + 上传报告（不阻断 PR）；Sprint 2 清理 8 处历史反向依赖后恢复「阻断合并，要求重构」 | ADR-002 |
 | **FF-2** | **18 层顺序契约** | `STANDARD_LAYER_ORDER` 与 PSD 写出顺序 + Live2D model3 `renderOrder` 一致性 | 三者严格 1:1 匹配，任何层错位 0 容忍 | `core/psd/validator.py::check_layer_order` + `live2d_builder/validator` | 每次生成 | 阻断导出并高亮错层 | ADR-003 |
 | **FF-3** | **Amodal ΔE 颜色连续性** | 补全边缘像素（α=0↔1 过渡带）CIE Lab 色差 p95 | ≤ 15 | `core/qa/engine.py::score_color_continuity` | 每次生成 | 打 `⚠️ 建议手动修色` 标签 | ADR-003 |
 | **FF-4** | **Go API p95 首字节延迟** | `/api/health`、`/api/character/list` 等元接口 | ≤ 80ms（不阻塞 Python 计算时） | `api/` 基准测试（待补） | 每次发版 | 告警，排查缓存/路由 | ADR-002 |
@@ -174,7 +174,7 @@
 | **FF-13** | **三栈构建总时长** | GitHub Actions 三 job 总墙钟 | ≤ 20 分钟 | Actions UI | 每次 PR | 优化缓存 / 并行度 | ADR-002 |
 | **FF-14** | **端到端生成耗时（CPU）** | Prompt → model3.zip 全流程（i7-12700）| ≤ 10 分钟 | 每周定时任务 | 每周 | 评估是否移除某个 Amodal 层 | ADR-003 |
 | **FF-15** | **License 与署名完整性** | 产出物（桌宠安装包、导出模型包、Web 构建包）内是否含 ADR-001 (Rev.4) 要求的 Apache-2.0 许可全文 | 100% 包含，且文本与根目录 `LICENSE` 文件的 **Apache-2.0 License** 原文逐字节一致（义务：保留版权+许可声明；若根目录存在 `NOTICE` 则一并保留）| Release 打包前钩子：`scripts/check-license-bundle.sh`（待补）| 每次发版 | 阻断发布 | ADR-001 |
-| **FF-16** | **Go→Python 命令注入安全** | `validatePath` 通过 / 失败比例 + shell meta 字符逃逸检测 | 0 失败（任何失败即高危） | `services/python_bridge_test.go`（待补）| 每次 PR | 阻断合并 + 人工审查 | ADR-002 |
+| **FF-16** | **Go→Python 命令注入安全** | `validatePath` 通过 / 失败比例 + shell meta 字符逃逸检测 | 0 失败（任何失败即高危） | `api/services/python_bridge_test.go` + `python_bridge_inject_test.go`（**已落地**，由 CI `go-build` job 的 `go test -v ./...` 覆盖 `./services` 注入红线用例）| 每次 PR | 阻断合并 + 人工审查 | ADR-002 |
 
 ---
 
@@ -218,4 +218,4 @@
 ## 后续跟进（Follow-ups，≤ 2 项未解析 Surface）
 
 1. **[documentation-lifecycle]** 本架构文档 + ADR 索引的 Owner / 新鲜度 / Review 节奏尚未落地（建议：每发版一次 Review；架构组每月 1 小时架构保健）。
-2. **[testing-and-quality-gates]** FF-1、FF-4、FF-5、FF-7、FF-8、FF-10、FF-16 共 **7 条 Fitness Functions 当前仍以"待补测试"存在**，需在下个迭代（v0.10.1）前全部以 CI 可执行脚本形式落地；否则等于腐化没有报警。
+2. **[testing-and-quality-gates]** FF-4、FF-5、FF-7、FF-8、FF-10 共 **5 条 Fitness Functions 当前仍以"待补测试"存在**，需在下个迭代（v0.10.1）前全部以 CI 可执行脚本形式落地；否则等于腐化没有报警。FF-1 已落地为 **warn-only baseline**（CI `python-tests` job 在 3.11 矩阵跑 `scripts/lint_architecture.py` 并上传 `ff1-architecture-lint` artifact；待 8 处历史违规清理后去掉 `|| true` 恢复 PR 阻断）；FF-16 已落地为 **CI 阻断**（由 `go-build` job 的 `go test -v ./...` 覆盖 `api/services` 的 `python_bridge_test.go` + `python_bridge_inject_test.go` 注入红线用例）。

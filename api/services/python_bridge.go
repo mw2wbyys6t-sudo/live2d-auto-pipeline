@@ -39,13 +39,38 @@ func NewPythonBridge(cfg *config.Config) *PythonBridge {
 	return &PythonBridge{cfg: cfg}
 }
 
-// validatePath validates path safety, preventing command injection and path traversal
+// validatePath 校验路径安全性，拦截命令注入与目录穿越。
+// Go→Python 桥接的纵深防御层：即便上游放过，这里也要拦住 shell 元字符、
+// 控制字符、URL 编码前导符与 Unicode 规范化攻击向量。
 func validatePath(path string) error {
 	if path == "" {
 		return fmt.Errorf("路径不能为空")
 	}
-	if matched, _ := regexp.MatchString(`[;&|*$\x00]`, path); matched {
-		return fmt.Errorf("路径包含非法字符")
+	// 防御 Unicode 规范化攻击：全角点 ＂．＂ 在视觉上等同 ".."，但不会命中
+	// 「段 == ..」检查。先把全角分隔符规范化为半角，再做后续校验。
+	// 这里只覆盖三种分隔符，用标准库 strings.Map 即可，无需引入 x/text。
+	path = strings.Map(func(r rune) rune {
+		switch r {
+		case '\uFF0E': // 全角句号 → 半角点
+			return '.'
+		case '\uFF0F': // 全角斜杠 → 半角斜杠
+			return '/'
+		case '\uFF3C': // 全角反斜杠 → 半角反斜杠
+			return '\\'
+		}
+		return r
+	}, path)
+	// 字符黑名单：shell 元字符 + 控制字符 + URL 编码前导符。
+	//   - `;` `&` `|` `*` `$`：原有 shell 元字符（命令拼接/通配/变量展开）
+	//   - 反引号：命令替换 `...`
+	//   - 换行(LF)/回车(CR)：日志伪造、HTTP 头注入、配置文件污染
+	//   - %：%00 截断攻击、双重 URL 编码绕过
+	//   - NUL：C 字符串截断、参数注入
+	for _, c := range path {
+		switch c {
+		case ';', '&', '|', '*', '$', '`', '%', '\x00', '\x0a', '\x0d':
+			return fmt.Errorf("路径包含非法字符")
+		}
 	}
 	// 拒绝目录穿越：任一 ".." 路径段都不允许。此前只靠后续 os.Stat 的存在性兜底，
 	// 已存在的越界文件仍可被读取。两种分隔符都切分，避免跨平台差异。

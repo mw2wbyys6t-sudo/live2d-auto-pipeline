@@ -7,6 +7,11 @@ on:
     branches: [main]
   # 手动入口：跑需要官方内核 + 逐像素验收的 moc3-acceptance job
   workflow_dispatch:
+  # 每日北京时间 10:00（UTC 02:00）自动跑官方内核验收，关闭 F-10 盲区：
+  # 默认 PR 的 CI 不装 live2d-py，"绿"不代表模型真能被官方内核接受；
+  # 此定时任务强制装内核跑完整验收，发现回归时及时告警（GitHub 仅在默认分支执行 schedule）。
+  schedule:
+    - cron: '0 2 * * *'
 
 jobs:
   # ===== Python Tests =====
@@ -68,6 +73,24 @@ jobs:
         if: matrix.python-version == '3.11'
         with:
           file: ./coverage.xml
+
+      # FF-1 依赖方向 lint —— warn-only baseline。
+      # 现存 8 处历史反向依赖（见 scripts/lint_architecture.py 顶部清单）尚未清零，
+      # 故此处用 `|| true` 降级为"只产报告、不阻断 PR"；待 Sprint 2 清理后去掉 `|| true` 即恢复 PR 阻断。
+      # 仅在 3.11 矩阵跑一次：lint 是静态 AST 扫描，与 Python 版本无关，跑 3 次只会撞 artifact 同名。
+      - name: FF-1 架构依赖方向 lint（warn-only baseline）
+        if: always() && matrix.python-version == '3.11'
+        run: |
+          python scripts/lint_architecture.py --json > ff1-report.json || true
+          echo "::notice::FF-1 lint 已生成报告（warn-only baseline，不阻断 PR），详见 artifact ff1-architecture-lint"
+
+      - name: 上传 FF-1 报告
+        if: always() && matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ff1-architecture-lint
+          retention-days: 14
+          path: ff1-report.json
 
   # ===== Go Tests & Build =====
   go-build:
@@ -141,15 +164,16 @@ jobs:
         working-directory: web
         run: npm run build
 
-  # ===== moc3 Acceptance (opt-in: 官方内核 + 逐像素形变) =====
+  # ===== moc3 Acceptance (官方内核 + 逐像素形变) =====
   # 默认 job 不装 live2d-py（加载/渲染需要 GL 上下文），所以一致性/加载/像素判据
   # 在默认 job 里会被 skip —— 那些"绿色"不能证明模型真能被官方内核接受。
-  # 本 job 提供"真的装上内核并跑完整验收"的入口：只有它绿，才算模型能被加载、
-  # 参数真的驱动画面。首次运行需人工确认环境可跑通，确认后可再加 schedule 定时。
+  # 本 job 是"真的装上内核并跑完整验收"的唯一入口：只有它绿，才算模型能被加载、
+  # 参数真的驱动画面。触发方式：workflow_dispatch（手动）+ schedule（每日 UTC 02:00 / 北京 10:00）；
+  # schedule 仅在默认分支运行，回归出现时通过 Actions 失败 + 上传的 moc3-acceptance-evidence artifact 告警。
   moc3-acceptance:
     name: moc3 Acceptance (live2d-py + pixels)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
 
     steps:
       - uses: actions/checkout@v4
@@ -178,7 +202,29 @@ jobs:
         env:
           LIVE2D_TEST_PIXELS: "1"
         run: |
-          xvfb-run -a python -m pytest tests/integration -q --no-header
+          xvfb-run -a python -m pytest tests/integration -q --no-header \
+            --junitxml=moc3-acceptance-junit.xml
+
+      - name: 上传 moc3 验收证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: moc3-acceptance-evidence
+          retention-days: 14
+          # junitxml 是验收步骤里唯一保证落盘的真实证据（集成测试主体写 pytest tmp_path，
+          # 用完即清）。其余路径为前向兼容：当未来有测试往 Work/ output/ reports/ 落盘时
+          # 自动纳入证据包；当下若不匹配，if-no-files-found=ignore 避免污染 cron 日志。
+          if-no-files-found: ignore
+          path: |
+            moc3-acceptance-junit.xml
+            Work/multiband-axis/
+            Work/moc3-keyform-verification.json
+            Work/moc3-pixel-judgments.json
+            Work/native-sample/
+            Work/export*/
+            output/live2d/*.moc3
+            output/live2d/*.model3.json
+            tests/integration/reports/*.json
 
   # ===== Docker Build =====
   docker-build:

@@ -88,3 +88,50 @@ dist/
 !api/webui/dist/
 api/webui/dist/*
 !api/webui/dist/.gitkeep
+
+# ============================================================
+# 增量补充：过程性产物（避免误入版本控制）
+# 以下规则均为原 .gitignore 未覆盖的项；已存在的不再重复。
+# 注意：已 git track 的文件不受 .gitignore 影响，无需 git rm --cached。
+# ============================================================
+
+# --- 运行时产物（增量） ---
+output-*/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- 工具产物（增量） ---
+# .aider* 覆盖 .aider / .aider.conf.yml / .aider.chat.history.md 等
+.aider*
+
+# --- 本地缓存（增量） ---
+.venv-*/
+.npm-cache/
+
+# --- 打包/编辑器临时产物（增量） ---
+*.beacon.bak
+*.bak
+*~
+
+# --- Next.js 构建产物（显式声明，即便顶层 .next/ 已涵盖同名目录） ---
+web/.next/
+web/.vercel/
+web/.cache/
+
+# --- Python 扩展模块构建产物 ---
+*.so
+*.dylib
+*.dll
+*.exe.manifest
+
+# --- 模型缓存目录 ---
+# 注意：项目内 api/models/ 为 Go 源码目录（已 track），故不使用全局 models/ 规则以免误伤。
+# 大模型权重已由上方 *.onnx/*.pth/*.bin/*.safetensors 覆盖。
+hf_cache/
+
+# --- 个人/本地配置 ---
+*.local.json
+
+# --- 操作系统文件（增量） ---
+desktop.ini

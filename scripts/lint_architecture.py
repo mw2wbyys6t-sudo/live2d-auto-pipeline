@@ -7,16 +7,26 @@ Architecture Lint — Live2D Master Agent (FF-1 红线)
     ① Python 不 import Go/TS 包
     ② Go 不 import Python 源码（仅通过 subprocess + FS）
     ③ web/ 不直接读磁盘（除服务端合理场景）
-    ④ 依赖方向不允许反向（core < live2d_builder < drivers/llm_bridge）
+    ④ 依赖方向不允许反向（core < live2d_builder < drivers/llm_bridge；
+       且 live2d_builder 不依赖服务层 api_server）
 
 四条规则一旦违规，脚本 exit 1，对应 FF-1「PR 阻断」失败响应。
 
 用法
 ----
-    python scripts/lint_architecture.py            # 扫整个项目，违规时 exit 1
-    python scripts/lint_architecture.py --quiet    # 只输出违规摘要
-    python scripts/lint_architecture.py --json     # 输出 JSON 给 CI 消费
+    python scripts/lint_architecture.py              # 扫整个项目，违规时 exit 1
+    python scripts/lint_architecture.py --quiet      # 只输出违规摘要
+    python scripts/lint_architecture.py --json       # 输出 JSON 给 CI 消费
+    python scripts/lint_architecture.py --root core  # 只扫 core/ 子目录（scope 模式）
     python scripts/lint_architecture.py --help
+
+--root 语义
+-----------
+    不传 / 传项目根本身          → 全量扫描（默认）
+    传项目根的直接子目录之一     → scope 模式，只扫该子目录与相关规则
+                                  合法值：core / live2d_builder / drivers /
+                                          llm_bridge / api / web
+    传任意其它已存在的目录       → 把它当项目根（脚本据此解析相对路径）
 
 已知违规清单（截至 v0.10.0，待 Sprint 2 修复，**脚本会如实报出**）
 ---------------------------------------------------------------
@@ -125,13 +135,29 @@ WEB_SERVER_PATH_MARKERS = (
 )
 
 PROJECT_LAYERS = ("core", "live2d_builder", "drivers", "llm_bridge")
+SERVICE_LAYER_MODULES = ("api_server",)
+_LAYER_TOKENS = frozenset(PROJECT_LAYERS + SERVICE_LAYER_MODULES)
 FORBIDDEN_DOWNSTREAM_FROM = {
     "core": ("drivers", "live2d_builder", "llm_bridge"),
-    "live2d_builder": ("drivers", "llm_bridge"),
+    "live2d_builder": ("drivers", "llm_bridge", "api_server"),
     "llm_bridge": ("drivers",),
 }
 PY_SOURCE_DIRS_FOR_RULE1 = ("core", "live2d_builder", "drivers", "llm_bridge")
 PY_SOURCE_FILES_FOR_RULE1 = ("api_server.py",)
+
+# FF-1 跳过规则：以下目录 / 文件不参与依赖方向检查
+#   - 缓存 / 虚拟环境 / 构建产物 / 依赖目录：不是项目源码
+#   - tools/archive：归档不参与（脚本会跳过 tools/<archive> 子树）
+#   - 测试文件（test_*.py / *_test.py / *_test.go）：测试允许反向依赖做集成验证
+SKIP_DIR_NAMES = frozenset({
+    "__pycache__", "__pypackages__",
+    ".venv", ".venv38", ".venv39", ".venv310", ".venv311", ".venv312", ".venv313",
+    "node_modules", ".next", ".nuxt",
+    ".pytest_cache", ".mypy_cache", ".tox", ".cache", "htmlcov",
+    "dist", "build", "out", "coverage",
+})
+# --root 可指定的子目录（scope 模式）
+SCOPEABLE_DIRS = ("core", "live2d_builder", "drivers", "llm_bridge", "api", "web")
 
 
 @dataclass(frozen=True)
@@ -185,14 +211,58 @@ def _line_col(text: str, pos: int) -> tuple[int, int]:
     return line, col
 
 
+def _is_test_file_name(name: str) -> bool:
+    return (
+        name.startswith("test_")
+        or name.endswith("_test.py")
+        or name.endswith("_test.go")
+    )
+
+
+def _should_skip_parts(parts: tuple) -> bool:
+    """根据路径片段判断是否跳过（缓存目录 / 归档子树 / 虚拟环境等）。"""
+    if any(p in SKIP_DIR_NAMES for p in parts):
+        return True
+    for i, p in enumerate(parts):
+        if p == "tools" and i + 1 < len(parts) and parts[i + 1] == "archive":
+            return True
+    return False
+
+
+def _scoped_target(target: Path, scope: Optional[Path]) -> Optional[Path]:
+    """根据 scope 裁剪扫描目标。
+
+    - scope=None：返回 target（若存在）
+    - target 在 scope 内（target==scope 或 scope 是 target 上级）→ 返回 target
+    - target 包含 scope（scope 是 target 的后代）→ 返回 scope（裁剪）
+    - 无交集 → None（跳过该目标）
+    """
+    if scope is None:
+        return target if target.exists() else None
+    if not target.exists():
+        return None
+    ta = target.resolve()
+    sc = scope.resolve()
+    if ta == sc or sc in ta.parents:
+        return ta
+    if ta in sc.parents:
+        return sc
+    return None
+
+
 def _iter_py_files(targets: Iterable[Path]) -> Iterator[Path]:
     for t in targets:
         if not t.exists():
             continue
         if t.is_file() and t.suffix == ".py":
+            if _should_skip_parts(t.parts) or _is_test_file_name(t.name):
+                continue
             yield t
         elif t.is_dir():
-            yield from sorted(t.rglob("*.py"))
+            for p in sorted(t.rglob("*.py")):
+                if _should_skip_parts(p.parts) or _is_test_file_name(p.name):
+                    continue
+                yield p
 
 
 def _read_text(path: Path) -> str:
@@ -203,16 +273,21 @@ def _module_top_layer(module: str) -> Optional[str]:
     if not module:
         return None
     top = module.lstrip(".").split(".")[0]
-    if top in PROJECT_LAYERS:
+    if top in _LAYER_TOKENS:
         return top
     return None
 
 
-def check_rule1_python_no_go_ts(project_root: Path) -> RuleResult:
+def check_rule1_python_no_go_ts(project_root: Path, scope: Optional[Path] = None) -> RuleResult:
     """规则 1：Python 源码不允许 import 引用 .go / .ts / .tsx 源文件。"""
     result = RuleResult(rule_id="R1", rule_name="Python 不引用 Go/TS 源码")
-    targets: List[Path] = [project_root / d for d in PY_SOURCE_DIRS_FOR_RULE1]
-    targets += [project_root / f for f in PY_SOURCE_FILES_FOR_RULE1]
+    raw_targets: List[Path] = [project_root / d for d in PY_SOURCE_DIRS_FOR_RULE1]
+    raw_targets += [project_root / f for f in PY_SOURCE_FILES_FOR_RULE1]
+    targets: List[Path] = []
+    for t in raw_targets:
+        st = _scoped_target(t, scope)
+        if st is not None:
+            targets.append(st)
 
     for py_file in _iter_py_files(targets):
         result.files_scanned += 1
@@ -274,26 +349,27 @@ def check_rule1_python_no_go_ts(project_root: Path) -> RuleResult:
     return result
 
 
-def check_rule2_go_no_python(project_root: Path) -> RuleResult:
+def check_rule2_go_no_python(project_root: Path, scope: Optional[Path] = None) -> RuleResult:
     """规则 2：api/ 下 .go 文件不允许 import Python 源码目录。"""
     result = RuleResult(rule_id="R2", rule_name="Go 不引用 Python 源码")
     api_dir = project_root / "api"
-    if not api_dir.is_dir():
+    scan_root = _scoped_target(api_dir, scope)
+    if scan_root is None or not scan_root.is_dir():
         return result
 
     python_src_segments = ("core", "drivers", "live2d_builder", "llm_bridge")
 
     def _is_python_source_import(imp: str) -> bool:
-        if imp == "python":
-            return True
         parts = imp.split("/")
+        if "python" in parts:
+            return True
         for seg in python_src_segments:
             if seg in parts:
                 return True
         return False
 
-    for go_file in sorted(api_dir.rglob("*.go")):
-        if go_file.name.endswith("_test.go"):
+    for go_file in sorted(scan_root.rglob("*.go")):
+        if _is_test_file_name(go_file.name) or _should_skip_parts(go_file.parts):
             continue
         result.files_scanned += 1
         rel = go_file.relative_to(project_root).as_posix()
@@ -333,16 +409,19 @@ def check_rule2_go_no_python(project_root: Path) -> RuleResult:
     return result
 
 
-def check_rule3_web_no_fs(project_root: Path) -> RuleResult:
+def check_rule3_web_no_fs(project_root: Path, scope: Optional[Path] = None) -> RuleResult:
     """规则 3：web/ 下 .ts/.tsx 不允许客户端组件直接使用 fs API。"""
     result = RuleResult(rule_id="R3", rule_name="前端不直接读磁盘")
     web_dir = project_root / "web"
-    if not web_dir.is_dir():
+    scan_root = _scoped_target(web_dir, scope)
+    if scan_root is None or not scan_root.is_dir():
         return result
 
     for ext in ("*.ts", "*.tsx"):
-        for ts_file in sorted(web_dir.rglob(ext)):
+        for ts_file in sorted(scan_root.rglob(ext)):
             rel = ts_file.relative_to(project_root).as_posix()
+            if _should_skip_parts(ts_file.parts):
+                continue
             if any(part in WEB_IGNORE_DIRS for part in ts_file.parts):
                 continue
             if any(marker in rel for marker in WEB_SERVER_PATH_MARKERS):
@@ -381,19 +460,22 @@ def check_rule3_web_no_fs(project_root: Path) -> RuleResult:
     return result
 
 
-def check_rule4_no_reverse_dep(project_root: Path) -> RuleResult:
+def check_rule4_no_reverse_dep(project_root: Path, scope: Optional[Path] = None) -> RuleResult:
     """规则 4：项目层依赖方向不允许反向（core < live2d_builder < drivers/llm_bridge）。"""
     result = RuleResult(rule_id="R4", rule_name="依赖方向不反向")
 
     for owner in PROJECT_LAYERS:
         owner_dir = project_root / owner
-        if not owner_dir.is_dir():
+        scan_root = _scoped_target(owner_dir, scope)
+        if scan_root is None or not scan_root.is_dir():
             continue
         forbidden = FORBIDDEN_DOWNSTREAM_FROM.get(owner, ())
         if not forbidden:
             continue
 
-        for py_file in sorted(owner_dir.rglob("*.py")):
+        for py_file in sorted(scan_root.rglob("*.py")):
+            if _should_skip_parts(py_file.parts) or _is_test_file_name(py_file.name):
+                continue
             result.files_scanned += 1
             rel = py_file.relative_to(project_root).as_posix()
             text = _read_text(py_file)
@@ -432,21 +514,43 @@ def check_rule4_no_reverse_dep(project_root: Path) -> RuleResult:
     return result
 
 
-def run_all(project_root: Path) -> List[RuleResult]:
+def run_all(project_root: Path, scope: Optional[Path] = None) -> List[RuleResult]:
     return [
-        check_rule1_python_no_go_ts(project_root),
-        check_rule2_go_no_python(project_root),
-        check_rule3_web_no_fs(project_root),
-        check_rule4_no_reverse_dep(project_root),
+        check_rule1_python_no_go_ts(project_root, scope),
+        check_rule2_go_no_python(project_root, scope),
+        check_rule3_web_no_fs(project_root, scope),
+        check_rule4_no_reverse_dep(project_root, scope),
     ]
 
 
-def format_text(results: Sequence[RuleResult], quiet: bool = False) -> str:
+def _scope_rel(scope: Optional[Path], project_root: Optional[Path]) -> Optional[str]:
+    if scope is None or project_root is None:
+        return None
+    try:
+        return scope.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return scope.as_posix()
+
+
+def format_text(
+    results: Sequence[RuleResult],
+    quiet: bool = False,
+    scope: Optional[Path] = None,
+    project_root: Optional[Path] = None,
+) -> str:
     lines: List[str] = [
-        "Architecture Lint — Live2D Master Agent",
-        "========================================",
+        "━━━ FF-1 依赖方向 lint ━━━",
         "",
     ]
+    sr = _scope_rel(scope, project_root)
+    if sr is not None:
+        lines.append(f"扫描范围（--root 限定）: {sr}/")
+    else:
+        lines.append(
+            "扫描范围: core/ live2d_builder/ drivers/ llm_bridge/ api_server.py api/ web/"
+        )
+    lines.append("")
+
     if quiet:
         for r in results:
             status = "PASS" if r.passed else f"FAIL ({len(r.violations)})"
@@ -468,25 +572,34 @@ def format_text(results: Sequence[RuleResult], quiet: bool = False) -> str:
                         lines.append(f"    建议：{v.suggestion}")
             lines.append("")
 
+    total_files = sum(r.files_scanned for r in results)
     total_violations = sum(len(r.violations) for r in results)
-    failed = sum(1 for r in results if not r.passed)
+    lines.append("━━━ 结果 ━━━")
+    lines.append(f"扫描文件: {total_files}")
+    lines.append(f"违规:     {total_violations}")
     if total_violations == 0:
-        lines.append(f"Summary: 全部 {len(results)} 条规则通过，零违规")
+        lines.append("结论:     全部规则通过，零违规")
     else:
-        lines.append(
-            f"Summary: {failed}/{len(results)} 规则未通过，发现 {total_violations} 处违规"
-        )
+        failed = sum(1 for r in results if not r.passed)
+        lines.append(f"结论:     {failed}/{len(results)} 规则未通过")
     return "\n".join(lines) + "\n"
 
 
-def format_json(results: Sequence[RuleResult]) -> str:
+def format_json(
+    results: Sequence[RuleResult],
+    scope: Optional[Path] = None,
+    project_root: Optional[Path] = None,
+) -> str:
     total_violations = sum(len(r.violations) for r in results)
+    total_files = sum(r.files_scanned for r in results)
     payload = {
         "tool": "lint_architecture",
-        "version": "1.0",
+        "version": "1.1",
         "ff": "FF-1",
         "passed": total_violations == 0,
         "total_violations": total_violations,
+        "total_files_scanned": total_files,
+        "scope": _scope_rel(scope, project_root),
         "rules": [r.to_dict() for r in results],
         "violations": [v.to_dict() for r in results for v in r.violations],
     }
@@ -508,30 +621,56 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--root",
         default=None,
-        help="项目根目录（默认：脚本所在目录的上一级）",
+        help=(
+            "项目根目录（默认：脚本上一级）。"
+            "若指向项目根的直接子目录（core/live2d_builder/drivers/llm_bridge/api/web），"
+            "则进入 scope 模式，只扫该子目录与相关规则。"
+        ),
     )
     return parser
+
+
+def _resolve_project_root_and_scope(raw_root: Optional[str]) -> tuple[Path, Optional[Path]]:
+    """把 --root 解析成 (project_root, scope)。
+
+    - raw_root 为空 → (项目根, None)
+    - 指向项目根本身 → (项目根, None)
+    - 指向项目根的直接子目录（SCOPEABLE_DIRS）→ (项目根, 该子目录)
+    - 指向其它已存在的目录 → (该目录, None)
+    - 不存在 → 抛 FileNotFoundError
+    """
+    project_root = PROJECT_ROOT_DEFAULT
+    if not raw_root:
+        return project_root, None
+    candidate = Path(raw_root).resolve()
+    if not candidate.exists():
+        raise FileNotFoundError(candidate)
+    if candidate == project_root:
+        return project_root, None
+    if candidate.parent == project_root and candidate.name in SCOPEABLE_DIRS:
+        return project_root, candidate
+    return candidate, None
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
-    if args.root:
-        project_root = Path(args.root).resolve()
-    else:
-        project_root = PROJECT_ROOT_DEFAULT
-
-    if not project_root.exists():
-        print(f"错误：项目根目录不存在：{project_root}", file=sys.stderr)
+    try:
+        project_root, scope = _resolve_project_root_and_scope(args.root)
+    except FileNotFoundError as e:
+        print(f"错误：路径不存在：{e.filename}", file=sys.stderr)
         return 2
 
-    results = run_all(project_root)
+    results = run_all(project_root, scope=scope)
 
     if args.as_json:
-        print(format_json(results))
+        print(format_json(results, scope=scope, project_root=project_root))
     else:
-        print(format_text(results, quiet=args.quiet), end="")
+        print(
+            format_text(results, quiet=args.quiet, scope=scope, project_root=project_root),
+            end="",
+        )
 
     total_violations = sum(len(r.violations) for r in results)
     return 1 if total_violations > 0 else 0
