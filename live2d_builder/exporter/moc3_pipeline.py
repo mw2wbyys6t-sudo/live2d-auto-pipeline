@@ -469,14 +469,21 @@ def _lattice(rect: tuple, n_cols: int, n_rows: int) -> List[List[float]]:
 
 def _driving_rotation_parameter(pivot: Any,
                                 parameters_by_id: Dict[str, ParameterSpec],
-                                bone_positions: Dict[str, Any]) -> tuple:
+                                bone_positions: Dict[str, Any],
+                                proximity_px: float = 0.0) -> tuple:
     """按「枢轴 == 官方转动骨骼」找出驱动该 rotation 变形器的唯一官方参数。
 
     对齐 ``ROTATION_KEYFORM_PARAMS``：枢轴即 Head 的绑 ``ParamAngleZ``、即 Body 的绑
     ``ParamBodyAngleZ``。只有**恰好命中一个**已声明参数时才绑定；否则返回
     ``("", None)`` —— 宁可不驱动，也不猜一个参数。
+
+    ``proximity_px`` > 0 时启用**就近匹配**作为精确匹配的兜底：自动绑骨生成的枢轴
+    常因取整或比例换算偏离骨骼坐标几个像素，标准 Live2D 实践按就近原则归属。
+    就近匹配仍然守「唯一命中」规则 —— 多个骨骼等距时不猜，保持静态。
     """
     px, py = float(pivot[0]), float(pivot[1])
+
+    # 第一轮：精确匹配（容差 1e-3，与原始行为一致）
     hits = []
     for pid, spec in ROTATION_KEYFORM_PARAMS.items():
         param = parameters_by_id.get(pid)
@@ -489,9 +496,35 @@ def _driving_rotation_parameter(pivot: Any,
             if abs(float(bone[0]) - px) <= 1e-3 and abs(float(bone[1]) - py) <= 1e-3:
                 hits.append((pid, param))
                 break
-    if len(hits) != 1:
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
         return "", None
-    return hits[0]
+
+    # 第二轮：就近匹配（仅当 proximity_px > 0 且精确匹配落空时）
+    if proximity_px <= 0:
+        return "", None
+    nearest = []  # [(距离, pid, param), ...]
+    for pid, spec in ROTATION_KEYFORM_PARAMS.items():
+        param = parameters_by_id.get(pid)
+        if param is None:
+            continue
+        for bone_name in _bone_names(spec):
+            bone = bone_positions.get(bone_name)
+            if bone is None:
+                continue
+            dist = math.hypot(float(bone[0]) - px, float(bone[1]) - py)
+            if dist <= proximity_px:
+                nearest.append((dist, pid, param))
+    if not nearest:
+        return "", None
+    nearest.sort(key=lambda t: t[0])
+    best_dist = nearest[0][0]
+    best_hits = [(pid, param) for dist, pid, param in nearest
+                 if dist <= best_dist + 1e-3]
+    if len(best_hits) != 1:
+        return "", None
+    return best_hits[0]
 
 
 def build_deformers(specs: List[MeshSpec],
@@ -558,8 +591,13 @@ def build_deformers(specs: List[MeshSpec],
             # 与网格顶点同一换算：图像坐标 -> 原点居中、y 向上的模型坐标
             origin = (float(pivot[0]) - width / 2.0,
                       height / 2.0 - float(pivot[1]))
+            # 就近匹配容差：画布最大边的 5%。自动绑骨生成的枢轴常因取整/比例换算
+            # 偏离骨骼坐标几个像素，标准 Live2D 实践按就近原则归属；5% 足以容纳
+            # 正常偏差，又不会把不相关的枢轴错绑到近旁骨骼。
+            _proximity = max(width, height) * 0.05 if width > 0 and height > 0 else 0.0
             pid, param = _driving_rotation_parameter(
-                pivot, parameters_by_id or {}, bone_positions or {})
+                pivot, parameters_by_id or {}, bone_positions or {},
+                proximity_px=_proximity)
             if pid and param is not None:
                 # 逐键键形：内核按参数值在键之间插值，整棵子树真的绕枢轴转。
                 out.append(RotationDeformerSpec(

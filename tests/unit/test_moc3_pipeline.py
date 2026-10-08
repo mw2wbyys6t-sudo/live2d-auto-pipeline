@@ -181,6 +181,43 @@ def test_rotation_deformer_stays_static_when_pivot_is_not_a_known_turning_bone()
     assert spec.static_deformers == ["EyeTrack_L"]
 
 
+def test_rotation_deformer_binds_via_proximity_when_pivot_is_near_bone():
+    """自动绑骨生成的枢轴常因取整/比例换算偏离骨骼几个像素 —— 就近匹配兜底绑上。
+
+    画布 128x64 -> 就近容差 = max(128,64)*5% = 6.4px。枢轴 (1.5, -41.0) 距
+    Head (0.0, -40.0) 约 1.8px，在容差内且唯一最近 -> 绑 ParamAngleZ。
+    """
+    params = [{"Id": "ParamAngleZ", "Min": -30, "Max": 30, "Value": 0}]
+    result = _builder_result(
+        {"a": _mesh()},
+        deformers=[{"name": "HeadTilt", "type": "rotation", "targets": ["a"],
+                    "pivot": [1.5, -41.0], "angle": 0.0}],
+        params=params)
+    result["bone_positions"] = dict(_STANDARD_BONE_POSITIONS)
+
+    spec = build_rig_spec(result, {"a": _uv()})
+    assert spec.deformers[0].parameter_id == "ParamAngleZ"
+    assert spec.static_deformers == []
+
+
+def test_rotation_deformer_stays_static_when_two_bones_equidistant():
+    """就近匹配仍守「唯一命中」：两个骨骼等距时不猜，保持静态。"""
+    params = [{"Id": "ParamAngleZ", "Min": -30, "Max": 30, "Value": 0},
+              {"Id": "ParamBodyAngleZ", "Min": -30, "Max": 30, "Value": 0}]
+    # Head 与 Body 关于枢轴 (0, 5) 各偏 3px（均在 6.4px 容差内且等距）
+    bones = {"Head": (0.0, 2.0), "Body": (0.0, 8.0)}
+    result = _builder_result(
+        {"a": _mesh()},
+        deformers=[{"name": "AmbiguousTilt", "type": "rotation",
+                    "targets": ["a"], "pivot": [0.0, 5.0], "angle": 0.0}],
+        params=params)
+    result["bone_positions"] = bones
+
+    spec = build_rig_spec(result, {"a": _uv()})
+    assert spec.deformers[0].parameter_id == ""
+    assert spec.static_deformers == ["AmbiguousTilt"]
+
+
 _EYE_PARAMS = [{"Id": "ParamEyeBallX", "Min": -1, "Max": 1, "Value": 0},
                {"Id": "ParamEyeBallY", "Min": -1, "Max": 1, "Value": 0}]
 
