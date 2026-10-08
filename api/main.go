@@ -327,7 +327,7 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 func printServerInfo(cfg *config.Config, addr string) {
 	separator := strings.Repeat("=", 80)
 	fmt.Println("\n" + separator)
-	fmt.Println("║     🎨 Live2D Master Agent API v0.10.0 (Go Edition)          ║")
+	fmt.Printf("║     🎨 Live2D Master Agent API %s (Go Edition)       ║\n", handlers.Version)
 	fmt.Println("║     高性能优化版本 - 支持连接池、并发处理、请求缓存          ║")
 	fmt.Println(separator)
 	fmt.Printf("║  服务地址: http://%s\n", addr)

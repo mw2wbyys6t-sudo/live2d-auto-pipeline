@@ -95,6 +95,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 CHARACTERS_DIR.mkdir(parents=True, exist_ok=True)
 
 VERSION = "v0.10.3-py"
+SERVER_PORT = 8080  # v0.10.3: 与 Go 后端及前端代理目标一致
 START_TIME = time.time()
 
 
@@ -164,7 +165,7 @@ async def lifespan(app: FastAPI):
     print(f"  🎨 Live2D Master Agent API {VERSION} (Python Edition)")
     print(f"  高性能 FastAPI 版本 - 直接调用 core 模块")
     print(f"{'='*60}")
-    print(f"  服务地址: http://0.0.0.0:8000")
+    print(f"  服务地址: http://0.0.0.0:{SERVER_PORT}")
     print(f"  输出目录: {OUTPUT_DIR}")
     print(f"  项目根目录: {PROJECT_ROOT}")
     print(f"{'='*60}\n")
@@ -1126,7 +1127,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "api_server:app",
         host="0.0.0.0",
-        port=8080,
+        port=SERVER_PORT,
         reload=False,
         log_level="info",
     )
