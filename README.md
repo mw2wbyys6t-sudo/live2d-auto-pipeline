@@ -334,10 +334,4 @@ cd web && npm run build
 
 [Apache-2.0](LICENSE) — 商业用途也欢迎。
 
----
 
-<p align="center">
-  <img src="assets/icon/logo_s_32.png" width="32" alt="logo">
-  <br>
-  <sub>Made with curiosity and caffeine.</sub>
-</p>
