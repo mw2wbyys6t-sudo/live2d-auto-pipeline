@@ -1,61 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="512" height="512">
-  <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ff6bc1"/>
-      <stop offset="100%" stop-color="#a855f7"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="50%" cy="52%" r="32%">
-      <stop offset="0%" stop-color="#fffdfa" stop-opacity="0.9"/>
-      <stop offset="100%" stop-color="#fffdfa" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
-
-  <!-- 圆角背景 -->
-  <rect x="40" y="40" width="944" height="944" rx="225" ry="225" fill="url(#bg)"/>
-
-  <!-- 脸部发光底 -->
-  <circle cx="512" cy="532" r="340" fill="url(#glow)"/>
-  <!-- 脸 -->
-  <circle cx="512" cy="532" r="307" fill="#fffcfa"/>
-
-  <!-- 左眼 -->
-  <g>
-    <ellipse cx="425" cy="512" rx="72" ry="92" fill="#ffffff"/>
-    <circle cx="422" cy="525" r="57" fill="#6366f1"/>
-    <circle cx="422" cy="525" r="26" fill="#312e81"/>
-    <circle cx="405" cy="505" r="20" fill="#ffffff"/>
-    <circle cx="442" cy="540" r="9" fill="#ffffff"/>
-  </g>
-
-  <!-- 右眼 -->
-  <g>
-    <ellipse cx="599" cy="512" rx="72" ry="92" fill="#ffffff"/>
-    <circle cx="602" cy="525" r="57" fill="#6366f1"/>
-    <circle cx="602" cy="525" r="26" fill="#312e81"/>
-    <circle cx="585" cy="505" r="20" fill="#ffffff"/>
-    <circle cx="622" cy="540" r="9" fill="#ffffff"/>
-  </g>
-
-  <!-- 腮红 -->
-  <ellipse cx="377" cy="600" rx="36" ry="20" fill="#ff96b4" opacity="0.6"/>
-  <ellipse cx="647" cy="600" rx="36" ry="20" fill="#ff96b4" opacity="0.6"/>
-
-  <!-- 嘴 -->
-  <path d="M 482 666 Q 512 684 542 666" stroke="#dc5078" stroke-width="7"
-        fill="none" stroke-linecap="round"/>
-
-  <!-- AI 星火 -->
-  <g fill="#fbbf24">
-    <path d="M 225 225 L 245 285 L 285 305 L 245 325 L 225 385 L 205 325 L 165 305 L 205 285 Z"/>
-    <path d="M 820 800 L 835 842 L 868 855 L 835 868 L 820 910 L 805 868 L 772 855 L 805 842 Z"/>
-  </g>
-  <g fill="#ffffff">
-    <path d="M 840 255 L 852 285 L 875 295 L 852 305 L 840 335 L 828 305 L 805 295 L 828 285 Z"/>
-    <path d="M 185 800 L 195 822 L 215 830 L 195 838 L 185 860 L 175 838 L 155 830 L 175 822 Z"/>
-    <circle cx="307" cy="154" r="12"/>
-    <circle cx="737" cy="901" r="10"/>
-    <circle cx="901" cy="512" r="8"/>
-    <circle cx="123" cy="512" r="8"/>
-  </g>
+<!-- Pygmalion 图标 — 高保真 PNG 内嵌版本。
+     注：完整 SVG 矢量版本将由手工重绘路径，提供无损缩放。
+     当前 SVG 引用 1024px 主 PNG，足以覆盖绝大多数现代浏览器的 SVG icon 场景。 -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1024 1024" width="512" height="512">
+  <image xlink:href="logo_1024.png" x="0" y="0" width="1024" height="1024"/>
 </svg>

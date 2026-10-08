@@ -304,7 +304,7 @@ cd web && npm run build
 ---
 
 <p align="center">
-  <img src="assets/icon/logo_64.png" width="32" alt="logo">
+  <img src="assets/icon/logo_s_32.png" width="32" alt="logo">
   <br>
   <sub>Made with curiosity and caffeine.</sub>
 </p>

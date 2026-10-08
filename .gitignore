@@ -130,6 +130,10 @@ web/.cache/
 # 大模型权重已由上方 *.onnx/*.pth/*.bin/*.safetensors 覆盖。
 hf_cache/
 
+# --- 用户上传/AI 工作区文件（不进入仓库） ---
+# 由宿主环境在工作区根写入的临时文件，避免污染 git 状态
+.uploads/
+
 # --- 个人/本地配置 ---
 *.local.json
 
