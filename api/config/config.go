@@ -58,6 +58,13 @@ type PythonConfig struct {
 	// 验收）的预算。实测依据 tools/measure_export_duration.py：26 层 x 1024px
 	// （27 百万像素）中位 6.6s，12 层 x 2048px（50 百万像素）6.5s。
 	ExportTimeoutSec int `json:"export_timeout_sec"`
+	// HfCache 指向打包后的 HuggingFace 权重缓存目录（便携版用）。
+	// 非空时，python_bridge 在启动 Python 子进程时注入 HF_HOME 与
+	// HUGGINGFACE_HUB_CACHE 指向该目录，让 transformers / huggingface_hub
+	// 从打包位置读权重，而不是用户目录下的默认缓存。
+	// 选此方案（在 Go exec 时注入）而非写注册表或改 Python 启动脚本，
+	// 是因为它只影响本程序的子进程，不污染用户全局环境，卸载无需还原。
+	HfCache string `json:"hf_cache"`
 }
 
 type OutputConfig struct {
@@ -271,6 +278,29 @@ func LoadConfig(path string) (*Config, error) {
 
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return cfg, err
+	}
+
+	// 兼容便携版的扁平配置格式：build_portable.py 与 desktop.iss 都把
+	// python_path / scripts_dir / hf_cache 写在 JSON 顶层（而不是嵌在
+	// python.{...} 下）。json.Unmarshal 默认会静默忽略这些顶层键，导致
+	// portable 配置完全不生效。这里做一次扁平→嵌套的迁移：扁平键存在
+	// 即覆盖嵌套字段——portable 配置本来就是"覆盖默认"语义，二者同时
+	// 出现在同一份 JSON 里属于误配，让扁平（显式便携）胜出更安全。
+	var flat struct {
+		PythonPath string `json:"python_path"`
+		ScriptsDir string `json:"scripts_dir"`
+		HfCache    string `json:"hf_cache"`
+	}
+	if err := json.Unmarshal(data, &flat); err == nil {
+		if flat.PythonPath != "" {
+			cfg.Python.PythonPath = flat.PythonPath
+		}
+		if flat.ScriptsDir != "" {
+			cfg.Python.ScriptsDir = flat.ScriptsDir
+		}
+		if flat.HfCache != "" {
+			cfg.Python.HfCache = flat.HfCache
+		}
 	}
 
 	return cfg, nil

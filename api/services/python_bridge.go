@@ -113,6 +113,18 @@ func (pb *PythonBridge) executePythonScript(scriptPath string, args []string, ti
 		"LIVE2D_PROJECT_ROOT="+pb.cfg.Python.ScriptsDir,
 	)
 
+	// 便携版（桌面安装包）：把 HF_HOME / HUGGINGFACE_HUB_CACHE 指向打包的
+	// 权重目录，让 transformers / huggingface_hub 从 {app}\runtime\hf-cache
+	// 读权重，而不是用户目录下的默认缓存。开发模式（HfCache 为空）不注入，
+	// 完全沿用系统默认行为。
+	if hf := pb.cfg.Python.HfCache; hf != "" {
+		cmd.Env = append(cmd.Env,
+			"HF_HOME="+hf,
+			"HUGGINGFACE_HUB_CACHE="+hf,
+			"TRANSFORMERS_CACHE="+filepath.Join(hf, "hub"),
+		)
+	}
+
 	configurePythonProcess(cmd)
 
 	output, err := cmd.CombinedOutput()

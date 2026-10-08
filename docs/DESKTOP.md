@@ -34,6 +34,19 @@ scripts\build_desktop.bat
 - `Live2DMasterAgent.exe` — 双击运行（无控制台窗口）
 - `Live2DMasterAgent-console.exe` — 带控制台日志，排查 Python 桥接问题时用
 
+### 跨平台构建（Linux / macOS 也能产出 Windows exe）
+
+Go 自带交叉编译，无需 Windows 主机即可产出 `.exe`：
+
+```bash
+./scripts/build_desktop.sh --target windows    # 产出 Windows exe（默认）
+./scripts/build_desktop.sh --target linux      # 产出 Linux 桌面版（本机调试）
+./scripts/build_desktop.sh --target darwin     # 产出 macOS arm64 版
+./scripts/build_desktop.sh --skip-frontend     # 跳过前端重建（用现有 web/out）
+```
+
+脚本与 `build_desktop.bat` 完全对等，便于 CI 与跨平台协作。
+
 ## 运行要求与首次启动
 
 1. **项目根目录**：exe 启动时会从自身位置向上查找 `core/workflow.py` 标记来定位
@@ -57,11 +70,42 @@ scripts\build_desktop.bat
 
 ## 已知边界
 
-- exe 内嵌的是构建时刻的 UI；改前端后需重跑 `build_desktop.bat`。
+- exe 内嵌的是构建时刻的 UI；改前端后需重跑 `build_desktop.bat` 或 `build_desktop.sh`。
 - Python 解释器与依赖不打进 exe（见下方路线图）；无 Python 时 API 与 UI 可用，
   但生成/分层/导出会明确报错。
-- 桌面版跨平台：Windows 构建脚本目前为 `.bat`；macOS/Linux 用
-  `NEXT_STATIC_EXPORT=1 npm run build && cp -r web/out api/webui/dist && go build`。
+- 桌面版跨平台构建：Windows 用 `scripts/build_desktop.bat`，
+  Linux/macOS 用 `scripts/build_desktop.sh`（Go 自带交叉编译，无需 Windows 主机）。
+
+## 便携版配置格式（installer 用）
+
+`deploy/installer/desktop.iss` 与 `scripts/build_portable.py` 都产出**扁平 JSON**：
+
+```json
+{
+  "python_path": "C:\\Apps\\Live2D Master Agent\\runtime\\python\\python.exe",
+  "scripts_dir": "C:\\Apps\\Live2D Master Agent\\app",
+  "hf_cache":    "C:\\Apps\\Live2D Master Agent\\runtime\\hf-cache"
+}
+```
+
+Go 端 `config.LoadConfig` 会把这三个顶层键迁移到 `Python.{PythonPath,ScriptsDir,HfCache}`
+（扁平与嵌套同时存在时，扁平胜出——便携配置是"显式覆盖"语义）。回归测试在
+`api/config/config_portable_test.go`。
+
+### HF_HOME 决策（已采纳方案 B）
+
+打包后的权重在 `{app}\runtime\hf-cache`，但 `transformers` 默认从用户目录读缓存。
+决策：**Go 侧 `python_bridge` 在 `exec.CommandContext` 时注入环境变量**
+（`api/services/python_bridge.go` 的 `cmd.Env`）：
+
+```
+HF_HOME={hf_cache}
+HUGGINGFACE_HUB_CACHE={hf_cache}
+TRANSFORMERS_CACHE={hf_cache}/hub
+```
+
+只影响本程序的 Python 子进程，不污染用户全局环境，卸载无需还原。
+开发模式（`HfCache` 为空）不注入，完全沿用系统默认行为。
 
 ## 路线图（完全离线的"绿色版"）
 

@@ -15,9 +15,11 @@
 ;   {app}\config.portable.json         安装时按 {app} 生成，见 [Code]
 ;
 ; 已知未接上的一项：HF_HOME。权重缓存在 {app}\runtime\hf-cache，但
-; transformers 默认读用户目录下的缓存；Go 侧只设置了 PYTHONPATH
-; （api/services/python_bridge.go:84）。三条可选路子在 desktop.iss 末尾
-; [Code] 的 TODO 里，需要先定一条再落代码——不在这里偷偷选一条实现。
+; transformers 默认读用户目录下的缓存；Go 侧已采纳方案 B：python_bridge
+; 在 exec 时注入 HF_HOME / HUGGINGFACE_HUB_CACHE / TRANSFORMERS_CACHE
+; （api/services/python_bridge.go executePythonScript 的 cmd.Env）。
+; 桌面程序读 config.portable.json 的 hf_cache 字段（config.go 的扁平键
+; 迁移），无需写注册表或改 Python 启动脚本。
 ; ---------------------------------------------------------------------------
 
 #define MyAppName      "Live2D Master Agent"
@@ -109,10 +111,10 @@ begin
   HfCache     := ExpandConstant('{app}\runtime\hf-cache');
   ConfigPath  := ExpandConstant('{app}\config.portable.json');
 
-  // TODO(HF_HOME)：三选一，定了再落代码，别在这里替你决定：
-  //   (a) 写用户环境变量 HF_HOME=HfCache（HKCU\Environment，影响全局，卸载要还原）；
-  //   (b) Go 侧 python_bridge 在 exec 时注入 HF_HOME（改一处 Go，最干净）；
-  //   (c) Python 启动时若发现 <scripts_dir>/hf-cache 存在则自行设置（改 Python）。
+  // HF_HOME 已采纳方案 B：Go 侧 python_bridge 在 exec 时注入环境变量
+  // （api/services/python_bridge.go executePythonScript）。本安装脚本只需
+  // 把 hf_cache 写进 config.portable.json，桌面程序读到即生效，无需在此
+  // 写注册表或改 Python 启动脚本。
   SetArrayLength(Lines, 5);
   Lines[0] := '{';
   Lines[1] := '  "python_path": "' + StringReplace(PythonExe,  '\', '\\', rfReplaceAll) + '",';
