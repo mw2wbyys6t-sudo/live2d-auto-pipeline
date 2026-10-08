@@ -505,6 +505,29 @@ export class APIClient {
     return extractData<any>(res);
   }
 
+  /** PSD 分层方案：调用后端 /api/export/psd 对角色立绘执行分层规划。 */
+  async exportPSDPlan(
+    imagePath: string,
+    useAI = false,
+  ): Promise<{
+    layers?: number;
+    plan?: string;
+    plan_dir?: string;
+    psd_path?: string;
+    applied?: boolean;
+    success: boolean;
+  }> {
+    const payload = {
+      image_path: imagePath,
+      use_ai: useAI,
+    };
+    const res = await this.request<unknown>('/api/export/psd', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return extractData<any>(res);
+  }
+
   // ---------- expressions ----------
 
   async getExpressions(characterId?: string): Promise<Expression[]> {

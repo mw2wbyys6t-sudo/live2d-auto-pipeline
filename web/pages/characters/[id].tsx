@@ -80,15 +80,8 @@ const CharacterDetailPage: NextPage = () => {
         const c = await apiClient.getCharacter(id).catch(() => null);
         if (cancelled) return;
         if (!c) {
-          // fallback: placeholder for demo/offline
-          setCharacter({
-            id,
-            name: `Character ${id}`,
-            generationCount: 0,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            colorPalette: DEFAULT_PALETTE,
-          });
+          // 后端不可达或角色不存在时如实反映，不伪造角色数据误导用户
+          setError('无法加载角色数据。请确认后端服务已启动，或该角色 ID 是否存在。');
         } else {
           setCharacter(c);
         }
@@ -223,9 +216,9 @@ const CharacterDetailPage: NextPage = () => {
     return (
       <div className="text-center py-20">
         <AlertCircle className="w-10 h-10 text-red-400 mx-auto mb-3" />
-        <p className="text-gray-400">Character not found</p>
+        <p className="text-gray-300">{error || 'Character not found'}</p>
         <Link href="/characters" className="text-pink-400 text-sm mt-3 inline-block">
-          Back to characters
+          返回角色列表
         </Link>
       </div>
     );

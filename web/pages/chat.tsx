@@ -121,13 +121,12 @@ const ChatPage: NextPage = () => {
     try {
       const history: ChatMessage[] = [...messages, userMsg];
       await apiClient.chat(history, onChunk, characterId).catch(async () => {
-        // fallback local response
-        const fallback = generateFallback(content, personality);
-        for (const word of fallback.text.split(' ')) {
-          await new Promise((r) => setTimeout(r, 40));
-          onChunk(word + ' ');
-        }
-        setCurrentEmotion(fallback.emotion);
+        // 后端不可达时如实告知，不伪造 AI 回复误导用户
+        const offlineNotice =
+          '⚠️ 无法连接到后端服务。请确认 Go API（默认 :12009）或 Python 后端已启动后重试。\n\n' +
+          '你的消息已记录，连接恢复后可重新发送。';
+        onChunk(offlineNotice);
+        setCurrentEmotion('sad');
       });
       setMessages((prev) =>
         prev.map((m) =>
@@ -444,32 +443,6 @@ function detectEmotion(text: string): Emotion | null {
   if (/blush|shy|embarrass/.test(lower)) return 'shy';
   if (/maybe|think|consider|perhaps/.test(lower)) return 'thinking';
   return null;
-}
-
-function generateFallback(prompt: string, personality: string): { text: string; emotion: Emotion } {
-  const lower = prompt.toLowerCase();
-  if (lower.includes('hello') || lower.includes('hi')) {
-    return {
-      text: "Hi there! It's great to see you! What character should we dream up today? (Local demo response — connect the API for full capabilities.)",
-      emotion: 'happy',
-    };
-  }
-  if (lower.includes('who are you')) {
-    return {
-      text: "I'm your Live2D Master Agent assistant — I help design, generate, and rig anime characters. I try to be " + personality.toLowerCase(),
-      emotion: 'neutral',
-    };
-  }
-  if (lower.includes('help')) {
-    return {
-      text: "Sure! I can help with prompt crafting, color palettes, layer naming, physics settings, or just brainstorm ideas. What are you working on?",
-      emotion: 'thinking',
-    };
-  }
-  return {
-    text: `That's an interesting idea! Based on your prompt "${prompt.slice(0, 60)}…" — I'd suggest focusing on consistent character design and clean layer separation. Want me to elaborate?`,
-    emotion: 'excited',
-  };
 }
 
 export default ChatPage;

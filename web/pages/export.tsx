@@ -26,6 +26,7 @@ interface FormatOption {
 
 const FORMATS: FormatOption[] = [
   { id: 'live2d-package', label: 'Live2D Package', desc: 'model3.json + textures + physics (.zip)', icon: FileJson, ext: '.zip' },
+  { id: 'psd', label: 'PSD 分层方案', desc: '对角色立绘执行智能分层规划，输出层数与方案', icon: FileImage, ext: '.json' },
 ];
 
 const ExportPage: NextPage = () => {
@@ -126,29 +127,56 @@ const ExportPage: NextPage = () => {
     try {
       for (const format of Array.from(formats)) {
         try {
-          const result = await apiClient
-            .exportModel(selectedId, format, layersDir || undefined)
-            .catch(() => null);
           const opt = FORMATS.find((f) => f.id === format)!;
           const filename = `${(selected?.name || 'character').replace(/\s+/g, '_')}_${format}${opt.ext}`;
-          if (!result || !result.success) {
-            throw new Error(`Export failed for ${format}`);
-          }
-          // 链路交接：记录模型 Web 地址（预览页自动加载同一份最新记录）
-          const modelUrl = modelUrlFromRecord({
-            model3_json: result.model3_json || '',
-            model3_url: (result as { model3_url?: string }).model3_url,
-          });
-          if (modelUrl) setLastModelUrl(modelUrl);
-          if (typeof result.runtime_ready === 'boolean') setLastRuntimeReady(result.runtime_ready);
-          const payload = modelUrl || result.model3_json || '';
-          if (!payload) {
-            throw new Error(`Export returned no file for ${format}`);
-          }
-          downloads.push({ format, filename, size: payload.length, url: payload });
-          // 如实反映「能否直接运行」：缺 .moc3 时给出明确阻塞原因
-          if (result.runtime_ready === false && result.blocker) {
-            setBlocker(result.blocker);
+
+          if (format === 'psd') {
+            // PSD 分层方案：调用 /api/export/psd 执行智能分层规划
+            const psdImagePath = layersDir || '';
+            if (!psdImagePath) {
+              throw new Error('PSD 分层需要分层目录路径，请先生成或从分层页进入');
+            }
+            const psdResult = await apiClient
+              .exportPSDPlan(psdImagePath)
+              .catch(() => null);
+            if (!psdResult || !psdResult.success) {
+              throw new Error('PSD 分层方案生成失败');
+            }
+            const planSummary = JSON.stringify({
+              layers: psdResult.layers,
+              plan: psdResult.plan,
+              plan_dir: psdResult.plan_dir,
+              applied: psdResult.applied,
+            }, null, 2);
+            downloads.push({
+              format,
+              filename,
+              size: planSummary.length,
+              url: `data:application/json;charset=utf-8,${encodeURIComponent(planSummary)}`,
+            });
+          } else {
+            const result = await apiClient
+              .exportModel(selectedId, format, layersDir || undefined)
+              .catch(() => null);
+            if (!result || !result.success) {
+              throw new Error(`Export failed for ${format}`);
+            }
+            // 链路交接：记录模型 Web 地址（预览页自动加载同一份最新记录）
+            const modelUrl = modelUrlFromRecord({
+              model3_json: result.model3_json || '',
+              model3_url: (result as { model3_url?: string }).model3_url,
+            });
+            if (modelUrl) setLastModelUrl(modelUrl);
+            if (typeof result.runtime_ready === 'boolean') setLastRuntimeReady(result.runtime_ready);
+            const payload = modelUrl || result.model3_json || '';
+            if (!payload) {
+              throw new Error(`Export returned no file for ${format}`);
+            }
+            downloads.push({ format, filename, size: payload.length, url: payload });
+            // 如实反映「能否直接运行」：缺 .moc3 时给出明确阻塞原因
+            if (result.runtime_ready === false && result.blocker) {
+              setBlocker(result.blocker);
+            }
           }
         } catch (err) {
           exportError = err instanceof Error ? err.message : `Export failed for ${format}`;
