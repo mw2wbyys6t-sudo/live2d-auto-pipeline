@@ -17,6 +17,10 @@ import (
 	"live2d-api/services"
 )
 
+// Version 是后端的语义版本号，集中定义避免散落多处版本字符串不同步。
+// v0.10.3：首次集中化管理，更新时只需改这一处。
+const Version = "v0.10.3-go"
+
 type Handler struct {
 	cfg            *config.Config
 	imageGenerator *services.ImageGenerator
@@ -56,14 +60,32 @@ func NewHandler(cfg *config.Config, imageGenerator *services.ImageGenerator, cac
 	return h
 }
 
-// HealthCheck 健康检查
+// HealthCheck 健康检查。
+//
+// v0.10.3: 不再永远返回 200 —— 启动后跑一次 Python 解释器探针，不可用时
+// 返回 503 + 中文说明，避免「前端看到正常、点生成立刻崩」的误导体验。
 func (h *Handler) HealthCheck(c *gin.Context) {
+	pyOK, pyIssues := h.pythonBridge.CheckPythonEnvironment()
+	if !pyOK {
+		c.JSON(http.StatusServiceUnavailable, models.Response{
+			Success: false,
+			Error:   "Python 环境不可用：" + strings.Join(pyIssues, "；"),
+			Data: map[string]interface{}{
+				"version":   Version,
+				"uptime":    time.Since(h.startTime).String(),
+				"python_ok": false,
+				"hint":      "请确认 Python 已安装并配置正确，或运行 python install.py 安装依赖",
+			},
+		})
+		return
+	}
 	c.JSON(http.StatusOK, models.Response{
 		Success: true,
 		Message: "Live2D API 服务正常运行",
 		Data: map[string]interface{}{
-			"version": "v0.10.2-go",
-			"uptime":  time.Since(h.startTime).String(),
+			"version":   Version,
+			"uptime":    time.Since(h.startTime).String(),
+			"python_ok": true,
 		},
 	})
 }
@@ -118,7 +140,7 @@ func (h *Handler) GetSystemStatus(c *gin.Context) {
 		Success: true,
 		Data: models.SystemStatus{
 			Services: services,
-			Version:  "v0.10.2-go",
+			Version:  Version,
 			Uptime:   time.Since(h.startTime).String(),
 		},
 	})
@@ -629,7 +651,7 @@ func (h *Handler) GetAPIInfo(c *gin.Context) {
 		Success: true,
 		Data: map[string]interface{}{
 			"name":        "Live2D Master Agent API",
-			"version":     "v0.10.2-go",
+			"version":     Version,
 			"description": "AI角色生成、一致性维护、LLM聊天、Live2D导出 API",
 			"features": []string{
 				"角色一致性系统",

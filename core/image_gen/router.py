@@ -36,6 +36,7 @@ class ProviderRouter:
 
     def _register_defaults(self):
         """Register built-in providers."""
+        from core.image_gen.local_placeholder import LocalPlaceholderProvider
         from core.image_gen.openai_compat import OpenAICompatProvider
         from core.image_gen.pollinations import PollinationsProvider
         from core.image_gen.sensenova import SenseNovaProvider
@@ -46,10 +47,14 @@ class ProviderRouter:
         # OpenAI Images API 兼容端点（官方/one-api 等网关/本地自建），
         # 使任意外部生成大模型都能接入上游路由。
         self.register_provider("openai", OpenAICompatProvider)
+        # 离线兜底：所有云端 provider 都不可用时（无 Key / 断网），
+        # 用确定性占位图保证「生成 → 分层 → 导出」主链路依然走通。
+        self.register_provider("local_placeholder", LocalPlaceholderProvider)
 
     # 统一的路由优先级：配置了高质量付费 Key 的 provider 永远先被尝试，
-    # OpenAI 兼容网关次之，免费 Pollinations 兜底。
-    PRIORITY = ["seedream", "sensenova", "openai", "pollinations"]
+    # OpenAI 兼容网关次之，免费 Pollinations 兜底；完全离线时由
+    # local_placeholder 保证产图（哪怕只是占位剪影）。
+    PRIORITY = ["seedream", "sensenova", "openai", "pollinations", "local_placeholder"]
 
     def register_provider(self, name: str, provider_cls: Type[ImageProvider]):
         """Register a new provider class."""

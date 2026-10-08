@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -174,13 +175,24 @@ func DefaultConfig() *Config {
 			if exe, err := os.Executable(); err == nil {
 				exeDir := filepath.Dir(exe)
 				candidates = append(candidates, exeDir, filepath.Dir(exeDir), filepath.Dir(filepath.Dir(exeDir)))
+				// v0.10.3: 桌面便携版常见布局 —— exe 同级 runtime/ 子目录
+				// 打包了完整 Python 工程，单独追加这个候选避免遗漏。
+				candidates = append(candidates, filepath.Join(exeDir, "runtime"))
 			}
 			candidates = append(candidates, "/workspace", "/app", "/repo", "/project")
+			found := false
 			for _, candidate := range candidates {
 				if _, err := os.Stat(filepath.Join(candidate, "core", "workflow.py")); err == nil {
 					baseDir = candidate
+					found = true
 					break
 				}
+			}
+			// v0.10.3: 全部候选都找不到时如实记录，不静默继续 ——
+			// 后续 Python 调用必然失败，让运维一眼看出根因。
+			if !found {
+				log.Printf("[config] 警告：未在任何候选目录找到 Python 工程（core/workflow.py）。" +
+					"请把可执行文件放在项目根目录，或用 -config 指定 scripts_dir。")
 			}
 		}
 	}

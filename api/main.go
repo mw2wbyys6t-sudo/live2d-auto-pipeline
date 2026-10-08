@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -140,8 +141,24 @@ func main() {
 		MaxHeaderBytes:    cfg.Server.MaxHeaderBytes,
 	}
 
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("服务器启动失败: %v", err)
+	// v0.10.3: 绑定前探测端口，被占时给出中文友好提示而非直接崩。
+	// 小白最容易做的事就是双击两次 exe —— 第二次撞端口，原实现 log.Fatalf
+	// 直接退出且无任何可读提示。
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf(
+			"端口 %s 已被占用或无法绑定。\n"+
+				"可能原因：\n"+
+				"  1. 程序已在运行（请检查任务栏/系统托盘）\n"+
+				"  2. 其他程序占用了该端口\n"+
+				"解决方法：\n"+
+				"  • 关闭已运行的实例后重试\n"+
+				"  • 或用 -config 指定其他端口\n"+
+				"原始错误: %v", addr, err)
+	}
+
+	if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("服务器运行异常: %v", err)
 	}
 }
 

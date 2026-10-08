@@ -1,4 +1,4 @@
-# 🎭 Live2D Master Agent v0.10.2
+# 🎭 Live2D Master Agent v0.10.3
 
 > **一句话**：输入一句话，AI 生成你的专属虚拟主播——支持实时面部捕捉、语音对话、表情联动、桌宠运行。
 
@@ -8,7 +8,7 @@
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=for-the-badge)](https://go.dev)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge)](https://nextjs.org)
 [![License](https://img.shields.io/badge/License-Apache--2.0-green?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.10.2-ff69b4?style=for-the-badge)]()
+[![Version](https://img.shields.io/badge/Version-0.10.3-ff69b4?style=for-the-badge)]()
 
 </div>
 
@@ -390,7 +390,8 @@ cd web && npm run build
 
 | 阶段 | 版本 | 核心方向 | 状态 |
 |------|------|----------|------|
-| 现在 | **v0.10.2** | 离线兜底生成器 + PSD 图层名识别 + 桌面打包工具链 + 相关项目调研 | ✅ 已发布 |
+| 现在 | **v0.10.3** | 沙箱就绪：离线兜底生图 + PSD 降级不崩 + 健康检查真实化 + 端口冲突友好处理 | ✅ 已发布 |
+| 上一版 | v0.10.2 | 离线兜底生成器 + PSD 图层名识别 + 桌面打包工具链 + 相关项目调研 | ✅ 已发布 |
 | 上一版 | v0.10.1 | 自研 moc3 导出管线：官方 Cubism 参数驱动 + 官方内核逐像素验收 | ✅ 已发布 |
 | 近期 | v0.10.5 | 自定义画风 / 多角色换装编辑器 / VTube Studio 插件直连 | 🚧 开发中 |
 | 中期 | v0.11.0 | ComfyUI 工作流集成 / SDXL 本地推理 / 中文 ASR 优化 | 📋 规划中 |

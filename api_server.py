@@ -94,7 +94,7 @@ CHARACTERS_DIR = ASSETS_DIR / "characters"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 CHARACTERS_DIR.mkdir(parents=True, exist_ok=True)
 
-VERSION = "v0.10.2-py"
+VERSION = "v0.10.3-py"
 START_TIME = time.time()
 
 
@@ -318,7 +318,7 @@ async def get_system_status():
     services = [
         {"name": "image_generator", "available": True, "version": "pollinations+core", "last_checked": datetime.now().isoformat()},
         {"name": "python_env", "available": True, "version": sys.version.split()[0], "last_checked": datetime.now().isoformat()},
-        {"name": "segment_engine", "available": True, "version": "v0.10.2", "last_checked": datetime.now().isoformat()},
+        {"name": "segment_engine", "available": True, "version": "v0.10.3", "last_checked": datetime.now().isoformat()},
         {"name": "live2d_builder", "available": True, "version": "cubism4", "last_checked": datetime.now().isoformat()},
     ]
     return ok({
@@ -1121,10 +1121,12 @@ async def get_python_scripts():
 # ---------- 主入口 ----------
 if __name__ == "__main__":
     import uvicorn
+    # v0.10.3: 默认端口从 8000 对齐到 8080，与 Go 后端及前端 Next.js 代理目标一致。
+    # 此前端口不一致会导致降级模式（python api_server.py）启动后前端所有请求 404。
     uvicorn.run(
         "api_server:app",
         host="0.0.0.0",
-        port=8000,
+        port=8080,
         reload=False,
         log_level="info",
     )

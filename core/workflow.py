@@ -530,9 +530,20 @@ class WorkflowEngine:
                 layers_output, psd_output, ordered_names=psd_names or None
             )
             result["steps"]["psd"] = psd_result
-            if not psd_result.get("success") or psd_result.get("fallback"):
-                raise RuntimeError(psd_result.get("error") or "PSD export produced only a PNG fallback package")
-            if not Path(psd_result.get("psd_path", "")).is_file():
+            if not psd_result.get("success"):
+                raise RuntimeError(psd_result.get("error") or "PSD export failed")
+            # v0.10.3: PSD fallback（psd-tools 缺失时只产出 PNG 包）从「致命错误」
+            # 降级为「带警告的降级」——图片已生成、分层已完成，不该因为一个
+            # 可选依赖没装上就让整个 workflow 前功尽弃。后续 Live2D 导出仍可走通。
+            if psd_result.get("fallback"):
+                log.warning(
+                    "PSD 以降级模式产出（仅 PNG 包，缺少 .psd）。如需完整 PSD，"
+                    "请安装 psd-tools：pip install psd-tools"
+                )
+                result.setdefault("warnings", []).append(
+                    "PSD 降级模式：缺少 psd-tools，仅产出 PNG 包"
+                )
+            elif not Path(psd_result.get("psd_path", "")).is_file():
                 raise RuntimeError("PSD export did not produce a file")
             log.success(f"PSD created: {psd_result.get('psd_path', 'N/A')}")
 
