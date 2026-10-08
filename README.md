@@ -1,355 +1,228 @@
-# 🎭 Live2D Master Agent v0.10.3
+<p align="center">
+  <img src="assets/icon/logo_256.png" width="128" alt="Live2D Master Agent Logo">
+</p>
 
-> **一句话**：输入一句话，AI 生成你的专属虚拟主播——支持实时面部捕捉、语音对话、表情联动、桌宠运行。
+<h1 align="center">Live2D Master Agent</h1>
 
-<div align="center">
+<p align="center">
+  <strong>用一句话，让 AI 帮你生成一个能动的二次元角色。</strong><br>
+  从文本描述 → AI 立绘 → 自动分层 → Live2D 模型 → 可导出可预览。
+</p>
 
-[![Python](https://img.shields.io/badge/Python-3.9+-blue?style=for-the-badge)](https://python.org)
-[![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=for-the-badge)](https://go.dev)
-[![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge)](https://nextjs.org)
-[![License](https://img.shields.io/badge/License-Apache--2.0-green?style=for-the-badge)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.10.3-ff69b4?style=for-the-badge)]()
-
-</div>
-
----
-
-## 💡 项目简介
-
-Live2D Master Agent 是一款**面向人人的 AI 虚拟主播生产工具**。哪怕你没有任何绘画、建模、编程基础，只要一句话描述，就能在 3 分钟内从 0 到 1 产出一套**合规可二创的 Live2D Cubism4 虚拟角色**，并开箱即用地运行在桌面桌宠、VTuber 推流、AI 对话、VTube Studio 等个人与学习场景。
-
-项目从 **AI 图像生成 → 语义分层 → PSD 质检 → Live2D 自动绑定 → 实时面部捕捉 → LLM 对话 → 桌宠/工作台运行**，打通了一整条工业化流水线。核心技术栈为 **Python 内核 + Go API + Next.js 工作台**，全栈开源、模块化、可扩展。
-
-## 🎬 效果预览
-
-| 功能 | 效果说明 |
-|------|----------|
-| 🎨 **AI 生成角色** | 一句话 Prompt → 4096×4096 透明日系赛璐璐立绘 |
-| ✂️ **自动分层** | SAM+ISNet 语义分割，一键拆出 18 层 PSD（头发/五官/衣物…） |
-| 🦴 **自动绑定** | 输出完整 Cubism4 模型包，直接导入 VTube Studio / Live2D Viewer |
-| 🎯 **面部捕捉** | MediaPipe 468 关键点驱动，75ms 低延迟，支持麦克风嘴型联动 |
-| 💬 **AI 对话** | LLM + TTS + ASR 三合一，情绪分析联动表情与动作 |
-| 🖥️ **桌宠运行** | 跨平台透明悬浮窗，Windows/macOS/Linux 通吃 |
-
-> ⏳ 视频演示与示例模型包即将上线，敬请期待。
-
-## 🎯 适用场景
-
-- **个人 VTuber** — 零成本快速出道，无需画师与建模师
-- **独立创作者** — 为漫画、小说、游戏角色生成可互动 Live2D 形象
-- **AI 陪伴/对话** — 结合 LLM 打造有声音、有表情的 AI 桌宠
-- **二次元社区** — 社团活动、粉丝二创、虚拟偶像企划
-- **教学演示** — 高校/培训机构的虚拟讲师、数字人课堂
-- **MCN/公会** — 批量生产虚拟主播形象，快速搭建虚拟艺人矩阵
+<p align="center">
+  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.3-ff69b4?style=flat-square" alt="version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="license"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.9+-blue?style=flat-square" alt="python"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square" alt="go"></a>
+  <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16-black?style=flat-square" alt="nextjs"></a>
+</p>
 
 ---
 
-## ✨ v0.10.1 重大升级：自研 moc3 导出管线
+## 先说清楚：现在能干什么
 
-| 维度 | v0.10.0 | **v0.10.1** |
-|------|-------|-----------|
-| `.moc3` 导出 | 外部工具 / 空脚手架 | **自研 moc3 编译器（纯自研，无第三方运行时依赖）** |
-| 部件驱动 | 少量自定义参数 | **对齐 Live2D 官方参数**：`ParamAngleZ` / `ParamBodyAngleZ` / `ParamArm*` / `ParamHair*` / `ParamEyeBallX/Y` / `ParamBreath` |
-| 头部姿态 | 简单位移 | **三轴 keyform**（`ParamAngleX/Y/Z`）：侧转 + 点头/转头各向异性压扁 + 弧位移 + 深度透视（非仿射） |
-| 质量把关 | 结构校验 | **官方 Cubism Core 逐像素验收** + 逐像素回归基线 |
-| 产物 | 近似占位 | **真实 `model3.json` Layout**：画布尺寸 / PixelsPerUnit 由编译结果承载 |
+我不想给你画饼。这个项目有些部分已经很稳，有些还在路上。下面是**截至 v0.10.3 的真实状态**：
 
-> ✅ 已在 **Live2D 官方 Cubism Native Core** 上通过逐像素验收（`LIVE2D_TEST_PIXELS=1`）：导出模型可被官方内核加载，且参数确实驱动画面。`pytest tests/unit tests/integration` → 379 passed / 38 skipped；官方内核像素验收 108 passed / 3 skipped。
+| 能力 | 状态 | 说明 |
+|------|------|------|
+| AI 生成角色立绘 | ✅ 可用 | Pollinations 免费云端，开箱即用无需 Key；也支持火山引擎/商汤付费高质量生成 |
+| 完全离线生图 | ✅ 可用 | 断网时自动降级为占位立绘，保证流程不中断 |
+| 自动分层（K-means） | ✅ 可用 | 颜色聚类分层，纯 Python 实现，无需额外模型 |
+| 自动分层（SAM 语义） | ⚠️ 需配置 | 语义分割精度更高，但需下载约 2GB 模型权重 |
+| PSD 导出 | ✅ 可用 | 需 `pip install psd-tools`；缺了也能降级导出 PNG 包 |
+| Live2D moc3 导出 | ✅ 可用 | **自研编译器，已通过 Live2D 官方 Cubism Core 逐像素验收** |
+| 面部捕捉驱动 | ⚠️ 需配置 | MediaPipe 实现，需要摄像头 + 安装额外依赖 |
+| 桌宠运行 | ⚠️ 需配置 | 需要 pygame，跨平台窗口行为各有差异 |
+| LLM 对话 + 语音 | ⚠️ 需 Key | 对话需要 OpenAI/Anthropic API Key 或本地 Ollama |
 
-> 📦 相关依赖已并入 [requirements.txt](requirements.txt)：`py-moc3`（容器结构参考与交叉校验）、`live2d-py`（官方内核隔离验证，不进入生产数据路径）。`pip install -r requirements.txt` 即可。
-
----
-
-## ✨ v0.10.0 重大升级
-
-| 功能 | v0.9.0 | **v0.10.0** |
-|------|------|-----------|
-| 图像分层 | K-means 颜色聚类 | **SAM+ISNet 语义分割 + Amodal 补全** |
-| Live2D 导出 | 空脚手架 model3.json | **完整 Cubism4 模型包（28 表情 + 物理 + 骨骼）** |
-| 桌宠驱动 | 预设循环动画 | **MediaPipe 面部捕捉 + 麦克风音频驱动** |
-| 角色一致性 | ❌ 每次随机变脸 | **角色卡 + 参考图锚定 + Embedding 锁定** |
-| AI 对话 | ❌ 无 | **LLM 流式对话 + TTS 语音 + 情绪联动** |
-| 前端工作台 | PSD 质检单页 | **8 页面一站式工作台** |
-| 代码架构 | 双目录冗余 | **模块化 6 层架构** |
-| 部署 | 手动 | **Docker + 一键安装 + CI/CD** |
+> 一句话总结：**「生成 → 分层 → 导出」核心链路完全可用，高级交互功能需要额外配置。**
 
 ---
 
-## 🚀 快速上手
+## 这个项目解决了什么问题
 
-### 环境要求
+我自己是个技术爱好者，不是专业画师也不是建模师。我想做一个属于自己的虚拟形象，但发现：
 
-| 依赖 | 最低版本 | 检查命令 |
-|------|---------|---------|
-| Python | 3.9+ | `python3 --version` |
-| Node.js | 18+ | `node --version` |
-| npm | 9+ | `npm --version` |
-| Go | 1.21+ | `go version` |
+- 找画师画一张立绘：**几百到几千块**
+- 找人做 Live2D 绑定：**几千到上万块**
+- 自己学：**PS 分层、Live2D Cubism、参数调试，每一样都要好几个月**
 
-### 方式一：一键安装（推荐小白）
+所以我写了这个项目——**把「一句话到可用的 Live2D 模型」这条路上最耗时的环节自动化**。你不需要会画画，不需要懂建模，只要描述你想要什么样的角色，剩下的交给代码。
+
+它不能替代专业画师和建模师的精细作品，但能让你**零成本快速获得一个能用的起点**，然后在这个基础上继续打磨。
+
+---
+
+## 快速开始
+
+### 最快的方式（30 秒体验核心能力）
 
 ```bash
-# Windows: 双击 install.bat
-# macOS/Linux:
-bash install.sh
-
-# 或直接用 Python:
-python install.py
-```
-
-安装程序会自动：
-1. 检测 Python/Node/Go 环境
-2. 安装所有 Python 依赖
-3. 安装 npm 依赖（Web 前端）
-4. 编译 Go API 服务器
-5. 创建 .env 配置文件
-6. 验证安装
-
-### 方式二：手动安装（开发者推荐）
-
-#### 第 1 步：安装 Python 依赖
-
-```bash
-cd Live2D-Master-Agent
+# 安装依赖
 pip install -r requirements.txt
+
+# 一句话生成角色（用免费的 Pollinations，不需要任何 API Key）
+python -m core.cli generate "蓝发猫耳少女，白色背景，日系赛璐璐风格"
+
+# 交互式菜单
+python -m core.cli
 ```
 
-#### 第 2 步：安装前端依赖
+就这么简单。如果你的网络能访问 pollinations.ai，几十秒内你就能在 `output/` 目录看到生成的角色立绘。
+
+### 完整启动（Web 工作台）
+
+需要两个终端：
 
 ```bash
-cd web
-npm install
+# 终端 1 — 启动 Python 后端（端口 8080）
+python api_server.py
+
+# 终端 2 — 启动前端
+cd web && npm install && npm run dev
 ```
 
-#### 第 3 步：编译 Go API
+然后打开 **http://localhost:3000**，你会看到一个 8 页面的工作台。
+
+### Windows 双击运行
 
 ```bash
-cd api
-go mod tidy
-go build -o live2d-api .
+# 首次：双击 install.bat 安装
+# 之后：双击 start.bat 启动
 ```
 
-#### 第 4 步：创建配置文件
+### Docker
 
 ```bash
-cp .env.example .env
-```
-
-> 默认使用免费的 Pollinations 图像生成 + Edge TTS 语音，无需填写任何 API Key 即可体验。
-
-#### 第 5 步：启动服务（需要两个终端）
-
-**终端 1 — 启动 Go API 后端：**
-
-```bash
-cd api
-export PYTHONPATH=$(pwd)/..
-export LIVE2D_PROJECT_ROOT=$(pwd)/..
-./live2d-api
-# API 运行在 http://localhost:8080
-```
-
-**终端 2 — 启动 Next.js 前端工作台：**
-
-```bash
-cd web
-npm run dev
-# 前端运行在 http://localhost:3000
-```
-
-打开浏览器访问 **http://localhost:3000** 即可使用！
-
-> 前端通过 Next.js rewrites 代理所有 `/api/*` 请求到 Go 后端，无需担心跨域问题。
-
-### 方式三：Docker 一键部署
-
-```bash
-# 可选：填写自己的 API Key；不创建也可以使用默认免费服务
-cp .env.example .env
-# Windows PowerShell 使用：Copy-Item .env.example .env
-
-# 首次运行需要从 Docker Hub 拉取基础镜像
-docker pull python:3.11-slim-bookworm
-docker pull node:22-bookworm-slim
-docker pull golang:1.25-alpine
-
+cp .env.example .env   # 可选，不配 Key 也能用免费功能
 docker compose up -d --build
 # Web: http://localhost:3000  API: http://localhost:8080
 ```
 
-如果 `docker pull` 报 `failed to fetch oauth token` 或连接 `auth.docker.io` 超时，
-请先在 Docker Desktop 的 **Settings → Resources → Proxies** 中配置可用代理，或切换到能访问 Docker Hub 的网络；这是 Docker Desktop 的网络问题，不是项目代码错误。
+> ⚠️ 国内拉 Docker Hub 镜像可能超时，需要在 Docker Desktop 设置代理或切换网络。
 
-### 方式四：命令行快速体验（无需启动 Web）
+---
+
+## 核心流程
+
+```
+你的描述          AI 生图           自动分层          导出
+  │                │                │               │
+  ▼                ▼                ▼               ▼
+"蓝发猫耳少女" → 立绘 PNG → 18 层 PSD → .moc3 模型包
+                                    ↓
+                              可导入 Live2D Cubism
+                              可导入 VTube Studio
+```
+
+### AI 图像生成
+
+接入多个服务商，按优先级自动降级：
+
+| 优先级 | 服务 | 需要付费？ | 质量 |
+|--------|------|-----------|------|
+| 1 | Seedream（火山引擎） | 需 Key | 高 |
+| 2 | SenseNova（商汤） | 需 Key | 高 |
+| 3 | OpenAI 兼容端点 | 需 Key | 取决于模型 |
+| 4 | **Pollinations.ai** | **免费** | 中 |
+| 5 | 本地占位图 | 免费 | 兜底用 |
+
+不配任何 Key，默认走 Pollinations，完全够用。
+
+### 自动分层
+
+两种模式：
+
+- **K-means 颜色聚类**（默认，纯 Python）：按颜色相近度自动拆分图层，快且不需要额外依赖。
+- **SAM + ISNet 语义分割**（需下载模型）：按语义识别头发、五官、衣物等部位，精度更高但需要约 2GB 模型权重。运行 `python scripts/download_models.py` 下载。
+
+标准 18 层顺序：头皮 → 后发 → 中发 → 前发 → 眉毛 → 眼睛 → 口鼻 → 脸 → 颈 → 上衣 → 内衣 → 手臂 → 手 → 裙摆 → 腿 → 配饰 → 兽耳/尾 → 特效。
+
+### Live2D moc3 导出
+
+这是项目里我花了最多心血的部分。
+
+不是调用外部工具，而是**自己写了 moc3 编译器**——从分层 PNG 直接编译出符合 Live2D Cubism4 规范的 `.moc3` 文件，包含网格、骨骼、变形器、28 个表情参数、物理模拟。
+
+> ✅ 已在 **Live2D 官方 Cubism Native Core** 上通过逐像素验收：导出的模型能被官方内核正确加载，参数确实驱动画面。测试覆盖率 392 passed / 3 skipped。
+
+---
+
+## 项目结构
+
+```
+├── core/                  Python 核心内核
+│   ├── image_gen/           图像生成（多服务商路由 + 离线兜底）
+│   ├── segment_engine/      分层引擎（K-means / SAM / ISNet）
+│   ├── psd/                 PSD 读写
+│   ├── qa/                  质量检测
+│   └── workflow.py          全流程编排
+├── live2d_builder/        Live2C Cubism4 构建管线
+│   ├── mesh/                网格生成
+│   ├── bones/               骨骼 + 变形器
+│   ├── blendshapes/         28 表情参数
+│   ├── physics/             物理模拟
+│   └── exporter/            自研 moc3 编译器 ← 核心技术
+├── drivers/               实时驱动层
+│   ├── face_tracker/        MediaPipe 面部捕捉
+│   ├── desktop_pet/         桌宠
+│   └── live2d_runtime/      软件 Live2D 渲染
+├── llm_bridge/            AI 对话网关
+├── api/                   Go REST API（Gin）
+├── web/                   Next.js 工作台（8 页面）
+├── assets/icon/           项目图标
+└── docs/                  文档
+```
+
+---
+
+## 配置（可选）
+
+默认零配置即可使用核心功能。如果你想要更高质量的生图或对话能力：
 
 ```bash
-# 交互式菜单
-python -m core.cli
-
-# 一句话生成角色（免费 Pollinations，无需 API Key）
-python -m core.cli generate "蓝发猫耳少女，白色背景，日系赛璐璐风格" --deploy-desktop
-
-# 运行桌宠
-python -m core.cli pet
-
-# 与角色对话（需要配置 LLM API Key）
-python -m core.cli chat
+cp .env.example .env
 ```
 
-### 验证安装成功
-
-```bash
-# 检查 Go API 是否正常
-curl http://localhost:8080/api/health
-# 应返回: {"success":true,"message":"Live2D API 服务正常运行"}
-
-# 检查前端是否能代理到后端
-curl http://localhost:3000/api/health
-# 应返回同样的结果
-```
-
----
-
-## 🏗️ 项目架构
-
-```
-Live2D-Master-Agent/
-├── core/                    # 🐍 Python 核心内核
-│   ├── segment_engine/      #   语义分割（SAM+ISNet+Amodal）
-│   ├── image_gen/           #   AI 图像生成（Pollinations/Seedream/SenseNova）
-│   ├── character/           #   角色一致性系统（卡片+Embedding）
-│   ├── psd/                 #   PSD 读写与校验
-│   ├── qa/                  #   质量检测引擎
-│   ├── utils/               #   图像/文件工具集
-│   ├── config.py            #   安全配置管理
-│   ├── workflow.py          #   全流程编排引擎
-│   └── cli.py               #   命令行入口
-├── live2d_builder/          # 🦴 Live2D Cubism4 构建管线
-│   ├── mesh/                #   Delaunay 网格生成 + UV 展开
-│   ├── bones/               #   36 骨骼层级 + 变形器
-│   ├── blendshapes/         #   28 标准表情参数
-│   ├── physics/             #   头发/裙摆/呼吸物理
-│   ├── exporter/            #   自研 moc3 编译器 + model3.json + physics3.json + 纹理图集
-│   └── validator/           #   模型合法性校验
-├── drivers/                 # 🎯 实时驱动层
-│   ├── face_tracker/        #   MediaPipe 468 关键点 → BlendShape 映射
-│   ├── audio/               #   麦克风采集 + 音量/音调分析
-│   ├── desktop_pet/         #   跨平台透明窗口桌宠
-│   └── live2d_runtime/      #   软件 Live2D 渲染器（参数驱动）
-├── llm_bridge/              # 💬 AI 对话网关
-│   ├── providers/           #   OpenAI/Anthropic/Ollama 多模型
-│   ├── tts/                 #   Edge TTS（免费）/ OpenAI TTS
-│   ├── asr/                 #   Whisper/FunASR 语音识别
-│   ├── emotion/             #   情绪分析（7 类→表情+动作）
-│   └── chat_session.py      #   对话管理 + 语音指令
-├── api/                     # 🔷 Go REST API（Gin 高性能）
-│   ├── handlers/            #   路由处理（角色/生成/聊天/WebSocket）
-│   ├── services/            #   业务逻辑（Python桥接/缓存/WS Hub）
-│   ├── models/              #   数据模型
-│   └── config/              #   配置管理
-├── web/                     # ⚛️ Next.js 工作台
-│   ├── pages/               #   8 页面（仪表盘/角色/生成/分层/Live2D/预览/聊天/导出）
-│   ├── components/          #   24+ React 组件
-│   ├── lib/                 #   API 客户端/WS/Live2D 播放器
-│   └── types/               #   TypeScript 类型定义
-├── assets/                  # 📦 资产存储
-│   ├── characters/          #   角色卡片 JSON
-│   ├── models/              #   AI 模型权重
-│   └── output/              #   生成产物
-├── scripts/                 # 🔧 工具脚本（模型下载等）
-├── deploy/                  # 🚀 部署配置（Docker）
-├── tests/                   # 🧪 测试套件（unit/integration/e2e）
-├── docs/                    # 📚 文档
-├── install.py / .sh / .bat  # 🔨 一键安装程序
-├── Dockerfile               # 🐳 容器化
-└── docker-compose.yml       #   多服务编排
-```
-
----
-
-## 🎯 核心功能
-
-### 1. AI 角色生成
-- **多 Provider**：Pollinations（免费）/ Seedream（火山引擎）/ SenseNova（商汤）
-- **生产级 Prompt**：4096×4096 透明背景、正面朝向、五官对称、赛璐璐风格
-- **自动 QA**：边缘清晰度、颜色分离度、背景检测
-
-### 2. 语义分层引擎
-- **ISNet Anime-Segmentation**：二次元主体精准抠图
-- **SAM**：实例语义分层（头发/五官/衣物/配饰）
-- **Amodal Completion**：遮挡区域像素补全（被头发遮挡的脸部等）
-- **18 层标准顺序**：头皮→后发→中发→前发→眉毛→眼睛→口鼻→脸→颈→上衣→内衣→手臂→手→裙摆→腿→配饰→兽耳/尾→特效
-
-### 3. Live2D Cubism4 自动绑定
-- **Delaunay 三角网格**自动生成（边界细分+内部网格）
-- **36 骨骼**标准层级自动排布
-- **28 BlendShape**：眨眼、微笑、生气、惊讶、哭泣、嘴型 A/I/U/E/O 等
-- **物理引擎**：头发摆动、裙摆飘动、呼吸、兽耳/尾巴弹性
-- **导出**：model3.json + physics3.json + 28 个 exp3.json + 纹理图集 + Cubism 导入指南
-
-### 4. 实时面部捕捉
-- **MediaPipe Face Mesh** 468 个人脸关键点
-- **ARKit BlendShape** → Live2D 参数映射（52 系数）
-- **指数平滑** + 死区滤波，低延迟 ≤75ms
-- **麦克风**：RMS 音量 → 嘴型开合，基频 → 语调情绪
-- **跨平台**：Windows/macOS/Linux 透明悬浮窗口
-
-### 5. 角色一致性锁定
-- **角色卡**：JSON 存档脸型/五官/配色/体型/服装/人设
-- **参考图锚定**：正面/侧面/背面三视图约束生成
-- **Embedding 锁定**：CLIP/颜色直方图特征注入 Prompt
-- **换装系统**：同角色多套穿搭，主体形象不偏移
-
-### 6. LLM 对话 + 语音 + 情绪联动
-- **多模型**：OpenAI GPT-4o / Claude 3 / Ollama 本地 Qwen
-- **流式输出**：逐字显示，实时情绪分析
-- **免费 TTS**：微软 Edge TTS（中文晓晓/日语 Nanami/英文 Aria）
-- **ASR**：Whisper/FunASR 本地语音识别
-- **7 类情绪** → 表情 + 肢体参数联动
-- **语音指令**：「换衣服」「晃头发」「收起桌宠」
-
-### 7. Web 一站式工作台
-| 页面 | 功能 |
-|------|------|
-| Dashboard | 总览、快捷入口、系统状态 |
-| Characters | 角色卡 CRUD、参考图上传、历史存档 |
-| Generate | Prompt 编辑、Provider 选择、实时进度 WS |
-| Layers | 分层可视化、拖拽排序、蒙版预览、PSD 导出 |
-| Live2D | 骨骼树、参数滑块、物理调试、模型导出 |
-| Preview | PixiJS 实时预览、Webcam 捕捉开关 |
-| Chat | 聊天界面、语音输入、表情联动 |
-| Export | PSD/PNG/模型包/桌宠包/角色卡导出 |
-
----
-
-## 🔧 配置 API Key
-
-默认使用 Pollinations 免费生成，无需配置。如需高质量生成或 LLM 对话，编辑 `.env`：
+编辑 `.env`，按需填入：
 
 ```env
-# 图像生成（可选）
-ARK_API_KEY=your-volcengine-key
-SENSENOVA_API_KEY=your-sensenova-key
+# 高质量生图（可选，不填就用免费的 Pollinations）
+ARK_API_KEY=你的火山引擎Key
+SENSENOVA_API_KEY=你的商汤Key
 
-# LLM 对话（可选，不设则无法聊天）
-OPENAI_API_KEY=sk-...
+# LLM 对话（可选，不填则聊天功能不可用）
+OPENAI_API_KEY=sk-你的Key
 OPENAI_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-4o-mini
 
-# 或使用本地 Ollama（免费）
-# 无需 Key，只需 ollama serve + ollama pull qwen2.5:3b
+# 或者用本地 Ollama（完全免费）
+# 启动 ollama serve && ollama pull qwen2.5:3b 即可，无需填 Key
 ```
+
+> `.env` 文件已被 `.gitignore` 排除，不会上传到 GitHub。
 
 ---
 
-## 🧪 测试
+## 已知局限
+
+与其让你踩坑后失望，不如提前说清楚：
+
+1. **生成的角色质量取决于 AI 生图服务商**。免费的 Pollinations 出图质量中等；想要高质量赛璐璐立绘，建议配置火山引擎 Seedream。
+2. **SAM 语义分层需要约 2GB 模型权重**。不想下载的话，默认的 K-means 分层也够用。
+3. **面部捕捉和桌宠功能依赖摄像头和平台特定库**，在不同操作系统上表现可能不一致。
+4. **moc3 导出的模型是「可用但粗糙」的起点**。自动绑定无法替代专业 Live2D 技术师的手动精调——它能让你快速有一个能动的模型，但要追求商业级品质仍需人工打磨。
+5. **项目仍在快速迭代中**，API 接口可能随版本变化。
+
+详细说明见 [docs/LIMITATIONS.md](docs/LIMITATIONS.md)。
+
+---
+
+## 测试
 
 ```bash
-# 运行全部测试
+# Python 测试（392 个）
 python -m pytest tests/ -v
-
-# 带覆盖率
-python -m pytest tests/ -v --cov=core --cov=drivers --cov=llm_bridge --cov=live2d_builder --cov-report=term
 
 # Go 测试
 cd api && go test ./... -v
@@ -360,111 +233,78 @@ cd web && npm run build
 
 ---
 
-## 📖 文档
+## 版本记录
+
+| 版本 | 日期 | 重点 |
+|------|------|------|
+| **v0.10.3** | 2026-10-08 | 沙箱就绪：离线兜底生图 + PSD 缺依赖不崩 + 健康检查真实化 + 端口冲突友好提示 |
+| v0.10.2 | 2026-09-29 | 离线兜底生成器 + PSD 图层命名 + 桌面打包工具链 |
+| v0.10.1 | 2026-09-22 | 自研 moc3 编译器：官方 Cubism 参数驱动 + 逐像素验收通过 |
+| v0.10.0 | 2026-09-22 | SAM 语义分层 + 完整 Cubism4 模型包 + MediaPipe 面捕 + LLM 对话 |
+
+完整记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+---
+
+## 文档
 
 | 文档 | 内容 |
 |------|------|
-| [快速入门](docs/QUICKSTART.md) | 5 分钟跑通全流程 |
-| [用户指南](docs/USER_GUIDE.md) | 完整功能使用说明 |
+| [快速入门](docs/QUICKSTART.md) | 5 分钟跑通 |
+| [用户指南](docs/USER_GUIDE.md) | 完整功能说明 |
 | [常见问题](docs/FAQ.md) | 遇到问题先看这里 |
-| [已知局限](docs/LIMITATIONS.md) | 功能边界说明 |
-| [架构设计](docs/ARCHITECTURE.md) | 技术架构详解（流程图/数据流/选型） |
-| 🏛️ **[架构决策中心](docs/architecture/index.md)** | **Staff Engineer 出品：6 条核心 ADR + 系统图 + 10 上下文映射 + 16 条架构不变量 + 12 项风险登记册** |
-| [部署指南](docs/DEPLOY.md) | 云端/本地部署教程 |
-| [开发规范](docs/CODE_STANDARD.md) | 代码贡献指南 |
+| [已知局限](docs/LIMITATIONS.md) | 功能边界 |
+| [架构设计](docs/ARCHITECTURE.md) | 技术架构详解 |
+| [架构决策](docs/architecture/index.md) | 6 条核心 ADR + 架构不变量 |
+| [部署指南](docs/DEPLOY.md) | 云端/本地部署 |
 
 ---
 
-## 🤝 相关开源生态
+## 关于这个项目
 
-- [MediaPipe](https://mediapipe.dev/) — 实时面部/手势捕捉
-- [Segment Anything](https://github.com/facebookresearch/segment-anything) — 通用语义分割
-- [anime-segmentation](https://github.com/SkyTNT/anime-segmentation) — 二次元专用分割
+这个项目由一个人从零开始摸索着做出来。我不是科班出身，很多技术是边做边学的——所以代码里可能有不够优雅的地方，架构上也有可以改进的空间。
+
+但它解决了一个真实的问题：**让没有绘画和建模基础的人，也能拥有自己的虚拟形象。**
+
+如果你也在做类似的事情，或者对这个方向感兴趣，欢迎交流。
+
+---
+
+## 如何贡献
+
+欢迎所有形式的贡献：
+
+- **提交 Issue** — 反馈 Bug、提功能建议
+- **Pull Request** — 修 Bug、加功能、改文档
+- **分享作品** — 用这个项目生成的角色（保留署名即可）
+- **写教程** — 帮更多小白上手
+
+提交 PR 前请确保 `pytest tests/` 和 `npm run build` 通过。详见 [docs/CODE_STANDARD.md](docs/CODE_STANDARD.md)。
+
+---
+
+## 致谢
+
+这个项目站在巨人的肩膀上：
+
+- [MediaPipe](https://mediapipe.dev/) — 面部捕捉
+- [Segment Anything](https://github.com/facebookresearch/segment-anything) — 语义分割
 - [pixi-live2d-display](https://github.com/nicxfer/pixi-live2d-display) — Web Live2D 渲染
-- [Open-LLM-VTuber](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber) — AI VTuber 框架
-- [VTube Studio](https://github.com/DenchiSoft/VTubeStudio) — 专业 VTuber 软件
+- [Pollinations.ai](https://pollinations.ai) — 免费 AI 生图
+- [Live2D Cubism](https://www.live2d.com/) — 官方规范参考
+
+感谢每一位 Star、Issue、PR 的贡献者。
 
 ---
 
-## 🗺️ 版本 Roadmap
+## 许可证
 
-| 阶段 | 版本 | 核心方向 | 状态 |
-|------|------|----------|------|
-| 现在 | **v0.10.3** | 沙箱就绪：离线兜底生图 + PSD 降级不崩 + 健康检查真实化 + 端口冲突友好处理 | ✅ 已发布 |
-| 上一版 | v0.10.2 | 离线兜底生成器 + PSD 图层名识别 + 桌面打包工具链 + 相关项目调研 | ✅ 已发布 |
-| 上一版 | v0.10.1 | 自研 moc3 导出管线：官方 Cubism 参数驱动 + 官方内核逐像素验收 | ✅ 已发布 |
-| 近期 | v0.10.5 | 自定义画风 / 多角色换装编辑器 / VTube Studio 插件直连 | 🚧 开发中 |
-| 中期 | v0.11.0 | ComfyUI 工作流集成 / SDXL 本地推理 / 中文 ASR 优化 | 📋 规划中 |
-| 远期 | v0.12.0 | 3D VTuber 支持（VRM 导出）/ 实时动作捕捉（全身）/ 多模态输入 | 🔮 构思中 |
-
-> 💡 欢迎在 **Issues** 里提需求，每一条 Star 和 Issue 都是我们迭代的方向。
-
-## 🤝 如何贡献
-
-本项目采用 **Apache-2.0 License**（详见根目录 [LICENSE](LICENSE)），**欢迎所有形式的贡献（包括商业用途衍生）**；提交 PR 即视为您同意将代码以 Apache-2.0 协议并入本项目，无任何额外限制。
-
-### 贡献方式
-1. **提交 Issue** — 反馈 Bug、功能建议、体验问题
-2. **Pull Request** — 修复 Bug、新增功能、优化文档、完善测试
-3. **分享作品** — 用本项目生成的角色、模型、二创（保留署名即可）
-4. **文档翻译** — 英文/日文文档翻译校对
-5. **教程创作** — 视频教程、图文教程、使用心得
-
-### 贡献流程
-1. Fork 本仓库 → 创建分支 `git checkout -b feat/your-feature`
-2. 完成开发 → 确保测试通过 `pytest tests/` 与 `npm run build`
-3. 提交 PR → 附上改动说明与测试截图
-4. Code Review 通过 → 合并进主分支
-
-详细规范见 [docs/CODE_STANDARD.md](docs/CODE_STANDARD.md)。
-
-## 💬 社区与反馈
-
-| 渠道 | 说明 |
-|------|------|
-| **GitHub Issues** | Bug 反馈、功能建议、技术讨论 |
-| **Discussions** | 使用心得、作品分享、需求投票 |
-| **Wiki** | 常见问题、进阶教程、FAQ |
-
-> 遇到任何使用障碍，先看 [docs/FAQ.md](docs/FAQ.md) 与 [docs/LIMITATIONS.md](docs/LIMITATIONS.md)，大多数问题都有现成解答。
-
-## 🙏 致谢
-
-感谢以下开源项目与社区为本项目提供了重要技术基础设施：
-
-- **MediaPipe** — 面部捕捉底层能力
-- **Segment Anything (Meta)** — 通用语义分割模型
-- **anime-segmentation** — 二次元专用抠图
-- **pixi-live2d-display** — Web 端 Live2D 渲染
-- **Open-LLM-VTuber** — AI VTuber 工程实践参考
-- **VTube Studio** — Live2D VTuber 行业标杆
-- **Pollinations** — 免费 AI 图像生成服务
-
-以及每一位 Star、Issue、PR 贡献者 ❤️。
+[Apache-2.0](LICENSE) — 商业用途也欢迎。
 
 ---
 
-## ⭐ 支持我们
-
-如果这个项目对你有用，欢迎给我们一个 **Star** ⭐，这是我们持续迭代的最大动力。
-
-同时欢迎：
-- 将本项目推荐给身边的 VTuber / 画师 / 二次元创作者
-- 在社交媒体分享你生成的角色（记得 tag 我们）
-- 提交 Issue 告诉我们你想要的功能
-
----
-
-## 📄 许可证
-
-本项目采用 **Apache-2.0 License**，详见 [LICENSE](LICENSE) 文件。
-
-
-
----
-
-<div align="center">
-
-**Made with ❤️ by Live2D Master Agent Team**
-
-</div>
+<p align="center">
+  <img src="assets/icon/logo_64.png" width="32" alt="logo">
+  <br>
+  <sub>Made with curiosity and caffeine.</sub>
+</p>
