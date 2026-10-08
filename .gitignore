@@ -134,6 +134,9 @@ hf_cache/
 # 由宿主环境在工作区根写入的临时文件，避免污染 git 状态
 .uploads/
 
+# --- 本机环境检测的产物（含个人机器信息，不入库） ---
+desktop-env-report.txt
+
 # --- 个人/本地配置 ---
 *.local.json
 
