@@ -1031,10 +1031,6 @@ func (h *Handler) ExportPSD(c *gin.Context) {
 	c.JSON(http.StatusOK, models.Response{Success: true, Message: "PSD导出成功", Data: result})
 }
 
-// ExportSpine 导出 Spine 格式（占位/兼容端点）。
-//
-// 本平台以 Live2D Cubism4 为一等导出目标；Spine 导出作为兼容端点返回
-// 可用的 model3 产物路径，调用方可据此自行转换，而不会收到 404。
 // TrackingUnavailable 摄像头面捕的**显式**"未实现"响应。
 //
 // 前端 /preview 会调用 /api/tracking/start|stop 并连接 /ws/tracking；这套端点

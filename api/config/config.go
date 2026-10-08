@@ -44,6 +44,10 @@ type ServerConfig struct {
 	AllowedOrigins     []string      `json:"allowed_origins"`
 }
 
+// SDWebUIConfig 本地 SD WebUI 图像生成设置。
+//
+// 注意：本字段目前仅作配置预留，Go 后端尚未接入 SD WebUI 调用链。
+// 图像生成实际由 Python 侧（core/workflow.py + llm_bridge）执行。
 type SDWebUIConfig struct {
 	BaseURL string `json:"base_url"`
 	Timeout int    `json:"timeout"`
@@ -94,7 +98,10 @@ type LLMConfig struct {
 	Temperature float64 `json:"temperature"`
 }
 
-// TTSConfig 语音合成设置
+// TTSConfig 语音合成设置。
+//
+// 注意：Go 后端本身不执行语音合成。TTS 由浏览器端（window.speechSynthesis）
+// 和 Python 侧（llm_bridge/tts/）各自实现。本字段供未来 Go 端 TTS 代理预留。
 type TTSConfig struct {
 	Provider string `json:"provider"` // edge-tts, azure, etc.
 	Voice    string `json:"voice"`
@@ -117,7 +124,10 @@ type WebSocketConfig struct {
 	PongWait       int  `json:"pong_wait_sec"`
 }
 
-// RedisConfig Redis设置（可选，用于任务队列）
+// RedisConfig Redis设置（可选，用于任务队列）。
+//
+// 注意：Go 后端当前使用内存存储请求计数（见 main.go），Redis 未接入。
+// 本字段供未来分布式部署预留，当前默认 Enabled=false。
 type RedisConfig struct {
 	URL      string `json:"url"`
 	Enabled  bool   `json:"enabled"`
@@ -125,7 +135,11 @@ type RedisConfig struct {
 	Password string `json:"password"`
 }
 
-// MediaPipeConfig MediaPipe人脸追踪设置
+// MediaPipeConfig MediaPipe人脸追踪设置。
+//
+// 注意：Go 后端不执行面捕（/api/tracking/* 返回 501）。
+// 面捕由浏览器端（web/lib/face-tracker.ts，MediaPipe WASM）和 Python 侧
+//（drivers/face_tracker/）各自实现。本字段供未来 Go 端面捕代理预留。
 type MediaPipeConfig struct {
 	Enabled                bool    `json:"enabled"`
 	ModelComplexity        int     `json:"model_complexity"`
