@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/icon/logo_256.png" width="128" alt="Live2D Master Agent Logo">
+  <img src="assets/icon/logo_512.png" width="180" alt="Live2D Master Agent Logo">
 </p>
 
 <h1 align="center">Live2D Master Agent</h1>
