@@ -129,9 +129,22 @@ jobs:
         working-directory: api
         run: go build -o /tmp/live2d-api .
 
+      # HealthCheck 会真的探针 Python（`python --version` + `import PIL` / `import numpy`），
+      # 这里把探针要求的依赖装上，好让下面 LIVE2D_TEST_PYTHON 打开的真实路径用例能跑。
+      - name: Set up Python for the Go health probe
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps probed by the Go health check
+        run: python -m pip install --upgrade pip Pillow numpy
+
       - name: Go test
         working-directory: api
         run: go test -v ./...
+        env:
+          # 打开「用真机解释器验证健康检查」用例；未设置时该用例自动跳过，不制造假失败。
+          LIVE2D_TEST_PYTHON: python3
 
   # ===== Frontend Build =====
   frontend-build:

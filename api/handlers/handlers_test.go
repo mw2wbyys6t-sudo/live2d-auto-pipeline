@@ -3,8 +3,12 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -16,6 +20,15 @@ import (
 
 // newTestHandler 创建一个测试用 handler（不依赖外部服务）
 func newTestHandler(t *testing.T) *Handler {
+	t.Helper()
+	return newTestHandlerWithPython(t, "python3")
+}
+
+// newTestHandlerWithPython 同上，但显式指定 Python 解释器路径。
+//
+// HealthCheck 会真的执行这个解释器做探针，所以需要它的用例必须自己决定
+// 用哪个解释器，而不是碰运气去读宿主机 PATH 上的 python3。
+func newTestHandlerWithPython(t *testing.T, pythonPath string) *Handler {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -29,7 +42,7 @@ func newTestHandler(t *testing.T) *Handler {
 			BaseDir: t.TempDir(),
 		},
 		Python: config.PythonConfig{
-			PythonPath: "python3",
+			PythonPath: pythonPath,
 			ScriptsDir: "",
 			TimeoutSec: 5,
 		},
@@ -48,8 +61,35 @@ func newTestHandler(t *testing.T) *Handler {
 	return NewHandler(cfg, img, cache)
 }
 
+// fakePython 生成一个「行为固定」的假 Python 解释器，供 HealthCheck 探针使用。
+//
+// 为什么需要它：HealthCheck（v0.10.3 起）会真的执行 `python --version` 并
+// `import PIL` / `import numpy`。单元测试不该依赖宿主机恰好装了什么——CI 的
+// Go 任务就没装这两个库，用真解释器会返回 503，让「断言 200」变成假失败。
+// 注入假解释器后，健康与不健康两条分支都能被确定性地测到。
+//
+//	exitCode == 0 → 模拟「环境完好」；非 0 → 模拟「解释器不可用」
+func fakePython(t *testing.T, exitCode int) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(dir, "fake-python.bat")
+		if err := os.WriteFile(path, []byte(fmt.Sprintf("@echo off\r\nexit /b %d\r\n", exitCode)), 0o644); err != nil {
+			t.Fatalf("写入假解释器失败: %v", err)
+		}
+		return path
+	}
+
+	path := filepath.Join(dir, "fake-python.sh")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf("#!/bin/sh\nexit %d\n", exitCode)), 0o755); err != nil {
+		t.Fatalf("写入假解释器失败: %v", err)
+	}
+	return path
+}
+
 func TestHealthCheck(t *testing.T) {
-	h := newTestHandler(t)
+	h := newTestHandlerWithPython(t, fakePython(t, 0))
 	r := gin.New()
 	r.GET("/api/health", h.HealthCheck)
 
@@ -58,7 +98,7 @@ func TestHealthCheck(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+		t.Fatalf("expected 200, got %d (body=%s)", w.Code, w.Body.String())
 	}
 	var resp models.Response
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -69,6 +109,55 @@ func TestHealthCheck(t *testing.T) {
 	}
 	if resp.Message == "" {
 		t.Error("expected non-empty message")
+	}
+}
+
+// TestHealthCheckReportsBrokenPython 锁住 v0.10.3 的行为：
+// Python 探针失败时不再假装健康，而是 503 + 可读的原因。
+func TestHealthCheckReportsBrokenPython(t *testing.T) {
+	h := newTestHandlerWithPython(t, fakePython(t, 1))
+	r := gin.New()
+	r.GET("/api/health", h.HealthCheck)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d (body=%s)", w.Code, w.Body.String())
+	}
+	var resp models.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if resp.Success {
+		t.Error("expected success=false when Python 不可用")
+	}
+	if resp.Error == "" {
+		t.Error("expected non-empty error telling why Python 不可用")
+	}
+}
+
+// TestHealthCheckWithRealPython 用真机解释器验证「环境完好 → 200」这一真实路径。
+//
+// 沿用仓库既有的 LIVE2D_TEST_PYTHON 约定：未设置就跳过，不制造假失败。
+// CI 的 Go 任务装了 Pillow + numpy 并设置该变量，让这条路径也被真实覆盖。
+func TestHealthCheckWithRealPython(t *testing.T) {
+	pythonPath := os.Getenv("LIVE2D_TEST_PYTHON")
+	if pythonPath == "" {
+		t.Skip("需要 LIVE2D_TEST_PYTHON 才能用真机解释器验证健康检查")
+	}
+
+	h := newTestHandlerWithPython(t, pythonPath)
+	r := gin.New()
+	r.GET("/api/health", h.HealthCheck)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("真机解释器 %s 应报告健康，实际 %d (body=%s)", pythonPath, w.Code, w.Body.String())
 	}
 }
 
