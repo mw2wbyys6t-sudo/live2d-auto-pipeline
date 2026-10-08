@@ -100,9 +100,12 @@ class OpenAICompatProvider(ImageProvider):
     def __init__(self, config=None):
         from core.config import config as global_config
         self.config = config or global_config
-        self.api_key = os.environ.get("OPENAI_API_KEY", "")
-        self.base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-        self.model = os.environ.get("IMAGE_MODEL", "gpt-image-1")
+        # v0.10.3 修复：统一走 SecureConfig 通道，使 .env 里配置的
+        # OPENAI_API_KEY（敏感 Key，存私有 _secrets 而非 os.environ）能被读到。
+        # 回退顺序：加密存储 > .env 私有字典 > os.environ（兼容 export 写法）。
+        self.api_key = self.config.openai_api_key or ""
+        self.base_url = (self.config.openai_base_url or "https://api.openai.com/v1").rstrip("/")
+        self.model = self.config.image_model or "gpt-image-1"
         # 操作员显式配置的网关主机 = 唯一的非公网信任来源
         gateway_host = (urlparse(self.base_url).hostname or "").lower()
         self._trusted_hosts = frozenset({gateway_host} if gateway_host else ())

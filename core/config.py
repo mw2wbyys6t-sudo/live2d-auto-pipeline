@@ -153,7 +153,7 @@ class SecureConfig:
         """Load keys from encrypted storage if available."""
         if self._encrypted_config is None:
             return
-        for provider_env in ('SENSENOVA_API_KEY', 'ARK_API_KEY', 'SEEDREAM_API_KEY'):
+        for provider_env in ('SENSENOVA_API_KEY', 'ARK_API_KEY', 'SEEDREAM_API_KEY', 'OPENAI_API_KEY'):
             provider = provider_env.replace('_API_KEY', '').lower()
             try:
                 key = self._encrypted_config.get_api_key(provider)
@@ -172,6 +172,8 @@ class SecureConfig:
             'OUTPUT_DIR': '',
             'MAX_PSD_SIZE_MB': '500',
             'SENSENOVA_BASE_URL': 'https://api.sensenova.cn/v1',
+            'OPENAI_BASE_URL': 'https://api.openai.com/v1',
+            'IMAGE_MODEL': 'gpt-image-1',
             'LIVE2D_LOG_LEVEL': 'INFO',
             'LIVE2D_TELEMETRY': '0',
             'GO_API_HOST': '0.0.0.0',
@@ -200,6 +202,7 @@ class SecureConfig:
                 'SENSENOVA_API_KEY': 'sensenova',
                 'ARK_API_KEY': 'ark',
                 'SEEDREAM_API_KEY': 'seedream',
+                'OPENAI_API_KEY': 'openai',
             }
             if key in provider_map:
                 try:
@@ -230,6 +233,7 @@ class SecureConfig:
                     'SENSENOVA_API_KEY': 'sensenova',
                     'ARK_API_KEY': 'ark',
                     'SEEDREAM_API_KEY': 'seedream',
+                    'OPENAI_API_KEY': 'openai',
                 }
                 if key in provider_map:
                     self._encrypted_config.store_api_key(provider_map[key], value)
@@ -285,6 +289,18 @@ class SecureConfig:
     @property
     def sensenova_base_url(self) -> str:
         return self.get('SENSENOVA_BASE_URL', 'https://api.sensenova.cn/v1')
+
+    @property
+    def openai_api_key(self) -> Optional[str]:
+        return self._get_secret('OPENAI_API_KEY')
+
+    @property
+    def openai_base_url(self) -> str:
+        return self.get('OPENAI_BASE_URL', 'https://api.openai.com/v1')
+
+    @property
+    def image_model(self) -> str:
+        return self.get('IMAGE_MODEL', 'gpt-image-1')
 
     @property
     def has_api_key(self) -> bool:
