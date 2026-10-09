@@ -1,0 +1,125 @@
+name: Tauri Desktop Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'scripts/build_tauri_release.*'
+      - 'scripts/run_tauri_dev.*'
+      - '.github/workflows/tauri-build.yml'
+
+jobs:
+  build-tauri:
+    name: Build Tauri NSIS Installer (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            desktop/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: tauri-${{ hashFiles('desktop/Cargo.lock', 'desktop/Cargo.toml') }}
+          restore-keys: tauri-
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('web/package-lock.json') }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ hashFiles('api/go.sum') }}
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build frontend static export
+        working-directory: web
+        run: npx next build
+        env:
+          NEXT_STATIC_EXPORT: '1'
+
+      - name: Version asset URLs
+        run: node scripts/version-assets.mjs web/out
+
+      - name: Copy static output to embed dir
+        run: |
+          if (Test-Path api/webui/dist) { Remove-Item -Recurse -Force api/webui/dist }
+          New-Item -ItemType Directory -Force -Path api/webui/dist | Out-Null
+          Copy-Item -Recurse -Force web/out/* api/webui/dist/
+        shell: pwsh
+
+      - name: Build Go binary (with embedded frontend)
+        working-directory: api
+        run: go build -trimpath -ldflags "-s -w -H windowsgui" -o live2d-api.exe .
+
+      - name: Copy Go binary to Tauri resources
+        run: |
+          New-Item -ItemType Directory -Force -Path desktop/bin | Out-Null
+          Copy-Item -Force api/live2d-api.exe desktop/bin/live2d-api.exe
+        shell: pwsh
+
+      - name: Show Tauri config
+        run: Get-Content desktop/tauri.conf.json
+        shell: pwsh
+
+      - name: List resource bin contents
+        run: Get-ChildItem -Recurse desktop/bin
+        shell: pwsh
+
+      - name: Build Tauri app + NSIS installer
+        working-directory: desktop
+        run: cargo tauri build --bundles nsis --verbose
+
+      - name: List build output
+        run: |
+          Write-Host "=== NSIS installer ==="
+          Get-ChildItem -Recurse desktop/target/release/bundle -ErrorAction SilentlyContinue
+          Write-Host "=== Standalone exe ==="
+          Get-ChildItem desktop/target/release/*.exe -ErrorAction SilentlyContinue
+        shell: pwsh
+
+      - name: Upload NSIS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-nsis-installer
+          path: desktop/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload standalone exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-standalone-exe
+          path: desktop/target/release/Live2D Master Agent.exe
+          if-no-files-found: ignore
+          retention-days: 30
