@@ -21,11 +21,19 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "resources": [],
+    "resources": ["bin/*"],
     "externalBin": [],
-    "copyright": "",
+    "copyright": "Copyright (c) 2026 Pygmalion",
     "category": "DeveloperTool",
     "shortDescription": "AI-powered Live2D character creation pipeline",
-    "longDescription": "Live2D Master Agent (Pygmalion) - transform a text prompt into a rig-ready Live2D model through an automated pipeline."
+    "longDescription": "Live2D Master Agent (Pygmalion) - transform a text prompt into a rig-ready Live2D model through an automated pipeline.",
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser",
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": true
+      }
+    }
   }
 }

@@ -4,7 +4,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const BACKEND_HOST: &str = "127.0.0.1";
 const BACKEND_PORT: u16 = 8080;
@@ -23,39 +23,71 @@ fn is_backend_online() -> bool {
     TcpStream::connect(backend_addr()).is_ok()
 }
 
-fn find_go_binary() -> Option<PathBuf> {
-    let exe_name = if cfg!(windows) {
+fn go_binary_name() -> &'static str {
+    if cfg!(windows) {
         "live2d-api.exe"
     } else {
         "live2d-api"
-    };
+    }
+}
 
-    let desktop_name = if cfg!(windows) {
+fn desktop_binary_name() -> &'static str {
+    if cfg!(windows) {
         "Live2DMasterAgent.exe"
     } else {
         "Live2DMasterAgent"
-    };
+    }
+}
 
-    let candidates: Vec<PathBuf> = [
-        format!("../api/{}", exe_name),
-        format!("api/{}", exe_name),
-        format!("../dist/{}", desktop_name),
-        format!("dist/{}", desktop_name),
-    ]
-    .iter()
-    .map(|s| PathBuf::from(s))
-    .collect();
+/// Search for the Go backend binary in order of likelihood.
+///
+/// Development mode (running `cargo tauri dev` from `desktop/`):
+///   1. ../api/live2d-api(.exe)       — freshly built Go binary
+///   2. ../dist/Live2DMasterAgent(.exe) — full desktop build
+///
+/// Production mode (installed via NSIS / running the bundled exe):
+///   3. <resource_dir>/live2d-api(.exe) — Tauri bundles `desktop/bin/*` here
+///   4. <exe_dir>/live2d-api(.exe)      — fallback: sibling of the main exe
+fn find_go_binary(app: &AppHandle) -> Option<PathBuf> {
+    let go_name = go_binary_name();
+    let desk_name = desktop_binary_name();
 
-    for candidate in &candidates {
+    // --- Dev paths (relative to CWD which is desktop/ during `tauri dev`) ---
+    let dev_candidates: Vec<PathBuf> = vec![
+        PathBuf::from(format!("../api/{}", go_name)),
+        PathBuf::from(format!("api/{}", go_name)),
+        PathBuf::from(format!("../dist/{}", desk_name)),
+        PathBuf::from(format!("dist/{}", desk_name)),
+    ];
+    for candidate in &dev_candidates {
         if candidate.exists() {
             return Some(candidate.clone());
         }
     }
+
+    // --- Production: Tauri resource directory ---
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let p = resource_dir.join(go_name);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    // --- Production fallback: next to the main executable ---
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let p = exe_dir.join(go_name);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+
     None
 }
 
-fn spawn_backend() -> Option<Child> {
-    let binary = find_go_binary()?;
+fn spawn_backend(app: &AppHandle) -> Option<Child> {
+    let binary = find_go_binary(app)?;
     Command::new(&binary)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -94,24 +126,24 @@ fn check_backend() -> bool {
 pub fn run() {
     let already_running = is_backend_online();
 
-    let backend = if already_running {
-        None
-    } else {
-        let child = spawn_backend();
-        if child.is_some() {
-            wait_for_backend(HEALTH_TIMEOUT_SECS);
-        }
-        child
-    };
-
-    let backend_ok = is_backend_online();
-
     tauri::Builder::default()
         .manage(AppState {
-            backend: Mutex::new(backend),
+            backend: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![check_backend])
         .setup(move |app| {
+            let backend_ok = if already_running {
+                true
+            } else {
+                let child = spawn_backend(app.handle());
+                if child.is_some() {
+                    wait_for_backend(HEALTH_TIMEOUT_SECS);
+                }
+                let state: tauri::State<AppState> = app.state();
+                *state.backend.lock().unwrap() = child;
+                is_backend_online()
+            };
+
             let window = if backend_ok {
                 WebviewWindowBuilder::new(
                     app,
@@ -131,7 +163,7 @@ pub fn run() {
 
             if !backend_ok {
                 let _ = app.emit("backend-error", serde_json::json!({
-                    "message": "Go API backend not found. Please build it first:\n  cd api && go build -o live2d-api.exe ."
+                    "message": "Go API backend not found.\n\nDevelopment:\n  cd api && go build -o live2d-api.exe .\n\nRelease:\n  Run scripts\\build_tauri_release.bat"
                 }));
             }
 

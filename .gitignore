@@ -152,3 +152,8 @@ desktop/gen/
 !desktop/dist/
 desktop/dist/*
 !desktop/dist/index.html
+
+# Tauri 打包用的 Go 二进制（由 build_tauri_release 脚本复制进来，不入库）
+# 保留 .gitkeep 让目录存在于 git 中，Tauri resources glob 才不会报错
+desktop/bin/*
+!desktop/bin/.gitkeep
