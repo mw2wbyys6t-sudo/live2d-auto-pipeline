@@ -1,0 +1,27 @@
+[package]
+name = "live2d-master-agent"
+version = "0.10.3"
+description = "Live2D Master Agent - Desktop Application (Pygmalion)"
+authors = ["Pygmalion"]
+edition = "2021"
+
+[lib]
+name = "live2d_master_agent_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -142,3 +142,13 @@ desktop-env-report.txt
 
 # --- 操作系统文件（增量） ---
 desktop.ini
+
+# --- Tauri 桌面壳构建产物 ---
+desktop/target/
+desktop/gen/
+
+# Tauri 前端占位页面需要入库（tauri::generate_context! 编译时嵌入）
+# 但顶层 dist/ 规则会把它一起忽略，所以先放行目录再保留 index.html
+!desktop/dist/
+desktop/dist/*
+!desktop/dist/index.html

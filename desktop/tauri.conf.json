@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Live2D Master Agent",
+  "version": "0.10.3",
+  "identifier": "com.pygmalion.live2d-master-agent",
+  "build": {
+    "frontendDist": "dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": [],
+    "externalBin": [],
+    "copyright": "",
+    "category": "DeveloperTool",
+    "shortDescription": "AI-powered Live2D character creation pipeline",
+    "longDescription": "Live2D Master Agent (Pygmalion) - transform a text prompt into a rig-ready Live2D model through an automated pipeline."
+  }
+}
