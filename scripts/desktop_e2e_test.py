@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""桌面版全链路真实测试（对 http://127.0.0.1:8095 反复执行）。"""
+"""桌面版全链路真实测试（对 http://127.0.0.1:8080 反复执行）。"""
 import json
 import io
 import os
@@ -8,7 +8,7 @@ import time
 
 import requests
 
-BASE = "http://127.0.0.1:8095"
+BASE = os.environ.get("DESKTOP_E2E_BASE", "http://127.0.0.1:8080")
 PASS, FAIL = 0, 0
 FAILURES = []
 

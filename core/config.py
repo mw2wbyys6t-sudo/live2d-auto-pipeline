@@ -43,6 +43,7 @@ class SecureConfig:
         'ARK_API_KEY', 'SENSENOVA_API_KEY', 'API_KEY',
         'SECRET_KEY', 'PASSWORD', 'TOKEN',
         'SEEDREAM_API_KEY', 'OPENAI_API_KEY',
+        'ANTHROPIC_API_KEY', 'JWT_SECRET',
     }
 
     def __new__(cls):

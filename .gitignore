@@ -140,6 +140,10 @@ desktop-env-report.txt
 # --- 个人/本地配置 ---
 *.local.json
 
+# --- 加密密钥存储（虽为加密文件，但泄露后配合系统信息可能被解密） ---
+.env.encrypted
+.env*.encrypted
+
 # --- 操作系统文件（增量） ---
 desktop.ini
 
