@@ -4,6 +4,17 @@ set -e
 echo "🎭 Live2D Master Agent v0.10.0"
 echo "============================"
 
+# 以 root 启动时：先把 bind mount 的可写目录属主改成目标用户，再通过 gosu 降权
+# 重入本脚本。此后 Go API 与 Next.js 全部以非 root 身份运行。
+# 以非 root 身份启动时（如 compose 覆盖了 user:）直接跳过，避免误 chown。
+if [ "$(id -u)" = "0" ]; then
+    PUID="${PUID:-1000}"
+    PGID="${PGID:-1000}"
+    mkdir -p /app/assets /app/output /app/logs
+    chown -R "${PUID}:${PGID}" /app/assets /app/output /app/logs 2>/dev/null || true
+    exec gosu "${PUID}:${PGID}" "$0" "$@"
+fi
+
 # Create .env if not exists
 if [ ! -f .env ]; then
     cp .env.example .env

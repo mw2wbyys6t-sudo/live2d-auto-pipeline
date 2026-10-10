@@ -11,6 +11,7 @@ import (
 	"path"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-contrib/gzip"
@@ -57,6 +58,14 @@ func main() {
 
 	// 创建路由
 	r := gin.Default()
+
+	// 不信任任何代理转发的客户端 IP 头（X-Forwarded-For / X-Real-IP）。
+	// gin 默认信任所有来源，攻击者可伪造 XFF: 127.0.0.1 绕过限流的回环豁免。
+	// 本服务直连客户端（桌面形态 / Docker 端口映射经 NAT 后 RemoteAddr 即真实 IP）。
+	// 若未来部署在 nginx 等反向代理之后，应改为 r.SetTrustedProxies([]string{"<代理 CIDR>"})。
+	if err := r.SetTrustedProxies(nil); err != nil {
+		log.Printf("[warn] SetTrustedProxies 失败（忽略）: %v", err)
+	}
 
 	// ========== 安全中间件 ==========
 
@@ -404,11 +413,13 @@ func validateRequestMiddleware() gin.HandlerFunc {
 
 // rateLimitMiddleware 速率限制中间件
 func rateLimitMiddleware(cfg *config.Config) gin.HandlerFunc {
-	// 使用内存存储请求计数（生产环境应使用Redis）
 	type clientInfo struct {
 		count     int
 		resetTime time.Time
 	}
+	// mu 保护 clients：清理 goroutine 的遍历/删除与请求 goroutine 的读写
+	// 必须互斥，否则 Go runtime 检测到并发 map 读写会 fatal error 终止整个进程。
+	var mu sync.Mutex
 	clients := make(map[string]*clientInfo)
 
 	// 清理过期客户端的goroutine
@@ -417,11 +428,13 @@ func rateLimitMiddleware(cfg *config.Config) gin.HandlerFunc {
 		defer ticker.Stop()
 		for range ticker.C {
 			now := time.Now()
+			mu.Lock()
 			for ip, info := range clients {
 				if now.After(info.resetTime) {
 					delete(clients, ip)
 				}
 			}
+			mu.Unlock()
 		}
 	}()
 
@@ -438,6 +451,7 @@ func rateLimitMiddleware(cfg *config.Config) gin.HandlerFunc {
 		clientIP := c.ClientIP()
 
 		now := time.Now()
+		mu.Lock()
 		info, exists := clients[clientIP]
 
 		if !exists || now.After(info.resetTime) {
@@ -446,20 +460,24 @@ func rateLimitMiddleware(cfg *config.Config) gin.HandlerFunc {
 				count:     1,
 				resetTime: now.Add(1 * time.Minute),
 			}
+			mu.Unlock()
 			c.Next()
 			return
 		}
 
 		// 检查是否超过限制（每分钟60请求）
 		if info.count >= 60 {
+			retryAfter := int(info.resetTime.Sub(now).Seconds())
+			mu.Unlock()
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
 				"error":       "请求过于频繁，请稍后再试",
-				"retry_after": int(info.resetTime.Sub(now).Seconds()),
+				"retry_after": retryAfter,
 			})
 			return
 		}
 
 		info.count++
+		mu.Unlock()
 		c.Next()
 	}
 }

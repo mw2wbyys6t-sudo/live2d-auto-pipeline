@@ -28,15 +28,18 @@ func TestNativeExportLive2D(t *testing.T) {
 		t.Skip("real export environment not configured")
 	}
 
-	layersDir := filepath.Join(t.TempDir(), "layers")
+	// 图层与导出目录必须位于同一个输出根内：生产链路（segment 端点）生成的
+	// layers_* 目录就在 Output.BaseDir 下，导出端点也据此做目录归属校验。
+	workRoot := t.TempDir()
+	layersDir := filepath.Join(workRoot, "layers")
 	if err := writeTestLayers(layersDir); err != nil {
 		t.Fatalf("构造测试图层失败: %v", err)
 	}
-	outputDir := filepath.Join(t.TempDir(), "export")
+	outputDir := filepath.Join(workRoot, "export")
 
 	cfg := &config.Config{
 		Python: config.PythonConfig{PythonPath: python, ScriptsDir: root, TimeoutSec: 600},
-		Output: config.OutputConfig{BaseDir: filepath.Dir(outputDir)},
+		Output: config.OutputConfig{BaseDir: workRoot},
 	}
 	h := &Handler{pythonBridge: services.NewPythonBridge(cfg), cfg: cfg}
 	gin.SetMode(gin.TestMode)

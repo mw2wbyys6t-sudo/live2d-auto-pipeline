@@ -652,6 +652,14 @@ func (pb *PythonBridge) ExportLive2DModel(characterID, layersDir, outputDir stri
 	if outputDir == "" {
 		outputDir = filepath.Join(pb.cfg.Output.BaseDir, "live2d_exports", characterID)
 	}
+	// 请求体传入的目录可能是绝对路径，必须限定在输出根内，
+	// 否则可读取任意目录 PNG 并向任意位置写模型产物。
+	if err := validateWithinBase(layersDir, pb.cfg.Output.BaseDir, "图层目录"); err != nil {
+		return nil, err
+	}
+	if err := validateWithinBase(outputDir, pb.cfg.Output.BaseDir, "输出目录"); err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(layersDir); os.IsNotExist(err) {
 		return nil, fmt.Errorf("图层目录不存在: %s", layersDir)
 	}

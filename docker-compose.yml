@@ -4,8 +4,11 @@ services:
     build: .
     container_name: live2d-master-agent
     ports:
-      - "8080:8080"   # Go API
-      - "3000:3000"   # Next.js Web UI
+      # 安全默认：只绑回环，服务不对局域网暴露。
+      # 确需局域网访问时，改为 "8080:8080"（等价 0.0.0.0 绑定），
+      # 并同步设置 LIVE2D_CORS_ORIGINS 放行你的前端来源（勿用 "*" + 凭据）。
+      - "127.0.0.1:8080:8080"   # Go API（仅本机）
+      - "127.0.0.1:3000:3000"   # Next.js Web UI（仅本机）
     volumes:
       - ./assets:/app/assets      # Characters, output, models
       - ./output:/app/output      # Generated files
@@ -15,6 +18,9 @@ services:
       - LIVE2D_PROJECT_ROOT=/app
       - NEXT_PUBLIC_API_URL=http://localhost:8080
       - PYTHONPATH=/app
+      # 非 root 运行用户的 UID/GID，按宿主机目录属主调整（id -u 查看）
+      - PUID=1000
+      - PGID=1000
     env_file:
       - path: ./.env
         required: false
@@ -31,7 +37,8 @@ services:
     image: redis:7-alpine
     container_name: live2d-redis
     ports:
-      - "6379:6379"
+      # 该 Redis 未配置认证，同样只绑回环；需要跨机访问请走 Docker 内部网络或加认证。
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped

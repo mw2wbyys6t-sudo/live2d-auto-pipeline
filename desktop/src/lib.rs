@@ -88,7 +88,16 @@ fn find_go_binary(app: &AppHandle) -> Option<PathBuf> {
 
 fn spawn_backend(app: &AppHandle) -> Option<Child> {
     let binary = find_go_binary(app)?;
+    // 桌面形态的后端只服务本机 webview：默认显式绑回环地址。
+    // Go 二进制自身默认 0.0.0.0，若不传参会把生图/文件/桌宠 API 暴露到整个局域网。
+    // 排障确需局域网访问时，可设环境变量 LIVE2D_DESKTOP_BACKEND_HOST=0.0.0.0 覆盖。
+    let host = std::env::var("LIVE2D_DESKTOP_BACKEND_HOST")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| BACKEND_HOST.to_string());
     Command::new(&binary)
+        .arg("-host")
+        .arg(host)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

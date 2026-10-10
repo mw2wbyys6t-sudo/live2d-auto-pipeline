@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -258,9 +260,17 @@ func TestProgressDisabledWithoutHub(t *testing.T) {
 func TestExportWithoutHubKeepsLegacyPath(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Python.PythonPath = "definitely-not-a-python-binary"
+	// 目录归属校验要求 layers/output 都位于 Output.BaseDir 内（与生产链路一致）。
+	workRoot := t.TempDir()
+	cfg.Output.BaseDir = workRoot
+	layersDir := filepath.Join(workRoot, "layers")
+	if err := os.MkdirAll(layersDir, 0o755); err != nil {
+		t.Fatalf("构造 layers 目录失败: %v", err)
+	}
 	h := &Handler{cfg: cfg, pythonBridge: services.NewPythonBridge(cfg)}
 
-	result, err := h.exportLive2DModelTracked("char", t.TempDir(), t.TempDir())
+	result, err := h.exportLive2DModelTracked(
+		"char", layersDir, filepath.Join(workRoot, "export"))
 	if err == nil {
 		t.Fatalf("不存在的解释器必须报错，实得 %v", result)
 	}
@@ -278,10 +288,18 @@ func TestExportWithoutHubKeepsLegacyPath(t *testing.T) {
 func TestExportWithHubStillReturnsSameContract(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Python.PythonPath = "definitely-not-a-python-binary"
+	// 与无 Hub 用例相同：layers/output 必须在 Output.BaseDir 内才能走到执行路径。
+	workRoot := t.TempDir()
+	cfg.Output.BaseDir = workRoot
+	layersDir := filepath.Join(workRoot, "layers")
+	if err := os.MkdirAll(layersDir, 0o755); err != nil {
+		t.Fatalf("构造 layers 目录失败: %v", err)
+	}
 	hub := services.NewWSHub() // 不 Run()：顺带验证无人消费时不会卡住导出
 	h := &Handler{cfg: cfg, pythonBridge: services.NewPythonBridge(cfg), wsHub: hub}
 
-	result, err := h.exportLive2DModelTracked("char", t.TempDir(), t.TempDir())
+	result, err := h.exportLive2DModelTracked(
+		"char", layersDir, filepath.Join(workRoot, "export"))
 	if err == nil || result != nil {
 		t.Fatalf("失败情形要与旧路径一致，实得 result=%v err=%v", result, err)
 	}

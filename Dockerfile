@@ -23,9 +23,10 @@ LABEL description="AI Character → Live2D Model → Desktop Pet"
 LABEL version="0.10.2"
 
 # System dependencies
+# gosu: 入口脚本修正 bind mount 属主后降权到非 root 用户运行服务
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender1 \
-    libgomp1 ffmpeg curl ca-certificates \
+    libgomp1 ffmpeg curl ca-certificates gosu \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -59,6 +60,18 @@ COPY web/next.config.js ./web/
 
 # Create directories
 RUN mkdir -p assets/characters assets/output assets/models output logs
+
+# 非 root 运行用户（UID/GID 可用 --build-arg PUID/PGID 覆盖，对齐宿主目录属主）。
+# 镜像内文件属主先置为该用户；容器仍以 root 启动入口脚本，由其对 bind mount
+# （assets/output）执行 chown 后通过 gosu 降权——这样挂载目录在任意宿主 UID
+# 下都可写，而 Go API / Next.js 服务进程本身不以 root 运行。
+ARG PUID=1000
+ARG PGID=1000
+RUN groupadd -g ${PGID} live2d \
+    && useradd -u ${PUID} -g ${PGID} -m -s /usr/sbin/nologin live2d \
+    && chown -R ${PUID}:${PGID} /app
+ENV PUID=1000
+ENV PGID=1000
 
 # Environment
 ENV PYTHONPATH=/app

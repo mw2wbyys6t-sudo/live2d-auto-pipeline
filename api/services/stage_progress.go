@@ -500,6 +500,9 @@ func (pb *PythonBridge) ExportLive2DModelTracked(characterID, layersDir, outputD
 	if tracker == nil {
 		return pb.ExportLive2DModel(characterID, layersDir, outputDir)
 	}
+	if err := validateStrictID(characterID); err != nil {
+		return nil, err
+	}
 	if layersDir == "" {
 		suffix := characterID
 		if len(suffix) > 8 {
@@ -509,6 +512,13 @@ func (pb *PythonBridge) ExportLive2DModelTracked(characterID, layersDir, outputD
 	}
 	if outputDir == "" {
 		outputDir = filepath.Join(pb.cfg.Output.BaseDir, "live2d_exports", characterID)
+	}
+	// 与 ExportLive2DModel 相同的目录归属约束（tracked 分支此前完全缺失）。
+	if err := validateWithinBase(layersDir, pb.cfg.Output.BaseDir, "图层目录"); err != nil {
+		return nil, err
+	}
+	if err := validateWithinBase(outputDir, pb.cfg.Output.BaseDir, "输出目录"); err != nil {
+		return nil, err
 	}
 	pyCode := exportStagePythonCode(pb.cfg.Python.ScriptsDir, layersDir, outputDir,
 		characterID, tracker.JobID())

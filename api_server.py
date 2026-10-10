@@ -98,6 +98,75 @@ VERSION = "v0.10.3-py"
 SERVER_PORT = 8080  # v0.10.3: 与 Go 后端及前端代理目标一致
 START_TIME = time.time()
 
+# 生图尺寸安全区间（与 Go 服务 ClampImageDimensions 保持一致）：
+# 防止单请求申请超大画布导致进程 OOM。
+MIN_IMAGE_DIMENSION = 64
+MAX_IMAGE_DIMENSION = 4096
+
+
+def _clamp_dimensions(req: Any) -> None:
+    """就地钳制请求宽高；<=0 保留给后续默认值逻辑。"""
+    w = getattr(req, "width", 0)
+    h = getattr(req, "height", 0)
+    if 0 < w < MIN_IMAGE_DIMENSION:
+        req.width = MIN_IMAGE_DIMENSION
+    elif w > MAX_IMAGE_DIMENSION:
+        req.width = MAX_IMAGE_DIMENSION
+    if 0 < h < MIN_IMAGE_DIMENSION:
+        req.height = MIN_IMAGE_DIMENSION
+    elif h > MAX_IMAGE_DIMENSION:
+        req.height = MAX_IMAGE_DIMENSION
+
+
+# ---------- 线程池任务超时 ----------
+# 同步重活（图像 API 调用、CPU 语义分层、网格/图集烘焙）都经 asyncio.to_thread
+# 在线程池执行。若不施加超时，对端永久挂起时 HTTP 请求与工作线程会一起泄漏。
+# 默认预算与 Go 后端对齐（生图 600s / 分层 900s），完整工作流因串行包含
+# 生图+分层+PSD+绑定+可选导出，给到 1800s。全部支持环境变量覆盖，
+# 约定 0 = 不限制（保留给离线批处理等长任务场景）。
+def _env_timeout(name: str, default: float) -> float:
+    """读取超时秒数；空值用默认，非法值（非数字/负数）回退默认并告警。"""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+        if value < 0:
+            raise ValueError
+    except ValueError:
+        print(f"⚠️  警告: {name}={raw!r} 不是合法超时秒数，回退默认值 {default:g}s")
+        return default
+    return value
+
+
+GEN_TIMEOUT = _env_timeout("LIVE2D_GEN_TIMEOUT", 600)                  # 对齐 Go: PythonTimeout(120s)×5
+WORKFLOW_TIMEOUT = _env_timeout("LIVE2D_WORKFLOW_TIMEOUT", 1800)       # 生图+语义分层+PSD+绑定+可选导出
+SEGMENT_TIMEOUT = _env_timeout("LIVE2D_SEGMENT_TIMEOUT", 900)          # 对齐 Go bridge: 15 分钟
+EXPORT_LOAD_TIMEOUT = _env_timeout("LIVE2D_EXPORT_LOAD_TIMEOUT", 120)  # 仅读盘加载 PNG
+EXPORT_BUILD_TIMEOUT = _env_timeout("LIVE2D_EXPORT_BUILD_TIMEOUT", 300)  # 网格+图集烘焙+moc3
+DEPLOY_TIMEOUT = _env_timeout("LIVE2D_DEPLOY_TIMEOUT", 300)            # 桌宠打包
+TRACKING_START_TIMEOUT = _env_timeout("LIVE2D_TRACKING_START_TIMEOUT", 30)  # 摄像头打开（设备被占用时可能阻塞）
+TRACKING_STOP_TIMEOUT = _env_timeout("LIVE2D_TRACKING_STOP_TIMEOUT", 10)    # 摄像头释放
+
+
+async def _to_thread_bounded(func: Any, timeout: float, *args: Any) -> Any:
+    """把同步函数丢进默认线程池执行，并施加等待超时。
+
+    注意：Python 无法安全强杀运行中的线程，超时只放弃等待并向客户端返回，
+    线程跑完后资源自然回收；关键是保证 HTTP 请求不再永久挂起。
+    timeout <= 0（含约定的 0）表示不限制。
+    """
+    if timeout and timeout > 0:
+        return await asyncio.wait_for(asyncio.to_thread(func, *args), timeout=timeout)
+    return await asyncio.to_thread(func, *args)
+
+
+def _timeout_message(label: str, timeout: float, env_name: str) -> str:
+    return (
+        f"{label}超时（限制 {timeout:g} 秒）。若任务确需更长时间，"
+        f"可设置环境变量 {env_name} 调大上限（0 表示不限制）后重试。"
+    )
+
 
 # ---------- 响应模型 ----------
 class APIResponse(BaseModel):
@@ -437,9 +506,17 @@ async def create_character(req: CharacterCreateRequest):
     return ok(char, "角色创建成功")
 
 
+# PUT /api/characters 允许修改的字段白名单：
+# 禁止客户端通过批量赋值覆盖 character_id/id/created_at 等系统字段。
+_CHAR_EDITABLE_FIELDS = {"name", "persona", "palette", "image_url", "thumbnail_url"}
+
+
 @app.get("/api/characters/{char_id}")
 async def get_character(char_id: str):
-    path = CHARACTERS_DIR / f"{char_id}.json"
+    try:
+        path = _safe_char_path(char_id)
+    except ValueError:
+        return err("非法角色 ID", 400)
     if not path.exists():
         return err(f"角色 {char_id} 不存在", 404)
     with open(path, "r", encoding="utf-8") as f:
@@ -449,12 +526,17 @@ async def get_character(char_id: str):
 
 @app.put("/api/characters/{char_id}")
 async def update_character(char_id: str, req: Dict[str, Any]):
-    path = CHARACTERS_DIR / f"{char_id}.json"
+    try:
+        path = _safe_char_path(char_id)
+    except ValueError:
+        return err("非法角色 ID", 400)
     if not path.exists():
         return err(f"角色 {char_id} 不存在", 404)
     with open(path, "r", encoding="utf-8") as f:
         char = json.load(f)
-    char.update(req)
+    for field in _CHAR_EDITABLE_FIELDS:
+        if field in req:
+            char[field] = req[field]
     char["updated_at"] = datetime.now().isoformat()
     _save_character(char)
     return ok(char, "角色更新成功")
@@ -462,7 +544,10 @@ async def update_character(char_id: str, req: Dict[str, Any]):
 
 @app.delete("/api/characters/{char_id}")
 async def delete_character(char_id: str):
-    path = CHARACTERS_DIR / f"{char_id}.json"
+    try:
+        path = _safe_char_path(char_id)
+    except ValueError:
+        return err("非法角色 ID", 400)
     if not path.exists():
         return err(f"角色 {char_id} 不存在", 404)
     path.unlink()
@@ -500,8 +585,11 @@ def _run_generate(req: "GenerateRequest") -> Dict[str, Any]:
 @app.post("/api/generate")
 async def generate_image(req: GenerateRequest):
     try:
-        data = await asyncio.to_thread(_run_generate, req)
+        _clamp_dimensions(req)  # 边界处钳制，任何下游调用路径都绕不过
+        data = await _to_thread_bounded(_run_generate, GEN_TIMEOUT, req)
         return ok(data, "图像生成成功")
+    except asyncio.TimeoutError:
+        return err(_timeout_message("图像生成", GEN_TIMEOUT, "LIVE2D_GEN_TIMEOUT"), 504)
     except Exception as e:
         return err(f"图像生成失败: {e}", 500)
 
@@ -554,8 +642,14 @@ def _run_generate_character(req: "GenerateCharacterRequest") -> Dict[str, Any]:
 @app.post("/api/generate/character")
 async def generate_character(req: GenerateCharacterRequest):
     try:
-        result = await asyncio.to_thread(_run_generate_character, req)
+        _clamp_dimensions(req)  # 边界处钳制，与 /api/generate 同一条信任边界
+        result = await _to_thread_bounded(_run_generate_character, WORKFLOW_TIMEOUT, req)
         return ok(result, "角色生成完成" if result.get("success") else "角色生成失败")
+    except asyncio.TimeoutError:
+        return err(
+            _timeout_message("角色生成工作流", WORKFLOW_TIMEOUT, "LIVE2D_WORKFLOW_TIMEOUT"),
+            504,
+        )
     except Exception as e:
         return err(f"角色生成失败: {e}", 500)
 
@@ -627,8 +721,10 @@ def _run_segment(req: "SegmentRequest") -> Dict[str, Any]:
 async def segment_image(req: SegmentRequest):
     """对图片运行真实分层并写出 PSD，供「分层工作台」使用。"""
     try:
-        data = await asyncio.to_thread(_run_segment, req)
+        data = await _to_thread_bounded(_run_segment, SEGMENT_TIMEOUT, req)
         return ok(data, "分层完成")
+    except asyncio.TimeoutError:
+        return err(_timeout_message("分层", SEGMENT_TIMEOUT, "LIVE2D_SEGMENT_TIMEOUT"), 504)
     except Exception as e:
         return err(f"分层失败: {e}", 500)
 
@@ -654,17 +750,28 @@ async def run_see_through():
 
 
 # ---------- 导出 ----------
+def _within_project_root(p: Path) -> bool:
+    """目录解析后是否仍位于项目根内（与静态文件服务 _safe_resolve 同款校验，
+    额外阻止符号链接逃逸）。"""
+    try:
+        p.resolve().relative_to(PROJECT_ROOT.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def _resolve_export_source(req: "ExportLive2DRequest") -> str:
     """定位导出所用的图层来源目录。
 
     优先级：显式 layers_dir → model_dir → OUTPUT_DIR 下最新的 layers_* 目录。
+    所有外部传入路径必须解析后仍位于项目根内，防止绝对路径穿越读取任意 PNG。
     """
     for candidate in (req.layers_dir, req.model_dir):
         if candidate:
             p = Path(candidate)
             if not p.is_absolute():
                 p = PROJECT_ROOT / p
-            if p.is_dir() and any(p.glob("*.png")):
+            if _within_project_root(p) and p.is_dir() and any(p.glob("*.png")):
                 return str(p)
     for d in sorted(OUTPUT_DIR.glob("layers_*"), key=lambda x: x.stat().st_mtime, reverse=True):
         if d.is_dir() and any(d.glob("*.png")):
@@ -731,16 +838,38 @@ async def export_live2d(req: ExportLive2DRequest):
             payload = {"success": False, "message": "未找到可导出的图层目录"}
             return ok(payload, "导出失败：缺少图层")
 
-        layers = await asyncio.to_thread(_load_layers_for_export, source_dir)
+        # character_id 会进入烘焙纹理文件名，必须先过白名单（防穿越写）。
+        if req.character_id and not _SAFE_CHAR_ID.match(req.character_id):
+            return err("非法角色 ID", 400)
+
+        try:
+            layers = await _to_thread_bounded(
+                _load_layers_for_export, EXPORT_LOAD_TIMEOUT, source_dir
+            )
+        except asyncio.TimeoutError:
+            return err(
+                _timeout_message("图层加载", EXPORT_LOAD_TIMEOUT, "LIVE2D_EXPORT_LOAD_TIMEOUT"),
+                504,
+            )
         if not layers:
             payload = {"success": False, "message": f"图层目录内没有可用 PNG：{source_dir}"}
             return ok(payload, "导出失败：图层为空")
 
         export_dir = OUTPUT_DIR / f"export_{int(time.time())}"
         export_dir.mkdir(parents=True, exist_ok=True)
-        result = await asyncio.to_thread(
-            _build_live2d_model, layers, str(export_dir), req.character_id
-        )
+        try:
+            result = await _to_thread_bounded(
+                _build_live2d_model,
+                EXPORT_BUILD_TIMEOUT,
+                layers,
+                str(export_dir),
+                req.character_id,
+            )
+        except asyncio.TimeoutError:
+            return err(
+                _timeout_message("Live2D 导出", EXPORT_BUILD_TIMEOUT, "LIVE2D_EXPORT_BUILD_TIMEOUT"),
+                504,
+            )
 
         model3 = result.get("model3_json", "") or ""
         textures = [t for t in (result.get("textures") or []) if t]
@@ -820,8 +949,14 @@ async def deploy_desktop(req: DeployDesktopRequest):
                     layers_dir = json.load(f).get("layers_dir", "")
         if not layers_dir or not Path(layers_dir).is_dir():
             return err("未找到可用图层目录，请先生成角色", 400)
+        # 目录必须位于项目根内，防止指向外部路径打包任意 PNG。
+        candidate = Path(layers_dir)
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        if not _within_project_root(candidate):
+            return err("图层目录必须位于项目输出目录内", 400)
 
-        result = await asyncio.to_thread(_run_deploy_desktop, layers_dir)
+        result = await _to_thread_bounded(_run_deploy_desktop, DEPLOY_TIMEOUT, str(candidate))
         if not result.get("success"):
             return err(result.get("error", "桌宠打包失败"), 500)
         pkg_dir = result.get("package_dir", "")
@@ -831,6 +966,8 @@ async def deploy_desktop(req: DeployDesktopRequest):
             "run_script": str(Path(pkg_dir) / "run_pet.bat"),
             "readme": str(Path(pkg_dir) / "README.txt"),
         }, "桌宠包已生成")
+    except asyncio.TimeoutError:
+        return err(_timeout_message("桌宠打包", DEPLOY_TIMEOUT, "LIVE2D_DEPLOY_TIMEOUT"), 504)
     except Exception as e:
         return err(f"桌宠部署失败: {e}", 500)
 
@@ -844,8 +981,12 @@ def _make_chat_session(character_id: str = ""):
     persona = "活泼可爱，有点傲娇，喜欢和主人聊天"
     name = "小奈"
     if character_id:
-        path = CHARACTERS_DIR / f"{character_id}.json"
-        if path.exists():
+        # character_id 来自请求 body，必须过白名单再拼路径（防绝对路径/穿越读）。
+        try:
+            path = _safe_char_path(character_id)
+        except ValueError:
+            path = None
+        if path is not None and path.exists():
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     char = json.load(f)
@@ -1024,7 +1165,13 @@ async def tracking_start():
         return t
 
     try:
-        tracker = await asyncio.to_thread(_open)
+        tracker = await _to_thread_bounded(_open, TRACKING_START_TIMEOUT)
+    except asyncio.TimeoutError:
+        return err(
+            _timeout_message("摄像头启动", TRACKING_START_TIMEOUT, "LIVE2D_TRACKING_START_TIMEOUT")
+            + "请检查摄像头是否被其他程序占用。",
+            504,
+        )
     except Exception as e:
         return err(f"摄像头启动失败: {e}", 500)
 
@@ -1043,7 +1190,10 @@ async def tracking_stop():
     _TrackerState.running = False
     if _TrackerState.tracker is not None:
         try:
-            await asyncio.to_thread(_TrackerState.tracker.stop)
+            # 释放是 best-effort：超时/异常都继续清理状态，避免 stop 接口本身挂死。
+            await _to_thread_bounded(
+                _TrackerState.tracker.stop, TRACKING_STOP_TIMEOUT
+            )
         except Exception:
             pass
     _TrackerState.reset()

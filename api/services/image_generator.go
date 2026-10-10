@@ -34,6 +34,7 @@ func (g *ImageGenerator) GenerateImage(req models.GenerateImageRequest) (*models
 	if req.Height <= 0 {
 		req.Height = 768
 	}
+	req.Width, req.Height = ClampImageDimensions(req.Width, req.Height)
 	if req.Seed == 0 {
 		req.Seed = rand.Intn(999999999)
 	}
@@ -50,6 +51,7 @@ func (g *ImageGenerator) GenerateWithCharacter(req models.GenerateRequest) (*mod
 	if req.Height <= 0 {
 		req.Height = 1024
 	}
+	req.Width, req.Height = ClampImageDimensions(req.Width, req.Height)
 	if req.Seed == 0 {
 		req.Seed = rand.Intn(999999999)
 	}
@@ -98,9 +100,16 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 	// 确定输出目录
 	outputDir := filepath.Join(g.cfg.Python.ScriptsDir, "output")
 	if req.CharacterID != "" {
+		// character_id 来自 JSON body 且会被拼进文件路径，必须过白名单
+		// （全局中间件只校验 URL path 不校验 body），否则 "../../x" 可穿越建目录。
+		if err := validateStrictID(req.CharacterID); err != nil {
+			return nil, err
+		}
 		outputDir = filepath.Join(g.cfg.Python.ScriptsDir, "output", "characters", req.CharacterID)
 	}
-	os.MkdirAll(outputDir, 0755)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return nil, fmt.Errorf("创建输出目录失败: %v", err)
+	}
 
 	// 构建参数（使用 --json 模式，可靠解析结果）
 	args := []string{
