@@ -330,8 +330,8 @@ class SecureConfig:
     def __repr__(self) -> str:
         return (
             f"SecureConfig(version={__version__}, "
-            f"sensenova_key={'***' + self.sensenova_api_key[-4:] if self.sensenova_api_key else 'NOT SET'}, "
-            f"ark_key={'***' + self.ark_api_key[-4:] if self.ark_api_key else 'NOT SET'}, "
+            f"sensenova_key={'SET' if self.sensenova_api_key else 'NOT SET'}, "
+            f"ark_key={'SET' if self.ark_api_key else 'NOT SET'}, "
             f"output_dir={self.output_dir})"
         )
 

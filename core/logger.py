@@ -11,6 +11,7 @@ Provides structured logging with:
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -20,16 +21,17 @@ from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from typing import Optional, Dict, Any, List
 
-# Sensitive key patterns that should always be redacted
+# Sensitive key names for structured data redaction
 _SENSITIVE_PATTERNS = [
     "api_key", "apikey", "secret", "password", "token",
     "authorization", "auth", "credential", "private_key",
-    "ARK_API_KEY", "SENSENOVA_API_KEY",
+    "ark_api_key", "sensenova_api_key", "seedream_api_key",
+    "openai_api_key", "anthropic_api_key", "jwt_secret",
 ]
 
 
 def _redact_sensitive(data: Any) -> Any:
-    """Recursively redact sensitive fields from data structures."""
+    """Recursively redact sensitive fields from data structures (dicts/lists)."""
     if isinstance(data, dict):
         return {
             k: ("***REDACTED***" if any(p in k.lower() for p in _SENSITIVE_PATTERNS) else _redact_sensitive(v))
@@ -40,6 +42,67 @@ def _redact_sensitive(data: Any) -> Any:
     elif isinstance(data, str) and len(data) > 20 and data.startswith(("sk-", "Bearer ", "eyJ")):
         return data[:8] + "***REDACTED***"
     return data
+
+
+# Regex patterns for detecting sensitive VALUES in plain-text log messages.
+# Each entry is (compiled_regex, replacement_template).
+# Group 1 captures the key/label prefix (preserved); the sensitive tail is replaced.
+_SENSITIVE_VALUE_REGEXES: List[tuple] = [
+    # sk- prefixed API keys: sk- followed by 8+ alphanumeric chars
+    (re.compile(r'(sk-)[a-zA-Z0-9]{8,}'), r'\1***REDACTED***'),
+    # Bearer tokens: Bearer <token> — minimum 8 chars to avoid matching
+    # common English words that might follow "bearer" in non-token contexts.
+    (re.compile(r'(Bearer\s+)[a-zA-Z0-9._\-]{8,}', re.IGNORECASE), r'\1***REDACTED***'),
+    # JWT tokens: eyJ<base64>.<base64>.<base64>
+    (re.compile(r'(eyJ)[a-zA-Z0-9._\-]{10,}'), r'\1***REDACTED***'),
+    # key=value or key: value or key="value" where key is a sensitive name.
+    # The optional suffix (?:[_\-]?(?:key|id|secret|hash|token|value|string|salt))?
+    # matches compound names like secret_key, tokenId, passwordHash, credential_value
+    # while EXCLUDING non-sensitive compounds like token_count, secret_level.
+    # NOTE: "authorization" is excluded here because the Bearer pattern above
+    # already handles "Authorization: Bearer <token>". Including it would
+    # cause double-redaction ("Authorization: ***REDACTED*** ***REDACTED***").
+    (
+        re.compile(
+            r'((?:api[_\-]?key|apikey|secret|password|passwd|token|'
+            r'credential|private[_\-]?key|jwt[_\-]?secret)'
+            r'(?:[_\-]?(?:key|id|secret|hash|token|value|string|salt))?'
+            r'\s*[=:]\s*["\']?)[^"\'\s,}\]>]+',
+            re.IGNORECASE,
+        ),
+        r'\1***REDACTED***',
+    ),
+]
+
+
+def _redact_message(msg: str) -> str:
+    """Redact sensitive values from a plain-text log message string.
+
+    Applied at the Formatter level so every log call is covered,
+    not just telemetry events.
+    """
+    if not isinstance(msg, str):
+        return msg
+    redacted = msg
+    for regex, replacement in _SENSITIVE_VALUE_REGEXES:
+        redacted = regex.sub(replacement, redacted)
+    return redacted
+
+
+class _RedactingFormatter(logging.Formatter):
+    """Formatter wrapper that redacts sensitive values from every log record.
+
+    This sits between the handler and the inner formatter so that
+    all log output (console, file, rich) is automatically sanitized,
+    regardless of which log method (debug/info/warning/error/critical) was called.
+    """
+
+    def __init__(self, fmt: Optional[str] = None, datefmt: Optional[str] = None):
+        super().__init__(fmt=fmt, datefmt=datefmt)
+
+    def format(self, record: logging.LogRecord) -> str:
+        formatted = super().format(record)
+        return _redact_message(formatted)
 
 
 class Live2DLogger:
@@ -75,9 +138,9 @@ class Live2DLogger:
                 markup=False,
                 rich_tracebacks=True,
             )
-            handler.setFormatter(logging.Formatter("%(message)s"))
+            handler.setFormatter(_RedactingFormatter("%(message)s"))
         except ImportError:
-            handler.setFormatter(logging.Formatter(
+            handler.setFormatter(_RedactingFormatter(
                 "[%(asctime)s] %(levelname)-7s %(name)s: %(message)s",
                 datefmt="%H:%M:%S"
             ))
@@ -94,7 +157,7 @@ class Live2DLogger:
             log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
         )
         handler.setLevel(logging.DEBUG)
-        handler.setFormatter(logging.Formatter(
+        handler.setFormatter(_RedactingFormatter(
             "[%(asctime)s] %(levelname)-7s %(name)s:%(lineno)d - %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S"
         ))

@@ -223,8 +223,8 @@ def _settings():
     print(f"\n⚙️  Settings:")
     print(f"  Version: {config.version}")
     print(f"  Output:  {config.output_dir}")
-    print(f"  ARK Key: {'***' + config.ark_api_key[-4:] if config.ark_api_key else 'NOT SET'}")
-    print(f"  SenseNova Key: {'***' if config.sensenova_api_key else 'NOT SET'}")
+    print(f"  ARK Key: {'SET' if config.ark_api_key else 'NOT SET'}")
+    print(f"  SenseNova Key: {'SET' if config.sensenova_api_key else 'NOT SET'}")
     print()
     print("  Edit .env file to configure API keys")
 
