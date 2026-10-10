@@ -750,11 +750,16 @@ async def run_see_through():
 
 
 # ---------- 导出 ----------
-def _within_project_root(p: Path) -> bool:
-    """目录解析后是否仍位于项目根内（与静态文件服务 _safe_resolve 同款校验，
-    额外阻止符号链接逃逸）。"""
+def _within_output_root(p: Path) -> bool:
+    """目录 resolve 后是否仍位于配置的输出根（OUTPUT_DIR）内。
+
+    与 Go 服务 validateWithinBase(target, Output.BaseDir) 同一信任锚、同一套
+    规范化 + 前缀检查：图层/模型目录只允许来自应用自己生成产物的根目录
+    （分层端点生成的 layers_*、latest_generation.json 记录的路径都在此根下），
+    阻止绝对路径穿越读取或打包任意位置的 PNG。
+    """
     try:
-        p.resolve().relative_to(PROJECT_ROOT.resolve())
+        p.resolve().relative_to(OUTPUT_DIR.resolve())
         return True
     except (ValueError, OSError):
         return False
@@ -764,14 +769,15 @@ def _resolve_export_source(req: "ExportLive2DRequest") -> str:
     """定位导出所用的图层来源目录。
 
     优先级：显式 layers_dir → model_dir → OUTPUT_DIR 下最新的 layers_* 目录。
-    所有外部传入路径必须解析后仍位于项目根内，防止绝对路径穿越读取任意 PNG。
+    相对路径按输出根 OUTPUT_DIR 解析；所有外部传入路径必须解析后仍位于
+    OUTPUT_DIR 内，防止绝对路径穿越读取任意 PNG。
     """
     for candidate in (req.layers_dir, req.model_dir):
         if candidate:
             p = Path(candidate)
             if not p.is_absolute():
-                p = PROJECT_ROOT / p
-            if _within_project_root(p) and p.is_dir() and any(p.glob("*.png")):
+                p = OUTPUT_DIR / p
+            if _within_output_root(p) and p.is_dir() and any(p.glob("*.png")):
                 return str(p)
     for d in sorted(OUTPUT_DIR.glob("layers_*"), key=lambda x: x.stat().st_mtime, reverse=True):
         if d.is_dir() and any(d.glob("*.png")):
@@ -949,12 +955,12 @@ async def deploy_desktop(req: DeployDesktopRequest):
                     layers_dir = json.load(f).get("layers_dir", "")
         if not layers_dir or not Path(layers_dir).is_dir():
             return err("未找到可用图层目录，请先生成角色", 400)
-        # 目录必须位于项目根内，防止指向外部路径打包任意 PNG。
+        # 目录必须位于输出根内（与导出端点同一信任锚），防止指向外部路径打包任意 PNG。
         candidate = Path(layers_dir)
         if not candidate.is_absolute():
-            candidate = PROJECT_ROOT / candidate
-        if not _within_project_root(candidate):
-            return err("图层目录必须位于项目输出目录内", 400)
+            candidate = OUTPUT_DIR / candidate
+        if not _within_output_root(candidate):
+            return err("图层目录必须位于输出目录内", 400)
 
         result = await _to_thread_bounded(_run_deploy_desktop, DEPLOY_TIMEOUT, str(candidate))
         if not result.get("success"):

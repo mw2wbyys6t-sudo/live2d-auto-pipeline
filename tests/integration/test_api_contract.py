@@ -39,8 +39,11 @@ def isolated_output(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def layer_dir(tmp_path):
-    layers = tmp_path / "layers_test"
+def layer_dir(isolated_output):
+    # 安全约束（P2，与 Go 侧 validateWithinBase(Output.BaseDir) 对齐）：
+    # 图层目录必须位于输出根内。生产链路的 layers_* 本来就由分层端点生成在
+    # OUTPUT_DIR 下，夹具照此放置，而不是用输出根之外的临时目录。
+    layers = isolated_output / "layers_test"
     layers.mkdir()
     colors = {
         "face_base": (255, 220, 180, 255),
@@ -135,11 +138,14 @@ class TestUnimplementedEndpointsAreHonest:
         """桌宠部署端点已接线到真实 animator，不得返回 501。"""
         from PIL import Image
 
-        layers = tmp_path / "layers"
+        out = tmp_path / "out"
+        out.mkdir()
+        monkeypatch.setattr(api_server, "OUTPUT_DIR", out)
+        # 安全约束：图层目录必须位于输出根内（生产链路的 layers_* 即在 OUTPUT_DIR 下）。
+        layers = out / "layers"
         layers.mkdir()
         for name in ("hair_back", "hair_front", "face"):
             Image.new("RGBA", (64, 64), (120, 80, 200, 255)).save(layers / f"{name}.png")
-        monkeypatch.setattr(api_server, "OUTPUT_DIR", tmp_path / "out")
 
         r = client.post("/api/deploy/desktop", json={"layers_dir": str(layers)})
         assert r.status_code == 200

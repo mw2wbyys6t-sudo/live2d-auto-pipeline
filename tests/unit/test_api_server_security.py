@@ -213,16 +213,17 @@ def test_safe_char_path_unit():
     assert srv._safe_char_path("abc-123_X") == srv.CHARACTERS_DIR / "abc-123_X.json"
 
 
-# ---------- 导出：外部目录不得作为图层来源 ----------
-def test_export_rejects_layers_dir_outside_project_root(client, tmp_path, monkeypatch):
+# ---------- 导出：输出根之外的目录不得作为图层来源 ----------
+def test_export_rejects_layers_dir_outside_output_root(client, tmp_path, monkeypatch):
+    out_root = tmp_path / "out_root"
+    out_root.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
     Image.new("RGBA", (8, 8), (255, 0, 0, 255)).save(outside / "x.png")
 
-    # 把回落搜索用的 OUTPUT_DIR 指到空目录，保证用例不受工作区残留影响
-    empty_out = tmp_path / "empty_output"
-    empty_out.mkdir()
-    monkeypatch.setattr(srv, "OUTPUT_DIR", empty_out)
+    # 信任锚是 OUTPUT_DIR（与 Go 侧 Output.BaseDir 对齐）：外部目录一律落选，
+    # 回落到（空的）输出根内搜索也找不到 → 明确报「缺少图层」。
+    monkeypatch.setattr(srv, "OUTPUT_DIR", out_root)
 
     r = client.post("/api/export/live2d", json={"layers_dir": str(outside)})
     assert r.status_code == 200
@@ -232,6 +233,9 @@ def test_export_rejects_layers_dir_outside_project_root(client, tmp_path, monkey
     assert str(outside) not in body["message"]
 
 
-def test_within_project_root_unit(tmp_path):
-    assert srv._within_project_root(srv.PROJECT_ROOT / "output" / "a") is True
-    assert srv._within_project_root(tmp_path) is False
+def test_within_output_root_unit(tmp_path):
+    # 默认 OUTPUT_DIR 之内放行
+    assert srv._within_output_root(srv.OUTPUT_DIR / "layers_1" / "a.png") is True
+    # 输出根之外拒绝（含 /tmp、项目根的其他目录）
+    assert srv._within_output_root(tmp_path) is False
+    assert srv._within_output_root(srv.PROJECT_ROOT / "core" / "security.py") is False
