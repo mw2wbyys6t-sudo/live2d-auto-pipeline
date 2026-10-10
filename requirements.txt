@@ -5,23 +5,32 @@
 # 版本号单一真源见 core/version.py
 
 # ====== Core Dependencies (Required) ======
+# 版本下限已覆盖已知 CVE（2026-10 复核 NVD/GitHub Advisory）：
+# - requests>=2.32.3: CVE-2024-35195(Session verify=False 粘连，2.32.0 修复)
+# - urllib3>=2.2.2:  CVE-2024-37891(代理认证请求走私，2.2.2 修复)
+# - aiohttp>=3.10.11: CVE-2024-23334(静态目录遍历，3.9.2)/
+#                     CVE-2024-30251(请求走私，3.9.4)/
+#                     CVE-2024-52304(chunk 扩展请求走私，3.10.11)
+# - cryptography>=42.0.0: CVE-2023-49083(PKCS#7 空指针 DoS，41.0.6 修复)
 Pillow>=10.0.0
 numpy>=1.24.0
-requests>=2.31.0
-urllib3>=2.0.0
+requests>=2.32.3
+urllib3>=2.2.2
 httpx>=0.24.0
-aiohttp>=3.9.0
+aiohttp>=3.10.11
 aiofiles>=23.0
 websockets>=12.0
 psd-tools>=1.9.0
 scipy>=1.10.0
 scikit-learn>=1.3.0
-cryptography>=41.0.0
+cryptography>=42.0.0
 
 # ====== Optional: API server (api_server.py, 与 Go API 并行的 Python 实现) ======
+# python-multipart>=0.0.18: CVE-2024-24762(Content-Type ReDoS，0.0.7 修复)
+# 及后续 multipart 解析 ReDoS 公告（0.0.18 修复）
 fastapi>=0.110.0
 uvicorn>=0.27.0
-python-multipart>=0.0.9
+python-multipart>=0.0.18
 
 # ====== CLI Enhancement ======
 rich>=13.0.0
@@ -31,7 +40,8 @@ pygame>=2.5.0; python_version < "3.14"
 pygame-ce>=2.5.0; python_version >= "3.14"
 
 # ====== Image Processing ======
-opencv-python>=4.8.0
+# opencv-python>=4.9.0.80: 捆绑的 libwebp 已含 CVE-2023-4863(堆缓冲区溢出)修复
+opencv-python>=4.9.0.80
 onnxruntime>=1.14.0
 rembg[cpu]>=2.0.0
 

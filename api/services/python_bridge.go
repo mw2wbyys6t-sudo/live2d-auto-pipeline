@@ -750,17 +750,24 @@ func (pb *PythonBridge) runInlinePythonTimeout(code string,
 // CheckPythonEnvironment checks Python environment availability
 func (pb *PythonBridge) CheckPythonEnvironment() (bool, []string) {
 	var issues []string
-	cmd := exec.Command(pb.cfg.Python.PythonPath, "--version")
+	// 环境探测必须有超时上限：损坏/挂起的解释器（如等待输入、损坏的 venv）
+	// 不能让健康检查永久阻塞。--version 很快；import 检查给 30s 余量。
+	versionCtx, cancelVersion := context.WithTimeout(context.Background(), 15*time.Second)
+	cmd := exec.CommandContext(versionCtx, pb.cfg.Python.PythonPath, "--version")
 	if _, err := cmd.CombinedOutput(); err != nil {
+		cancelVersion()
 		issues = append(issues, fmt.Sprintf("Python 不可用: %v", err))
 		return false, issues
 	}
+	cancelVersion()
 	deps := []string{"PIL", "numpy"}
 	for _, dep := range deps {
-		cmd := exec.Command(pb.cfg.Python.PythonPath, "-c", fmt.Sprintf("import %s", dep))
+		importCtx, cancelImport := context.WithTimeout(context.Background(), 30*time.Second)
+		cmd := exec.CommandContext(importCtx, pb.cfg.Python.PythonPath, "-c", fmt.Sprintf("import %s", dep))
 		if err := cmd.Run(); err != nil {
 			issues = append(issues, fmt.Sprintf("缺少依赖: %s", dep))
 		}
+		cancelImport()
 	}
 	return len(issues) == 0, issues
 }

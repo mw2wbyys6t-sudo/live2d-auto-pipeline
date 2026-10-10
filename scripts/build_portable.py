@@ -52,11 +52,30 @@ WEIGHT_SOURCES = (
 )
 
 
+def _run_timeout() -> "int | None":
+    """子步骤超时（秒）。CUDA torch 等包体积大，默认 1 小时；0=不限。"""
+    raw = os.environ.get("LIVE2D_PORTABLE_TIMEOUT", "").strip()
+    if not raw:
+        return 3600
+    try:
+        val = int(raw)
+        return val if val > 0 else None
+    except ValueError:
+        return 3600
+
+
 def run(cmd: list[str], dry: bool) -> int:
     print(f"  $ {' '.join(cmd)}")
     if dry:
         return 0
-    return subprocess.call(cmd, env=dict(os.environ))
+    timeout = _run_timeout()
+    try:
+        return subprocess.call(cmd, env=dict(os.environ), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        limit = f"{timeout}s" if timeout else "不限"
+        print(f"\n❌ 步骤超时（上限 {limit}）：{' '.join(cmd[:4])} ...")
+        print("   可用环境变量 LIVE2D_PORTABLE_TIMEOUT 调大上限（0=不限）")
+        return 124
 
 
 def human(nbytes: float) -> str:

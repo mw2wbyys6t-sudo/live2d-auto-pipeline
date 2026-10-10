@@ -40,6 +40,26 @@ class C:
     RESET = "\033[0m" if sys.stdout.isatty() else ""
 
 
+def _env_timeout(name, default):
+    """读取子进程超时（秒）。环境变量设为 0 表示不限制（恢复旧行为）。"""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        val = int(raw)
+        return val if val > 0 else None
+    except ValueError:
+        print(f"{C.YELLOW}⚠ 忽略无效的 {name}={raw!r}，使用默认值 {default}s{C.RESET}")
+        return default
+
+
+# 子进程超时：安装/构建命令必须有上限以防网络挂起导致永久阻塞，
+# 但默认值要足够宽松（大体积包/慢网络），并允许通过环境变量覆盖。
+STEP_TIMEOUT = _env_timeout("LIVE2D_STEP_TIMEOUT", 1800)              # 通用步骤 30 分钟
+PIP_TIMEOUT = _env_timeout("LIVE2D_PIP_TIMEOUT", 1800)                # pip 安装 30 分钟
+MODEL_DOWNLOAD_TIMEOUT = _env_timeout("LIVE2D_MODEL_DOWNLOAD_TIMEOUT", 3600)  # 模型下载 1 小时
+
+
 # ============================================================
 # 版本解析（与 start.py 保持一致的语义）
 # ============================================================
@@ -271,8 +291,14 @@ def run_step(name, cmd, cwd=None, env=None, state=None):
         print(f"{C.CYAN}[dry-run] $ {' '.join(str(c) for c in cmd)}{env_hint}{C.RESET}")
         return True
     try:
-        subprocess.run(cmd, cwd=cwd, env=env, check=True)
+        subprocess.run(cmd, cwd=cwd, env=env, check=True, timeout=STEP_TIMEOUT)
         return True
+    except subprocess.TimeoutExpired:
+        print(f"{C.RED}❌ 步骤超时（>{STEP_TIMEOUT}s）：{name}{C.RESET}")
+        print(f"{C.YELLOW}  可用环境变量 LIVE2D_STEP_TIMEOUT 调整上限（0=不限）{C.RESET}")
+        if state is not None and state.yes:
+            return False
+        return False
     except subprocess.CalledProcessError as e:
         handle_step_failure(name, e, state)
         return False
@@ -291,8 +317,12 @@ def run_pip(args, description="", state=None):
         print(f"{C.CYAN}[dry-run] $ {' '.join(cmd)}{C.RESET}")
         return True
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, timeout=PIP_TIMEOUT)
         return True
+    except subprocess.TimeoutExpired:
+        print(f"{C.RED}❌ pip 安装超时（>{PIP_TIMEOUT}s）：{' '.join(args)}{C.RESET}")
+        print(f"{C.YELLOW}  网络过慢时可用环境变量 LIVE2D_PIP_TIMEOUT 调大上限（0=不限）{C.RESET}")
+        return False
     except subprocess.CalledProcessError as e:
         handle_step_failure("pip install " + " ".join(args), e, state)
         return False
@@ -324,10 +354,17 @@ def install_core(state=None):
         subprocess.run(
             [PYTHON, "-m", "pip", "install", "-r", str(req_file)],
             check=True,
+            timeout=PIP_TIMEOUT,
         )
         print(f"{C.GREEN}✓ Core dependencies installed{C.RESET}")
         state.mark_success(step_name)
         return True
+    except subprocess.TimeoutExpired:
+        print(f"{C.RED}❌ pip install -r requirements.txt 超时（>{PIP_TIMEOUT}s）{C.RESET}")
+        print(f"{C.YELLOW}  可用环境变量 LIVE2D_PIP_TIMEOUT 调大上限（0=不限）{C.RESET}")
+        state.abort = True
+        state.mark_failed(step_name)
+        return False
     except subprocess.CalledProcessError as e:
         if not handle_step_failure("pip install -r requirements.txt", e, state):
             state.abort = True
@@ -335,11 +372,11 @@ def install_core(state=None):
             return False
         print(f"{C.YELLOW}  尝试逐个安装核心包...{C.RESET}")
         core_pkgs = [
-            "Pillow>=10.0.0", "numpy>=1.24.0", "requests>=2.31.0",
-            "urllib3>=2.0.0", "httpx>=0.24.0", "aiohttp>=3.9.0",
+            "Pillow>=10.0.0", "numpy>=1.24.0", "requests>=2.32.3",
+            "urllib3>=2.2.2", "httpx>=0.24.0", "aiohttp>=3.10.11",
             "psd-tools>=1.9.0", "scipy>=1.10.0", "scikit-learn>=1.3.0",
-            "cryptography>=41.0.0", "rich>=13.0.0",
-            "opencv-python-headless>=4.8.0", "onnxruntime>=1.14.0",
+            "cryptography>=42.0.0", "rich>=13.0.0",
+            "opencv-python-headless>=4.9.0.80", "onnxruntime>=1.14.0",
             "aiofiles>=23.0", "websockets>=12.0",
         ]
         if run_pip(core_pkgs, "Installing individual packages...", state):
@@ -407,7 +444,17 @@ def install_ai_models(state=None):
         try:
             sam_script = PROJECT_ROOT / "scripts" / "download_models.py"
             if sam_script.exists():
-                subprocess.run([PYTHON, str(sam_script), "--model", "sam"], check=False)
+                subprocess.run(
+                    [PYTHON, str(sam_script), "--model", "sam"],
+                    check=False,
+                    timeout=MODEL_DOWNLOAD_TIMEOUT,
+                )
+        except subprocess.TimeoutExpired:
+            print(
+                f"{C.YELLOW}⚠ SAM 模型下载超时（>{MODEL_DOWNLOAD_TIMEOUT}s），"
+                f"可稍后运行 python scripts/download_models.py --model sam 重试，"
+                f"或用 LIVE2D_MODEL_DOWNLOAD_TIMEOUT 调大上限{C.RESET}"
+            )
         except Exception as e:
             print(f"{C.YELLOW}⚠ Model download skipped: {e}{C.RESET}")
 

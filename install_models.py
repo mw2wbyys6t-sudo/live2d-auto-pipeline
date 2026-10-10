@@ -21,9 +21,24 @@ requirements.txt 中标注为「large, install separately with install_models.py
 """
 
 import argparse
+import os
 import subprocess
 import sys
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+
+# 重型包（torch/CUDA 等）安装可能很慢，给一个宽松的默认上限防止永久挂起；
+# 环境变量 LIVE2D_PIP_TIMEOUT 设为 0 表示不限制。
+def _pip_timeout() -> Optional[int]:
+    raw = os.environ.get("LIVE2D_PIP_TIMEOUT", "").strip()
+    if not raw:
+        return 1800
+    try:
+        val = int(raw)
+        return val if val > 0 else None
+    except ValueError:
+        return 1800
+
 
 GROUPS: Dict[str, List[str]] = {
     "generation": [
@@ -87,7 +102,16 @@ def install(packages: List[str], dry_run: bool) -> int:
     print("执行: " + printable)
     if dry_run:
         return 0
-    return subprocess.call(cmd)
+    timeout = _pip_timeout()
+    try:
+        return subprocess.call(cmd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        limit = f"{timeout}s" if timeout else "不限"
+        print(f"\n❌ pip 安装超时（上限 {limit}）。网络过慢时可：")
+        print("   1) 增大上限：set LIVE2D_PIP_TIMEOUT=3600（Linux/macOS 用 export）")
+        print("   2) 设为 0 不限制：set LIVE2D_PIP_TIMEOUT=0")
+        print("   3) 稍后重跑本脚本，已安装的包会自动跳过。")
+        return 124  # 与 POSIX timeout(1) 的超时退出码一致
 
 
 def main() -> int:

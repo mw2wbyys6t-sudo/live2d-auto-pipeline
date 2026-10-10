@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -283,7 +284,11 @@ func (g *ImageGenerator) generateWithLocalGenerator(req models.GenerateImageRequ
 		args = append(args, "--", prompt)
 	}
 
-	cmd := exec.Command(g.cfg.Python.PythonPath, args...)
+	// 单图生成本地调用：沿用 Python 执行预算（默认 120s，受配置控制），
+	// 防止生成脚本挂起（模型加载卡死/等待输入）导致 goroutine 与请求永久泄漏。
+	genCtx, cancelGen := context.WithTimeout(context.Background(), g.cfg.GetPythonTimeout())
+	defer cancelGen()
+	cmd := exec.CommandContext(genCtx, g.cfg.Python.PythonPath, args...)
 	cmd.Dir = g.cfg.Python.ScriptsDir
 	cmd.Env = append(os.Environ(),
 		"PYTHONIOENCODING=utf-8",
@@ -291,6 +296,10 @@ func (g *ImageGenerator) generateWithLocalGenerator(req models.GenerateImageRequ
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if genCtx.Err() == context.DeadlineExceeded {
+			fmt.Fprintf(os.Stderr, "[ERROR] 本地生成器执行超时（限制%ds）\n", int(g.cfg.GetPythonTimeout().Seconds()))
+			return nil, fmt.Errorf("本地生成器执行超时（限制%d秒）", int(g.cfg.GetPythonTimeout().Seconds()))
+		}
 		fmt.Fprintf(os.Stderr, "[ERROR] 本地生成器执行失败: %v\n输出: %s\n", err, string(output))
 		return nil, fmt.Errorf("本地生成器执行失败，请检查服务端日志")
 	}
@@ -369,9 +378,16 @@ func (g *ImageGenerator) CheckLocalGeneratorStatus() (bool, string) {
 		return true, "v0.10.0 工作流就绪"
 	}
 
-	cmd := exec.Command(g.cfg.Python.PythonPath, "-c", "import diffusers; import torch; import PIL")
+	// import torch/diffusers 冷启动较慢，给 60s 上限；挂起的解释器不能
+	// 让状态检查请求永久阻塞。
+	depCtx, cancelDep := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelDep()
+	cmd := exec.CommandContext(depCtx, g.cfg.Python.PythonPath, "-c", "import diffusers; import torch; import PIL")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if depCtx.Err() == context.DeadlineExceeded {
+			return false, "依赖检查超时（>60s），Python 环境可能异常"
+		}
 		return false, fmt.Sprintf("缺少依赖: %s", string(output))
 	}
 

@@ -177,10 +177,29 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Live2D Master Agent API", version=VERSION, lifespan=lifespan)
 
 # CORS 中间件
+# 严格白名单：默认只放行本地工作台（与 Go API 的 AllowedOrigins 默认值一致）。
+# 绝不可默认 "*"：它与 allow_credentials=True 组合会形成任意站点携带凭据的漏洞。
+# 需要放行其他来源时，用环境变量覆盖（逗号分隔）：
+#   LIVE2D_CORS_ORIGINS="http://localhost:3000,https://app.example.com"
+# 显式设为 "*" 时强制关闭凭据（CORS 规范要求），并记录警告。
+_default_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+_env_origins = os.environ.get("LIVE2D_CORS_ORIGINS", "").strip()
+if _env_origins:
+    CORS_ORIGINS = [o.strip() for o in _env_origins.split(",") if o.strip()]
+else:
+    CORS_ORIGINS = _default_origins
+
+# 仅在明确配置了额外可信来源时才允许携带凭据；通配符场景必须关闭凭据
+if CORS_ORIGINS == ["*"]:
+    print("⚠️  警告: LIVE2D_CORS_ORIGINS='*' 时已自动关闭 allow_credentials")
+    _cors_allow_credentials = False
+else:
+    _cors_allow_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

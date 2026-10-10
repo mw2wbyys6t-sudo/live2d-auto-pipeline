@@ -237,7 +237,15 @@ def _start_api():
         api_bin = Path("api/live2d-api.exe")
     if api_bin.exists():
         print("\n🔧 Starting API server on :8080...")
-        subprocess.run([str(api_bin)], cwd="api")
+        print("   Press Ctrl+C to stop.\n")
+        # 长驻前台服务：不能设置 timeout（服务本应运行到用户退出）。
+        try:
+            subprocess.run([str(api_bin)], cwd="api", check=True)
+        except KeyboardInterrupt:
+            print("\n👋 API server stopped.")
+        except subprocess.CalledProcessError as e:
+            print(f"\n❌ API server exited with error code {e.returncode}.")
+            print("   Check api/ logs above for details.")
     else:
         print("\n❌ API binary not found. Build it first:")
         print("   cd api && go build -o live2d-api .")
