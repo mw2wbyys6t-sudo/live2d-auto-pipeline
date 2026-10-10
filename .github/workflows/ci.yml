@@ -204,7 +204,10 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install Pillow numpy requests psd-tools scipy scikit-learn opencv-python onnxruntime
+          # httpx 必须显式安装：tests/integration 经 api_server 导入
+          # starlette.TestClient，缺少 httpx 会在收集期报
+          # "testclient module requires the httpx2 package"（与主 CI job 一致）。
+          pip install Pillow numpy requests urllib3 httpx psd-tools scipy scikit-learn opencv-python onnxruntime
           pip install pytest pytest-asyncio
           # api_server.py import chain (used by the integration suite that runs here)
           pip install fastapi uvicorn python-multipart
