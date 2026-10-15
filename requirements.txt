@@ -13,7 +13,7 @@
 #                     CVE-2024-52304(chunk 扩展请求走私，3.10.11)
 # - cryptography>=42.0.0: CVE-2023-49083(PKCS#7 空指针 DoS，41.0.6 修复)
 Pillow>=10.0.0
-numpy>=1.24.0
+numpy>=2.5.4
 requests>=2.32.3
 urllib3>=2.2.2
 httpx>=0.28.1
