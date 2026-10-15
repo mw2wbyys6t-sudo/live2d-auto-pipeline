@@ -4,6 +4,31 @@
 
 ---
 
+## [v0.10.6] — 2026-10-15 — 代号「Desktop First」
+
+> **本版目标**：解决 CI 构建失败并统一全栈版本号。dependabot 提出的 pixi.js v7→v8 大版本升级因 API 不兼容（v8 移除 PlaneGeometry、重构 Geometry Buffer/Texture API）导致 Next.js TypeScript 检查失败，本版关闭该 PR 并在 dependabot 配置中忽略 pixi.js major 升级，确保发布管线畅通。
+
+### 🔵 修复与维护
+
+#### CI 构建失败修复
+- **问题**：dependabot PR #18 将 `pixi.js` 从 7.4.3 升级到 8.22.0，`web/lib/live2d-player.ts` 使用的 v7 API（`PlaneGeometry`、`geometry.getBuffer('aVertexPosition')`、`tex.baseTexture.resource` 等）在 v8 中全部变更，TypeScript 检查失败。
+- **修复**：关闭 PR #18，在 `.github/dependabot.yml` 中为 `pixi.js` 增加 `version-update:semver-major` 忽略规则，避免反复提出破坏性大版本 PR。pixi.js v8 迁移留待后续专门迭代。
+
+#### 版本号统一
+- 此前各端版本号不一致（Python 0.10.3 / Go 0.10.5 / Web 0.10.5 / Desktop 0.10.3），本版全部对齐到 **0.10.6**：
+  - `core/version.py`：`0.10.3` → `0.10.6`
+  - `api/handlers/handlers.go`：`v0.10.5-go` → `v0.10.6-go`
+  - `api_server.py`：`v0.10.3-py` → `v0.10.6-py`
+  - `web/package.json` / `web/package-lock.json`：`0.10.5` → `0.10.6`
+  - `desktop/Cargo.toml` / `desktop/tauri.conf.json`：`0.10.3` → `0.10.6`
+
+### 已知限制
+
+- pixi.js 仍为 v7，v8 迁移（含 WebGPU 支持）需单独排期
+- macOS / Linux 桌面打包脚本仍以 Windows 为主
+
+---
+
 ## [v0.10.5] — 2026-10-11 — 代号「Desktop First」
 
 > **本版目标**：全面转向桌面应用为唯一分发形态。移除 Docker 和独立 Web 部署模式，保留 Next.js 前端用于桌面内嵌和开发调试。核心动机：AI 推理需要直接利用本地 GPU/CPU，容器化部署无法高效访问硬件加速。

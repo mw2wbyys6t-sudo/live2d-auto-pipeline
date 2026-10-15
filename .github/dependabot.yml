@@ -12,6 +12,12 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # pixi.js v8 是大版本重写（移除 PlaneGeometry、重构 Geometry Buffer/Texture API），
+    # web/lib/live2d-player.ts 变形网格渲染器需要专门迁移；忽略 major 升级，
+    # 避免 dependabot 反复提出无法直接合并的破坏性 PR。
+    ignore:
+      - dependency-name: "pixi.js"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "pip"
     directory: "/"
     schedule:

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Live2D Master Agent",
-  "version": "0.10.3",
+  "version": "0.10.6",
   "identifier": "com.pygmalion.live2d-master-agent",
   "build": {
     "frontendDist": "dist"

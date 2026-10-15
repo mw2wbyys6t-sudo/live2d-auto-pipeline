@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.5-ff69b4?style=flat-square" alt="version"></a>
+  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.6-ff69b4?style=flat-square" alt="version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="license"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.9+-blue?style=flat-square" alt="python"></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square" alt="go"></a>
@@ -21,7 +21,7 @@
 
 ## 先说清楚：现在能干什么
 
-我不想给你画饼。这个项目有些部分已经很稳，有些还在路上。下面是**截至 v0.10.5 的真实状态**：
+我不想给你画饼。这个项目有些部分已经很稳，有些还在路上。下面是**截至 v0.10.6 的真实状态**：
 
 | 能力 | 状态 | 说明 |
 |------|------|------|
@@ -94,13 +94,13 @@
 
 **下载安装包**（零配置，双击即用）：
 
-👉 [最新 Release v0.10.5](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.5)
+👉 [最新 Release v0.10.6](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.6)
 
 | 下载文件 | 大小 | 说明 |
 |----------|------|------|
 | `Live2DMasterAgent.exe` | ~22 MB | **正式版** — GUI 模式，双击运行，无控制台窗口 |
 | `Live2DMasterAgent-console.exe` | ~32 MB | **调试版** — 带控制台日志，排查问题用 |
-| `Live2DMasterAgent-v0.10.5-portable.zip` | ~24 MB | **便携包** — 两个 exe + 中文说明文档 |
+| `Live2DMasterAgent-v0.10.6-portable.zip` | ~24 MB | **便携包** — 两个 exe + 中文说明文档 |
 
 **使用方式**：
 1. 下载 `Live2DMasterAgent.exe`，放到任意目录
@@ -288,6 +288,7 @@ cd web && npm run build
 
 | 版本 | 日期 | 重点 |
 |------|------|------|
+| **v0.10.6** | 2026-10-15 | **CI 修复 + 版本统一**：关闭 pixi.js v8 破坏性升级 PR、dependabot 忽略 major、全栈版本号对齐到 0.10.6 |
 | **v0.10.5** | 2026-10-11 | **Desktop First**：移除 Docker/Web 部署，全面转向桌面应用；桌面应用安装包可直接下载 |
 | **v0.10.4** | 2026-10-11 | **Hardened Shell**：5 项安全加固（CSP/面捕恢复、zip symlink 防护、目录列举禁用、SSRF DNS 钉扎、PNG 批量导入内存优化） |
 | v0.10.3 | 2026-10-08 | 沙箱就绪：离线兜底生图 + PSD 缺依赖不崩 + 健康检查真实化 + 端口冲突友好提示 |
