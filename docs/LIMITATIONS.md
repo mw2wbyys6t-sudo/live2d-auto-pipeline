@@ -9,7 +9,7 @@
 > - 原生运行时可用边界 → [docs/native-runtime.md](native-runtime.md) § 验收界限
 >
 > 本文档只做**面向用户的汇总**；细节与证据以上述真相源为准，避免重复维护。
-> **最后校验（Last verified）**：2026-09-22。
+> **最后校验（Last verified）**：2026-10-14。
 > **新鲜度规则**：每个 minor 版本发布前复核一次；若真相源中关联条目（R-xx / F-xx）状态变化而本文未同步，即视为 `stale`。
 > **变更触发**：导出链路、分割后端、驱动层运行时、前端页面实现度任一发生变化时。
 
@@ -68,10 +68,14 @@
   因此眼球跟随之类的效果**不会动**。它被单独记入 `deformers_static`，不会冒充成已落地。
 - **warp 变形器**已可编译并过官方内核 + 逐像素验收。
 - **网格键形（逐顶点键形带）当前整体关闭**（`moc3_pipeline.MESH_KEYFORMS_ENABLED = False`）：
-  自动绑骨接上蒙皮权重后，只要模型里 **≥2 个网格带键形**，官方 Cubism Core 就会在
-  `LoadModelJson` 阶段**段错误**（已排除轴数、变形器、参数数量、网格规模、退化网格、
-  顶点数值内容等因素；合成的最小复现不成立，怀疑是 moc3 键形索引表在真实网格上的写出缺陷）。
-  关闭前请先用 `drivers/live2d_runtime/verify.py` 完成加载 + 逐像素验收。
+  自动绑骨接上蒙皮权重后，只要模型里**有 ≥2 个真实网格**（其中任何一个带键形即可），官方
+  Cubism Core 就会在 `LoadModelJson` 阶段**段错误**。崩溃是**概率性**的：同一份字节完全相同的
+  moc3 约 90–95% 崩、偶发通过；`HasMocConsistencyFromFile` 仍返回 `true`（一致性检查拦不住）。
+  已排除的因素（均实测）：轴数、变形器、参数数量、画布与 ppu、网格规模（合成 9×3136 顶点不崩）、
+  退化网格、顶点数值内容、UV 取值、索引稠密度、多页纹理、文件尾越界（补零无效）、字节布局
+  （经 py-moc3 读回再写出照崩）。合成网格扫到 800 三角形均不崩，只有真实网格内容触发；
+  `draw_order` 有非单调影响。结论指向内核在解析阶段读到越界/未初始化内存、结果依赖堆布局。
+  **开启前**必须先用 `drivers/live2d_runtime/verify.py` 完成加载 + 逐像素验收。
 - **X/Y 轴键形刻意不生成**（在 Live2D 里是位移 + 透视的复合，属美术判断，不臆造）。
 - **同一网格命中多个旋转参数时保持静态**（多参数带的轴序尚未实测定论，见评审 F-06）。
 - **glue 类型变形器不支持**，会被记入 `deformers_uncompiled` 并压住 `runtime_ready`。
@@ -82,7 +86,11 @@
 - `drivers/live2d_runtime/renderer.py` 是**PNG 图层近似渲染器**（自述 "NOT a full Cubism renderer"），
   用于无 SDK 环境的预览，不等同于 Cubism 官方渲染结果。
 - 原生透明桌宠窗口的三平台支持不均衡：`native_window.py` 仅 Windows，且为**色键透明**（非逐像素 alpha）。
-- 面捕在缺少 MediaPipe 时进入 stub 模式；BlendShape 为**启发式近似**，并非官方面部模型输出。
+- 面捕已改为**原生 Rust `native/face_tracker` 子进程**（ONNX YuNet 人脸检测）：摄像头由该进程
+  独占采集（Windows 下设备不可共享），参数经 `/api/ws` 的 `tracking_frame` 广播给前端与桌宠。
+  二进制未编译时接口显式 501（提示 `cd native/face_tracker && cargo build --release`），
+  配置 `native_tracker.enabled=false` 可整体禁用。BlendShape 仍为**几何启发式近似**
+  （由原 Python `mediapipe_tracker.py` 移植），并非官方面部模型输出。
 
 ## 5. 前端工作台
 
@@ -92,17 +100,18 @@
   生成记录（`latest_generation.json`），**尚无按角色的生成历史**。
 - 生成进度已走 WebSocket 实时推送（前端订阅 `/api/ws` 的 `type:"progress"` 广播）；导出页仍为
   一次性请求 + 阶段推送。
-- `/preview` 的摄像头面捕**在浏览器内运行**（MediaPipe FaceLandmarker WASM，Go/Python 部署均可用）。
-  WASM 运行时已本地化（`web/public/mediapipe/wasm`）；`face_landmarker.task` 模型默认从官方 CDN
-  加载（可下载后放入 `web/public/models/` 或设 `NEXT_PUBLIC_FACE_LANDMARKER_URL`），离线且未放置
-  模型时面捕不可用并明确报错。Python 后端 `/api/tracking/*` 与 `/ws/tracking` 仍保留（服务端面捕），
-  Go 后端显式 501。
+- `/preview` 的摄像头面捕**不再在浏览器内运行**：改用原生 Rust `native/face_tracker` 子进程
+  （Windows 下摄像头设备不可共享，浏览器拿不到画面）。前端 `web/lib/native-tracker.ts` 连接
+  `/api/ws` 订阅 `tracking_frame`；`POST /api/tracking/start|stop`、`GET /api/tracking/status`
+  为控制与状态接口。浏览器内 MediaPipe 面捕（`web/lib/face-tracker.ts`）已移除。
+  降级实现 `api_server.py` 仍保留 `/api/tracking/*` 与 `/ws/tracking`（Python + MediaPipe），
+  与 Go 的原生子进程是两条独立路径。
 - 「Launch Desktop Pet」按钮已接通（`POST /api/deploy/desktop`）：真实可用的前提仍是
   Windows + `live2d-py` + 已通过官方内核验收的模型目录。
 
 ## 6. API 层
 
-- `api/python_server.py` 是 Go 服务的降级替代实现，其多数 POST 处理器为**桩**（仅回 202）。
+- `api_server.py` 是 Go 服务的降级替代实现，其多数 POST 处理器为**桩**（仅回 202）。
 - 聊天会话存储为内存实现，**无 TTL/淘汰**。
 - v0.10.1 新增（Go）：`GET /api/generations/latest`、`POST /api/segment`、`POST /api/upload`、
   `POST /api/characters/:id/references`、`POST /api/characters/:id/embedding`；`/output/*filepath`
