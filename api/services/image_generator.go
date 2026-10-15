@@ -150,9 +150,13 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 
 	cmd := exec.Command(g.cfg.Python.PythonPath, args...)
 	cmd.Dir = g.cfg.Python.ScriptsDir
+	// LIVE2D_PROJECT_ROOT 必须指向项目根：core/logger.py 用它决定日志文件位置，
+	// 缺省回退到 %USERPROFILE%\logs，在受控/沙箱环境下不可写会导致 logging
+	// 每次 emit 都抛 OSError 并把回溯刷进 stderr，进而污染 JSON 结果解析。
 	cmd.Env = append(os.Environ(),
 		"PYTHONIOENCODING=utf-8",
 		"PYTHONPATH="+g.cfg.Python.ScriptsDir,
+		"LIVE2D_PROJECT_ROOT="+g.cfg.Python.ScriptsDir,
 	)
 
 	// 工作流超时更长（生图+分割+绑定比较耗时）
@@ -175,9 +179,9 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 		return nil, fmt.Errorf("工作流执行超时（限制%d秒）", int(timeout.Seconds()))
 	}
 
-	// 从 stdout 中提取 JSON（用括号配对定位最外层 JSON 对象的边界）
+	// 从输出中提取 JSON（日志与结果混流，往前定位真正的结果对象）
 	outputStr := string(output)
-	jsonStart, jsonEnd := findTopLevelJSON(outputStr)
+	jsonStart, jsonEnd := findWorkflowJSON(outputStr)
 	if jsonStart == -1 {
 		fmt.Fprintf(os.Stderr, "[ERROR] 工作流未返回 JSON，输出: %s\n", outputStr)
 		if runErr != nil {
@@ -301,6 +305,7 @@ func (g *ImageGenerator) generateWithLocalGenerator(req models.GenerateImageRequ
 	cmd.Dir = g.cfg.Python.ScriptsDir
 	cmd.Env = append(os.Environ(),
 		"PYTHONIOENCODING=utf-8",
+		"LIVE2D_PROJECT_ROOT="+g.cfg.Python.ScriptsDir,
 	)
 
 	output, err := cmd.CombinedOutput()
@@ -465,18 +470,48 @@ func (g *ImageGenerator) GetAvailableModels() []map[string]interface{} {
 	}
 }
 
-// findTopLevelJSON 在 stdout 中找到最外层 JSON 对象的起止位置。
-// 解决日志中混入嵌套 JSON（如 {"id":"..."}）时 LastIndex 抓到错位置的 bug。
-// 返回 (start, end) 包含 end；找不到返回 (-1, -1)。
+// findTopLevelJSON 在 stdout 中找到第一个最外层 JSON 对象的起止位置。
+// 返回的 end 不含；找不到返回 (-1, -1)。
 func findTopLevelJSON(s string) (int, int) {
-	start := strings.Index(s, "{")
-	if start == -1 {
+	spans := topLevelJSONSpans(s)
+	if len(spans) == 0 {
 		return -1, -1
 	}
+	return spans[0][0], spans[0][1]
+}
+
+// findWorkflowJSON 定位工作流结果 JSON。
+//
+// workflow.py --json 把结果对象打印在输出末尾，但 CombinedOutput 会把它和日志
+// 混在一起，日志文本里可能夹带花括号（例如 f-string 源码行 {self.model_type}）。
+// 因此不能简单取第一个 {...}：这里从后往前挑第一个能解析出 "success" 字段的
+// 顶层对象（即真正的结果）；若都解析不了则退回最后一个配平对象。
+func findWorkflowJSON(s string) (int, int) {
+	spans := topLevelJSONSpans(s)
+	for i := len(spans) - 1; i >= 0; i-- {
+		var probe map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(s[spans[i][0]:spans[i][1]]), &probe); err != nil {
+			continue
+		}
+		if _, ok := probe["success"]; ok {
+			return spans[i][0], spans[i][1]
+		}
+	}
+	if n := len(spans); n > 0 {
+		return spans[n-1][0], spans[n-1][1]
+	}
+	return -1, -1
+}
+
+// topLevelJSONSpans 返回 s 中所有花括号配平的顶层 {...} 区间 [start, end)。
+// 字符串内部的括号与转义不参与计数。
+func topLevelJSONSpans(s string) [][2]int {
+	var spans [][2]int
 	depth := 0
+	start := -1
 	inStr := false
 	escape := false
-	for i := start; i < len(s); i++ {
+	for i := 0; i < len(s); i++ {
 		ch := s[i]
 		if escape {
 			escape = false
@@ -494,13 +529,16 @@ func findTopLevelJSON(s string) (int, int) {
 			continue
 		}
 		if ch == '{' {
+			if depth == 0 {
+				start = i
+			}
 			depth++
-		} else if ch == '}' {
+		} else if ch == '}' && depth > 0 {
 			depth--
 			if depth == 0 {
-				return start, i + 1
+				spans = append(spans, [2]int{start, i + 1})
 			}
 		}
 	}
-	return -1, -1
+	return spans
 }

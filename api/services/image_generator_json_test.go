@@ -64,3 +64,28 @@ func TestFindTopLevelJSON_Empty(t *testing.T) {
 		t.Errorf("期望 -1，实际 %d", start)
 	}
 }
+
+func TestFindWorkflowJSON_SkipsBraceNoise(t *testing.T) {
+	// 复现真实故障：stderr 里的回溯源码行含 {self.model_type}，
+	// 真正的结果 JSON 打印在最后。必须跳过噪声取到结果对象。
+	s := `Traceback (most recent call last):
+  File "semantic.py", line 100, in __init__
+    log.info(f"SemanticSegmenter initialized (backend={self.model_type}, device={self.device})")
+{
+  "success": true,
+  "layers_dir": "output/layers_1",
+  "output_dir": "output"
+}`
+	start, end := findWorkflowJSON(s)
+	if start == -1 {
+		t.Fatal("未找到结果 JSON")
+	}
+	got := s[start:end]
+	if !strings.Contains(got, `"success": true`) || !strings.HasPrefix(got, "{") {
+		t.Errorf("提取错误:\n%s", got)
+	}
+	if strings.Contains(got, "self.model_type") {
+		t.Errorf("误取到噪声片段: %s", got)
+	}
+}
+
