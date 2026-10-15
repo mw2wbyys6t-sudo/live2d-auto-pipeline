@@ -3,6 +3,9 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [main, develop]
+    # 推送 v* tag 时触发，使 release job（if: startsWith(github.ref, 'refs/tags/v')）能运行。
+    # 此前只配 branches 导致 tag 推送不会触发本 workflow，release job 永远被 skipped。
+    tags: ['v*']
   pull_request:
     branches: [main]
   # 手动入口：跑需要官方内核 + 逐像素验收的 moc3-acceptance job
