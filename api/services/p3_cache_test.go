@@ -69,8 +69,11 @@ func TestP3CacheSetOverwriteReclaimsSize(t *testing.T) {
 }
 
 func TestP3CachePurgeExpiredReclaimsSize(t *testing.T) {
-	// TTL=0：写入即过期
-	c, img := p3Cache(t, 10, 0)
+	// TTL 取负值：条目在写入时即已过期，判定不依赖时钟前进。刻意不用 TTL=0 ——
+	// Windows 上连续两次 time.Now() 常返回同一时间戳（实测约 99.997% 相同），
+	// now.Sub(created) 恰为 0，PurgeExpired 的 `> ttl`（ttl=0）不成立，条目看起来
+	// 「还没过期」，用例会假失败。
+	c, img := p3Cache(t, 10, -1)
 	c.Set("k", 1, 1, 0, "m", &models.GenerateImageResponse{ImagePath: img})
 	if c.Stats()["current_size_mb"].(int) != 2 {
 		t.Fatalf("准备条件：先应记账 2MB")

@@ -4,6 +4,7 @@ package handlers
 // 必须共用同一道 uploads 目录归属校验，拒绝任意服务器路径（防任意文件复制）。
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,13 +26,24 @@ func createCharacterRequest(t *testing.T, h *Handler, body string) *httptest.Res
 	return w
 }
 
+// characterBody 用 json.Marshal 构造请求体，不要手拼：Windows 路径含反斜杠
+// （C:\Users\...），直接拼进 JSON 字面量会产生非法转义（`\U`）。
+func characterBody(t *testing.T, name, refImage string) string {
+	t.Helper()
+	raw, err := json.Marshal(map[string]string{"name": name, "ref_image": refImage})
+	if err != nil {
+		t.Fatalf("构造请求体失败: %v", err)
+	}
+	return string(raw)
+}
+
 func TestCreateCharacter_RejectsRefImageOutsideUploads(t *testing.T) {
 	h := newTestHandler(t)
 	outside := filepath.Join(t.TempDir(), "secret.png")
 	if err := os.WriteFile(outside, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	w := createCharacterRequest(t, h, `{"name":"小坏","ref_image":"`+outside+`"}`)
+	w := createCharacterRequest(t, h, characterBody(t, "小坏", outside))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("uploads 之外的 ref_image 必须 400，实得 %d: %s", w.Code, w.Body.String())
 	}
@@ -51,7 +63,7 @@ func TestCreateCharacter_AllowsRefImageInsideUploads(t *testing.T) {
 	if err := os.WriteFile(ok, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	w := createCharacterRequest(t, h, `{"name":"小好","ref_image":"`+ok+`"}`)
+	w := createCharacterRequest(t, h, characterBody(t, "小好", ok))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("uploads 内的合法 ref_image 应放行（201），实得 %d: %s", w.Code, w.Body.String())
 	}

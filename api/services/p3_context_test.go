@@ -8,6 +8,8 @@ package services
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -17,14 +19,43 @@ import (
 func newP3Bridge(t *testing.T) *PythonBridge {
 	t.Helper()
 	cfg := config.DefaultConfig()
-	cfg.Python.PythonPath = "python3"
+	cfg.Python.PythonPath = testPythonPath(t)
 	cfg.Python.ScriptsDir = t.TempDir()
 	cfg.Python.TimeoutSec = 30
 	return NewPythonBridge(cfg)
 }
 
+// testPythonPath 返回一个真实可用的解释器路径。
+//
+// 这些用例必须真的起子进程（验的是超时包装与整个进程组的终止），所以硬编码
+// "python3" 不行：Windows 上通常只有 "python"，脚本会以 exit 9009（命令未找到）
+// 立即失败——超时用例因此假通过、正常路径用例假失败。约定与 CI / handlers 一致：
+// 优先 LIVE2D_TEST_PYTHON，其次在 PATH 上找 python3 / python，都没有才跳过。
+func testPythonPath(t *testing.T) string {
+	t.Helper()
+	if p := os.Getenv("LIVE2D_TEST_PYTHON"); p != "" {
+		return p
+	}
+	// Windows 的 PATH 里 WindowsApps\python3.exe 是 Microsoft Store 的
+	// App Execution Alias 占位符：LookPath 能找到它，但执行只会返回 9009。
+	// 因此必须真的跑一次探针，确认解释器可用才采用。
+	for _, name := range []string{"python3", "python"} {
+		p, err := exec.LookPath(name)
+		if err != nil {
+			continue
+		}
+		if exec.Command(p, "-c", "").Run() == nil {
+			return p
+		}
+	}
+	t.Skip("需要 LIVE2D_TEST_PYTHON，或 PATH 上有可用的 python3/python 才能跑真实解释器用例")
+	return ""
+}
+
 // Python 派一个后台 sleep（继承 stdout 管道），自己再睡 30 秒。
-const groupHogCode = "import subprocess,time; subprocess.Popen(['sleep','30']); time.sleep(30)"
+// 孙子进程用 sys.executable 起，不要用 ['sleep','30'] —— Windows 没有 sleep 命令，
+// Popen 会直接抛 FileNotFoundError，用例就退化成了「进程立即退出」的假通过。
+const groupHogCode = "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); time.sleep(30)"
 
 func TestP3CancelKillsWholeProcessGroup(t *testing.T) {
 	pb := newP3Bridge(t)

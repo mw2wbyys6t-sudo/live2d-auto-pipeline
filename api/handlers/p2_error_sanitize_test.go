@@ -4,6 +4,7 @@ package handlers
 // 请求方错误（400）保留可读、无路径细节的业务提示。
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,7 +19,13 @@ func psdPlanRequest(t *testing.T, h *Handler, imagePath string) *httptest.Respon
 	t.Helper()
 	r := gin.New()
 	r.POST("/api/psd-plan", h.CreatePSDPlan)
-	body := strings.NewReader(`{"image_path":"` + imagePath + `"}`)
+	// 用 json.Marshal 构造请求体，不要手拼：Windows 路径含反斜杠
+	// （C:\Users\...），直接拼进 JSON 字面量会产生非法转义（`\U`）。
+	raw, err := json.Marshal(map[string]string{"image_path": imagePath})
+	if err != nil {
+		t.Fatalf("构造请求体失败: %v", err)
+	}
+	body := strings.NewReader(string(raw))
 	req := httptest.NewRequest(http.MethodPost, "/api/psd-plan", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
