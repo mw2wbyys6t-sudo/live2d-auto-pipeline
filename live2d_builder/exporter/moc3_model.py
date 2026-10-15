@@ -576,7 +576,7 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
                     keyform_pos_begin, keyform_opacities, keyform_draw_orders)
     _write_bands(doc, bindings, bands)
     _write_parameters(doc, params, bindings)
-    _write_draw_order(doc, count)
+    _write_draw_order(doc, count, [m.draw_order for m in meshes])
     return doc
 
 
@@ -908,12 +908,20 @@ def _write_parameters(doc: Moc3Container, params: List[ParameterSpec],
     ])
 
 
-def _write_draw_order(doc: Moc3Container, count: int) -> None:
+def _write_draw_order(doc: Moc3Container, count: int,
+                      draw_orders: Optional[List[float]] = None) -> None:
+    """写出绘制顺序组。
+
+    ``min_draw_orders`` / ``max_draw_orders`` 必须是本组实际的绘制序范围：内核用它
+    划定绘制序区间，恒写 0 会让声明的区间小于真实取值，越界读取（实测在带键形的
+    多网格模型上直接段错误）。
+    """
+    orders = [int(round(float(o))) for o in (draw_orders or [0])] or [0]
     doc.set("draw_order_group.object_begin_indices", [0])
     doc.set("draw_order_group.object_counts", [count])
     doc.set("draw_order_group.object_total_counts", [count])
-    doc.set("draw_order_group.min_draw_orders", [0])
-    doc.set("draw_order_group.max_draw_orders", [0])
+    doc.set("draw_order_group.min_draw_orders", [min(orders)])
+    doc.set("draw_order_group.max_draw_orders", [max(orders)])
     doc.set("draw_order_group_object.types", [0] * count)
     doc.set("draw_order_group_object.indices", list(range(count)))
     doc.set("draw_order_group_object.group_indices", [-1] * count)

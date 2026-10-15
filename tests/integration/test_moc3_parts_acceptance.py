@@ -27,6 +27,7 @@ from live2d_builder.exporter.moc3_model import (
     RigSpec,
     compile_static_rig,
 )
+from live2d_builder.exporter import moc3_pipeline
 from live2d_builder.exporter.moc3_pipeline import (
     HEAD_DEPTH_SPANS,
     HEAD_SHIFT_X,
@@ -36,6 +37,18 @@ from live2d_builder.exporter.moc3_pipeline import (
     build_rig_spec,
     ensure_front_facing,
 )
+
+
+@pytest.fixture(autouse=True)
+def _enable_mesh_keyforms(monkeypatch):
+    """本文件的头部三轴用例要求 ``build_rig_spec`` 产出网格键形。
+
+    ``MESH_KEYFORMS_ENABLED`` 默认关闭（原因见 moc3_pipeline 的说明：真实模型的
+    多网格键形会让内核在加载阶段崩溃）。这里的网格是合成单网格，属于已被官方内核
+    逐像素验收覆盖的路径，所以显式打开。
+    """
+    monkeypatch.setattr(moc3_pipeline, "MESH_KEYFORMS_ENABLED", True)
+
 
 CANVAS = 1024.0
 PPU = 100.0

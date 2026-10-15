@@ -80,6 +80,7 @@ class Live2DBuilder:
         # Build state (populated during build())
         self._meshes: Dict[str, Dict] = {}
         self._bone_positions: Dict[str, Any] = {}
+        self._centroids: Dict[str, Tuple[float, float]] = {}
         self._uv_data: Dict[str, Dict] = {}
         self._bone_tree: Dict[str, Any] = {}
         self._deformer_tree: Dict[str, Any] = {}
@@ -118,7 +119,14 @@ class Live2DBuilder:
         # Step 3: Bones
         log.step(3, self.TOTAL_STEPS, "Building bone hierarchy")
         centroids = self._compute_centroids(layers)
+        self._centroids = centroids
         self._bone_tree = self._build_bones(layers, centroids)
+
+        # Step 3b: Skinning weights
+        # 必须在骨骼与网格都就绪之后、导出之前：没有蒙皮权重，moc3 里
+        # KEYS / KEYFORM_BINDINGS 恒为 0，参数键形无从烘焙，模型"能画不动"。
+        log.step(3, self.TOTAL_STEPS, "Assigning bone weights")
+        self._assign_bone_weights()
 
         # Step 4: Deformers
         log.step(4, self.TOTAL_STEPS, "Setting up deformers")
@@ -306,10 +314,12 @@ class Live2DBuilder:
         try:
             if not self._meshes or not self._bone_tree:
                 return
+            # 与 _build_bones 同一套枢轴：质心优先，缺失的骨骼才落到比例模型默认值。
             bone_positions = self.bones.get_bone_positions(self._centroids or {})
             # 留给导出阶段用：骨骼枢轴是烘焙参数旋转键形所必需的
             self._bone_positions = bone_positions
             assignments = self._bone_tree.get("layer_assignments", {})
+            weighted = 0
             for name, mesh in self._meshes.items():
                 try:
                     assigned = assignments.get(name, "Head")
@@ -317,8 +327,13 @@ class Live2DBuilder:
                     mesh["weights"] = self.mesh_gen.compute_bone_weights(
                         mesh, bone_positions, assigned, parent
                     )
+                    if mesh["weights"].get("bone_names"):
+                        weighted += 1
                 except Exception as exc:
                     log.debug(f"Skinning weights skipped for '{name}': {exc}")
+            if weighted:
+                log.info(f"蒙皮权重已分配: {weighted}/{len(self._meshes)} 个网格，"
+                         f"骨骼枢轴 {len(bone_positions)} 个")
         except Exception as exc:
             log.warning(f"Bone weight assignment failed (non-fatal): {exc}")
 

@@ -1,11 +1,31 @@
 """桥接层：管线数据 -> RigSpec 的坐标/UV/参数映射。"""
 import pytest
 
+from live2d_builder.exporter import moc3_pipeline
 from live2d_builder.exporter.moc3_model import ParameterSpec
 from live2d_builder.exporter.moc3_pipeline import (
     build_rig_spec,
     ensure_front_facing,
 )
+
+
+@pytest.fixture(autouse=True)
+def _enable_mesh_keyforms(request, monkeypatch):
+    """本文件的用例都是为「网格键形开着」时的行为写的。
+
+    ``MESH_KEYFORMS_ENABLED`` 默认关闭（原因见 moc3_pipeline 里的说明：网格键形
+    会让官方内核在加载阶段崩溃），所以这里显式打开，继续覆盖键形烘焙逻辑本身；
+    默认值由 ``test_mesh_keyforms_are_disabled_by_default`` 单独守住（该用例不能
+    被本夹具改写）。
+    """
+    if request.node.name == "test_mesh_keyforms_are_disabled_by_default":
+        return
+    monkeypatch.setattr(moc3_pipeline, "MESH_KEYFORMS_ENABLED", True)
+
+
+def test_mesh_keyforms_are_disabled_by_default():
+    """闸门默认必须是关的：开着会让任何导出产物无法被官方内核加载。"""
+    assert moc3_pipeline.MESH_KEYFORMS_ENABLED is False
 
 
 def _mesh(width=128.0, height=64.0):

@@ -269,6 +269,16 @@ def eye_track_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
     return axes, shapes
 
 
+#: 网格键形（逐顶点键形带）总开关，**默认关闭**。
+#:
+#: 关闭原因：只要模型里有 **≥2 个自动绑骨网格带键形**，官方 Cubism Core 就会在
+#: ``LoadModelJson`` 阶段段错误（实测 2026-10；已排除轴数、变形器、参数数量、
+#: 网格规模、退化网格、顶点数值内容等因素，最小合成复现不成立，怀疑 moc3 键形
+#: 索引表在真实网格上的写出有缺陷）。开着会让**任何**导出产物无法被内核加载，
+#: 因此先闸住，等定位后再打开。开启前必须用
+#: ``drivers/live2d_runtime/verify.py`` 做过完整验收。
+MESH_KEYFORMS_ENABLED = False
+
 # 头部整体：ParamAngleX / ParamAngleY 在 Live2D 里不是纯旋转，而是**点头/转头的
 # 透视复合** —— 正面轮廓按 cos θ 各向异性压扁（转头压水平、点头压垂直，与压扁方向
 # 交叉的弧位移 ∝ sin θ 模拟颈关节在枢轴下方），且离枢轴远的点深度变化大、透视缩放
@@ -347,7 +357,7 @@ def head_angle_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
 
     条件：网格受**头部总成**中任一骨骼影响（``Head`` 及其后代，见
     ``_head_assembly``）、``Head`` **关节位置已知**、且 ``ParamAngleX/Y/Z``
-    **三者都已声明**（缺任一则退回原有的单轴 Z 路径，保证既有产物不变）。
+    **三者都已声明**（缺任一则不生成）。
 
     枢轴取 **Head 骨骼关节点**（贴近官方习惯），不是网格包围盒中心；骨骼位置是图像
     坐标，按与顶点同一换算（原点居中、y 向上）转到模型坐标。关节位置未知时**不生成**
@@ -717,7 +727,18 @@ def build_rig_spec(
 
         triangles = ensure_front_facing(
             vertices, [[int(a), int(b), int(c)] for a, b, c in mesh["indices"]])
-        eye_axes, eye_shapes = eye_track_keyforms(mesh, vertices, params_by_id)
+        if MESH_KEYFORMS_ENABLED:
+            eye_axes, eye_shapes = eye_track_keyforms(mesh, vertices, params_by_id)
+            head_axes, head_shapes = head_angle_keyforms(
+                mesh, vertices, params_by_id, standard_bones,
+                bone_positions, width, height)
+            pid, shapes, candidates = rotation_keyforms(
+                mesh, params_by_id, bone_positions, standard_bones, width, height)
+        else:
+            # 见 MESH_KEYFORMS_ENABLED 的说明：网格键形会让内核在加载阶段崩溃。
+            eye_axes = eye_shapes = head_axes = head_shapes = ()
+            pid, shapes, candidates = "", [], []
+
         if eye_axes:
             # 眼球优先于旋转键形：瞳孔是平移，且必须由 X+Y 两轴共同驱动。
             eyes_tracked.append(name)
@@ -731,11 +752,7 @@ def build_rig_spec(
                 keyform_axes=eye_axes,
             ))
             continue
-        head_axes, head_shapes = head_angle_keyforms(
-            mesh, vertices, params_by_id, standard_bones,
-            bone_positions, width, height)
         if head_axes:
-            # 头部整体：X/Y 位移+缩放 与 Z 旋转合成一个三轴带（优先于单轴 Z 路径）。
             head_tracked.append(name)
             specs.append(MeshSpec(
                 mesh_id=str(name),
@@ -747,8 +764,6 @@ def build_rig_spec(
                 keyform_axes=head_axes,
             ))
             continue
-        pid, shapes, candidates = rotation_keyforms(
-            mesh, params_by_id, bone_positions, standard_bones, width, height)
         if len(candidates) > 1:
             multi_hit.append((name, candidates))
         elif pid:

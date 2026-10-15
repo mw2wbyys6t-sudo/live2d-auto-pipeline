@@ -7,6 +7,7 @@ deformers used for hair swing, body sway, and eye tracking.
 
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -337,8 +338,17 @@ class BoneHierarchy:
 
     @staticmethod
     def _normalise(name: str) -> str:
-        """Normalise a layer name for lookup (lower-case, spaces to underscores)."""
-        return name.strip().lower().replace(" ", "_").replace("-", "_")
+        """Normalise a layer name for lookup.
+
+        lower-case + separators to underscores, and strip a leading numeric
+        index prefix. Layer PNGs are exported as ``NNN_part.png``
+        (``000_arms``, ``005_face``), so without the prefix strip every
+        lookup falls through to the default bone and all layers end up
+        parented to ``Face`` — which silently disables parameter keyforms.
+        """
+        norm = name.strip().lower().replace(" ", "_").replace("-", "_")
+        norm = re.sub(r"^\d+_", "", norm)
+        return norm
 
 
 # ======================================================================

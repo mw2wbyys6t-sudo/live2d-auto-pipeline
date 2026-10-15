@@ -193,6 +193,91 @@ class MeshGenerator:
         return self._build_delaunay(vertices, mask, w, h)
 
     # ------------------------------------------------------------------
+    # Skinning weights
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def compute_bone_weights(
+        mesh: Dict,
+        bone_positions: Dict[str, Tuple[float, float]],
+        assigned_bone: str,
+        parent_bone: Optional[str] = None,
+    ) -> Dict:
+        """为单个网格计算逐顶点蒙皮权重（ assigned 骨骼 + 父骨骼）。
+
+        返回 ``{"bone_names": [...], "weights": [[...], ...]}``，其中
+        ``weights[i][j]`` 是顶点 *i* 在 ``bone_names[j]`` 上的权重，和为 1。
+
+        权重模型（从简到够用，不引入臆造的骨骼动力学）：
+
+        * 顶点只受 **assigned 与其父骨骼** 影响 —— 自动绑骨的语义就是"整层
+          跟着它归属的那根骨骼走"，再多分骨骼既无输入数据也无从验证。
+        * 两者按**到各自枢轴的距离倒数**分配，使靠近枢轴的部分更"钉"在骨骼上；
+          距离为 0 时该骨骼独占权重。
+        * 父骨骼缺席（根骨骼）时 assigned 独占全部权重。
+
+        这个格式正是 ``moc3_pipeline.rotation_keyforms`` /
+        ``head_angle_keyforms`` 消费的输入：没有它，参数键形根本不会被烘焙，
+        moc3 里 ``KEYS``/``KEYFORM_BINDINGS`` 恒为 0，模型"能画不动"。
+        """
+        # 注意：mesh["vertices"] 可能是 numpy 数组，不能用 `or []` 判空
+        # （那会抛 "truth value is ambiguous"）。
+        vertices = mesh.get("vertices")
+        if vertices is None:
+            vertices = []
+        if len(vertices) == 0:
+            return {"bone_names": [], "weights": []}
+
+        names = [assigned_bone]
+        if parent_bone and parent_bone != assigned_bone:
+            names.append(parent_bone)
+
+        pivots = []
+        for name in names:
+            pos = bone_positions.get(name)
+            pivots.append((float(pos[0]), float(pos[1])) if pos else None)
+
+        if all(p is None for p in pivots):
+            # 一根骨骼位置都没有：退化为单骨骼全权重，至少让键形能被烘焙出来。
+            return {"bone_names": [assigned_bone],
+                    "weights": [[1.0]] * len(vertices)}
+
+        weights: List[List[float]] = []
+        for x, y in vertices:
+            x, y = float(x), float(y)
+            # 距离为 0 => 该骨骼独占（其余骨骼分文不取）；否则按距离倒数分配。
+            at_pivot = []
+            dists = []
+            for pivot in pivots:
+                if pivot is None:
+                    at_pivot.append(False)
+                    dists.append(float("inf"))
+                    continue
+                d = math.hypot(x - pivot[0], y - pivot[1])
+                if d <= 1e-9:
+                    at_pivot.append(True)
+                    dists.append(0.0)
+                else:
+                    at_pivot.append(False)
+                    dists.append(d)
+
+            row = [0.0] * len(names)
+            if any(at_pivot):
+                # 多个枢轴重合（父子骨骼同点）时平均分配，仍严格和为 1。
+                hit = [i for i, flag in enumerate(at_pivot) if flag]
+                share = 1.0 / len(hit)
+                for i in hit:
+                    row[i] = share
+            else:
+                inv = [0.0 if math.isinf(d) else 1.0 / d for d in dists]
+                total = sum(inv)
+                if total > 0.0 and math.isfinite(total):
+                    row = [v / total for v in inv]
+            weights.append(row)
+
+        return {"bone_names": names, "weights": weights}
+
+    # ------------------------------------------------------------------
     # Mesh quality validation
     # ------------------------------------------------------------------
 
