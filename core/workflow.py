@@ -277,9 +277,11 @@ class WorkflowEngine:
             layers_output = str(self.output_dir / f"layers_{timestamp}_kmeans")
             layer_result = self.kmeans_layerer.layer(
                 optimized_img, output_dir=layers_output)
-        elif layer_result.get("method") == "semantic_hsv_fallback":
-            log.warning("Semantic segmentation degraded to HSV color fallback; "
-                        "keeping named layers")
+        elif layer_result.get("method") in (
+            "semantic_hsv_fallback", "semantic_fg_gated_color"
+        ):
+            log.warning("Semantic segmentation degraded to color heuristics "
+                        f"({layer_result.get('method')}); keeping named layers")
         return (layer_result.get("output_dir", layers_output), layer_result)
 
     def _record_layering_step(self, result: Dict, layers_output: str,

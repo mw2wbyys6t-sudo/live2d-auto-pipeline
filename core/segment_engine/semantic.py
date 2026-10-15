@@ -97,6 +97,10 @@ class SemanticSegmenter:
         self.model_type = self._resolve_backend((model_type or "isnet").lower())
         self._model = None
         self._model_loaded = False
+        # segment() 每次运行都会重置这两个标记；这里先置默认，避免调用方在
+        # 首次 segment() 之前读取时抛 AttributeError。
+        self._last_was_fallback = False
+        self._last_was_fg_gated = False
         log.info(f"SemanticSegmenter initialized (backend={self.model_type}, device={self.device})")
 
     def _resolve_backend(self, model_type: str) -> str:
@@ -172,6 +176,7 @@ class SemanticSegmenter:
         # Try the configured model first.
         masks: List[Dict] = []
         self._last_was_fallback = False
+        self._last_was_fg_gated = False
         try:
             if self.model_type == "isnet":
                 masks = self._segment_isnet(image)
@@ -189,12 +194,34 @@ class SemanticSegmenter:
             self._last_was_fallback = True
             return self._fallback_color_segment(image)
 
-        try:
-            parts = self._classify_masks_anime(masks, np.array(image.convert("RGB")))
-        except Exception as exc:
-            log.warning(f"Mask classification failed ({exc}); using fallback")
-            self._last_was_fallback = True
-            return self._fallback_color_segment(image)
+        if len(masks) == 1 and str(masks[0].get("label", "")) == "foreground":
+            # 后端只给了一张前景掩码（rembg 的 ISNet 就是这种），不含任何部件
+            # 信息。逐掩码分类会把整张角色判成 hair（实测部件从 11 退化到 2 个
+            # 完全重叠的 hair 层），所以这里改用它当 gate：颜色分割照常跑，再与
+            # 前景求交 —— 既保留多部件，又用学习式掩码裁掉背景杂色。
+            self._last_was_fg_gated = True
+            parts = self._fallback_color_segment(image)
+            fg = masks[0].get("segmentation")
+            if fg is not None:
+                fg = np.asarray(fg)
+                fg = fg > 0 if fg.dtype != bool else fg
+                if fg.shape != (h, w):
+                    fg = np.array(
+                        Image.fromarray(fg.astype(np.uint8) * 255, "L")
+                        .resize((w, h), Image.NEAREST)
+                    ) > 0
+                if fg.any():
+                    parts = {
+                        name: (np.asarray(m, dtype=bool) & fg)
+                        for name, m in parts.items() if m is not None
+                    }
+        else:
+            try:
+                parts = self._classify_masks_anime(masks, np.array(image.convert("RGB")))
+            except Exception as exc:
+                log.warning(f"Mask classification failed ({exc}); using fallback")
+                self._last_was_fallback = True
+                return self._fallback_color_segment(image)
 
         # Validate shapes
         clean: Dict[str, np.ndarray] = {}
@@ -265,7 +292,14 @@ class SemanticSegmenter:
         t0 = time.time()
         masks = self.segment(image)
         is_fallback = getattr(self, "_last_was_fallback", False)
-        method = "semantic_hsv_fallback" if is_fallback else "semantic"
+        if getattr(self, "_last_was_fg_gated", False):
+            # 部件仍来自颜色启发式，只是剪影由学习式前景掩码裁出，比纯 HSV
+            # 回退准，但不是部件级学习分割——如实单独标注，不冒充 "semantic"。
+            method = "semantic_fg_gated_color"
+        elif is_fallback:
+            method = "semantic_hsv_fallback"
+        else:
+            method = "semantic"
 
         if not masks:
             log.warning("Semantic segmentation produced no masks; returning empty result")

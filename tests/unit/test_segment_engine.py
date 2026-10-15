@@ -189,3 +189,60 @@ class TestLayerComposer:
             data = json.loads(Path(path).read_text())
             assert "layers" in data
             assert data["layer_count"] == 1
+
+
+class TestForegroundGatedSegmentation:
+    """rembg 的 ISNet 只输出一张前景掩码（label="foreground"），没有部件信息。
+
+    历史行为把它丢给逐掩码分类，整张角色会被判成 hair（部件从 11 退化到 2 个
+    完全重叠的 hair 层）。现在改为拿它当 gate 约束颜色分割，本测试锁定该契约。
+    """
+
+    @staticmethod
+    def _segmenter(monkeypatch, fg, color_parts):
+        seg = SemanticLayerer(device="cpu", model_type="isnet")
+        monkeypatch.setattr(
+            seg, "_segment_isnet",
+            lambda image: [{"segmentation": fg, "label": "foreground"}])
+        monkeypatch.setattr(
+            seg, "_fallback_color_segment", lambda image: color_parts)
+        return seg
+
+    def test_color_parts_are_clipped_to_foreground(self, monkeypatch):
+        img = Image.new("RGB", (64, 64), (0, 0, 0))
+        fg = np.zeros((64, 64), dtype=bool)
+        fg[0:32, :] = True  # 上半为角色前景
+        inside = np.zeros((64, 64), dtype=bool)
+        inside[0:16, 0:16] = True
+        outside = np.zeros((64, 64), dtype=bool)
+        outside[48:64, 0:16] = True  # 落在背景里
+        seg = self._segmenter(monkeypatch, fg, {"face": inside, "legs": outside})
+
+        parts = seg.segment(img)
+
+        assert seg._last_was_fg_gated is True
+        assert seg._last_was_fallback is False
+        assert "face" in parts and parts["face"].any()
+        # 落在背景之外的部件应被前景裁掉
+        assert "legs" not in parts
+
+    def test_single_foreground_mask_skips_part_classifier(self, monkeypatch):
+        img = Image.new("RGB", (64, 64), (0, 0, 0))
+        fg = np.ones((64, 64), dtype=bool)
+        seg = self._segmenter(monkeypatch, fg, {"face": fg.copy()})
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("前景-only 掩码不应进入逐掩码分类")
+
+        monkeypatch.setattr(seg, "_classify_masks_anime", _boom)
+
+        assert seg.segment(img)  # 不抛异常即说明没有走逐掩码分类
+
+    def test_layer_reports_fg_gated_method(self, monkeypatch, tmp_path):
+        img = Image.new("RGB", (64, 64), (0, 0, 0))
+        fg = np.ones((64, 64), dtype=bool)
+        seg = self._segmenter(monkeypatch, fg, {"face": fg.copy()})
+
+        result = seg.layer(img, output_dir=str(tmp_path))
+
+        assert result["method"] == "semantic_fg_gated_color"
