@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -27,6 +28,7 @@ type Handler struct {
 	cfg            *config.Config
 	imageGenerator *services.ImageGenerator
 	pythonBridge   *services.PythonBridge
+	nativeBridge   *services.NativeBridge
 	cache          *services.RequestCache
 	charSvc        *services.CharacterService
 	chatSvc        *services.ChatService
@@ -45,6 +47,7 @@ func NewHandler(cfg *config.Config, imageGenerator *services.ImageGenerator, cac
 		wsHub:          services.NewWSHubWithOrigins(cfg.Server.AllowedOrigins, cfg.Server.Port),
 		startTime:      time.Now(),
 	}
+	h.nativeBridge = services.NewNativeBridge(cfg, h.wsHub)
 
 	// 启动缓存清理守护进程
 	if cache != nil {
@@ -1114,22 +1117,105 @@ func (h *Handler) ExportPSD(c *gin.Context) {
 	c.JSON(http.StatusOK, models.Response{Success: true, Message: "PSD导出成功", Data: result})
 }
 
-// TrackingUnavailable 摄像头面捕的**显式**"未实现"响应。
+// StartTracking 启动原生面捕。
 //
-// 前端 /preview 会调用 /api/tracking/start|stop 并连接 /ws/tracking；这套端点
-// 目前只在 Python 侧 api_server.py 实现，Go 后端没有面捕管线。这里回 501 +
-// 明确指引，避免调用方收到 404 而误以为"路由写错了"。
-func (h *Handler) TrackingUnavailable(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, models.Response{
-		Success: false,
-		Error:   "本后端未实现摄像头面捕；请改用 Python 后端（api_server.py）",
+// 如果 Rust face_tracker 已编译且可用，启动子进程面捕；
+// 否则回退到显式 501（同原 TrackingUnavailable 语义）。
+func (h *Handler) StartTracking(c *gin.Context) {
+	// 配置级 kill-switch：native_tracker.enabled=false 时禁用面捕
+	if !h.cfg.NativeTracker.Enabled {
+		c.JSON(http.StatusNotImplemented, models.Response{
+			Success: false,
+			Error:   "原生面捕已在配置中禁用（native_tracker.enabled=false）",
+		})
+		return
+	}
+
+	if !h.nativeBridge.IsAvailable() {
+		c.JSON(http.StatusNotImplemented, models.Response{
+			Success: false,
+			Error:   "原生面捕未编译。请运行：cd native/face_tracker && cargo build --release",
+			Data: map[string]interface{}{
+				"backend":   "go",
+				"available": false,
+				"hint":      "cd native/face_tracker && cargo build --release",
+			},
+		})
+		return
+	}
+
+	if h.nativeBridge.IsRunning() {
+		c.JSON(http.StatusOK, models.Response{
+			Success: true,
+			Message: "面捕已在运行",
+		})
+		return
+	}
+
+	if err := h.nativeBridge.StartTracking(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.Response{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.Response{
+		Success: true,
+		Message: "原生面捕已启动",
 		Data: map[string]interface{}{
-			"backend":     "go",
-			"available":   false,
-			"endpoints":   []string{"/api/tracking/start", "/api/tracking/stop", "/ws/tracking"},
-			"alternative": "python api_server.py",
+			"source":    "native",
+			"camera_id": h.cfg.NativeTracker.CameraID,
+			"width":     h.cfg.NativeTracker.Width,
+			"height":    h.cfg.NativeTracker.Height,
+			"fps":       h.cfg.NativeTracker.FPS,
 		},
 	})
+}
+
+// StopTracking 停止原生面捕。
+func (h *Handler) StopTracking(c *gin.Context) {
+	if !h.nativeBridge.IsRunning() {
+		c.JSON(http.StatusOK, models.Response{
+			Success: true,
+			Message: "面捕未在运行",
+		})
+		return
+	}
+
+	if err := h.nativeBridge.StopTracking(); err != nil {
+		c.JSON(http.StatusInternalServerError, models.Response{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.Response{
+		Success: true,
+		Message: "面捕已停止",
+	})
+}
+
+// TrackingStatus 返回面捕状态。
+func (h *Handler) TrackingStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, models.Response{
+		Success: true,
+		Data: map[string]interface{}{
+			"running":   h.nativeBridge.IsRunning(),
+			"available": h.nativeBridge.IsAvailable(),
+			"enabled":   h.cfg.NativeTracker.Enabled,
+			"source":    "native",
+			"camera_id": h.cfg.NativeTracker.CameraID,
+			"smoothing": h.cfg.NativeTracker.Smoothing,
+			"deadzone":  h.cfg.NativeTracker.Deadzone,
+		},
+	})
+}
+
+// ShutdownNativeBridge 彻底关闭面捕子进程（供 main.go 退出信号处理调用）。
+func (h *Handler) ShutdownNativeBridge() {
+	h.nativeBridge.Shutdown()
 }
 
 // DeployDesktop verifies model pixels, then waits for the native pet first frame.
@@ -1139,12 +1225,50 @@ func (h *Handler) DeployDesktop(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.Response{Success: false, Message: "需要提供真实导出模型的 model_dir"})
 		return
 	}
-	result, err := h.pythonBridge.DeployDesktopModel(c.Request.Context(), req.ModelDir)
+	result, err := h.pythonBridge.DeployDesktopModel(
+		c.Request.Context(), req.ModelDir, h.petTrackingAttach(),
+	)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, models.Response{Success: false, Message: err.Error(), Data: map[string]interface{}{"deployed": false, "runtime_verified": false}})
 		return
 	}
 	c.JSON(http.StatusOK, models.Response{Success: true, Message: "桌宠已完成真实模型验收并绘制首帧；桌面透明外观仍需视觉确认", Data: result})
+}
+
+// petTrackingAttach 返回桌宠参数源接入函数：把原生面捕的每帧参数以 JSON Lines
+// 写进桌宠 stdin，让桌宠跟随真实表情与头部姿态。
+//
+// 面捕不可用（二进制缺失/配置禁用/无摄像头/启动失败）时静默降级——桌宠退回
+// 自带待机动画；若本次部署启动了面捕，则桌宠退出时一并关闭，避免摄像头常亮。
+func (h *Handler) petTrackingAttach() func(io.Writer) func() {
+	if h.nativeBridge == nil {
+		return nil
+	}
+	return func(stdin io.Writer) func() {
+		if !h.nativeBridge.IsAvailable() {
+			log.Printf("[deploy] 未找到原生面捕二进制，桌宠将使用自带待机动画")
+			return func() {}
+		}
+		owned := !h.nativeBridge.IsRunning()
+		if owned {
+			if err := h.nativeBridge.StartTracking(); err != nil {
+				log.Printf("[deploy] 原生面捕启动失败，桌宠将使用自带待机动画: %v", err)
+				return func() {}
+			}
+		}
+		encoder := json.NewEncoder(stdin)
+		h.nativeBridge.SetFrameSink(func(params map[string]float64) {
+			// 编码失败（桌宠已退出/管道关闭）无需处理：下一帧或拆除逻辑兜底。
+			_ = encoder.Encode(map[string]interface{}{"live2d_params": params})
+		})
+		log.Printf("[deploy] 桌宠已接入原生面捕（本次启动=%v）", owned)
+		return func() {
+			h.nativeBridge.SetFrameSink(nil)
+			if owned {
+				_ = h.nativeBridge.StopTracking()
+			}
+		}
+	}
 }
 
 func (h *Handler) DesktopStatus(c *gin.Context) {

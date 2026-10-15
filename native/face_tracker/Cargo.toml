@@ -1,0 +1,26 @@
+[package]
+name = "face_tracker"
+version = "1.0.0"
+edition = "2021"
+description = "Native face tracking for Live2D — camera capture + ARKit BlendShapes"
+
+[[bin]]
+name = "face_tracker"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Camera capture — Windows Media Foundation / DirectShow backend
+nokhwa = { version = "0.10", features = ["input-msmf"] }
+
+# ONNX Runtime — 深度学习人脸检测（运行时动态加载 onnxruntime.dll）
+ort = { version = "2.0.0-rc.14", features = ["load-dynamic"] }
+ndarray = "0.17"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

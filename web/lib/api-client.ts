@@ -806,6 +806,27 @@ export class APIClient {
     return extractData<any>(res);
   }
 
+  // ---------- native face tracking ----------
+
+  /**
+   * 启动原生面捕：后端拉起 Rust face_tracker 子进程（ONNX YuNet 检测）。
+   * 二进制未编译或配置禁用时抛 APIError（501），消息可直接展示给用户。
+   */
+  async startTracking(): Promise<void> {
+    await this.request<unknown>('/api/tracking/start', { method: 'POST' }, 60_000);
+  }
+
+  /** 停止原生面捕采集（子进程保留，可再次启动）。 */
+  async stopTracking(): Promise<void> {
+    await this.request<unknown>('/api/tracking/stop', { method: 'POST' }, 60_000);
+  }
+
+  /** 查询原生面捕状态（running / available / enabled）。 */
+  async getTrackingStatus(): Promise<TrackingStatus> {
+    const res = await this.request<unknown>('/api/tracking/status');
+    return extractData<TrackingStatus>(res);
+  }
+
   // ---------- character references & embedding ----------
 
   /** 为角色登记某个视角的参考图（imagePath 来自 uploadImage().path）。 */
@@ -832,6 +853,17 @@ export class APIClient {
     );
     return extractData<any>(res);
   }
+}
+
+/** 原生面捕状态（GET /api/tracking/status） */
+export interface TrackingStatus {
+  running: boolean;
+  available: boolean;
+  enabled?: boolean;
+  source: string;
+  camera_id: number;
+  smoothing?: number;
+  deadzone?: number;
 }
 
 export interface LatestGeneration {

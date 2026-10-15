@@ -151,6 +151,11 @@ desktop.ini
 desktop/target/
 desktop/gen/
 
+# --- 原生面捕（Rust）构建产物 ---
+# native/ 下的 cargo target 目录可达 1 GB（.rlib/.rmeta/.pdb 等），只入库源码；
+# 模型权重已由上方 *.onnx 规则覆盖。
+native/*/target/
+
 # Tauri 前端占位页面需要入库（tauri::generate_context! 编译时嵌入）
 # 但顶层 dist/ 规则会把它一起忽略，所以先放行目录再保留 index.html
 !desktop/dist/

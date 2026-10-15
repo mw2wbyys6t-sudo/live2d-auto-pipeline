@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gin-contrib/gzip"
@@ -187,6 +189,17 @@ func main() {
 				"原始错误: %v", addr, err)
 	}
 
+	// 捕获退出信号（Ctrl+C / SIGTERM），优雅关闭面捕子进程，
+	// 避免退出时 face_tracker.exe 残留并占用摄像头。
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Println("[main] 收到退出信号，正在关闭面捕子进程...")
+		h.ShutdownNativeBridge()
+		os.Exit(0)
+	}()
+
 	if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("服务器运行异常: %v", err)
 	}
@@ -232,10 +245,10 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 		// WebSocket v0.10
 		api.GET("/ws", h.WSHandle)
 
-		// 摄像头面捕：Go 后端不做视觉计算（预览页改用浏览器端 MediaPipe WASM），
-		// 保留显式 501 而不是 404，让调用方明确知道该走哪条路。
-		api.POST("/tracking/start", h.TrackingUnavailable)
-		api.POST("/tracking/stop", h.TrackingUnavailable)
+		// 原生面捕（Rust face_tracker 子进程）
+		api.POST("/tracking/start", h.StartTracking)
+		api.POST("/tracking/stop", h.StopTracking)
+		api.GET("/tracking/status", h.TrackingStatus)
 
 		// 跨页面流水线接力 v0.10.1：最近生成 / 真实分层 / 图片上传
 		api.GET("/generations/latest", h.LatestGeneration)

@@ -27,8 +27,10 @@ import {
   type ExportedModelInfo,
   type LatestGeneration,
 } from '../lib/api-client';
-import { loadFaceLandmarker, closeFaceLandmarker, resultToLive2DParams } from '../lib/face-tracker';
-import type { FaceLandmarker } from '@mediapipe/tasks-vision';
+import {
+  startNativeTracking as openNativeTracking,
+  type NativeTrackerSession,
+} from '../lib/native-tracker';
 import type { Live2DPlayer } from '../lib/live2d-player';
 
 const ModelCanvas = dynamic(() => import('../components/ModelCanvas'), {
@@ -51,8 +53,7 @@ const EXPRESSIONS: { id: Emotion; label: string; icon: typeof Smile }[] = [
 
 const PreviewPage: NextPage = () => {
   const canvasRef = useRef<ModelCanvasHandle>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [webcamOn, setWebcamOn] = useState(false);
+  const [trackingOn, setTrackingOn] = useState(false);
   const [micOn, setMicOn] = useState(false);
   const [fps, setFps] = useState(0);
   const [params, setParams] = useState<Record<string, number>>({
@@ -71,18 +72,16 @@ const PreviewPage: NextPage = () => {
   const [petBusy, setPetBusy] = useState(false);
   const [petMsg, setPetMsg] = useState<string | null>(null);
   const [models, setModels] = useState<ExportedModelInfo[]>([]);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  /** 麦克风独立音频流：与摄像头视频流分开持有，关闭麦克风时必须显式停轨，
+  /** 麦克风独立音频流：与面捕摄像头流分开持有，关闭麦克风时必须显式停轨，
       否则系统麦克风指示灯会一直亮（AudioContext.close 不会释放设备）。 */
   const audioStreamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const animRef = useRef<number | null>(null);
-  const trackRafRef = useRef<number | null>(null);
-  const landmarkerRef = useRef<FaceLandmarker | null>(null);
-  /** 启停会话令牌：加载模型/摄像头是异步的，途中用户点了停止时，
+  /** 原生面捕会话（持有 WS 通道与后端启停句柄） */
+  const nativeSessionRef = useRef<NativeTrackerSession | null>(null);
+  /** 启停会话令牌：启动流程是异步的，途中用户点了停止时，
       恢复执行的启动流程必须靠它识别「自己已过期」并退出。 */
   const trackingSessionRef = useRef(0);
-  const lastVideoTimeRef = useRef(-1);
   const lastReadoutRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   /** Normalised gaze (-1..1) driven by pointer position over the stage. */
@@ -165,64 +164,41 @@ const PreviewPage: NextPage = () => {
     }
   }, [latest, petBusy]);
 
-  /** 浏览器端面捕主循环：getUserMedia + MediaPipe FaceLandmarker(WASM) */
-  const startBrowserTracking = useCallback(async () => {
-    const video = videoRef.current;
-    if (!video) throw new Error('视频元素未就绪');
+  /**
+   * 原生面捕主循环：后端 Rust face_tracker 独占摄像头采集（ONNX YuNet 检测），
+   * Live2D 参数经 /api/ws 的 tracking_frame 消息回传，直接驱动播放器。
+   */
+  const startNativeTracking = useCallback(async () => {
     const session = ++trackingSessionRef.current;
-    const landmarker = await loadFaceLandmarker();
-    // 加载期间用户已停止：stop 侧会负责关闭这个实例，这里直接退出，
-    // 绝不能再把它挂回 ref 或继续申请摄像头。
-    if (trackingSessionRef.current !== session) {
-      throw new Error('面捕已取消');
-    }
-    landmarkerRef.current = landmarker;
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 480, facingMode: 'user' },
+    const tracker = await openNativeTracking({
+      onFrame: (frame) => {
+        const p = frame.live2d_params;
+        if (!p || Object.keys(p).length === 0) return;
+        playerRef.current?.setParameters(p);
+        // 回读面板节流到 10Hz：30fps 全量 setState 会让整页持续重渲染
+        const now = performance.now();
+        if (now - lastReadoutRef.current > 100) {
+          lastReadoutRef.current = now;
+          setParams((prev) => ({ ...prev, ...p }));
+        }
+      },
+      onError: (msg) => setError(msg),
     });
+    // 启动期间用户已停止：会话令牌已被 stop 侧清零，关掉刚建立的连接后退出
     if (trackingSessionRef.current !== session) {
-      stream.getTracks().forEach((t) => t.stop());
+      await tracker.stop();
       throw new Error('面捕已取消');
     }
-    mediaStreamRef.current = stream;
-    video.srcObject = stream;
-    await video.play().catch(() => undefined);
-
-    const tick = () => {
-      const v = videoRef.current;
-      const lm = landmarkerRef.current;
-      if (v && lm && v.readyState >= 2 && v.currentTime !== lastVideoTimeRef.current) {
-        lastVideoTimeRef.current = v.currentTime;
-        try {
-          const result = lm.detectForVideo(v, performance.now());
-          const params = resultToLive2DParams(result);
-          if (Object.keys(params).length > 0) {
-            playerRef.current?.setParameters(params);
-            const now = performance.now();
-            if (now - lastReadoutRef.current > 100) {
-              lastReadoutRef.current = now;
-              setParams((prev) => ({ ...prev, ...params }));
-            }
-          }
-        } catch { /* 单帧失败不中断跟踪 */ }
-      }
-      trackRafRef.current = requestAnimationFrame(tick);
-    };
-    trackRafRef.current = requestAnimationFrame(tick);
+    nativeSessionRef.current = tracker;
   }, []);
 
-  const stopBrowserTracking = useCallback(() => {
-    if (trackRafRef.current !== null) {
-      cancelAnimationFrame(trackRafRef.current);
-      trackRafRef.current = null;
-    }
-    // 经统一出口释放：关闭实例的同时清空模块缓存（M8），否则下次启动会拿到
-    // 已 close 的 landmarker。该函数同步清空缓存、异步关实例，void 调用即可。
+  const stopNativeTracking = useCallback(() => {
     trackingSessionRef.current = 0;
-    landmarkerRef.current = null;
-    lastVideoTimeRef.current = -1;
-    void closeFaceLandmarker();
+    lastReadoutRef.current = 0;
+    const tracker = nativeSessionRef.current;
+    nativeSessionRef.current = null;
+    // 经统一出口释放：关闭 WS 并通知后端停止采集（内部已 catch，不会抛）
+    if (tracker) void tracker.stop();
   }, []);
 
   // FPS loop
@@ -297,33 +273,28 @@ const PreviewPage: NextPage = () => {
     };
   }, []);
 
-  const toggleWebcam = useCallback(async () => {
-    if (webcamOn) {
-      stopBrowserTracking();
-      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-      mediaStreamRef.current = null;
-      if (videoRef.current) videoRef.current.srcObject = null;
-      setWebcamOn(false);
+  const toggleTracking = useCallback(async () => {
+    if (trackingOn) {
+      stopNativeTracking();
+      setTrackingOn(false);
       setStreamActive(false);
       return;
     }
     try {
-      // 面捕完全在浏览器内运行：摄像头 getUserMedia + MediaPipe WASM 推理，
-      // 参数直接驱动播放器（不经后端，Go/Python 部署行为一致）。
-      await startBrowserTracking();
-      setWebcamOn(true);
+      // 面捕在后端原生进程内运行（Rust + ONNX），参数经 WS 回传驱动模型。
+      await startNativeTracking();
+      setTrackingOn(true);
       setStreamActive(true);
       setError(null);
     } catch (e) {
-      stopBrowserTracking();
-      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-      mediaStreamRef.current = null;
-      setWebcamOn(false);
-      // 加载途中用户主动停止（会话令牌已被 stop 清零）：不是错误，不弹提示
+      stopNativeTracking();
+      setTrackingOn(false);
+      setStreamActive(false);
+      // 启动途中用户主动停止（会话令牌已被 stop 清零）：不是错误，不弹提示
       if (trackingSessionRef.current === 0) return;
       setError(e instanceof Error ? e.message : '面捕启动失败');
     }
-  }, [webcamOn, startBrowserTracking, stopBrowserTracking]);
+  }, [trackingOn, startNativeTracking, stopNativeTracking]);
 
   const toggleMic = useCallback(async () => {
     if (micOn) {
@@ -374,13 +345,12 @@ const PreviewPage: NextPage = () => {
 
   useEffect(() => {
     return () => {
-      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
       audioStreamRef.current?.getTracks().forEach((t) => t.stop());
       audioCtxRef.current?.close().catch(() => undefined);
       if (animRef.current) cancelAnimationFrame(animRef.current);
-      stopBrowserTracking();
+      stopNativeTracking();
     };
-  }, [stopBrowserTracking]);
+  }, [stopNativeTracking]);
 
   const applyExpression = (emotion: Emotion) => {
     playerRef.current?.setExpression(emotion);
@@ -491,8 +461,8 @@ const PreviewPage: NextPage = () => {
           {/* Overlays */}
           <div className="absolute top-3 left-3 flex flex-col gap-2">
             <div className="px-3 py-1.5 rounded-lg bg-black/50 backdrop-blur text-xs text-white/90 flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${webcamOn ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`} />
-              {webcamOn ? 'Tracking · MediaPipe 面捕' : 'Idle · 鼠标可跟随'}
+              <span className={`w-2 h-2 rounded-full ${trackingOn ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`} />
+              {trackingOn ? 'Tracking · 原生面捕 (ONNX)' : 'Idle · 鼠标可跟随'}
             </div>
             <div className="px-3 py-1.5 rounded-lg bg-black/50 backdrop-blur text-xs text-white/90 font-mono">
               {fps} FPS
@@ -505,19 +475,18 @@ const PreviewPage: NextPage = () => {
             </div>
           )}
 
-          {/* Webcam mini：浏览器端 MediaPipe 接管，显示摄像头小窗（单一 video 元素） */}
-          <div
-            className={`absolute bottom-3 right-3 w-40 h-28 rounded-lg overflow-hidden border border-gray-700 shadow-xl bg-black/80 ${
-              webcamOn ? '' : 'hidden'
-            }`}
-          >
-            <video
-              ref={videoRef}
-              muted
-              playsInline
-              className="w-full h-full object-cover scale-x-[-1]"
-            />
-          </div>
+          {/* 原生面捕状态：摄像头由后端 Rust 进程独占采集，浏览器拿不到画面 */}
+          {trackingOn && (
+            <div className="absolute bottom-3 right-3 w-44 rounded-lg border border-gray-700 shadow-xl bg-black/80 p-3 text-[10px]">
+              <div className="flex items-center gap-2 mb-1 text-white/90">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                <span>原生面捕运行中</span>
+              </div>
+              <p className="text-gray-500 leading-relaxed">
+                摄像头由本机原生进程独占，画面不在浏览器端预览。
+              </p>
+            </div>
+          )}
 
           {/* Param readout */}
           <div className="absolute top-3 right-3 w-48 rounded-lg bg-black/60 backdrop-blur p-3 text-[10px] font-mono space-y-1">
@@ -531,9 +500,9 @@ const PreviewPage: NextPage = () => {
           </div>
 
           {/* Center hint */}
-          {!webcamOn && (
+          {!trackingOn && (
             <div className="absolute bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-black/50 backdrop-blur text-xs text-white/70">
-              Enable webcam to begin tracking — or interact with controls on the right
+              Enable native tracking to begin — or interact with controls on the right
             </div>
           )}
         </div>
@@ -544,15 +513,15 @@ const PreviewPage: NextPage = () => {
             <p className="text-xs font-medium text-gray-400 mb-3">Tracking inputs</p>
             <div className="flex gap-2">
               <button
-                onClick={toggleWebcam}
+                onClick={toggleTracking}
                 className={`flex-1 inline-flex flex-col items-center gap-1 p-3 rounded-lg border transition-colors ${
-                  webcamOn
+                  trackingOn
                     ? 'bg-red-500/10 border-red-500/40 text-red-300'
                     : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
                 }`}
               >
-                {webcamOn ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
-                <span className="text-[11px]">{webcamOn ? 'Stop tracking' : 'Webcam tracking'}</span>
+                {trackingOn ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
+                <span className="text-[11px]">{trackingOn ? 'Stop tracking' : 'Native tracking'}</span>
               </button>
               <button
                 onClick={toggleMic}

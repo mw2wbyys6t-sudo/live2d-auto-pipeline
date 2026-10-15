@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,7 +29,11 @@ func copyDesktopResult(src map[string]interface{}) map[string]interface{} {
 	return dst
 }
 
-func (pb *PythonBridge) DeployDesktopModel(ctx context.Context, modelDir string) (map[string]interface{}, error) {
+// DeployDesktopModel 验收模型后拉起原生桌宠窗口。
+//
+// attach 可选：桌宠首帧就绪后回调一次，参数是其 stdin 写入端，返回值在桌宠
+// 退出时调用。Go 借此把原生面捕参数以 JSON Lines 推给桌宠（无面捕时静默）。
+func (pb *PythonBridge) DeployDesktopModel(ctx context.Context, modelDir string, attach func(stdin io.Writer) (detach func())) (map[string]interface{}, error) {
 	desktopLaunchMu.Lock()
 	defer desktopLaunchMu.Unlock()
 	if runtime.GOOS != "windows" {
@@ -73,8 +78,21 @@ func (pb *PythonBridge) DeployDesktopModel(ctx context.Context, modelDir string)
 		logFile.Close()
 		return nil, err
 	}
+	// 桌宠参数输入管道：原生面捕参数经此以 JSON Lines 喂给桌宠。
+	var petStdin io.WriteCloser
+	if attach != nil {
+		petStdin, err = cmd.StdinPipe()
+		if err != nil {
+			stdout.Close()
+			logFile.Close()
+			return nil, err
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		stdout.Close()
+		if petStdin != nil {
+			petStdin.Close()
+		}
 		logFile.Close()
 		return nil, err
 	}
@@ -83,6 +101,9 @@ func (pb *PythonBridge) DeployDesktopModel(ctx context.Context, modelDir string)
 	go func() {
 		defer close(done)
 		defer logFile.Close()
+		if petStdin != nil {
+			defer petStdin.Close()
+		}
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 4096), 1024*1024)
 		for scanner.Scan() {
@@ -122,6 +143,17 @@ func (pb *PythonBridge) DeployDesktopModel(ctx context.Context, modelDir string)
 		report["window"] = msg
 		delete(report, "launch_argv")
 		desktopProcess, desktopDone, desktopResult = cmd, done, copyDesktopResult(report)
+
+		// 首帧已绘制：现在才接入参数源，避免桌宠启动失败时空转摄像头。
+		if attach != nil && petStdin != nil {
+			detach := attach(petStdin)
+			if detach != nil {
+				go func() {
+					<-done
+					detach()
+				}()
+			}
+		}
 		return report, nil
 	case <-done:
 		return nil, fmt.Errorf("桌宠在首帧就绪前退出，请查看本地桌宠日志")

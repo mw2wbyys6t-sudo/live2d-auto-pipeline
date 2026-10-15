@@ -19,18 +19,19 @@ func defaultPythonPath() string {
 }
 
 type Config struct {
-	Server    ServerConfig    `json:"server"`
-	SDWebUI   SDWebUIConfig   `json:"sd_webui"`
-	Python    PythonConfig    `json:"python"`
-	Output    OutputConfig    `json:"output"`
-	ComfyUI   ComfyUIConfig   `json:"comfyui"`
-	Cache     CacheConfig     `json:"cache"`
-	LLM       LLMConfig       `json:"llm"`
-	TTS       TTSConfig       `json:"tts"`
-	Character CharacterConfig `json:"character"`
-	WebSocket WebSocketConfig `json:"websocket"`
-	Redis     RedisConfig     `json:"redis"`
-	MediaPipe MediaPipeConfig `json:"mediapipe"`
+	Server        ServerConfig        `json:"server"`
+	SDWebUI       SDWebUIConfig       `json:"sd_webui"`
+	Python        PythonConfig        `json:"python"`
+	Output        OutputConfig        `json:"output"`
+	ComfyUI       ComfyUIConfig       `json:"comfyui"`
+	Cache         CacheConfig         `json:"cache"`
+	LLM           LLMConfig           `json:"llm"`
+	TTS           TTSConfig           `json:"tts"`
+	Character     CharacterConfig     `json:"character"`
+	WebSocket     WebSocketConfig     `json:"websocket"`
+	Redis         RedisConfig         `json:"redis"`
+	MediaPipe     MediaPipeConfig     `json:"mediapipe"`
+	NativeTracker NativeTrackerConfig `json:"native_tracker"`
 }
 
 type ServerConfig struct {
@@ -140,12 +141,24 @@ type RedisConfig struct {
 //
 // 注意：Go 后端不执行面捕（/api/tracking/* 返回 501）。
 // 面捕由浏览器端（web/lib/face-tracker.ts，MediaPipe WASM）和 Python 侧
-//（drivers/face_tracker/）各自实现。本字段供未来 Go 端面捕代理预留。
+// （drivers/face_tracker/）各自实现。本字段供未来 Go 端面捕代理预留。
 type MediaPipeConfig struct {
 	Enabled                bool    `json:"enabled"`
 	ModelComplexity        int     `json:"model_complexity"`
 	MinDetectionConfidence float64 `json:"min_detection_confidence"`
 	MinTrackingConfidence  float64 `json:"min_tracking_confidence"`
+}
+
+// NativeTrackerConfig 原生面捕（Rust face_tracker 子进程）配置。
+type NativeTrackerConfig struct {
+	Enabled    bool    `json:"enabled"`
+	BinaryPath string  `json:"binary_path"` // 空则自动搜索
+	CameraID   int     `json:"camera_id"`
+	Width      int     `json:"width"`
+	Height     int     `json:"height"`
+	FPS        int     `json:"fps"`
+	Smoothing  float64 `json:"smoothing"`
+	Deadzone   float64 `json:"deadzone"`
 }
 
 func DefaultConfig() *Config {
@@ -290,6 +303,17 @@ func DefaultConfig() *Config {
 			ModelComplexity:        1,
 			MinDetectionConfidence: 0.5,
 			MinTrackingConfidence:  0.5,
+		},
+		NativeTracker: NativeTrackerConfig{
+			// Enabled 是面捕总开关（kill-switch）；默认开启。
+			// 真正的可用性判定仍由二进制是否存在决定（FindBinary）。
+			Enabled:   true,
+			CameraID:  0,
+			Width:     640,
+			Height:    480,
+			FPS:       30,
+			Smoothing: 0.5,
+			Deadzone:  0.02,
 		},
 	}
 }

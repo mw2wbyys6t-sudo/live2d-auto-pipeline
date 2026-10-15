@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'desktop/**'
+      - 'native/face_tracker/**'
       - 'scripts/build_tauri_release.*'
       - 'scripts/run_tauri_dev.*'
       - '.github/workflows/tauri-build.yml'
@@ -93,6 +94,15 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path desktop/bin | Out-Null
           Copy-Item -Force api/live2d-api.exe desktop/bin/live2d-api.exe
+        shell: pwsh
+
+      - name: Build Rust face_tracker (native face capture)
+        working-directory: native/face_tracker
+        run: cargo build --release --verbose
+
+      - name: Copy face_tracker binary to Tauri resources
+        run: |
+          Copy-Item -Force native/face_tracker/target/release/face_tracker.exe desktop/bin/face_tracker.exe
         shell: pwsh
 
       - name: Show Tauri config
