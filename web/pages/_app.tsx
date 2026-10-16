@@ -14,6 +14,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/preview': 'Live Preview',
   '/chat': 'AI Chat',
   '/export': 'Export Center',
+  '/health': '环境自检',
 };
 
 function resolveTitle(pathname: string): string {

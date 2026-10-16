@@ -613,6 +613,41 @@ export class APIClient {
     }
   }
 
+  /** 可选重模型清单（SAM2 等）+ 下载/就绪状态。 */
+  async listOptionalModels(): Promise<OptionalModel[] | null> {
+    try {
+      const res = await this.request<unknown>('/api/models/optional', undefined, 15_000);
+      const data = extractData<{ components?: OptionalModel[] }>(res);
+      return data?.components ?? [];
+    } catch {
+      return null;
+    }
+  }
+
+  async startOptionalModel(name: string) {
+    return this.request<unknown>('/api/models/optional/download', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  async cancelOptionalModel(name: string) {
+    return this.request<unknown>('/api/models/optional/cancel', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  /** 环境自检（P2）：解释器/脚本目录/产物可写/面捕三件套/回环绑定。 */
+  async getDiagnostics(): Promise<DiagnosticsReport | null> {
+    try {
+      const res = await this.request<unknown>('/api/diagnostics', undefined, 15_000);
+      return extractData<DiagnosticsReport>(res);
+    } catch {
+      return null;
+    }
+  }
+
   async getStatus(): Promise<SystemStatus | null> {
     try {
       const res = await this.request<unknown>('/api/status', undefined, 5000);
@@ -853,6 +888,39 @@ export class APIClient {
     );
     return extractData<any>(res);
   }
+}
+
+/** 环境自检（GET /api/diagnostics）的单条检查项。 */
+export interface DiagnosticCheck {
+  key: string;
+  label: string;
+  ok: boolean;
+  detail?: string;
+  issues?: string[];
+}
+
+export interface DiagnosticsReport {
+  version: string;
+  os: string;
+  host: string;
+  port: number;
+  checks: DiagnosticCheck[];
+  python_path: string;
+  output_dir: string;
+}
+
+export interface OptionalModel {
+  name: string;
+  url: string;
+  rel_path: string;
+  size_hint_mb: number;
+  note: string;
+  requires_pkg: string;
+  state: 'idle' | 'downloading' | 'ready' | 'error' | 'cancelled';
+  progress: number;
+  downloaded_mb: number;
+  total_mb: number;
+  message?: string;
 }
 
 /** 原生面捕状态（GET /api/tracking/status） */

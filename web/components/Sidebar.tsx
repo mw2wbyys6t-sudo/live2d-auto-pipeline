@@ -9,6 +9,7 @@ import {
   Eye,
   MessageSquare,
   Download,
+  Activity,
 } from 'lucide-react';
 
 interface NavItem {
@@ -27,6 +28,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/preview', label: 'Preview', icon: Eye },
   { href: '/chat', label: 'Chat', icon: MessageSquare },
   { href: '/export', label: 'Export', icon: Download },
+  { href: '/health', label: '环境自检', icon: Activity, match: (p) => p.startsWith('/health') },
 ];
 
 interface SidebarProps {
