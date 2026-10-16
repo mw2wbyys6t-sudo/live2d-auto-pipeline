@@ -437,6 +437,17 @@ class WorkflowEngine:
             # Load the character image
             character_img = Image.open(character_path).convert('RGBA')
 
+            # === Step 1b: 入口尺寸规范化（大图不拒绝，等比缩到安全上限）===
+            # 8K/超大画布直通分层/图集会 OOM/超时；这里统一收口，保比例保 alpha。
+            from core.image_policy import normalize_image
+            character_img, norm_record = normalize_image(character_img)
+            if norm_record["resized"]:
+                result["steps"]["normalize"] = norm_record
+                log.info(
+                    f"图片过大已自动缩放: {norm_record['original_size']} → "
+                    f"{norm_record['final_size']} (scale={norm_record['scale']})"
+                )
+
             # === Step 2a: clear the Live2D minimum height before judging it ===
             character_img, upscale_record = self._ensure_min_height(character_img)
             if upscale_record:

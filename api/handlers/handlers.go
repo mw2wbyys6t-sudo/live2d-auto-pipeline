@@ -33,6 +33,8 @@ type Handler struct {
 	charSvc        *services.CharacterService
 	chatSvc        *services.ChatService
 	wsHub          *services.WSHub
+	modelDL        *services.ModelDownloader
+	capMgr         *services.CapabilityManager
 	startTime      time.Time
 }
 
@@ -45,6 +47,8 @@ func NewHandler(cfg *config.Config, imageGenerator *services.ImageGenerator, cac
 		charSvc:        services.NewCharacterService(cfg),
 		chatSvc:        services.NewChatService(cfg),
 		wsHub:          services.NewWSHubWithOrigins(cfg.Server.AllowedOrigins, cfg.Server.Port),
+		modelDL:        services.NewModelDownloader(cfg.Python.HfCache),
+		capMgr:         services.NewCapabilityManager(cfg),
 		startTime:      time.Now(),
 	}
 	h.nativeBridge = services.NewNativeBridge(cfg, h.wsHub)
@@ -604,6 +608,57 @@ func (h *Handler) ListImageProviders(c *gin.Context) {
 		"registered": registered,
 		"query_ok":   true,
 	}})
+}
+
+// ListCapabilities 返回可选重型能力的可导入性 + 最近一次下载任务状态。
+func (h *Handler) ListCapabilities(c *gin.Context) {
+	probe, err := h.capMgr.Probe(c.Request.Context(), h.pythonBridge)
+	if err != nil {
+		log.Printf("[error] 能力探测: %v", err)
+		probe = map[string]interface{}{"capabilities": []interface{}{}, "note": "探测暂不可用"}
+	}
+	if groups, ok := probe["capabilities"].([]interface{}); ok {
+		for _, g := range groups {
+			if m, ok := g.(map[string]interface{}); ok {
+				if name, ok := m["group"].(string); ok {
+					if job := h.capMgr.Status(name); job != nil {
+						m["job_status"] = job.Status
+						m["job_tail"] = job.Tail
+						m["job_error"] = job.Error
+					}
+				}
+			}
+		}
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Data: probe})
+}
+
+// DownloadCapability 启动某重型能力组的后台 pip 安装（白名单校验）。
+func (h *Handler) DownloadCapability(c *gin.Context) {
+	var req struct {
+		Group string `json:"group" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "参数错误: " + err.Error()})
+		return
+	}
+	job, err := h.capMgr.Download(req.Group)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Message: "下载任务已启动", Data: job})
+}
+
+// CapabilityStatus 查询某组最近一次下载任务状态（轮询用）。
+func (h *Handler) CapabilityStatus(c *gin.Context) {
+	group := c.Param("group")
+	job := h.capMgr.Status(group)
+	if job == nil {
+		c.JSON(http.StatusOK, models.Response{Success: true, Data: map[string]interface{}{"group": group, "status": "idle"}})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Data: job})
 }
 
 // ListExportedModels 列出 output 下全部已导出的 Live2D 模型（新→旧），

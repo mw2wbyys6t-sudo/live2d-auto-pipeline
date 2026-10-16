@@ -278,7 +278,9 @@ class SecureConfig:
 
     @property
     def output_dir(self) -> str:
-        d = self.get('OUTPUT_DIR', '')
+        # 显式环境变量 OUTPUT_DIR（Go 桥注入的可写产物目录）优先于配置/默认，
+        # 避免把图写进只读安装目录。
+        d = os.environ.get("OUTPUT_DIR", "") or self.get('OUTPUT_DIR', '')
         if not d:
             root = os.environ.get("LIVE2D_PROJECT_ROOT", str(Path(__file__).parent.parent))
             d = str(Path(root) / "output")

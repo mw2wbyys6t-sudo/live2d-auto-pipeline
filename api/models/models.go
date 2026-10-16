@@ -76,6 +76,15 @@ type SystemStatus struct {
 	Uptime   string          `json:"uptime"`
 }
 
+// DiagnosticCheck 环境自检单项（前端自检页绿/黄/红展示）。
+type DiagnosticCheck struct {
+	Key    string   `json:"key"`
+	Label  string   `json:"label"`
+	OK     bool     `json:"ok"`
+	Detail string   `json:"detail,omitempty"`
+	Issues []string `json:"issues,omitempty"`
+}
+
 // See-through 工作流请求
 type SeeThroughRequest struct {
 	ImagePath  string `json:"image_path" binding:"required"`

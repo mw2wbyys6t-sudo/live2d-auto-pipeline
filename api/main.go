@@ -42,6 +42,10 @@ func main() {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 
+	// 桌面打包布局：发现 <res>/app/core/workflow.py 时，把解释器/源码/用户数据
+	// 目录解析到安装资源目录与 %APPDATA%/文档（ADR-010）。开发源码树不触发。
+	config.ApplyDesktopLayout(cfg, *configPath != "")
+
 	// 环境变量覆盖默认配置（部署场景，如 Docker/LAN）；命令行参数优先级最高。
 	// LIVE2D_API_HOST 是 README 文档化的主变量，GO_API_HOST 为容器镜像的兼容变量。
 	if envHost := hostFromEnv(os.Getenv); envHost != "" {
@@ -212,6 +216,7 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 		// 基础
 		api.GET("/health", h.HealthCheck)
 		api.GET("/status", h.GetSystemStatus)
+		api.GET("/diagnostics", h.GetDiagnostics)
 		api.GET("/info", h.GetAPIInfo)
 		api.GET("/models", h.GetModels)
 		api.GET("/expressions", h.GetExpressions)
@@ -260,6 +265,16 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 		api.GET("/providers", h.ListImageProviders)
 		api.POST("/import/psd", h.ImportPSD)
 		api.POST("/import/pngs", h.ImportPNGs)
+
+		// 可选重模型（SAM2 等）按需下载：清单/状态、开始、取消（断点续传+SHA256）
+		api.GET("/models/optional", h.ListOptionalModels)
+		api.POST("/models/optional/download", h.StartOptionalModel)
+		api.POST("/models/optional/cancel", h.CancelOptionalModel)
+
+		// 可选重型能力按需下载（SAM2/rembg/mediapipe/ASR/TTS/diffusion）
+		api.GET("/capabilities", h.ListCapabilities)
+		api.POST("/capabilities/download", h.DownloadCapability)
+		api.GET("/capabilities/:group", h.CapabilityStatus)
 
 		// 工具
 		api.GET("/scripts", h.GetPythonScripts)
