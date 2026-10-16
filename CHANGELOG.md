@@ -4,6 +4,32 @@
 
 ---
 
+## [v0.10.7] — 2026-10-16 — 代号「Dependency Governance」
+
+> **本版目标**：仓库侧依赖治理 + 发布流程修复。抬高 Python/npm 依赖下限以消除已知 CVE 面、降低 FOSSA 安全/质量告警；修复「Release 有 tag 无资产」的发布回归；并清零全栈版本号残留漂移。
+
+### 🔵 修复与维护
+
+#### 依赖治理（安全 / 质量）
+- `requirements.txt` 依赖下限抬高（对齐 dependabot 已通过 CI 的目标）：Pillow 10.0.0→12.3.0、numpy 1.24.0→2.5.4、urllib3 2.2.2→2.8.0、aiohttp 3.10.11→3.14.5、edge-tts 6.1.0→7.2.8。
+- 全仓确认无 numpy 2.x 已移除 API 依赖（`np.float_`/`np.NaN`/`np.object_` 等零命中）。
+- 修正 `requirements.txt` 中关于 live2d-py 的过时说明：PyPI 已提供 cp311-abi3 预编译 wheel，基础包钉 `==0.8.1`（1.0.0 移除 `live2d.v3`，与验收链不兼容）。
+- `web/package.json`：lucide-react 1.53.0→1.55.0、@types/node 26.6.4→26.6.5。
+
+#### 发布流程修复
+- **问题**：v0.10.6 的 GitHub Release 资产为空（`assets: []`）——`release` job 只发布 `dist/*`，而该 workflow 从不生成 `dist/*`。
+- **修复**：新增 tag 触发的 Windows NSIS 构建 job，并把安装包上传到对应 Release。
+
+#### 版本号统一
+- 残留漂移清零：`web/components/Sidebar.tsx`（v0.10.5）、`web/pages/index.tsx`（v0.10.5）、`web/lib/api-client.ts`（fallback v0.10.5）、`install.py`（v0.10.0）、`deploy/installer/desktop.iss`（0.10.2）、`requirements.txt` 头部横幅（v0.10.2）全部对齐到 **0.10.7**。
+
+### 已知限制
+- FOSSA 的三项检查（Dependency Quality / License Compliance / Security Analysis）为第三方 SaaS 状态，需在 FOSSA 后台按策略/忽略规则收敛；本版仅做仓库侧治理以降低报道数。
+- 桌面安装包当前仅含 Go 后端 + 内嵌 Web UI + Rust 面捕二进制；Python 运行时随包分发属 P0 打包计划（见 `docs/project_understanding.md`）。
+- README 曾宣称的单文件 `Live2DMasterAgent.exe` / `-portable.zip` 实际并无脚本产出，本版已按真实产物修正说明。
+
+---
+
 ## [v0.10.6] — 2026-10-15 — 代号「Desktop First」
 
 > **本版目标**：解决 CI 构建失败并统一全栈版本号。dependabot 提出的 pixi.js v7→v8 大版本升级因 API 不兼容（v8 移除 PlaneGeometry、重构 Geometry Buffer/Texture API）导致 Next.js TypeScript 检查失败，本版关闭该 PR 并在 dependabot 配置中忽略 pixi.js major 升级，确保发布管线畅通。

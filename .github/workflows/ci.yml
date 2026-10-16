@@ -291,11 +291,92 @@ jobs:
           name: desktop-pet-package
           path: ./dist/pet/
 
+  # ===== Windows NSIS installer (tag 发布产物) =====
+  # v0.10.6 的发布回归根因：release job 只上传 `dist/*`，而整个 workflow 从不
+  # 生成 dist/*，导致「有 tag、有 Release、资产为空」。此 job 在 tag 推送时于
+  # windows-latest 构建 NSIS 安装包（Go 后端 + 内嵌 Web UI + Rust 面捕），
+  # 作为 release 资产上传。步骤与 tauri-build.yml 对齐：后者负责 main 分支的
+  # 持续构建，本 job 只负责 tag 发布产物。
+  windows-installer:
+    name: Build Windows NSIS Installer
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '20'
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build frontend static export
+        working-directory: web
+        run: npx next build
+        env:
+          NEXT_STATIC_EXPORT: '1'
+
+      - name: Version asset URLs
+        run: node scripts/version-assets.mjs web/out
+
+      - name: Copy static output to embed dir
+        run: |
+          if (Test-Path api/webui/dist) { Remove-Item -Recurse -Force api/webui/dist }
+          New-Item -ItemType Directory -Force -Path api/webui/dist | Out-Null
+          Copy-Item -Recurse -Force web/out/* api/webui/dist/
+        shell: pwsh
+
+      - name: Build Go binary (with embedded frontend)
+        working-directory: api
+        run: go build -trimpath -ldflags "-s -w -H windowsgui" -o live2d-api.exe .
+
+      - name: Copy Go binary to Tauri resources
+        run: |
+          New-Item -ItemType Directory -Force -Path desktop/bin | Out-Null
+          Copy-Item -Force api/live2d-api.exe desktop/bin/live2d-api.exe
+        shell: pwsh
+
+      - name: Build Rust face_tracker
+        working-directory: native/face_tracker
+        run: cargo build --release
+
+      - name: Copy face_tracker binary to Tauri resources
+        run: Copy-Item -Force native/face_tracker/target/release/face_tracker.exe desktop/bin/face_tracker.exe
+        shell: pwsh
+
+      - name: Build Tauri app + NSIS installer
+        working-directory: desktop
+        run: cargo tauri build --bundles nsis
+
+      - name: Upload NSIS installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nsis-installer
+          path: desktop/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 30
+
   # ===== Release =====
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [python-tests, go-build, frontend-build]
+    needs: [python-tests, go-build, frontend-build, windows-installer]
     if: startsWith(github.ref, 'refs/tags/v')
     # 唯一需要写权限的 job：发布 GitHub Release
     permissions:
@@ -304,9 +385,15 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Download NSIS installer
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nsis-installer
+          path: dist
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           generate_release_notes: true
           files: |
-            dist/*
+            dist/**/*.exe

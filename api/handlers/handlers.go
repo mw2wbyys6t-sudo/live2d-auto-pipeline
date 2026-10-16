@@ -22,7 +22,7 @@ import (
 
 // Version 是后端的语义版本号，集中定义避免散落多处版本字符串不同步。
 // v0.10.3：首次集中化管理，更新时只需改这一处。
-const Version = "v0.10.6-go"
+const Version = "v0.10.7-go"
 
 type Handler struct {
 	cfg            *config.Config

@@ -1,6 +1,6 @@
 [package]
 name = "live2d-master-agent"
-version = "0.10.6"
+version = "0.10.7"
 description = "Live2D Master Agent - Desktop Application (Pygmalion)"
 authors = ["Pygmalion"]
 edition = "2021"

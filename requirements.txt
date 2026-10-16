@@ -1,23 +1,25 @@
-# Live2D Master Agent v0.10.2 - Python Requirements
+# Live2D Master Agent v0.10.7 - Python Requirements
 # Installation: python -m pip install -r requirements.txt
 # 官方内核验收（moc3-acceptance / 逐像素形变判据）额外需要：
 #   pip install live2d-py pygame-ce
 # 版本号单一真源见 core/version.py
 
 # ====== Core Dependencies (Required) ======
-# 版本下限已覆盖已知 CVE（2026-10 复核 NVD/GitHub Advisory）：
+# 依赖下限治理（v0.10.7 复核）：抬高的下限同时消除对应 CVE 面，并减少
+# FOSSA「Security Analysis / Dependency Quality」告警。取值对齐 dependabot
+# 已通过 CI 的升级目标，不做无依据的越级抬升。
 # - requests>=2.32.3: CVE-2024-35195(Session verify=False 粘连，2.32.0 修复)
-# - urllib3>=2.2.2:  CVE-2024-37891(代理认证请求走私，2.2.2 修复)
-# - aiohttp>=3.10.11: CVE-2024-23334(静态目录遍历，3.9.2)/
-#                     CVE-2024-30251(请求走私，3.9.4)/
-#                     CVE-2024-52304(chunk 扩展请求走私，3.10.11)
+# - urllib3>=2.8.0:   原 2.2.2 已含 CVE-2024-37891 修复，本次抬到 2.8.0
+# - aiohttp>=3.14.5:  CVE-2024-23334/30251/52304 修复后继续抬到 3.14.5
 # - cryptography>=42.0.0: CVE-2023-49083(PKCS#7 空指针 DoS，41.0.6 修复)
-Pillow>=10.0.0
-numpy>=1.24.0
+# - Pillow>=12.3.0:   原 10.0.0 → 12.3.0
+# - numpy>=2.5.4:     原 1.24.0 → 2.x（全仓已确认无 numpy 2 移除 API 依赖）
+Pillow>=12.3.0
+numpy>=2.5.4
 requests>=2.32.3
-urllib3>=2.2.2
+urllib3>=2.8.0
 httpx>=0.28.1
-aiohttp>=3.10.11
+aiohttp>=3.14.5
 aiofiles>=23.0
 websockets>=12.0
 psd-tools>=1.24.0
@@ -53,7 +55,7 @@ sounddevice>=0.4.6
 soundfile>=0.12.0
 
 # ====== TTS (llm_bridge/tts) - free Edge TTS ======
-edge-tts>=6.1.0
+edge-tts>=7.2.8
 
 # ====== Async / Web (for Go API bridge + web frontend) ======
 # aiohttp>=3.9.0        # already required above
@@ -71,11 +73,11 @@ edge-tts>=6.1.0
 # py-moc3: 结构参考与交叉校验（读写 .moc3）；编译器本体自研，不依赖其运行时
 py-moc3>=0.1.0
 # live2d-py: 官方 Cubism Native Core，仅用于隔离验证（逐像素验收 / 原生渲染探针），
-# 不进入生产数据路径。它没有预编译 wheel，构建需要 cmake + C++ 工具链，
-# 因此不能作为默认依赖（否则 `pip install -r requirements.txt` 及 Docker 构建会失败）。
-# 需要官方内核验收时再单独安装（CI 的 moc3-acceptance job 即如此）：
-#   pip install live2d-py
-# live2d-py>=0.7.0
+# 不进入生产数据路径。PyPI 已提供 cp311-abi3 预编译 wheel：0.8.1 含完整 live2d.v3，
+# 与本仓库 verify.py/moc3_* 探针调用面吻合；1.0.0 移除 live2d.v3、改用统一 Model API，
+# 与验收链不兼容。基础包钉 ==0.8.1，需要官方内核验收时再单独安装（moc3-acceptance job）：
+#   pip install live2d-py==0.8.1
+# live2d-py==0.8.1
 
 # ====== Optional: AI Models (large, install separately with install_models.py) ======
 # sam2_gd 后端（core/segment_engine/sam2_gd.py）需要下面三件，缺任一改抛 ModelUnavailable：

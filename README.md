@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.6-ff69b4?style=flat-square" alt="version"></a>
+  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.7-ff69b4?style=flat-square" alt="version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="license"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.9+-blue?style=flat-square" alt="python"></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square" alt="go"></a>
@@ -21,7 +21,7 @@
 
 ## 先说清楚：现在能干什么
 
-我不想给你画饼。这个项目有些部分已经很稳，有些还在路上。下面是**截至 v0.10.6 的真实状态**：
+我不想给你画饼。这个项目有些部分已经很稳，有些还在路上。下面是**截至 v0.10.7 的真实状态**：
 
 | 能力 | 状态 | 说明 |
 |------|------|------|
@@ -92,22 +92,20 @@
 
 > **v0.10.5 起全面转向桌面应用**。Docker 和独立 Web 部署已废弃，桌面应用成为唯一分发形态。
 
-**下载安装包**（零配置，双击即用）：
+**下载安装包**（Windows，双击安装）：
 
-👉 [最新 Release v0.10.6](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.6)
+👉 [最新 Release v0.10.7](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.7)
 
-| 下载文件 | 大小 | 说明 |
-|----------|------|------|
-| `Live2DMasterAgent.exe` | ~22 MB | **正式版** — GUI 模式，双击运行，无控制台窗口 |
-| `Live2DMasterAgent-console.exe` | ~32 MB | **调试版** — 带控制台日志，排查问题用 |
-| `Live2DMasterAgent-v0.10.6-portable.zip` | ~24 MB | **便携包** — 两个 exe + 中文说明文档 |
+| 下载文件 | 说明 |
+|----------|------|
+| `Live2D Master Agent_0.10.7_x64-setup.exe` | **Windows 安装包（NSIS）** — 双击安装，装完即可启动内嵌工作台 |
+
+> ⚠️ 当前安装包内含 **Go 后端（内嵌 Web UI）+ Rust 面捕二进制**：8 页面工作台与离线占位图兜底开箱即用。AI 高质量生图与语义分层等 Python 能力需本机具备 Python 3.11+ 与 `requirements.txt` 依赖（Python 运行时随包分发属 P0 打包计划，见 [docs/project_understanding.md](docs/project_understanding.md)）。
 
 **使用方式**：
-1. 下载 `Live2DMasterAgent.exe`，放到任意目录
-2. 双击运行，浏览器自动打开 `http://localhost:8080`
-3. 看到 8 页面工作台，核心 UI 和离线占位图开箱即用
-
-> 💡 AI 高质量生图需另装 Python 3.11+（`pip install -r requirements.txt`），将 exe 放在项目根目录即可自动发现 Python 工程。离线占位图兜底完全免费，无需任何配置。
+1. 从 Release 下载 `Live2D Master Agent_0.10.7_x64-setup.exe`
+2. 双击安装（NSIS 安装向导），完成后从开始菜单或桌面快捷方式启动
+3. 应用自动拉起本地后端并打开工作台 `http://localhost:8080`
 
 ### 命令行快速体验（30 秒核心能力）
 
@@ -288,6 +286,7 @@ cd web && npm run build
 
 | 版本 | 日期 | 重点 |
 |------|------|------|
+| **v0.10.7** | 2026-10-16 | **依赖治理 + 发布修复**：抬高 Python/npm 依赖下限消除 CVE 面、修复 Release 无资产回归、清零版本号漂移 |
 | **v0.10.6** | 2026-10-15 | **CI 修复 + 版本统一**：关闭 pixi.js v8 破坏性升级 PR、dependabot 忽略 major、全栈版本号对齐到 0.10.6 |
 | **v0.10.5** | 2026-10-11 | **Desktop First**：移除 Docker/Web 部署，全面转向桌面应用；桌面应用安装包可直接下载 |
 | **v0.10.4** | 2026-10-11 | **Hardened Shell**：5 项安全加固（CSP/面捕恢复、zip symlink 防护、目录列举禁用、SSRF DNS 钉扎、PNG 批量导入内存优化） |
