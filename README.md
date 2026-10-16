@@ -98,12 +98,12 @@
 
 | 下载文件 | 说明 |
 |----------|------|
-| `Live2D Master Agent_0.10.7_x64-setup.exe` | **Windows 安装包（NSIS）** — 双击安装，装完即可启动内嵌工作台 |
+| `Live2D.Master.Agent_0.10.7_x64-setup.exe` | **Windows 安装包（NSIS，~7.6 MB）** — 双击安装，装完即可启动内嵌工作台 |
 
 > ⚠️ 当前安装包内含 **Go 后端（内嵌 Web UI）+ Rust 面捕二进制**：8 页面工作台与离线占位图兜底开箱即用。AI 高质量生图与语义分层等 Python 能力需本机具备 Python 3.11+ 与 `requirements.txt` 依赖（Python 运行时随包分发属 P0 打包计划，见 [docs/project_understanding.md](docs/project_understanding.md)）。
 
 **使用方式**：
-1. 从 Release 下载 `Live2D Master Agent_0.10.7_x64-setup.exe`
+1. 从 Release 下载 `Live2D.Master.Agent_0.10.7_x64-setup.exe`
 2. 双击安装（NSIS 安装向导），完成后从开始菜单或桌面快捷方式启动
 3. 应用自动拉起本地后端并打开工作台 `http://localhost:8080`
 
