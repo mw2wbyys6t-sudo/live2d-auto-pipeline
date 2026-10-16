@@ -7,8 +7,10 @@ on:
     paths:
       - 'desktop/**'
       - 'native/face_tracker/**'
+      - 'scripts/build_desktop_bundle.py'
       - 'scripts/build_tauri_release.*'
       - 'scripts/run_tauri_dev.*'
+      - 'requirements.desktop.txt'
       - '.github/workflows/tauri-build.yml'
 
 # 仅检出代码与上传构建产物，不需要任何写权限
@@ -90,27 +92,39 @@ jobs:
         working-directory: api
         run: go build -trimpath -ldflags "-s -w -H windowsgui" -o live2d-api.exe .
 
-      - name: Copy Go binary to Tauri resources
-        run: |
-          New-Item -ItemType Directory -Force -Path desktop/bin | Out-Null
-          Copy-Item -Force api/live2d-api.exe desktop/bin/live2d-api.exe
-        shell: pwsh
-
       - name: Build Rust face_tracker (native face capture)
         working-directory: native/face_tracker
         run: cargo build --release --verbose
 
-      - name: Copy face_tracker binary to Tauri resources
-        run: |
-          Copy-Item -Force native/face_tracker/target/release/face_tracker.exe desktop/bin/face_tracker.exe
+      - name: Set up Python (for the bundled desktop runtime)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Cache bundled runtime downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/desktop-bundle
+          key: desktop-bundle-${{ hashFiles('requirements.desktop.txt') }}
+          restore-keys: desktop-bundle-
+
+      # 装配「安装包自带运行时」：嵌入式 CPython + 全量离线 wheel + 源码树
+      # + Go 后端 + 面捕 exe/dll/YuNet。产物 desktop/bundle/ 由
+      # tauri.conf.json 的 resources map {"bundle/": ""} 扁平打进 $RESOURCE，
+      # 与 api/config/desktop.go 的 resolveDesktopRoot 约定对齐。
+      - name: Assemble desktop runtime bundle
+        run: >-
+          python scripts/build_desktop_bundle.py
+          --go-exe api/live2d-api.exe
+          --face-tracker-exe native/face_tracker/target/release/face_tracker.exe
         shell: pwsh
 
       - name: Show Tauri config
         run: Get-Content desktop/tauri.conf.json
         shell: pwsh
 
-      - name: List resource bin contents
-        run: Get-ChildItem -Recurse desktop/bin
+      - name: List assembled bundle (top level)
+        run: Get-ChildItem -Force desktop/bundle | Select-Object Name, Length
         shell: pwsh
 
       - name: Build Tauri app + NSIS installer

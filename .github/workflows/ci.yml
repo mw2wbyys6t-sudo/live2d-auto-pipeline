@@ -346,18 +346,29 @@ jobs:
         working-directory: api
         run: go build -trimpath -ldflags "-s -w -H windowsgui" -o live2d-api.exe .
 
-      - name: Copy Go binary to Tauri resources
-        run: |
-          New-Item -ItemType Directory -Force -Path desktop/bin | Out-Null
-          Copy-Item -Force api/live2d-api.exe desktop/bin/live2d-api.exe
-        shell: pwsh
-
       - name: Build Rust face_tracker
         working-directory: native/face_tracker
         run: cargo build --release
 
-      - name: Copy face_tracker binary to Tauri resources
-        run: Copy-Item -Force native/face_tracker/target/release/face_tracker.exe desktop/bin/face_tracker.exe
+      - name: Set up Python (for the bundled desktop runtime)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Cache bundled runtime downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/desktop-bundle
+          key: desktop-bundle-${{ hashFiles('requirements.desktop.txt') }}
+          restore-keys: desktop-bundle-
+
+      # 装配安装包自带运行时（嵌入式 Python + 全量依赖 + 源码树 + exe/dll/模型）。
+      # 产物 desktop/bundle/ 由 tauri.conf.json 的 resources map 打进 $RESOURCE。
+      - name: Assemble desktop runtime bundle
+        run: >-
+          python scripts/build_desktop_bundle.py
+          --go-exe api/live2d-api.exe
+          --face-tracker-exe native/face_tracker/target/release/face_tracker.exe
         shell: pwsh
 
       - name: Build Tauri app + NSIS installer
@@ -393,6 +404,9 @@ jobs:
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        # 全量运行时安装包可能超过 GitHub Release 单附件 2GB 上限。此时不阻断
+        # 发布（Release 仍生成），安装包以 Actions 产物 nsis-installer 交付。
+        continue-on-error: true
         with:
           generate_release_notes: true
           files: |

@@ -35,6 +35,9 @@ if errorlevel 1 (echo [X] Node.js 未安装 & goto :FAILED)
 where go >nul 2>&1
 if errorlevel 1 (echo [X] Go 未安装 & goto :FAILED)
 
+where python >nul 2>&1
+if errorlevel 1 (echo [X] Python 未安装（装配内置运行时需要）& goto :FAILED)
+
 if not exist "web\node_modules" (
     echo [!] 前端依赖未安装，正在安装...
     pushd web
@@ -84,11 +87,16 @@ echo [OK] api\live2d-api.exe
 echo.
 
 REM ---- 第 5 步 ----
-echo [5/6] 复制 Go 二进制到 desktop\bin\（Tauri resources）...
-if not exist desktop\bin mkdir desktop\bin
-copy /Y api\live2d-api.exe desktop\bin\live2d-api.exe >nul
-if errorlevel 1 (echo [X] 复制失败 & goto :FAILED)
-echo [OK] desktop\bin\live2d-api.exe
+echo [5/6] 编译原生面捕 + 装配「安装包内置运行时」...
+pushd native\face_tracker
+cargo build --release
+if errorlevel 1 (popd & echo [X] face_tracker 编译失败 & goto :FAILED)
+popd
+echo [OK] native\face_tracker\target\release\face_tracker.exe
+echo       嵌入式 Python + 全量依赖 + 源码树 + exe/dll/YuNet → desktop\bundle\ ...
+python scripts\build_desktop_bundle.py --go-exe api\live2d-api.exe --face-tracker-exe native\face_tracker\target\release\face_tracker.exe
+if errorlevel 1 (echo [X] 运行时装配失败 & goto :FAILED)
+echo [OK] desktop\bundle\
 echo.
 
 REM ---- 第 6 步 ----

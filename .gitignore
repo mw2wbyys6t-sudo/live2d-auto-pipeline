@@ -166,3 +166,8 @@ desktop/dist/*
 # 保留 .gitkeep 让目录存在于 git 中，Tauri resources glob 才不会报错
 desktop/bin/*
 !desktop/bin/.gitkeep
+
+# Tauri 打包装配目录（由 scripts/build_desktop_bundle.py 生成：嵌入式 Python +
+# site-packages + 源码树 + exe/dll/模型，多 GB，绝不入库）。
+# tauri.conf.json 用 resources map 形式 {"bundle/": ""} 读取此目录。
+desktop/bundle/

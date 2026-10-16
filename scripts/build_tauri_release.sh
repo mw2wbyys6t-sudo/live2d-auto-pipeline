@@ -53,11 +53,14 @@ echo "[4/6] Building Go binary (with embedded frontend)..."
 echo "[OK] api/live2d-api"
 echo
 
-# ---- Step 5: Copy to Tauri resources ----
-echo "[5/6] Copying Go binary to desktop/bin/..."
-mkdir -p desktop/bin
-cp api/live2d-api "desktop/bin/live2d-api"
-echo "[OK] desktop/bin/live2d-api"
+# ---- Step 5: Assemble bundled desktop runtime ----
+echo "[5/6] Building native face_tracker + assembling bundled runtime..."
+(cd native/face_tracker && cargo build --release)
+# 装配安装包内置运行时（嵌入式 Python + 全量依赖 + 源码树 + exe/dll/YuNet）
+python3 scripts/build_desktop_bundle.py \
+    --go-exe api/live2d-api \
+    --face-tracker-exe native/face_tracker/target/release/face_tracker
+echo "[OK] desktop/bundle/"
 echo
 
 # ---- Step 6: Tauri build ----

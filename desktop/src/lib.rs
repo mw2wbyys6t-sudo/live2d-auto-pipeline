@@ -52,38 +52,35 @@ fn find_go_binary(app: &AppHandle) -> Option<PathBuf> {
     let go_name = go_binary_name();
     let desk_name = desktop_binary_name();
 
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
     // --- Dev paths (relative to CWD which is desktop/ during `tauri dev`) ---
-    let dev_candidates: Vec<PathBuf> = vec![
-        PathBuf::from(format!("../api/{}", go_name)),
-        PathBuf::from(format!("api/{}", go_name)),
-        PathBuf::from(format!("../dist/{}", desk_name)),
-        PathBuf::from(format!("dist/{}", desk_name)),
-    ];
-    for candidate in &dev_candidates {
-        if candidate.exists() {
-            return Some(candidate.clone());
-        }
-    }
+    candidates.push(PathBuf::from(format!("../api/{}", go_name)));
+    candidates.push(PathBuf::from(format!("api/{}", go_name)));
+    candidates.push(PathBuf::from(format!("../dist/{}", desk_name)));
+    candidates.push(PathBuf::from(format!("dist/{}", desk_name)));
 
     // --- Production: Tauri resource directory ---
+    //
+    // `scripts/build_desktop_bundle.py` 装配 desktop/bundle/，tauri.conf.json 的
+    // `resources: {"bundle/": ""}` 把内容**扁平**落到 $RESOURCE，故首选
+    // <res>/live2d-api.exe。`bin/` 与 `resources/` 是历史/兜底布局：
+    // 旧配置用数组形式 `["bin/*"]` 会把文件放进 <res>/bin/ 子目录。
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let p = resource_dir.join(go_name);
-        if p.exists() {
-            return Some(p);
-        }
+        candidates.push(resource_dir.join(go_name));
+        candidates.push(resource_dir.join("bin").join(go_name));
+        candidates.push(resource_dir.join("resources").join(go_name));
     }
 
     // --- Production fallback: next to the main executable ---
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            let p = exe_dir.join(go_name);
-            if p.exists() {
-                return Some(p);
-            }
+            candidates.push(exe_dir.join(go_name));
+            candidates.push(exe_dir.join("bin").join(go_name));
         }
     }
 
-    None
+    candidates.into_iter().find(|p| p.exists())
 }
 
 fn spawn_backend(app: &AppHandle) -> Option<Child> {

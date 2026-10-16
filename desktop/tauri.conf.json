@@ -21,7 +21,7 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "resources": ["bin/*"],
+    "resources": { "bundle/": "" },
     "externalBin": [],
     "copyright": "Copyright (c) 2026 Pygmalion",
     "category": "DeveloperTool",
