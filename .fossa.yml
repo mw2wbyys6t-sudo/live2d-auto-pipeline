@@ -1,0 +1,34 @@
+# FOSSA 配置（仓库侧治理，v0.10.7 起）
+#
+# 作用：把 FOSSA 的依赖/许可分析面收敛到「真实依赖清单 + 生产代码」，
+# 排除归档脚本与文档等非生产内容，降低 License Compliance / Dependency
+# Quality 的噪音条目。它不会隐藏依赖本身的问题（CVE/许可仍照常上报）。
+#
+# 仅影响「用 FOSSA CLI 分析」的场景（含 FOSSA GitHub App 触发的分析）；
+# 逐条 issue 的收敛仍需在 FOSSA 后台按策略/忽略规则处理。
+#
+# 文档：https://docs.fossa.com/docs/cli/references/files/fossa-yml
+version: 3
+
+# 关闭 CLI 遥测（仅声明，不影响扫描结果）
+telemetry:
+  scope: off
+
+project:
+  # 固定项目定位符，确保与本仓库既有的 FOSSA 项目对应，避免误建重复项目
+  # （该值取自现有项目徽章地址：git+github.com/<owner>/<repo>）
+  locator: git+github.com/mw2wbyys6t-sudo/live2d-auto-pipeline
+  name: live2d-auto-pipeline
+
+# 分析目标路径过滤：排除归档与文档，仅扫生产相关路径
+paths:
+  exclude:
+    - ./tools/archive
+    - ./docs
+
+# vendored 依赖的许可扫描文件过滤（glob）
+vendoredDependencies:
+  licenseScanPathFilters:
+    exclude:
+      - "**/tools/archive/**"
+      - "**/docs/**"
