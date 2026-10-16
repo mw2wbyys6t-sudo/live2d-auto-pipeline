@@ -1,0 +1,6 @@
+{
+  "_comment": "下载物 SHA256 锁定表。空字符串 = 首次构建由 Bundle-Desktop.ps1 实测记录到 BUILD-INFO，回写本文件后转为强制校验（不匹配即失败）。版本升级时必须同步更新。",
+  "python-embed": "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3",
+  "yunet-onnx": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+  "onnxruntime-dll": ""
+}
