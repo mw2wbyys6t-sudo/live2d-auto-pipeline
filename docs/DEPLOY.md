@@ -35,6 +35,10 @@
 > 首次启动时 Go 端 `config.ApplyDesktopLayout` 会凭 `<res>\app\core\workflow.py`
 > 自动解析解释器、源码树与用户数据目录，**无需手写 `-config`**。
 
+> 装完后的验收步骤见 [`tests/e2e/checklist.md`](../tests/e2e/checklist.md)：
+> 落盘完整性、随包解释器导入、`/api/health` 与 `/api/diagnostics` 判据、
+> 生图→分层→导出→预览→桌宠全链路、进程回收，以及失败排查对照表。
+
 ### 从源码构建安装包
 
 **推荐：GitHub Actions（云端 Windows，本地零工具链）**

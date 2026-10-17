@@ -80,6 +80,9 @@ scripts\build_tauri_release.bat
 2. 端口默认 8080；`-port` / `-host` 可改（桌面壳默认显式绑回环）。
 3. 首次启动自动创建 `%APPDATA%` 与文档输出目录；创建失败不阻断启动。
 
+> 安装完成后的完整验收步骤见 [`tests/e2e/checklist.md`](../tests/e2e/checklist.md)
+> （含可直接复制的 PowerShell 自检命令、`/api/diagnostics` 判据与失败排查表）。
+
 ## 与开发模式的关系
 
 | | 开发模式 | 桌面安装版 |
