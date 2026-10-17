@@ -64,7 +64,7 @@
 | 依赖解析 | `requirements.desktop.txt`（29 个直接依赖）→ win_amd64 / cp312，实装 **92 个包**，site-packages **1.4 GB** |
 | 装配产物体积 | python 1.4 GB + app 1.6 MB + models 3.8 MB = **1.5 GB**（未压缩） |
 | 钉住且强制校验 | `python-embed` `4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3`<br>`yunet-onnx` `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`<br>`face-landmarker-task` `64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff`<br>（来源 `scripts/windows/hashes.json`，不匹配即构建失败） |
-| 已实测但未强制 | `onnxruntime-dll` `0c42dc4e278f0968fdf9ebf1b1e54a74c657a9942e70803e453c91993451cf4c`（17,253,176 字节）——`hashes.json` 中该项仍为空，回填后转为强制校验 |
+| 已实测但未强制 | `onnxruntime-dll` `0c42dc4e278f0968fdf9ebf1b1e54a74c657a9942e70803e453c91993451cf4c`（17,253,176 字节）——`hashes.json` 该项为空，且脚本当前未对该文件调用 `verify_hash`；**回填哈希并补上校验调用**后才转为强制 |
 | 产物 | `Live2D.Master.Agent_0.10.8_x64-setup.exe` — **306.17 MiB / 321,047,178 字节** |
 | 产物校验 | `sha256:ff7d8aba4a96e38f93a4f2d5bf9c4314dd32817a43050c321f1551b30387d248` |
 | 下载可达性 | Release 直链匿名请求 `HTTP 200`，`content-length: 321047178`（已实测） |
