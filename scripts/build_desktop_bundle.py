@@ -46,6 +46,15 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Windows 控制台/CI 的默认编码常是 cp1252（非 UTF-8），直接 print 中文会抛
+# UnicodeEncodeError 把整个装配打断。统一切到 UTF-8（reconfigure 需 3.7+，
+# 失败则忽略，不影响功能）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
@@ -292,7 +301,7 @@ def smoke_test(bundle: Path) -> None:
     )
     print("  [冒烟] 用随包解释器校验导入 ...")
     proc = subprocess.run([str(py), "-c", code], capture_output=True, text=True,
-                          timeout=900)
+                          encoding="utf-8", errors="replace", timeout=900)
     line = ""
     for out in (proc.stdout, proc.stderr):
         for l in (out or "").splitlines():

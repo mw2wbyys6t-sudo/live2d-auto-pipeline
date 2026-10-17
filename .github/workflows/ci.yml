@@ -373,6 +373,9 @@ jobs:
           if (Test-Path desktop/bundle) { Remove-Item -Recurse -Force desktop/bundle }
           Move-Item "$env:RUNNER_TEMP\l2d" desktop/bundle
         shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: 'utf-8'
 
       - name: Build Tauri app + NSIS installer
         working-directory: desktop
