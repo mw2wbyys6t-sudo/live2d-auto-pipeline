@@ -40,7 +40,7 @@
 | LLM 对话 + 语音 | ⚠️ 需 Key | 对话需要 OpenAI/Anthropic API Key 或本地 Ollama |
 | 离线依赖 | ✅ 安装包自带 | 嵌入式 CPython 3.12 + 92 个离线包（site-packages 约 1.4 GB），装完即可跑，无需预装 Python |
 
-> 一句话总结：**「生成 → 分层 → 导出」核心链路完全可用，高级交互功能需要额外配置。**
+> 一句话总结：**「生成 → 分层 → 导出」核心链路完全可用，安装包装完即带运行时**；高级交互（LLM 对话）需自备 Key，面捕 / 桌宠尚待真机验证。
 
 ---
 
@@ -137,12 +137,15 @@ Invoke-RestMethod http://127.0.0.1:8080/api/diagnostics | ConvertTo-Json -Depth 
 >
 > 签名管线已就绪（[scripts/windows/sign_artifacts.ps1](scripts/windows/sign_artifacts.ps1)，支持自定义签名命令 / PFX / 证书指纹）。获得受信任证书后，设置仓库变量 `L2D_SIGN_MODE=required` 并配置对应密钥，构建即自动签名并在签名无效时**阻断发布**。
 
-### v0.10.8 这版到底变了什么（先看这 4 条）
+### v0.10.8 更新内容（先看这 5 条）
 
-1. **安装包自带运行时**：306 MiB 里含嵌入式 CPython 3.12 + 92 个离线包 + `app/` 源码树 + 原生面捕 + YuNet 模型，**不用再装 Python**。旧版 8 MB 包只含两个 exe，这正是"后端未找到"的根因。
-2. **界面少了几个控件**：生成页的 Provider / 风格 / Steps / CFG，导出页的 Include physics / expressions / motions 与 Compression，Live2D 页的模型结构树 / Physics 面板 / Wireframe —— 这些后端从未消费，属于"改了也没效果"的假开关，本版直接移除。
-3. **不再有假成功**：导出 PSD、角色保存/删除、See-through、LLM 兜底回复、Python 面捕，以前失败也可能显示成功；现在失败会明确报错（See-through 无抠图能力时直接返回 **501**）。
-4. **安装包未签名**：SmartScreen 会提示"未知发布者"，属已知限制，处理方式见上。
+1. **安装包自带运行时（306.17 MiB）**：内含嵌入式 CPython 3.12 + 92 个离线包（site-packages 约 1.4 GB）+ `app/` 源码树 + 原生面捕 + YuNet 模型，**不用再装 Python**。旧版 8 MB 包只含两个 exe，这正是「后端未找到」的根因。
+2. **修复导出页 PSD 100% 失败**：前端此前只读内层 `data.success`，而该字段本就不存在；现在改为合并外层 envelope 判断。
+3. **界面少了几个控件**：生成页 Provider / 风格 / Steps / CFG，导出页 Include physics / expressions / motions 与 Compression，Live2D 页模型结构树 / Physics 面板 / Wireframe —— 后端从未消费，属「改了也没效果」的假开关，本版移除。
+4. **不再有假成功**：导出 PSD、角色保存/删除、See-through、LLM 兜底回复、Python 面捕，以前失败也可能显示成功；现在失败会明确报错（See-through 无抠图能力直接返回 **501**，面捕启动失败返回 **503**）。
+5. **可自检了**：新增 `/api/diagnostics`（逐项报告解释器、依赖、模型、输出目录）与一键验收脚本 `scripts/windows/verify_desktop_install.ps1`。
+
+> 完整变更、**尚未验证项**与发布证据（源码提交 / 构建运行 / 哈希 / 回滚目标）见 [CHANGELOG v0.10.8](CHANGELOG.md)。旧版 v0.10.7 的 8 MB 安装包已从 Release 撤下。
 
 ### 命令行快速体验（30 秒核心能力）
 
@@ -344,7 +347,7 @@ cd web && npm run build
 
 | 版本 | 日期 | 重点 |
 |------|------|------|
-| **v0.10.8** | 2026-10-17 | **Honest Desktop**：安装包自带运行时（306 MiB，无需装 Python）、修复「后端未找到」根因、修复导出页 PSD 100% 失败、移除无效控件与假成功 |
+| **v0.10.8** | 2026-10-17 | **Honest Desktop**：安装包自带运行时（306.17 MiB / 92 个离线包，无需装 Python）、修复「后端未找到」与导出页 PSD 失败、移除无效控件与假成功、新增 `/api/diagnostics` 与一键验收脚本（未签名） |
 | **v0.10.7** | 2026-10-16 | **依赖治理 + 发布修复**：抬高 Python/npm 依赖下限消除 CVE 面、修复 Release 无资产回归、清零版本号漂移（⚠️ 该版 8 MB 安装包缺运行时，已撤下） |
 | **v0.10.6** | 2026-10-15 | **CI 修复 + 版本统一**：关闭 pixi.js v8 破坏性升级 PR、dependabot 忽略 major、全栈版本号对齐到 0.10.6 |
 | **v0.10.5** | 2026-10-11 | **Desktop First**：移除 Docker/Web 部署，全面转向桌面应用；桌面应用安装包可直接下载 |
