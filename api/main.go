@@ -322,16 +322,7 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 			}
 			// 桌面版版本化资源前缀：/_next-<buildTs>/... → 内嵌 _next/...。
 			// 每次构建 ts 变化，浏览器端旧资源 URL 全部失效，杜绝缓存错版。
-			// 兼容两种形态：/_next-<ts>/static/... 与
-			// /_next-<ts>/_next/static/...（Turbopack 运行时会自带一层 _next 前缀）。
-			if strings.HasPrefix(p, "/_next-") {
-				rest := p[len("/_next-"):]
-				if idx := strings.Index(rest, "/"); idx >= 0 {
-					rest = rest[idx:]
-					rest = strings.TrimPrefix(rest, "/_next")
-					p = "/_next" + rest
-				}
-			}
+			p = stripNextPrefix(p)
 			clean := strings.Trim(p, "/")
 			// 1) 命中真实静态文件（含 _next/assets 子路径）；带内容哈希的
 			//    _next 资源可永久缓存，其余静态文件用 no-cache 保证及时更新
@@ -380,6 +371,30 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 		// 根路径
 		r.GET("/", h.GetAPIInfo)
 	}
+}
+
+// stripNextPrefix maps versioned asset URLs back onto the embedded _next/ tree.
+//
+// Accepted forms:
+//
+//	/_next-<ts>/static/...          → /_next/static/...
+//	/_next-<ts>/_next/static/...    → /_next/static/...
+//
+// Stacked prefixes are stripped layer by layer. assetPrefix and the
+// post-build versioning script once both applied, yielding
+// /_next-<ts1>/_next-<ts2>/static/... which mapped to a missing directory and
+// made every CSS/JS request 404 (the v0.10.8 unstyled-page bug).
+func stripNextPrefix(p string) string {
+	for strings.HasPrefix(p, "/_next-") {
+		rest := p[len("/_next-"):]
+		idx := strings.Index(rest, "/")
+		if idx < 0 {
+			break
+		}
+		rest = strings.TrimPrefix(rest[idx:], "/_next")
+		p = "/_next" + rest
+	}
+	return p
 }
 
 func printServerInfo(cfg *config.Config, addr string) {
