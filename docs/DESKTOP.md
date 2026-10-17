@@ -1,102 +1,122 @@
 # 桌面版（Desktop）
 
-> 把 Live2D Master Agent 变成**电脑里的软件**：一个双击即用的 `Live2DMasterAgent.exe`，
-> 内嵌完整 Web 工作台 + API 服务，不再需要三个终端、Node 开发服务器或端口代理。
+> 把 Live2D Master Agent 变成**电脑里的软件**：双击安装包，桌面窗口里就是完整工作台。
+> 不需要 Node 开发服务器、不需要自装 Python、不需要端口代理。
 
 ## 形态与架构
 
 ```
-┌────────────────────────── dist/Live2DMasterAgent.exe ──────────────────────────┐
-│  Go 二进制（单文件）                                                            │
-│  ├─ 内嵌 Web 工作台（go:embed ← Next.js 静态导出，同源服务）                     │
-│  ├─ API 服务（生成/分层/导入/导出/桌宠/面捕 WebSocket）                          │
-│  └─ Python 桥接（调用机器上的 Python 执行 core/* 重活，argv 安全传参）           │
-└────────────────────────────────────────────────────────────────────────────────┘
-        │ 同源 http://127.0.0.1:8080/
-        ▼
-    浏览器打开即为工作台（Generate → Layers → Export → Preview → Pet）
+┌──────────────────── Live2D Master Agent.exe（Tauri 壳）────────────────────┐
+│  Rust + WebView2：拉起 Go 后端、等待健康检查、退出时回收子进程               │
+└───────────────────────────────┬────────────────────────────────────────────┘
+                                │ spawn，等待 127.0.0.1:8080 就绪
+                                ▼
+┌──────────────────── $RESOURCE/live2d-api.exe（Go 后端）────────────────────┐
+│  ├─ 内嵌 Web 工作台（go:embed ← Next.js 静态导出，同源服务）                │
+│  ├─ API（生成 / 分层 / 导入 / 导出 / 桌宠 / 面捕 WebSocket）                │
+│  ├─ Python 桥 → $RESOURCE/python/pythonw.exe 执行 $RESOURCE/app/core/*      │
+│  └─ 原生面捕桥 → $RESOURCE/face_tracker.exe（onnxruntime.dll + YuNet）      │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
-选型说明：这是 ComfyUI / Stable Diffusion WebUI / Ollama 同款的"本地服务 + 浏览器"形态。
-相比 Electron/Tauri 原生窗口方案，它**零新增依赖**（无 CGO/Node 打包链），单文件可分发；
-后续若要原生窗口壳，可平滑升级到 Wails（见文末路线图）。
+安装后的资源目录（`{res}` = Tauri `resource_dir`）：
+
+```
+{install}\Live2D Master Agent.exe
+{res}\live2d-api.exe
+{res}\face_tracker.exe
+{res}\onnxruntime.dll
+{res}\models\face_detection_yunet_2023mar.onnx
+{res}\models\face_landmarker.task
+{res}\python\               嵌入式 CPython 3.12 + 离线 site-packages
+{res}\app\                  core/ drivers/ live2d_builder/ llm_bridge/ prompts/ templates/
+```
+
+布局标记是 `{res}\app\core\workflow.py`：Go 端 `config.ApplyDesktopLayout` 命中后
+自动把解释器、源码树、用户数据目录解析到位（详见 ADR-007）。
+
+用户数据**严格不写安装目录**：
+
+```
+%APPDATA%\Live2DMasterAgent\              config / logs / hf-cache / characters
+%USERPROFILE%\Documents\Live2DMasterAgent\output\
+```
 
 ## 构建
 
 ```bat
-scripts\build_desktop.bat
+scripts\build_tauri_release.bat
 ```
 
-脚本做四件事：`NEXT_STATIC_EXPORT=1 next build`（静态导出）→ 复制 `web/out` 到
-`api/webui/dist`（go:embed 源）→ `go build -H windowsgui`（无控制台单文件）→
-同时产出带控制台的调试版。产物在 `dist/`：
+或在 GitHub Actions 手动触发 `tauri-build.yml`（windows-latest，产物
+`tauri-nsis-installer`）。脚本流程：
 
-- `Live2DMasterAgent.exe` — 双击运行（无控制台窗口）
-- `Live2DMasterAgent-console.exe` — 带控制台日志，排查 Python 桥接问题时用
+1. `NEXT_STATIC_EXPORT=1 next build` → 复制到 `api/webui/dist`（`go:embed` 源）
+2. `go build -H windowsgui -o live2d-api.exe`（内嵌 UI）
+3. `cargo build --release`（原生面捕）
+4. `python scripts\build_desktop_bundle.py` 装配 `desktop\bundle\`
+5. `cargo tauri build --bundles nsis`
 
-### 跨平台构建（Linux / macOS 也能产出 Windows exe）
+安装包产物：`desktop\target\release\bundle\nsis\*.exe`
 
-Go 自带交叉编译，无需 Windows 主机即可产出 `.exe`：
+### 装配脚本做了什么
 
-```bash
-./scripts/build_desktop.sh --target windows    # 产出 Windows exe（默认）
-./scripts/build_desktop.sh --target linux      # 产出 Linux 桌面版（本机调试）
-./scripts/build_desktop.sh --target darwin     # 产出 macOS arm64 版
-./scripts/build_desktop.sh --skip-frontend     # 跳过前端重建（用现有 web/out）
-```
+`scripts/build_desktop_bundle.py` 负责「安装包自带运行时」：
 
-脚本与 `build_desktop.bat` 完全对等，便于 CI 与跨平台协作。
+- 下载并 SHA256 校验嵌入式 Python 3.12.10 / YuNet / onnxruntime / face_landmarker
+  （锁定表：`scripts/windows/hashes.json`）
+- `pip download --only-binary=:all:` 拉 win_amd64 + cp312 轮子，再
+  `pip install --no-index --target` 离线装进 `python/Lib/site-packages`
+  （清单：`requirements.desktop.txt`，含 CPU 版 torch）
+- 修 `python312._pth`（放开 `import site`）并写 `sitecustomize.py`
+- 拷源码树与原生二进制，生成 `BUILD-INFO.json`，最后用随包解释器做导入冒烟
+
+> 必须在 **Windows** 上装配：pip 的 `--platform` 只约束 wheel 标签，不改变
+> `platform_system` / `python_version` 等环境标记的评估，跨平台装配会选错版本。
 
 ## 运行要求与首次启动
 
-1. **项目根目录**：exe 启动时会从自身位置向上查找 `core/workflow.py` 标记来定位
-   Python 工程与输出目录。推荐把 exe 放在**项目根目录**（或根目录的 dist/ 内）；
-   任意位置运行时用 `-config` 指定配置（`scripts_dir` 指向项目根）。
-2. **Python 环境**：机器上需有 `python`（Windows）/`python3`（Unix）及依赖
-   （`pip install -r requirements.txt`）。API 已就绪时工作台首页会显示各服务状态；
-   缺依赖时生成/分层会返回**带确切安装命令的报错**，不会假成功。
-3. 端口默认 8080，`-port` 可改；`-config`、`-host` 同主程序文档。
+1. **无需预装 Python**：安装包自带解释器与全部依赖。
+2. 端口默认 8080；`-port` / `-host` 可改（桌面壳默认显式绑回环）。
+3. 首次启动自动创建 `%APPDATA%` 与文档输出目录；创建失败不阻断启动。
 
 ## 与开发模式的关系
 
-| | 开发模式 | 桌面版 |
+| | 开发模式 | 桌面安装版 |
 |---|---|---|
-| 前端 | `npm run dev`（:3000，rewrites 代理） | 静态导出内嵌进 exe（同源） |
-| 后端 | `go run ./api`（:8080） | 同一个 exe |
-| 静态导出开关 | `NEXT_STATIC_EXPORT` 未设置 | `NEXT_STATIC_EXPORT=1` |
+| 前端 | `npm run dev`（:3000，rewrites 代理） | 静态导出内嵌进 Go 二进制（同源） |
+| 后端 | `go run ./api`（:8080） | 随包 `live2d-api.exe` |
+| Python | 机器上的 `python` + `pip install -r requirements.txt` | 随包嵌入式解释器 + 离线依赖 |
 
-`NEXT_STATIC_EXPORT=1` 时 next.config 走 `output: 'export'` 且**省略 rewrites**
-（导出模式不支持；同源下也不需要）。两条构建路径互不影响。
+## 面捕的两条路径
+
+- **原生面捕（桌面默认）**：Go 拉起 `face_tracker.exe`，YuNet ONNX +
+  `onnxruntime.dll`，逐帧经 WebSocket 推送，可直接驱动桌宠。
+- **Python 面捕**：`drivers/face_tracker/mediapipe_tracker.py` 服务 Python 桌宠。
+  mediapipe **0.10.30 起官方删除了经典 `mp.solutions`**，因此该模块做了双路适配：
+  有 `solutions` 时走经典 `FaceMesh`，否则切 **Tasks `FaceLandmarker`**
+  （模型 `{res}\models\face_landmarker.task`）。任一路不可用时按原逻辑优雅降级。
 
 ## 已知边界
 
-- exe 内嵌的是构建时刻的 UI；改前端后需重跑 `build_desktop.bat` 或 `build_desktop.sh`。
-- Python 解释器与依赖不打进 exe（见下方路线图）；无 Python 时 API 与 UI 可用，
-  但生成/分层/导出会明确报错。
-- 桌面版跨平台构建：Windows 用 `scripts/build_desktop.bat`，
-  Linux/macOS 用 `scripts/build_desktop.sh`（Go 自带交叉编译，无需 Windows 主机）。
+- 内嵌 UI 是**构建时刻**的快照；改前端后必须重新构建安装包。
+- 安装包体积较大（内置 CPU torch 等全量依赖）；CUDA 版 torch 不内置。
+- Python 依赖走 `numpy 2.x` 线：`mediapipe` 必须 `>=0.10.30,<0.10.32` ——
+  更低版本强制 `numpy<2`，与 scipy / scikit-learn / rembg 的 numpy 2 ABI 轮子冲突；
+  `0.10.32+` 又会引入 `opencv-contrib-python` 与 `opencv-python-headless` 争抢 `cv2`。
+- 安装包当前不签代码证书（SmartScreen 告警属预期）。
 
-## 便携版配置格式（installer 用）
+## 已废弃的构建路径
 
-`deploy/installer/desktop.iss` 与 `scripts/build_portable.py` 都产出**扁平 JSON**：
+- `scripts\build_desktop.bat` / `.sh`：单文件 Go exe（不含 Python 运行时）
+- `deploy\installer\desktop.iss` + `scripts\build_portable.py`：Inno + 作者机 CUDA venv
 
-```json
-{
-  "python_path": "C:\\Apps\\Live2D Master Agent\\runtime\\python\\python.exe",
-  "scripts_dir": "C:\\Apps\\Live2D Master Agent\\app",
-  "hf_cache":    "C:\\Apps\\Live2D Master Agent\\runtime\\hf-cache"
-}
-```
+自 ADR-007 起不再维护，保留源码仅作历史参考。
 
-Go 端 `config.LoadConfig` 会把这三个顶层键迁移到 `Python.{PythonPath,ScriptsDir,HfCache}`
-（扁平与嵌套同时存在时，扁平胜出——便携配置是"显式覆盖"语义）。回归测试在
-`api/config/config_portable_test.go`。
+## HF_HOME 决策（已采纳方案 B）
 
-### HF_HOME 决策（已采纳方案 B）
-
-打包后的权重在 `{app}\runtime\hf-cache`，但 `transformers` 默认从用户目录读缓存。
-决策：**Go 侧 `python_bridge` 在 `exec.CommandContext` 时注入环境变量**
-（`api/services/python_bridge.go` 的 `cmd.Env`）：
+打包后的权重缓存位于 `%APPDATA%\Live2DMasterAgent\hf-cache`，而 `transformers`
+默认读用户目录。决策：Go 侧 `python_bridge` 在 `exec.CommandContext` 时注入：
 
 ```
 HF_HOME={hf_cache}
@@ -104,14 +124,10 @@ HUGGINGFACE_HUB_CACHE={hf_cache}
 TRANSFORMERS_CACHE={hf_cache}/hub
 ```
 
-只影响本程序的 Python 子进程，不污染用户全局环境，卸载无需还原。
-开发模式（`HfCache` 为空）不注入，完全沿用系统默认行为。
+只影响本程序的 Python 子进程，不污染用户全局环境；开发模式（`HfCache` 为空）不注入。
 
-## 路线图（完全离线的"绿色版"）
+## 路线图
 
-1. **嵌入 Python 运行时**：用 python.org 的 Windows embeddable 包 +
-   `pip install --target` 离线依赖目录，随 exe 分发（`PYTHONPATH` 指向包内目录），
-   实现零 Python 环境要求——需要一次性联网拉取发行物。
-2. **原生窗口壳**：Wails（Go + WebView2）包一层，获得独立窗口/托盘/协议跳转；
-   需要 CGO 工具链（当前环境无 gcc，暂缓）。
-3. **自动更新**：单文件 + 版本接口（`/api/info`）已具备，差一个更新器。
+1. ~~嵌入 Python 运行时~~ —— 已随安装包落地（ADR-007）。
+2. **自动更新**：`/api/info` 已提供版本，差一个更新器。
+3. **重型能力按需下载**：SAM2 / 面捕增强等继续走应用内下载器。

@@ -7,36 +7,80 @@
 
 ## 桌面安装（推荐）
 
-### Windows 安装包
+### Windows 安装包（Tauri NSIS）
 
-从 [Release 页面](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases) 下载最新的 `.exe` 安装包，双击即可安装。
+从 [Release 页面](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases)
+下载最新的 `.exe`，或从 GitHub Actions 的 `tauri-nsis-installer` 产物获取，双击安装。
 
-安装包包含：
-- Go API 二进制（内嵌前端 UI）
-- 便携 Python 运行时
-- AI 模型权重（SAM 等）
-- 所有系统依赖（OpenCV、FFmpeg 等）
+安装包采用 ADR-007 的「自带运行时」布局（`{res}` = 安装后的 Tauri 资源目录）：
 
-### 从源码构建桌面应用
-
-```bash
-# 1. 安装依赖
-pip install -r requirements.txt
-cd web && npm ci && cd ..
-cd api && go mod download && cd ..
-
-# 2. 一键构建桌面应用
-# Windows:
-scripts\build_desktop.bat
-# Linux/macOS:
-chmod +x scripts/build_desktop.sh && scripts/build_desktop.sh
-
-# 3. 产物在 dist/ 目录
-# dist/Live2DMasterAgent.exe        — 无控制台版本
-# dist/Live2DMasterAgent-console.exe — 调试版本（带控制台输出）
+```
+{install}\Live2D Master Agent.exe      Tauri 壳（Rust + WebView2）
+{res}\live2d-api.exe                   Go 后端（内嵌 Web 工作台）
+{res}\face_tracker.exe                 Rust 原生面捕
+{res}\onnxruntime.dll                  面捕 load-dynamic 依赖
+{res}\models\face_detection_yunet_2023mar.onnx
+{res}\models\face_landmarker.task      MediaPipe Tasks 面捕模型
+{res}\python\                          嵌入式 CPython 3.12 + 离线 site-packages
+{res}\app\                             Python 工程源码树（core/ drivers/ ...）
 ```
 
-构建流程：`NEXT_STATIC_EXPORT=1 npm run build` → 复制 `web/out/*` → `api/webui/dist/` → `go build`（内嵌 UI）
+用户数据**严格不写安装目录**：
+
+```
+%APPDATA%\Live2DMasterAgent\              config / logs / hf-cache / characters
+%USERPROFILE%\Documents\Live2DMasterAgent\output\
+```
+
+> 首次启动时 Go 端 `config.ApplyDesktopLayout` 会凭 `<res>\app\core\workflow.py`
+> 自动解析解释器、源码树与用户数据目录，**无需手写 `-config`**。
+
+### 从源码构建安装包
+
+**推荐：GitHub Actions（云端 Windows，本地零工具链）**
+
+推送或手动触发 `.github/workflows/tauri-build.yml`，完成后下载
+`tauri-nsis-installer` 产物。
+
+**本地：Windows 一键脚本**
+
+```bat
+scripts\build_tauri_release.bat
+```
+
+前提：Rust + `tauri-cli` + Node.js + Go + Python 3.12（脚本会逐项检查）。
+流程：前端静态导出 → 内嵌进 Go 二进制 → 编译原生面捕 →
+`scripts\build_desktop_bundle.py` 装配 `desktop\bundle\` →
+`cargo tauri build --bundles nsis`。
+
+产物：`desktop\target\release\bundle\nsis\*.exe`
+
+### 装配脚本（scripts/build_desktop_bundle.py）
+
+把「安装包自带运行时」装进 `desktop/bundle/`，再由 `tauri.conf.json` 的
+`resources: { "bundle/": "" }` **扁平**打进 `$RESOURCE`：
+
+- 下载并 SHA256 校验嵌入式 Python 3.12.10 / YuNet / onnxruntime / face_landmarker
+  （锁定表：`scripts/windows/hashes.json`）
+- `pip download --only-binary=:all:` 拉 win_amd64 + cp312 轮子，
+  `pip install --no-index --target` 离线装进 `python/Lib/site-packages`
+- 修 `python312._pth`（放开 `import site`）并写 `sitecustomize.py` ——
+  `._pth` 会进入 isolated 模式、**忽略 `PYTHONPATH`**，必须借此把 `<res>/app`
+  注入 `sys.path`
+- 拷贝源码树、Go/面捕 exe、`onnxruntime.dll` 与两个模型
+- 用随包解释器做导入冒烟，生成 `BUILD-INFO.json`
+
+依赖清单见 `requirements.desktop.txt`（全量内置，CPU 版 torch）。
+
+> 装配必须在 **Windows** 上执行：pip 的 `--platform` 只约束 wheel 标签，
+> 不改变 `platform_system` / `python_version` 等环境标记的评估。
+
+### 已废弃的构建路径
+
+- `scripts\build_desktop.bat` / `.sh`：单文件 Go exe（不含 Python 运行时）
+- `deploy\installer\desktop.iss` + `scripts\build_portable.py`：Inno + 作者机 CUDA venv
+
+自 ADR-007 起不再维护，保留源码仅作历史参考；桌面分发唯一通道为 Tauri NSIS。
 
 ---
 

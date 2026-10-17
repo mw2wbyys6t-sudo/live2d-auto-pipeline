@@ -106,6 +106,12 @@
 
 ### 4.5 打包现状（根因确认）
 
+> **已修复（ADR-007）**：Tauri 现在先由 `scripts/build_desktop_bundle.py` 装配
+> `desktop/bundle/`（嵌入式 Python 3.12 + 全量离线依赖 + app 源码树 +
+> Go/面捕 exe + onnxruntime.dll + YuNet / face_landmarker 模型），再由
+> `tauri.conf.json` 的 `resources: {"bundle/": ""}` **扁平**打进 `$RESOURCE`；
+> `find_go_binary` 已扩展候选路径。以下为修复前的审计记录，保留以说明根因。
+
 tauri-build.yml 仅 bundle `desktop/bin/*`（live2d-api.exe + face_tracker.exe）：无 Python、无 app 源码、无 onnx 模型/DLL、无 webviewInstallMode 配置（tauri.conf.json:15-37）。三套打包互不相通：Tauri NSIS（A）、Inno+CUDA venv（B，desktop.iss 写死 0.10.2、依赖作者机 torch/权重/iscc）、单文件 Go exe（C，build_desktop.bat）。DEPLOY.md:14-19 把 B 的内容安到 A/C 头上，属文档虚假。
 
 ## 5. 路由表（Go，main.go:208-268）
