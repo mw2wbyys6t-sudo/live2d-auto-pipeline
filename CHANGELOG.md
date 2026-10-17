@@ -10,7 +10,7 @@
 
 ### 🔴 修复（会直接坑到用户）
 
-- **安装包不再缺运行时**：Tauri NSIS 改为自带嵌入式 CPython 3.12 + 全量离线依赖（99 个包）+ `app/` 源码树 + `live2d-api.exe` / `face_tracker.exe` / `onnxruntime.dll` / YuNet / `face_landmarker.task`。装配由 `scripts/build_desktop_bundle.py` 完成，下载物 SHA256 锁定，构建期冒烟 9/9 必装模块。
+- **安装包不再缺运行时**：Tauri NSIS 改为自带嵌入式 CPython 3.12 + 全量离线依赖（**92 个包**，site-packages 约 **1.4 GB**）+ `app/` 源码树 + `live2d-api.exe` / `face_tracker.exe` / `onnxruntime.dll` / YuNet / `face_landmarker.task`。装配由 `scripts/build_desktop_bundle.py` 完成，下载物 SHA256 锁定，构建期冒烟 9/9 必装模块。
 - **「后端未找到」根因修复**：`resources` 从数组 `["bin/*"]`（会落进 `$RESOURCE\bin\`）改为 map `{"bundle/": ""}`（扁平），并扩展 `find_go_binary` 的候选路径。
 - **导出页 PSD 100% 失败**：前端改为合并外层 envelope 的 `success`（内层 `data` 本就没有该字段）。
 - **角色保存/删除假成功**：去掉 `.catch()` 伪造对象与静默吞错，失败保留原状态并报错。
@@ -33,8 +33,20 @@
 
 ### 📦 安装包变化
 
-- 体积从 ~8 MB 变为 **~321 MB**（自包含运行时，正常）。
-- **旧 v0.10.7 的 8 MB 包不可用**（缺 Python/源码树/模型）；请先卸载旧版再装本版。
+- 体积从 ~8 MB 变为 **306.17 MiB（321,047,178 字节）**（自包含运行时，正常）。
+- SHA256：`ff7d8aba4a96e38f93a4f2d5bf9c4314dd32817a43050c321f1551b30387d248`
+- **旧 v0.10.7 的 8 MB 包不可用**（缺 Python 运行时 / 源码树 / 模型），该资产已从 Release 撤下并在发布说明中加了警示；请先卸载旧版再装本版。
+
+### 🧪 安装后自检（本版新增）
+
+- `scripts/windows/verify_desktop_install.ps1`：检查 17 项关键文件、随包解释器与核心依赖、`/api/health` 与 `/api/diagnostics`、残留进程，输出 `PASS / PASS with warnings / FAIL`。
+- 新增 `/api/diagnostics` 端点，逐项返回运行时状态（解释器路径、依赖可用性、模型、输出目录）。
+
+### ⚠️ 尚未验证（如实标注）
+
+- **真机安装验收未完成**：CI 已通过装配冒烟与产物检查，但"双击安装 → 启动 → 走完 5 个页面"尚未在真实 Windows 机器上录得结果。
+- **原生面捕 / 桌宠**未实机验证（仅确认二进制、dll 与模型已打入安装包）。
+- **安装包未签名**，首次运行会触发 SmartScreen 告警。签名管线已就绪（`scripts/windows/sign_artifacts.ps1`），默认 `L2D_SIGN_MODE=off` 不生效。
 
 ### ↩️ 回退
 
@@ -47,9 +59,9 @@
 | 发布线 | `main`（trunk） |
 | 构建环境 | GitHub Actions `windows-latest`；Node 20 / Go 1.25 / Rust stable / Python 3.12.10 |
 | 钉住的下载物 | `python-3.12.10-embed-amd64.zip`、`onnxruntime-win-x64-1.31.0.zip`、YuNet onnx、`face_landmarker.task`（SHA256 见 `scripts/windows/hashes.json`） |
-| 依赖解析 | `requirements.desktop.txt` → win_amd64 / cp312（84 个包） |
+| 依赖解析 | `requirements.desktop.txt` → win_amd64 / cp312（29 个直接依赖，装出 **92 个包**，site-packages 约 1.4 GB） |
 | 构建门禁 | 随包解释器导入冒烟（9 项必装模块） |
-| 产物 | `Live2D.Master.Agent_0.10.8_x64-setup.exe`（约 321 MB） |
+| 产物 | `Live2D.Master.Agent_0.10.8_x64-setup.exe`（**306.17 MiB / 321,047,178 字节**，sha256 `ff7d8aba…0387d248`） |
 | 必须通过的检查 | Python 测试 3.10/3.11/3.12、Go build+test、Next.js build、TS check |
 | 回滚目标 | 卸载后重装同一产物；用户数据保留 |
 | 例外 | 安装包未签名（SmartScreen 告警）；无自动更新 |

@@ -13,7 +13,7 @@
   <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.8-ff69b4?style=flat-square" alt="version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="license"></a>
 <a href="https://app.fossa.com/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline?ref=badge_shield" alt="FOSSA Status"><img 
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.9+-blue?style=flat-square" alt="python"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10+-blue?style=flat-square" alt="python"></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square" alt="go"></a>
   <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16-black?style=flat-square" alt="nextjs"></a>
 </p>
@@ -35,9 +35,10 @@
 | 自动分层（SAM 语义） | ⚠️ 需配置 | 语义分割精度更高，但需下载约 2GB 模型权重 |
 | PSD 导出 | ✅ 可用 | 需 `pip install psd-tools`；缺了也能降级导出 PNG 包 |
 | Live2D moc3 导出 | ✅ 可用 | **自研编译器，已通过 Live2D 官方 Cubism Core 逐像素验收** |
-| 面部捕捉驱动 | ⚠️ 需配置 | MediaPipe 实现，需要摄像头 + 安装额外依赖 |
-| 桌宠运行 | ⚠️ 需配置 | 需要 pygame，跨平台窗口行为各有差异 |
+| 面部捕捉驱动 | ✅ 安装包内置 | 桌面版用 Rust 原生面捕（YuNet + `onnxruntime.dll`），**不需要装 Python / MediaPipe**；从源码运行才走 MediaPipe |
+| 桌宠运行 | ⚠️ 未实机验证 | pygame 已随包分发，但多窗口 / 置顶行为尚未在真机验收 |
 | LLM 对话 + 语音 | ⚠️ 需 Key | 对话需要 OpenAI/Anthropic API Key 或本地 Ollama |
+| 离线依赖 | ✅ 安装包自带 | 嵌入式 CPython 3.12 + 92 个离线包（site-packages 约 1.4 GB），装完即可跑，无需预装 Python |
 
 > 一句话总结：**「生成 → 分层 → 导出」核心链路完全可用，高级交互功能需要额外配置。**
 
@@ -71,7 +72,7 @@
 
 - **要商业级、能直接上镜直播的成品模型** —— 自动绑定给不了那个精度，仍需专业 Live2D 技术师手动精修
 - **想照着已有角色或某张立绘复刻** —— 这个项目是从文字描述生成**新**角色，不是照图转模型
-- **完全不想碰命令行和环境配置** —— 桌面应用双击即可运行（需另装 Python 才能用 AI 生图），核心 UI 和离线占位图开箱即用
+- **完全不想碰命令行和环境配置** —— 桌面应用双击安装即可用：Python 运行时、AI 生图依赖、模型都已随包分发，无需单独配环境
 
 ### 典型使用场景
 
@@ -84,7 +85,7 @@
 | 当可继续打磨的起点 | 导出 PSD 手动改分层，再进 Cubism 精修 | 更接近成品的手工模型 |
 | 离线或受限网络环境演示 | 断网自动降级占位立绘 | 流程不中断的演示效果 |
 
-> 标 ⚠️ 的场景需要额外配置：面捕要装 MediaPipe 并接摄像头，桌宠要装 pygame，且跨平台表现有差异。
+> 标 ⚠️ 的场景：面捕在安装包里是原生实现，但仍需摄像头；桌宠虽随包带了 pygame，尚未真机验收。**从源码运行**时，面捕走 MediaPipe、桌宠需自行安装 pygame。
 >
 > 如果你落在「可能不适合」那一栏，欢迎先提个 Issue 说清需求——项目还在快速迭代，有些边界是能推的。
 
@@ -114,6 +115,19 @@
 3. 双击安装（NSIS 安装向导）；装完先确认安装目录含 `live2d-api.exe`、`python\`、`app\`、`models\`
 4. 从开始菜单或桌面快捷方式启动，应用会自动拉起本地后端并打开工作台 `http://localhost:8080`
 
+**装完自检**（可选，1 分钟）：
+
+```powershell
+# 安装目录应含这些；缺 live2d-api.exe 就是没装对
+Get-ChildItem "$env:LOCALAPPDATA\Live2D Master Agent" | Select-Object Name
+
+# 应用启动后，后端应能自报健康状态
+Invoke-RestMethod http://127.0.0.1:8080/api/health | ConvertTo-Json
+Invoke-RestMethod http://127.0.0.1:8080/api/diagnostics | ConvertTo-Json -Depth 6
+```
+
+仓库还带一键验收脚本：`powershell -ExecutionPolicy Bypass -File .\scripts\windows\verify_desktop_install.ps1 -Launch`
+
 > 🔏 **关于代码签名**：当前安装包**尚未签名**，Windows 首次运行会提示 SmartScreen「未知发布者」——点「更多信息 → 仍要运行」即可。请用 SHA256 确认文件完整：
 >
 > ```powershell
@@ -122,6 +136,13 @@
 > ```
 >
 > 签名管线已就绪（[scripts/windows/sign_artifacts.ps1](scripts/windows/sign_artifacts.ps1)，支持自定义签名命令 / PFX / 证书指纹）。获得受信任证书后，设置仓库变量 `L2D_SIGN_MODE=required` 并配置对应密钥，构建即自动签名并在签名无效时**阻断发布**。
+
+### v0.10.8 这版到底变了什么（先看这 4 条）
+
+1. **安装包自带运行时**：306 MiB 里含嵌入式 CPython 3.12 + 92 个离线包 + `app/` 源码树 + 原生面捕 + YuNet 模型，**不用再装 Python**。旧版 8 MB 包只含两个 exe，这正是"后端未找到"的根因。
+2. **界面少了几个控件**：生成页的 Provider / 风格 / Steps / CFG，导出页的 Include physics / expressions / motions 与 Compression，Live2D 页的模型结构树 / Physics 面板 / Wireframe —— 这些后端从未消费，属于"改了也没效果"的假开关，本版直接移除。
+3. **不再有假成功**：导出 PSD、角色保存/删除、See-through、LLM 兜底回复、Python 面捕，以前失败也可能显示成功；现在失败会明确报错（See-through 无抠图能力时直接返回 **501**）。
+4. **安装包未签名**：SmartScreen 会提示"未知发布者"，属已知限制，处理方式见上。
 
 ### 命令行快速体验（30 秒核心能力）
 
@@ -140,17 +161,33 @@ python -m core.cli
 
 ### 从源码构建桌面应用
 
-```bash
-# 前置：Node.js + npm + Go 1.21+
-# 一键构建（Windows 交叉编译，Linux/macOS 也可运行）
-./scripts/build_desktop.sh
+**产出可分发安装包**（与 Release 一致，自带运行时）：
 
-# 产物：
-#   dist/Live2DMasterAgent.exe         桌面版（无控制台，双击运行）
-#   dist/Live2DMasterAgent-console.exe 调试版（带控制台日志）
+```bash
+# 前置：Node.js 20+、Go 1.25+、Rust stable、Python 3.12、tauri-cli（cargo install tauri-cli）
+
+# 1) 前端 + Go 后端 + Rust 面捕
+cd web && npm ci && npm run build && cd ..
+cd api && go build -trimpath -ldflags "-s -w -H windowsgui" -o live2d-api.exe . && cd ..
+cd native/face_tracker && cargo build --release && cd ../..
+
+# 2) 装配自带运行时（嵌入式 Python / 离线 wheel / 模型，约 1.4 GB site-packages）
+python scripts/build_desktop_bundle.py --go-exe api/live2d-api.exe \
+  --face-tracker-exe native/face_tracker/target/release/face_tracker.exe
+
+# 3) 打 NSIS 安装包
+cd desktop && cargo tauri build --bundles nsis
+# 产物：desktop/target/release/bundle/nsis/Live2D Master Agent_<version>_x64-setup.exe
 ```
 
-构建流程：Next.js 静态导出 → 版本化资源 URL → 复制到 `api/webui/dist/` → Go 交叉编译（内嵌前端）
+**只想要一个轻量 exe 调试**（不含运行时，需本机 Python 3.10+）：
+
+```bash
+./scripts/build_desktop.sh
+# 产物：dist/Live2DMasterAgent.exe（无控制台）/ dist/Live2DMasterAgent-console.exe（带日志）
+```
+
+> 注意：这个轻量 exe 只是窗口壳，必须配合本机 Python 与依赖才能跑；分发给别人请用上面的 NSIS 安装包。
 
 ### 开发模式（前后端分离调试）
 
@@ -209,7 +246,7 @@ cd web && npm install && npm run dev
 
 不是调用外部工具，而是**自己写了 moc3 编译器**——从分层 PNG 直接编译出符合 Live2D Cubism4 规范的 `.moc3` 文件，包含网格、骨骼、变形器、28 个表情参数、物理模拟。
 
-> ✅ 已在 **Live2D 官方 Cubism Native Core** 上通过逐像素验收：导出的模型能被官方内核正确加载，参数确实驱动画面。测试覆盖率 392 passed / 3 skipped。
+> ✅ 已在 **Live2D 官方 Cubism Native Core** 上通过逐像素验收：导出的模型能被官方内核正确加载，参数确实驱动画面。测试规模 504 passed / 96 skipped（2026-10-17 CI 实测）。
 
 ---
 
@@ -235,6 +272,9 @@ cd web && npm install && npm run dev
 ├── llm_bridge/            AI 对话网关
 ├── api/                   Go REST API（Gin）
 ├── web/                   Next.js 工作台（8 页面）
+├── desktop/               Tauri v2 外壳（窗口 + 拉起后端 + NSIS 打包）
+├── native/face_tracker/   Rust 原生面捕（YuNet + onnxruntime）
+├── scripts/               装配与验收（build_desktop_bundle.py、windows/verify_desktop_install.ps1）
 ├── assets/icon/           项目图标
 └── docs/                  文档
 ```
@@ -275,9 +315,11 @@ LLM_MODEL=gpt-4o-mini
 
 1. **生成的角色质量取决于 AI 生图服务商**。免费的 Pollinations 出图质量中等；想要高质量赛璐璐立绘，建议配置火山引擎 Seedream。
 2. **SAM 语义分层需要约 2GB 模型权重**。不想下载的话，默认的 K-means 分层也够用。
-3. **面部捕捉和桌宠功能依赖摄像头和平台特定库**，在不同操作系统上表现可能不一致。
+3. **面部捕捉依赖摄像头**：安装包内置原生面捕（YuNet + onnxruntime），但尚未在真实机器上完成验收；桌宠虽随包带了 pygame，多窗口 / 置顶行为也未验证。
 4. **moc3 导出的模型是「可用但粗糙」的起点**。自动绑定无法替代专业 Live2D 技术师的手动精调——它能让你快速有一个能动的模型，但要追求商业级品质仍需人工打磨。
 5. **项目仍在快速迭代中**，API 接口可能随版本变化。
+6. **Windows 安装包未签名**：首次运行会触发 SmartScreen「未知发布者」提示；请用上面给出的 SHA256 校验下载完整性。
+7. **安装包体积 306 MiB**：因为内置了完整 Python 运行时与模型，这是「装完就能用」的代价；对比旧版 8 MB（只含两个 exe，缺运行时）。
 
 详细说明见 [docs/LIMITATIONS.md](docs/LIMITATIONS.md)。
 
@@ -286,7 +328,7 @@ LLM_MODEL=gpt-4o-mini
 ## 测试
 
 ```bash
-# Python 测试（392 个）
+# Python 测试（504 passed / 96 skipped，2026-10-17 构建实测；跳过的多为缺可选依赖）
 python -m pytest tests/ -v
 
 # Go 测试
@@ -302,7 +344,8 @@ cd web && npm run build
 
 | 版本 | 日期 | 重点 |
 |------|------|------|
-| **v0.10.7** | 2026-10-16 | **依赖治理 + 发布修复**：抬高 Python/npm 依赖下限消除 CVE 面、修复 Release 无资产回归、清零版本号漂移 |
+| **v0.10.8** | 2026-10-17 | **Honest Desktop**：安装包自带运行时（306 MiB，无需装 Python）、修复「后端未找到」根因、修复导出页 PSD 100% 失败、移除无效控件与假成功 |
+| **v0.10.7** | 2026-10-16 | **依赖治理 + 发布修复**：抬高 Python/npm 依赖下限消除 CVE 面、修复 Release 无资产回归、清零版本号漂移（⚠️ 该版 8 MB 安装包缺运行时，已撤下） |
 | **v0.10.6** | 2026-10-15 | **CI 修复 + 版本统一**：关闭 pixi.js v8 破坏性升级 PR、dependabot 忽略 major、全栈版本号对齐到 0.10.6 |
 | **v0.10.5** | 2026-10-11 | **Desktop First**：移除 Docker/Web 部署，全面转向桌面应用；桌面应用安装包可直接下载 |
 | **v0.10.4** | 2026-10-11 | **Hardened Shell**：5 项安全加固（CSP/面捕恢复、zip symlink 防护、目录列举禁用、SSRF DNS 钉扎、PNG 批量导入内存优化） |
