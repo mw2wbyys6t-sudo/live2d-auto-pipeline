@@ -72,6 +72,14 @@ ONNXRUNTIME_URL = (
     f"v{ONNXRUNTIME_VERSION}/onnxruntime-win-x64-{ONNXRUNTIME_VERSION}.zip"
 )
 
+# MediaPipe Tasks 人脸关键点模型：mediapipe>=0.10.30 删除了经典 solutions API，
+# drivers/face_tracker 会在缺少 solutions 时改用 Tasks FaceLandmarker，需要此模型。
+FACE_LANDMARKER_NAME = "face_landmarker.task"
+FACE_LANDMARKER_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/1/face_landmarker.task"
+)
+
 # Python 工程源码树：只收运行时真正用到的部分（不含 tests/ tools/ docs/ api/）。
 APP_DIRS = ["core", "drivers", "live2d_builder", "llm_bridge", "prompts", "templates"]
 APP_FILES = ["local_image_generator.py", "LICENSE", "requirements.desktop.txt"]
@@ -101,8 +109,8 @@ if os.path.isdir(_app) and _app not in sys.path:
 # 冒烟校验：required 缺失即失败；optional 缺失只告警（按需下载/机型相关）。
 SMOKE_REQUIRED = ["PIL", "numpy", "scipy", "sklearn", "cv2", "psd_tools",
                   "onnxruntime", "core.version", "live2d_builder.pipeline"]
-SMOKE_OPTIONAL = ["torch", "mediapipe", "rembg", "edge_tts", "sounddevice",
-                  "soundfile", "pygame", "live2d"]
+SMOKE_OPTIONAL = ["torch", "mediapipe", "mediapipe.tasks.python.vision", "rembg",
+                  "edge_tts", "sounddevice", "soundfile", "pygame", "live2d"]
 
 
 def human(n: float) -> str:
@@ -421,6 +429,13 @@ def main() -> int:
         shutil.copy2(yunet, models_dir / YUNET_NAME)
         print(f"    [onnx] models/{YUNET_NAME}")
 
+        landmarker = download(FACE_LANDMARKER_URL, cache / FACE_LANDMARKER_NAME,
+                              offline=offline)
+        verify_hash(landmarker, hashes.get("face-landmarker-task", ""),
+                    "face-landmarker-task", record)
+        shutil.copy2(landmarker, models_dir / FACE_LANDMARKER_NAME)
+        print(f"    [task] models/{FACE_LANDMARKER_NAME}")
+
     # ---- 5) 冒烟 + BUILD-INFO ----
     print("[5/5] 冒烟校验与 BUILD-INFO")
     if not args.no_smoke_test:
@@ -449,7 +464,8 @@ def main() -> int:
     for k in ("python", "app", "models", "total"):
         print(f"   {k:8} {human(sizes[k])}")
     print(f" BUILD-INFO.json 已写入 {dest / 'BUILD-INFO.json'}")
-    missing = [k for k in ("python-embed", "yunet-onnx", "onnxruntime-dll")
+    missing = [k for k in ("python-embed", "yunet-onnx", "onnxruntime-dll",
+                           "face-landmarker-task")
                if not hashes.get(k)]
     if missing:
         print("\n 提示：以下下载物尚未在锁定表中固定 SHA256，已实测并记录到 "

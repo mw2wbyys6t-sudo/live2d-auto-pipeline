@@ -44,19 +44,23 @@ rembg[cpu]>=2.0.0
 py-moc3>=0.1.0
 live2d-py==0.8.1
 
-# ===== 桌宠 / 音频 / TTS =====
+# ===== 桌宠 / 音频 / TTS / 面捕 =====
 pygame>=2.5.0; python_version < "3.14"
 pygame-ce>=2.5.0; python_version >= "3.14"
 sounddevice>=0.4.6
 soundfile>=0.12.0
 edge-tts>=7.2.8
 
-# 说明：mediapipe（Python 版面捕）**刻意不内置**。它强制 numpy<2（还会拉
-# jax / jaxlib，数百 MB），与本清单的 numpy>=2 以及 scikit-learn>=1.9 /
-# scipy>=1.18 / rembg（都要求 numpy>=2）不可共存 —— pip 解析会直接失败。
-# 桌面端原生面捕由随包的 Rust face_tracker.exe 承担；浏览器端面捕走仓库已
-# vendored 的 MediaPipe WASM（web/public/mediapipe）。两条路径都不依赖
-# Python mediapipe。确需 Python mediapipe 的场景，请另建独立 venv。
+# mediapipe（Python 版面捕：drivers/face_tracker + 桌宠跟随）：
+#   下限 >=0.10.30 是硬要求 —— 从该版本起 mediapipe 改为 py3-none-win_amd64
+#   纯 Python 轮子并解除 numpy<2 上限，才能与本清单的 numpy>=2 共存；
+#   0.10.21 会强制 numpy<2，与 scipy>=2 / rembg 直接冲突（pip 解析失败）。
+#   上限 <0.10.32 也是硬要求 —— 0.10.32+ 会重新引入 opencv-contrib-python
+#   （与 opencv-python-headless 争抢 cv2）和 matplotlib。
+#   注意：0.10.30 起官方删除了经典 mp.solutions API。drivers/face_tracker
+#   已内置「经典 API 优先、缺失时切 Tasks FaceLandmarker」双路适配；对应的
+#   模型 face_landmarker.task 由装配脚本下载到 <res>/models/。
+mediapipe>=0.10.30,<0.10.32
 
 # ===== AI：SAM2 语义分割 / 文本与视觉 embedding（CPU torch） =====
 torch>=2.0.0

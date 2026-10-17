@@ -7,7 +7,9 @@ coefficients. Gracefully degrades when mediapipe or a webcam is unavailable.
 """
 
 import math
+import sys
 import time
+from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 
 from core.logger import get_logger
@@ -50,6 +52,113 @@ ARKIT_BLENDSHAPES: List[str] = [
     "noseSneerLeft", "noseSneerRight",
     "tongueOut",
 ]
+
+
+#: MediaPipe Tasks 人脸关键点模型（随桌面安装包放在 <res>/models/）。
+_FACE_LANDMARKER_MODEL = "face_landmarker.task"
+
+
+def _find_face_landmarker_model() -> Optional[str]:
+    """定位 face_landmarker.task。
+
+    覆盖三种运行布局：
+      - 安装包：``<res>/app/drivers/face_tracker`` → ``<res>/models``；
+      - Go 桥：cwd = ``<res>/app`` → ``<res>/models``（cwd 的上一级）；
+      - 解释器：``<res>/python`` → ``<res>/models``（prefix 的上一级）。
+    """
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here.parents[2] / "models" / _FACE_LANDMARKER_MODEL,
+        Path.cwd() / "models" / _FACE_LANDMARKER_MODEL,
+        Path.cwd().parent / "models" / _FACE_LANDMARKER_MODEL,
+        Path(sys.executable).resolve().parent.parent / "models" / _FACE_LANDMARKER_MODEL,
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+class _TasksLandmark:
+    __slots__ = ("x", "y", "z")
+
+    def __init__(self, lm) -> None:
+        self.x, self.y, self.z = lm.x, lm.y, lm.z
+
+
+class _TasksFace:
+    def __init__(self, landmarks) -> None:
+        self.landmark = [_TasksLandmark(lm) for lm in landmarks]
+
+
+class _TasksResult:
+    def __init__(self, faces) -> None:
+        self.multi_face_landmarks = faces or None
+
+
+class _TasksFaceMesh:
+    """把 Tasks ``FaceLandmarker`` 适配成经典 ``FaceMesh.process()`` 契约。
+
+    mediapipe 0.10.30 起官方删除了 ``mp.solutions``。本适配器对上层暴露与
+    经典 API 相同的 ``process(rgb) -> result.multi_face_landmarks``，因此
+    ``get_landmarks`` 的 468 点处理逻辑无需改动。
+    """
+
+    def __init__(self, mp, min_detection_confidence: float,
+                 min_tracking_confidence: float) -> None:
+        from mediapipe.tasks import python as mp_python
+        from mediapipe.tasks.python import vision as mp_vision
+
+        model_path = _find_face_landmarker_model()
+        if not model_path:
+            raise FileNotFoundError(
+                f"未找到 {_FACE_LANDMARKER_MODEL}（应随安装包放在 "
+                f"<资源目录>/models/ 下）")
+
+        options = mp_vision.FaceLandmarkerOptions(
+            base_options=mp_python.BaseOptions(model_asset_path=model_path),
+            running_mode=mp_vision.RunningMode.VIDEO,
+            num_faces=1,
+            min_face_detection_confidence=min_detection_confidence,
+            min_tracking_confidence=min_tracking_confidence,
+            output_face_blendshapes=False,
+        )
+        self._mp = mp
+        self._landmarker = mp_vision.FaceLandmarker.create_from_options(options)
+        self._timestamp_ms = 0
+
+    def process(self, rgb) -> _TasksResult:
+        image = self._mp.Image(
+            image_format=self._mp.ImageFormat.SRGB,
+            data=np.ascontiguousarray(rgb),
+        )
+        # VIDEO 模式要求时间戳单调递增；同一毫秒内多次调用时自增 1。
+        now_ms = int(time.time() * 1000)
+        self._timestamp_ms = now_ms if now_ms > self._timestamp_ms else self._timestamp_ms + 1
+        result = self._landmarker.detect_for_video(image, self._timestamp_ms)
+        faces = [_TasksFace(lms) for lms in (result.face_landmarks or [])]
+        return _TasksResult(faces)
+
+    def close(self) -> None:
+        try:
+            self._landmarker.close()
+        except Exception:
+            pass
+
+
+def _create_face_mesh(mp, min_detection_confidence: float, min_tracking_confidence: float):
+    """优先经典 ``mp.solutions``；缺失（mediapipe>=0.10.30）时回退 Tasks API。"""
+    solutions = getattr(mp, "solutions", None)
+    if solutions is not None:
+        return solutions.face_mesh.FaceMesh(
+            static_image_mode=False,
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=min_detection_confidence,
+            min_tracking_confidence=min_tracking_confidence,
+        )
+    log.info("mediapipe 无经典 solutions API，改用 Tasks FaceLandmarker")
+    return _TasksFaceMesh(mp, min_detection_confidence, min_tracking_confidence)
 
 
 class FaceTracker:
@@ -99,12 +208,10 @@ class FaceTracker:
             return
 
         try:
-            self._face_mesh = mp.solutions.face_mesh.FaceMesh(
-                static_image_mode=False,
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=self.min_detection_confidence,
-                min_tracking_confidence=self.min_tracking_confidence,
+            self._face_mesh = _create_face_mesh(
+                mp,
+                self.min_detection_confidence,
+                self.min_tracking_confidence,
             )
             self._cap = cv2.VideoCapture(self.camera_id)
             if not self._cap.isOpened():
