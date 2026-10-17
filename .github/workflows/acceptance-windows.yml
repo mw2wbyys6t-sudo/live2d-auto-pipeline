@@ -16,6 +16,10 @@ on:
         description: 'Expected SHA256 of the installer (empty = skip the check)'
         required: false
         default: 'ff7d8aba4a96e38f93a4f2d5bf9c4314dd32817a43050c321f1551b30387d248'
+  # 该文件自身变更时自动跑一次，用于验证验收管线本身可用。
+  push:
+    paths:
+      - '.github/workflows/acceptance-windows.yml'
 
 permissions:
   contents: read
@@ -25,6 +29,10 @@ jobs:
     name: Install and probe the published installer
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      # push 触发时 inputs 为空，这里给出与 workflow_dispatch 默认值一致的兜底。
+      TAG: ${{ inputs.tag || 'v0.10.8' }}
+      EXPECTED_SHA: ${{ inputs.expected_sha256 || 'ff7d8aba4a96e38f93a4f2d5bf9c4314dd32817a43050c321f1551b30387d248' }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -35,7 +43,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          gh release download "${{ inputs.tag }}" --repo "${{ github.repository }}" --pattern "*.exe" --dir dist
+          gh release download $env:TAG --repo "${{ github.repository }}" --pattern "*.exe" --dir dist
           Get-ChildItem dist | Select-Object Name, Length | Format-Table -AutoSize
 
       - name: Verify SHA256
@@ -46,7 +54,7 @@ jobs:
           Write-Host "file   : $($exe.Name)"
           Write-Host "size   : $($exe.Length) bytes"
           Write-Host "sha256 : $actual"
-          $expected = "${{ inputs.expected_sha256 }}".Trim().ToLower()
+          $expected = "$env:EXPECTED_SHA".Trim().ToLower()
           if ($expected -and ($actual -ne $expected)) {
             Write-Host "::error::SHA256 mismatch (expected $expected)"
             exit 1
