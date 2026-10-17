@@ -128,24 +128,32 @@ const Dashboard: NextPage = () => {
         <StatusCard
           label="API"
           value={status?.apiConnected ? 'Connected' : 'Offline'}
-          subtext={status?.latencyMs ? `${status.latencyMs}ms` : undefined}
+          subtext={typeof status?.latencyMs === 'number' ? `${status.latencyMs}ms` : undefined}
           ok={!!status?.apiConnected}
           icon={Activity}
         />
         <StatusCard
           label="GPU"
-          value={status?.gpuAvailable ? status.gpuName || 'Available' : 'Not detected'}
-          subtext={
-            status?.vramTotal
-              ? `${status?.vramUsed ?? 0}/${status.vramTotal} GB VRAM`
-              : undefined
+          value={
+            status?.gpuAvailable === undefined
+              ? '未探测'
+              : status.gpuAvailable
+                ? status.gpuName || 'Available'
+                : 'Not detected'
           }
-          ok={!!status?.gpuAvailable}
+          subtext={
+            status?.gpuAvailable === undefined
+              ? '本版本不探测 GPU'
+              : status?.vramTotal
+                ? `${status?.vramUsed ?? 0}/${status.vramTotal} GB VRAM`
+                : undefined
+          }
+          ok={status?.gpuAvailable === true}
           icon={Server}
         />
         <StatusCard
-          label="Models"
-          value={status ? `${status.modelsLoaded?.length ?? 0} loaded` : '—'}
+          label="Services"
+          value={status ? `${status.modelsLoaded?.length ?? 0} registered` : '—'}
           subtext={status?.modelsLoaded?.slice(0, 2)?.join(', ') || undefined}
           ok={!!status?.modelsLoaded?.length}
           icon={Cpu}

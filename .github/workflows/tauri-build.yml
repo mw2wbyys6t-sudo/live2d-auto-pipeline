@@ -11,6 +11,15 @@ on:
       - 'scripts/build_tauri_release.*'
       - 'scripts/run_tauri_dev.*'
       - 'requirements.desktop.txt'
+      # 应用源码变更同样会进入安装包（web 静态站、Go 后端、Python 内核），
+      # 缺少这些路径会导致「改了功能但安装包不重建」。
+      - 'web/**'
+      - 'api/**'
+      - 'core/**'
+      - 'drivers/**'
+      - 'live2d_builder/**'
+      - 'llm_bridge/**'
+      - 'api_server.py'
       - '.github/workflows/tauri-build.yml'
 
 # 仅检出代码与上传构建产物，不需要任何写权限

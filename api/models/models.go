@@ -265,6 +265,9 @@ type ChatStreamChunk struct {
 	Action   string `json:"action,omitempty"`
 	Finished bool   `json:"finished,omitempty"`
 	Error    string `json:"error,omitempty"`
+	// Fallback 为 true 表示这不是模型真实输出，而是上游不可达时的离线兜底文案。
+	// 前端必须据此展示「离线兜底」，不能把它当成正常回复。
+	Fallback bool `json:"fallback,omitempty"`
 }
 
 // TrackingRequest 人脸追踪WebSocket请求

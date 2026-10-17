@@ -94,7 +94,9 @@
 
 ## 5. 前端工作台
 
-- `/live2d` 的「Model structure」树与 Physics 面板是**静态展示**，不随模型变化、不影响渲染。
+- `/live2d` 的「Model structure」静态树、Physics 面板与 Wireframe 开关已于 v1 真实性清理中**移除**
+  （它们此前只是写死的展示，不随模型变化、也不影响渲染）。当前只保留真实生效的参数滑块、
+  表情应用、Validate 与模型加载入口。
 - `/characters/[id]` 的 embedding 重算与参考图上传已接通后端（`POST /api/characters/:id/embedding`、
   `POST /api/characters/:id/references`，v0.10.1）；「Generation history」目前展示全局最近一次
   生成记录（`latest_generation.json`），**尚无按角色的生成历史**。

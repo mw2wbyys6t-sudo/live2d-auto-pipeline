@@ -93,11 +93,13 @@ const CharactersPage: NextPage = () => {
   };
 
   const handleDelete = async (id: string) => {
+    setError(null);
     try {
-      await apiClient.deleteCharacter(id).catch(() => undefined);
+      await apiClient.deleteCharacter(id);
       setCharacters((prev) => (prev || []).filter((c) => c.id !== id));
-    } catch {
-      // ignore
+    } catch (err) {
+      // 不再静默吞错：删除失败时保留列表项并提示原因，避免「卡片消失但刷新又回来」。
+      setError(err instanceof Error ? err.message : 'Failed to delete character');
     }
   };
 

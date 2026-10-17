@@ -1478,6 +1478,18 @@ async def tracking_start():
         return _server_error("摄像头启动", e)
 
     _TrackerState.tracker = tracker
+    # 诚实性修复：mediapipe/摄像头缺失时 FaceTracker.start() 会静默返回，
+    # 旧实现无条件把 running 置 true，导致前端「假报已启动」。
+    if not getattr(tracker, "is_running", lambda: False)():
+        try:
+            tracker.stop()
+        except Exception:
+            pass
+        return err(
+            "面捕未能启动：摄像头未打开，或 mediapipe/cv2 依赖缺失。"
+            "请检查摄像头是否被占用并确认依赖已安装后重试。",
+            503,
+        )
     _TrackerState.lock = threading.Lock()
     _TrackerState.running = True
     _TrackerState.error = ""

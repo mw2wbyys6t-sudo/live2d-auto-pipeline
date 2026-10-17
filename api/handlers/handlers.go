@@ -271,7 +271,8 @@ func (h *Handler) GetModels(c *gin.Context) {
 	availableModels := h.imageGenerator.GetAvailableModels()
 	c.JSON(http.StatusOK, models.Response{
 		Success: true,
-		Message: "获取模型列表成功",
+		// 诚实性标注：这份列表是内置示例，切换它不会改变本地生成结果。
+		Message: "内置示例模型列表（仅作展示；当前本地生成器不消费模型选择）",
 		Data:    availableModels,
 	})
 }
@@ -328,10 +329,16 @@ func (h *Handler) RunSeeThrough(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, models.Response{
-		Success: true,
-		Message: "See-through 工作流状态",
-		Data:    result,
+	// 诚实性修复：该接口从未真正执行抠图，过去却以 200 + success:true 返回，
+	// 让用户以为已处理。现在改为 501，并说明可替代路径。
+	c.JSON(http.StatusNotImplemented, models.Response{
+		Success: false,
+		Error: "See-through 抠图未实现：本版本不会执行背景移除。" +
+			"请改用分层页的颜色/语义分层；如已安装 ComfyUI，可由后续版本接入。",
+		Data: map[string]interface{}{
+			"implemented": false,
+			"detail":      result,
+		},
 	})
 }
 
@@ -746,21 +753,32 @@ func (h *Handler) ImportPNGs(c *gin.Context) {
 
 // GetAPIInfo 获取 API 信息
 func (h *Handler) GetAPIInfo(c *gin.Context) {
+	// 能力清单按实际探测生成：不再固定宣称「人脸追踪 / 请求缓存」可用。
+	features := []string{
+		"角色一致性系统",
+		"语义分割分层",
+		"LLM流式聊天(SSE)",
+		"WebSocket实时通信",
+		"Live2D模型导出",
+		"Gzip压缩",
+	}
+	if h.nativeBridge != nil && h.nativeBridge.IsAvailable() {
+		features = append(features, "原生人脸追踪")
+	}
+	if h.cache != nil {
+		features = append(features, "请求缓存")
+	}
+
 	c.JSON(http.StatusOK, models.Response{
 		Success: true,
 		Data: map[string]interface{}{
 			"name":        "Live2D Master Agent API",
 			"version":     Version,
 			"description": "AI角色生成、一致性维护、LLM聊天、Live2D导出 API",
-			"features": []string{
-				"角色一致性系统",
-				"语义分割分层",
-				"LLM流式聊天(SSE)",
-				"WebSocket实时通信",
-				"Live2D模型导出",
-				"人脸追踪",
-				"请求缓存",
-				"Gzip压缩",
+			"features":    features,
+			"notes": []string{
+				"See-through 抠图未实现：POST /api/see-through 返回 501",
+				"/api/models 与 /api/expressions 是内置示例列表，不代表当前加载的模型",
 			},
 			"endpoints": []map[string]string{
 				{"method": "GET", "path": "/api/health", "desc": "健康检查"},
@@ -1349,5 +1367,10 @@ func (h *Handler) GetExpressions(c *gin.Context) {
 		{Name: "wink_right", ID: "wink_r", Params: []string{"ParamEyeROpen"}},
 		{Name: "blink", ID: "blink", Params: []string{"ParamEyeLOpen", "ParamEyeROpen"}},
 	}
-	c.JSON(http.StatusOK, models.Response{Success: true, Data: expressions})
+	c.JSON(http.StatusOK, models.Response{
+		Success: true,
+		// 诚实性标注：该列表与当前加载的模型无关，是内置示例。
+		Message: "内置示例表情列表（不随当前加载模型变化）",
+		Data:    expressions,
+	})
 }

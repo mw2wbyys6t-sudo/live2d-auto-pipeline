@@ -79,13 +79,16 @@ export type SegmentationMethod = 'kmeans' | 'semantic';
 export interface GenerationRequest {
   prompt: string;
   negativePrompt?: string;
-  provider: ProviderId;
+  /** 后端当前不消费 provider：保留为可选，避免 UI 展示无效选项。 */
+  provider?: ProviderId;
   width: Resolution;
   height: Resolution;
-  style: StylePreset;
+  /** 后端当前不消费 style：保留为可选。 */
+  style?: StylePreset;
   seed?: number;
   characterId?: string;
   characterConsistency: boolean;
+  /** 后端当前不消费 steps / cfg：保留为可选。 */
   steps?: number;
   cfg?: number;
   segmentationMethod?: SegmentationMethod;
@@ -468,7 +471,8 @@ export interface ExportDownload {
 export interface SystemStatus {
   apiConnected: boolean;
   latencyMs: number;
-  gpuAvailable: boolean;
+  /** 未探测时缺省（undefined），不要用 false 冒充「没有 GPU」。 */
+  gpuAvailable?: boolean;
   gpuName?: string;
   vramUsed?: number;
   vramTotal?: number;

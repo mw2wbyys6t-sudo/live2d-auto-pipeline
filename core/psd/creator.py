@@ -180,9 +180,13 @@ class PSDCreator:
         log.info(f"PNG package created: {pkg_dir} (install psd-tools for PSD output)")
         return {
             "success": True,
-            "psd_path": str(pkg_dir),
+            # 没有真实 .psd 时不要把目录冒充成文件路径：旧实现返回 pkg_dir，
+            # 上层据此生成 /output/<目录> 下载链接，点击必然 404。
+            "psd_path": "",
+            "package_dir": str(pkg_dir),
             "preview_path": str(preview_path),
             "fallback": True,
+            "fallback_reason": "psd-tools 未安装：已输出 PNG 图层包，未生成 .psd",
             "layer_count": len(layer_files),
         }
 

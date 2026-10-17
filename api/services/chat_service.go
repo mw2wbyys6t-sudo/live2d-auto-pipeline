@@ -280,10 +280,13 @@ func (s *ChatService) fallbackChat(messages []ChatMessage, onChunk func(ChatStre
 		"喵喵~今天也要开心呀！",
 	}
 	reply := fallbackReplies[len(lastMsg)%len(fallbackReplies)]
+	// 明确标注离线兜底：文案对用户可见，chunk 上的 Fallback 供前端做机器判定。
+	// 旧实现直接把固定文案当正常回复输出，前端无法区分真假。
+	reply = "（离线兜底回复：当前未连接到 LLM 服务）\n" + reply
 	time.Sleep(100 * time.Millisecond)
-	onChunk(ChatStreamChunk{Type: "token", Content: reply})
+	onChunk(ChatStreamChunk{Type: "token", Content: reply, Fallback: true})
 	time.Sleep(50 * time.Millisecond)
-	onChunk(ChatStreamChunk{Type: "emotion", Emotion: "happy"})
-	onChunk(ChatStreamChunk{Type: "done", Finished: true})
+	onChunk(ChatStreamChunk{Type: "emotion", Emotion: "happy", Fallback: true})
+	onChunk(ChatStreamChunk{Type: "done", Finished: true, Fallback: true})
 	return nil
 }

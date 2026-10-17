@@ -19,33 +19,13 @@ import type {
   GenerationResult,
   GenerationStep,
   PipelineStatus,
-  ProviderId,
   Resolution,
-  StylePreset,
 } from '../types';
 import { apiClient, modelDirFromRecord, type LatestGeneration } from '../lib/api-client';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ProgressSteps from '../components/ProgressSteps';
 
-const PROVIDERS: { id: ProviderId; name: string; desc: string }[] = [
-  { id: 'seedream', name: 'Seedream', desc: '火山方舟 · 高保真' },
-  { id: 'sensenova', name: 'SenseNova', desc: '商汤 · 二次元特化' },
-  { id: 'openai', name: 'OpenAI Compatible', desc: '任意 OpenAI Images API 兼容端点 / 中转网关' },
-  { id: 'pollinations', name: 'Pollinations', desc: '免费兜底 · 质量不稳定' },
-  { id: 'local', name: 'Local', desc: '本地占位图（离线保底）' },
-];
-
 const RESOLUTIONS: Resolution[] = [512, 768, 1024, 2048];
-const STYLES: { id: StylePreset; label: string }[] = [
-  { id: 'moe', label: 'Moe' },
-  { id: 'anime', label: 'Anime' },
-  { id: 'realistic', label: 'Realistic' },
-  { id: 'chibi', label: 'Chibi' },
-  { id: 'watercolor', label: 'Watercolor' },
-  { id: 'lineart', label: 'Lineart' },
-  { id: 'pixel', label: 'Pixel' },
-  { id: 'cyberpunk', label: 'Cyberpunk' },
-];
 
 const PIPELINE_STEPS: { id: PipelineStatus; label: string }[] = [
   { id: 'queued', label: 'Queued' },
@@ -70,9 +50,7 @@ function makeInitialSteps(): GenerationStep[] {
 const GeneratePage: NextPage = () => {
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
-  const [provider, setProvider] = useState<ProviderId>('pollinations');
   const [resolution, setResolution] = useState<Resolution>(1024);
-  const [style, setStyle] = useState<StylePreset>('anime');
   const [consistency, setConsistency] = useState(true);
   const [characters, setCharacters] = useState<Character[]>([]);
   const [characterId, setCharacterId] = useState<string | undefined>();
@@ -84,28 +62,7 @@ const GeneratePage: NextPage = () => {
   const [latestRecord, setLatestRecord] = useState<LatestGeneration | null>(null);
   const [petBusy, setPetBusy] = useState(false);
   const [petMsg, setPetMsg] = useState<string | null>(null);
-  const [providerQuery, setProviderQuery] = useState<{
-    available: Array<{ name: string; display_name: string; requires_key: boolean }>;
-    registered: string[];
-    query_ok: boolean;
-  } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-
-  // 上游路由体检：展示各 provider 是否已配置可用；默认选中第一个可用项
-  useEffect(() => {
-    apiClient
-      .listProviders()
-      .then((pq) => {
-        setProviderQuery(pq);
-        const names = pq.available.map((a) => a.name);
-        setProvider((current) => {
-          if (current !== 'pollinations' && names.includes(current)) return current;
-          const best = PROVIDERS.find((p) => p.id !== 'local' && names.includes(p.id));
-          return best ? best.id : current;
-        });
-      })
-      .catch(() => setProviderQuery(null));
-  }, []);
 
   /** 部署桌面桌宠：后端验收模型 → 拉起原生透明窗口 */
   const launchPet = useCallback(async () => {
@@ -147,14 +104,10 @@ const GeneratePage: NextPage = () => {
     const req: GenerationRequest = {
       prompt: prompt.trim(),
       negativePrompt: negativePrompt.trim() || undefined,
-      provider,
       width: resolution,
       height: resolution,
-      style,
       characterConsistency: consistency,
       characterId: consistency ? characterId : undefined,
-      steps: 30,
-      cfg: 7,
     };
 
     try {
@@ -197,7 +150,7 @@ const GeneratePage: NextPage = () => {
       setGenerating(false);
       abortRef.current = null;
     }
-  }, [prompt, negativePrompt, provider, resolution, style, consistency, characterId, generating]);
+  }, [prompt, negativePrompt, resolution, consistency, characterId, generating]);
 
   const cancel = () => {
     abortRef.current?.abort();
@@ -235,73 +188,21 @@ const GeneratePage: NextPage = () => {
           </div>
 
           <div>
-            <label className="text-xs font-medium text-gray-400 block mb-2">
-              Provider
-              {providerQuery && !providerQuery.query_ok && (
-                <span className="ml-2 text-[10px] text-amber-400">上游状态查询失败</span>
-              )}
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              {PROVIDERS.map((p) => {
-                const availableNames = providerQuery?.available.map((a) => a.name) ?? [];
-                const isUp = p.id === 'local' || availableNames.includes(p.id);
-                return (
-                  <button
-                    key={p.id}
-                    onClick={() => setProvider(p.id)}
-                    className={`text-left p-2.5 rounded-lg border text-xs transition-all ${
-                      provider === p.id
-                        ? 'bg-pink-500/10 border-pink-500/40 text-white'
-                        : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
-                    }`}
-                  >
-                    <p className="font-semibold flex items-center gap-1.5">
-                      {p.name}
-                      {isUp ? (
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="已配置可用" />
-                      ) : (
-                        <span className="w-1.5 h-1.5 rounded-full bg-gray-600" title="未配置 API Key，选中后会自动降级" />
-                      )}
-                    </p>
-                    <p className="text-[10px] opacity-70 mt-0.5">{p.desc}</p>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs font-medium text-gray-400 block mb-2">Resolution</label>
-              <div className="flex gap-1 flex-wrap">
-                {RESOLUTIONS.map((r) => (
-                  <button
-                    key={r}
-                    onClick={() => setResolution(r)}
-                    className={`px-2.5 py-1 rounded-md text-xs border transition-colors ${
-                      resolution === r
-                        ? 'bg-pink-500/20 border-pink-500/50 text-pink-300'
-                        : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
-                    }`}
-                  >
-                    {r}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-400 block mb-2">Style</label>
-              <select
-                value={style}
-                onChange={(e) => setStyle(e.target.value as StylePreset)}
-                className="w-full px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-xs text-white focus:outline-none focus:border-pink-500"
-              >
-                {STYLES.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
+            <label className="text-xs font-medium text-gray-400 block mb-2">Resolution</label>
+            <div className="flex gap-1 flex-wrap">
+              {RESOLUTIONS.map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setResolution(r)}
+                  className={`px-2.5 py-1 rounded-md text-xs border transition-colors ${
+                    resolution === r
+                      ? 'bg-pink-500/20 border-pink-500/50 text-pink-300'
+                      : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
+                  }`}
+                >
+                  {r}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -478,7 +379,7 @@ const GeneratePage: NextPage = () => {
               </div>
               <p className="text-sm text-gray-300 font-medium">Ready to generate</p>
               <p className="text-xs text-gray-500 mt-1 max-w-sm">
-                Write a prompt, choose a provider, and hit Generate to run the full pipeline — image → QA → segmentation → rigging.
+                Write a prompt and hit Generate to run the full pipeline — image → QA → segmentation → rigging.
               </p>
             </div>
           )}

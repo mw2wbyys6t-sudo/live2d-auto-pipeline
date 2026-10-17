@@ -560,7 +560,11 @@ export class APIClient {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-    return extractData<any>(res);
+    // 内层 data 不一定带 success；统一合并外层 envelope 的结论，
+    // 避免上层把 undefined 当成失败，也避免内层显式 false 被外层 true 覆盖。
+    const data = (extractData<any>(res) ?? {}) as Record<string, unknown>;
+    const envelopeOk = (res as { success?: boolean } | null)?.success !== false;
+    return { ...(data as any), success: envelopeOk && data.success !== false };
   }
 
   /** PSD 分层方案：调用后端 /api/export/psd 对角色立绘执行分层规划。 */
@@ -583,7 +587,18 @@ export class APIClient {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-    return extractData<any>(res);
+    // 关键修复：Go 的 PSDLayerResponse 内层没有 success 字段，只有外层 envelope 有。
+    // 旧实现直接把内层 data 返回，导致 `psdResult.success` 恒为 undefined，
+    // 导出页的 PSD 选项 100% 报「PSD 分层方案生成失败」。
+    const data = (extractData<any>(res) ?? {}) as {
+      layers?: number;
+      plan?: string;
+      plan_dir?: string;
+      psd_path?: string;
+      applied?: boolean;
+    };
+    const envelopeOk = (res as { success?: boolean } | null)?.success !== false;
+    return { ...data, success: envelopeOk };
   }
 
   // ---------- expressions ----------
@@ -650,7 +665,10 @@ export class APIClient {
 
   async getStatus(): Promise<SystemStatus | null> {
     try {
+      const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      const startedAt = now();
       const res = await this.request<unknown>('/api/status', undefined, 5000);
+      const latencyMs = Math.round(now() - startedAt);
       const wrapper = res as { data?: unknown };
       const data: Record<string, unknown> =
         (wrapper?.data as Record<string, unknown> | undefined) ??
@@ -661,8 +679,8 @@ export class APIClient {
         : [];
       return {
         apiConnected: true,
-        latencyMs: 0,
-        gpuAvailable: false,
+        latencyMs,
+        // 本版本没有 GPU 探测能力：不设置 gpuAvailable，UI 显示「未探测」而不是谎报 false。
         version: (data.version as string) ?? 'v0.10.7',
         modelsLoaded: services.map((s) => s.name),
         providers: services.map((s) => ({

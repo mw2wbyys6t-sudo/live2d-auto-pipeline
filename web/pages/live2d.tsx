@@ -2,19 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
   Box,
-  ChevronRight,
-  ChevronDown,
   Download,
   Play,
   Pause,
-  Grid3x3,
   CheckCircle2,
   AlertCircle,
   Bug,
-  Save,
   RotateCcw,
-  Wind,
-  ArrowDown,
 } from 'lucide-react';
 import type { NextPage } from 'next';
 import type { Expression, ParameterDef, ParamMap } from '../types';
@@ -64,55 +58,6 @@ const DEFAULT_EXPRESSIONS: Expression[] = [
   { name: 'thinking', parameters: { ParamBrowLAngle: 0.3, ParamMouthForm: -0.2, ParamEyeBallX: 0.4 } },
 ];
 
-interface TreeNode {
-  id: string;
-  label: string;
-  type: 'bone' | 'deformer' | 'param' | 'mesh' | 'group';
-  children?: TreeNode[];
-}
-
-const MODEL_TREE: TreeNode[] = [
-  {
-    id: 'root',
-    label: 'Root',
-    type: 'group',
-    children: [
-      {
-        id: 'body',
-        label: 'Body',
-        type: 'bone',
-        children: [
-          { id: 'torso', label: 'Torso', type: 'deformer' },
-          { id: 'armL', label: 'Arm L', type: 'bone' },
-          { id: 'armR', label: 'Arm R', type: 'bone' },
-        ],
-      },
-      {
-        id: 'head',
-        label: 'Head',
-        type: 'bone',
-        children: [
-          {
-            id: 'face',
-            label: 'Face',
-            type: 'deformer',
-            children: [
-              { id: 'eyeL', label: 'Eye L', type: 'mesh' },
-              { id: 'eyeR', label: 'Eye R', type: 'mesh' },
-              { id: 'mouth', label: 'Mouth', type: 'mesh' },
-              { id: 'browL', label: 'Brow L', type: 'mesh' },
-              { id: 'browR', label: 'Brow R', type: 'mesh' },
-            ],
-          },
-          { id: 'hairFront', label: 'Hair Front', type: 'deformer' },
-          { id: 'hairBack', label: 'Hair Back', type: 'deformer' },
-          { id: 'hairSide', label: 'Hair Side', type: 'deformer' },
-        ],
-      },
-    ],
-  },
-];
-
 const Live2DPage: NextPage = () => {
   const canvasRef = useRef<ModelCanvasHandle>(null);
   const [values, setValues] = useState<Record<string, number>>(() => {
@@ -121,13 +66,9 @@ const Live2DPage: NextPage = () => {
     return out;
   });
   const [running, setRunning] = useState(true);
-  const [wireframe, setWireframe] = useState(false);
   const [modelUrl, setModelUrl] = useState<string>('');
-  const [gravity, setGravity] = useState({ x: 0, y: -1 });
-  const [wind, setWind] = useState({ x: 0, y: 0 });
   const [currentExpression, setCurrentExpression] = useState('default');
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['root', 'head', 'face']));
-  const [activeTab, setActiveTab] = useState<'params' | 'physics' | 'expressions' | 'validate'>('params');
+  const [activeTab, setActiveTab] = useState<'params' | 'expressions' | 'validate'>('params');
   const [fps, setFps] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [currentModelDir, setCurrentModelDir] = useState('');
@@ -205,15 +146,6 @@ const Live2DPage: NextPage = () => {
     }, 500);
     return () => clearInterval(id);
   }, []);
-
-  const toggleNode = (id: string) => {
-    setExpandedNodes((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
 
   const runValidation = () => {
     const issues: Array<{ level: 'ok' | 'warn' | 'error'; msg: string }> = [];
@@ -316,47 +248,6 @@ const Live2DPage: NextPage = () => {
     }
   };
 
-  const renderTree = (nodes: TreeNode[], depth = 0): React.ReactNode =>
-    nodes.map((node) => {
-      const hasChildren = node.children && node.children.length > 0;
-      const expanded = expandedNodes.has(node.id);
-      return (
-        <div key={node.id}>
-          <button
-            onClick={() => hasChildren && toggleNode(node.id)}
-            className={`w-full flex items-center gap-1.5 px-2 py-1 rounded text-xs hover:bg-gray-800 transition-colors ${
-              depth === 0 ? 'text-gray-200 font-medium' : 'text-gray-400'
-            }`}
-            style={{ paddingLeft: depth * 12 + 8 }}
-          >
-            {hasChildren ? (
-              expanded ? (
-                <ChevronDown className="w-3 h-3 text-gray-500" />
-              ) : (
-                <ChevronRight className="w-3 h-3 text-gray-500" />
-              )
-            ) : (
-              <span className="w-3" />
-            )}
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                node.type === 'bone'
-                  ? 'bg-pink-400'
-                  : node.type === 'deformer'
-                  ? 'bg-purple-400'
-                  : node.type === 'mesh'
-                  ? 'bg-cyan-400'
-                  : 'bg-gray-500'
-              }`}
-            />
-            <span className="truncate">{node.label}</span>
-            <span className="ml-auto text-[9px] text-gray-600 uppercase">{node.type}</span>
-          </button>
-          {hasChildren && expanded && renderTree(node.children!, depth + 1)}
-        </div>
-      );
-    });
-
   return (
     <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
@@ -365,7 +256,7 @@ const Live2DPage: NextPage = () => {
             <Box className="w-6 h-6 text-pink-400" /> Live2D Builder
           </h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Compose, rig, and debug your Live2D model — parameters, physics, and expressions
+            Compose, rig, and debug your Live2D model — parameters and expressions
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -379,16 +270,6 @@ const Live2DPage: NextPage = () => {
           >
             {running ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
             {running ? 'Pause' : 'Play'}
-          </button>
-          <button
-            onClick={() => setWireframe((w) => !w)}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-colors ${
-              wireframe
-                ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
-                : 'bg-gray-800 border-gray-700 text-gray-300'
-            }`}
-          >
-            <Grid3x3 className="w-3.5 h-3.5" /> Wireframe
           </button>
           <button
             onClick={runValidation}
@@ -408,15 +289,12 @@ const Live2DPage: NextPage = () => {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr_320px] gap-4">
-        {/* Left: model tree */}
-        <div className="bg-[#1a1a23] border border-gray-800 rounded-xl overflow-hidden flex flex-col max-h-[calc(100vh-180px)]">
-          <div className="p-3 border-b border-gray-800 flex items-center justify-between">
-            <p className="text-xs font-medium text-gray-400">Model structure</p>
-            <label className="text-[10px] text-gray-500 flex items-center gap-1">
-              <Save className="w-3 h-3" /> {modelUrl ? 'Loaded' : 'Demo'}
-            </label>
+        {/* Left: model source */}
+        <div className="bg-[#1a1a23] border border-gray-800 rounded-xl overflow-hidden flex flex-col">
+          <div className="p-3 border-b border-gray-800">
+            <p className="text-xs font-medium text-gray-400">Model source</p>
           </div>
-          <div className="p-2 border-b border-gray-800">
+          <div className="p-2">
             <input
               type="text"
               value={modelUrl}
@@ -425,7 +303,6 @@ const Live2DPage: NextPage = () => {
               className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-[11px] text-white placeholder:text-gray-600 focus:outline-none focus:border-pink-500"
             />
           </div>
-          <div className="flex-1 overflow-y-auto py-2">{renderTree(MODEL_TREE)}</div>
         </div>
 
         {/* Center: canvas */}
@@ -433,7 +310,6 @@ const Live2DPage: NextPage = () => {
           <ModelCanvas
             ref={canvasRef}
             modelUrl={modelUrl || undefined}
-            wireframe={wireframe}
             onReady={() => setRunning(true)}
           />
           {!modelUrl && (
@@ -453,7 +329,6 @@ const Live2DPage: NextPage = () => {
             {(
               [
                 ['params', 'Params'],
-                ['physics', 'Physics'],
                 ['expressions', 'Express'],
                 ['validate', 'Validate'],
               ] as const
@@ -498,40 +373,6 @@ const Live2DPage: NextPage = () => {
                     </div>
                   </div>
                 ))}
-              </div>
-            )}
-
-            {activeTab === 'physics' && (
-              <div className="space-y-5">
-                <div>
-                  <p className="text-xs text-gray-300 font-medium mb-3 flex items-center gap-1.5">
-                    <ArrowDown className="w-3.5 h-3.5" /> Gravity
-                  </p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <PhysicsInput label="X" value={gravity.x} onChange={(v) => setGravity((g) => ({ ...g, x: v }))} min={-1} max={1} step={0.1} />
-                    <PhysicsInput label="Y" value={gravity.y} onChange={(v) => setGravity((g) => ({ ...g, y: v }))} min={-1} max={1} step={0.1} />
-                  </div>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-300 font-medium mb-3 flex items-center gap-1.5">
-                    <Wind className="w-3.5 h-3.5" /> Wind
-                  </p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <PhysicsInput label="X" value={wind.x} onChange={(v) => setWind((g) => ({ ...g, x: v }))} min={-1} max={1} step={0.1} />
-                    <PhysicsInput label="Y" value={wind.y} onChange={(v) => setWind((g) => ({ ...g, y: v }))} min={-1} max={1} step={0.1} />
-                  </div>
-                </div>
-                <div className="p-3 rounded-lg bg-gray-900 border border-gray-800">
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Physics groups</p>
-                  {['HairFront', 'HairSide', 'HairBack', 'Ribbon', 'Skirt'].map((g) => (
-                    <div key={g} className="flex items-center justify-between py-1 text-xs">
-                      <span className="text-gray-400">{g}</span>
-                      <span className="text-emerald-400 flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3" /> 3 inputs
-                      </span>
-                    </div>
-                  ))}
-                </div>
               </div>
             )}
 
@@ -602,31 +443,5 @@ const Live2DPage: NextPage = () => {
     </div>
   );
 };
-
-interface PhysicsInputProps {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  min: number;
-  max: number;
-  step: number;
-}
-
-function PhysicsInput({ label, value, onChange, min, max, step }: PhysicsInputProps) {
-  return (
-    <label className="block">
-      <span className="text-[10px] text-gray-500 uppercase tracking-wide">{label}</span>
-      <input
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-        className="mt-1 w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-xs text-white font-mono focus:outline-none focus:border-pink-500"
-      />
-    </label>
-  );
-}
 
 export default Live2DPage;

@@ -125,9 +125,7 @@ const CharacterDetailPage: NextPage = () => {
     setSaving(true);
     setError(null);
     try {
-      const updated = await apiClient
-        .updateCharacter(id, form)
-        .catch(() => ({ ...character, ...form, updatedAt: new Date().toISOString() } as Character));
+      const updated = await apiClient.updateCharacter(id, form);
       setCharacter(updated);
       setForm(updated);
       setDirty(false);
@@ -141,7 +139,7 @@ const CharacterDetailPage: NextPage = () => {
   const handleDelete = async () => {
     if (!id || typeof id !== 'string') return;
     try {
-      await apiClient.deleteCharacter(id).catch(() => undefined);
+      await apiClient.deleteCharacter(id);
       router.push('/characters');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete');

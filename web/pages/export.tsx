@@ -39,10 +39,6 @@ const ExportPage: NextPage = () => {
   const [formats, setFormats] = useState<Set<ExportFormat>>(
     new Set(['live2d-package']),
   );
-  const [includePhysics, setIncludePhysics] = useState(true);
-  const [includeExpressions, setIncludeExpressions] = useState(true);
-  const [includeMotions, setIncludeMotions] = useState(false);
-  const [compression, setCompression] = useState(6);
   const [job, setJob] = useState<ExportJob | null>(null);
   const [history, setHistory] = useState<ExportJob[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -136,9 +132,7 @@ const ExportPage: NextPage = () => {
             if (!psdImagePath) {
               throw new Error('PSD 分层需要分层目录路径，请先生成或从分层页进入');
             }
-            const psdResult = await apiClient
-              .exportPSDPlan(psdImagePath)
-              .catch(() => null);
+            const psdResult = await apiClient.exportPSDPlan(psdImagePath);
             if (!psdResult || !psdResult.success) {
               throw new Error('PSD 分层方案生成失败');
             }
@@ -156,8 +150,7 @@ const ExportPage: NextPage = () => {
             });
           } else {
             const result = await apiClient
-              .exportModel(selectedId, format, layersDir || undefined)
-              .catch(() => null);
+              .exportModel(selectedId, format, layersDir || undefined);
             if (!result || !result.success) {
               throw new Error(`Export failed for ${format}`);
             }
@@ -221,10 +214,6 @@ const ExportPage: NextPage = () => {
   const [packingFormat, setPackingFormat] = useState<string | null>(null);
 
   const downloadFile = async (dl: ExportDownload) => {
-    if (dl.url.startsWith('#')) {
-      alert(`Demo download: ${dl.filename} (connect API to generate real file)`);
-      return;
-    }
     // M11：真实 zip 走后端二进制通道现打包，落盘的是可正常解压的包
     if (dl.modelDir) {
       if (packingFormat) return; // 同时只打一个包
@@ -346,41 +335,6 @@ const ExportPage: NextPage = () => {
                   </button>
                 );
               })}
-            </div>
-          </div>
-
-          <div className="bg-[#1a1a23] border border-gray-800 rounded-xl p-5">
-            <p className="text-xs font-medium text-gray-400 mb-3">Options</p>
-            <div className="space-y-3">
-              <Toggle
-                label="Include physics config"
-                value={includePhysics}
-                onChange={setIncludePhysics}
-              />
-              <Toggle
-                label="Include expressions"
-                value={includeExpressions}
-                onChange={setIncludeExpressions}
-              />
-              <Toggle
-                label="Include motions"
-                value={includeMotions}
-                onChange={setIncludeMotions}
-              />
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-gray-300">Compression level</span>
-                  <span className="text-xs text-pink-400 font-mono">{compression}</span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={9}
-                  value={compression}
-                  onChange={(e) => setCompression(parseInt(e.target.value))}
-                  className="w-full accent-pink-500"
-                />
-              </div>
             </div>
           </div>
 
@@ -559,34 +513,5 @@ const ExportPage: NextPage = () => {
     </div>
   );
 };
-
-interface ToggleProps {
-  label: string;
-  value: boolean;
-  onChange: (v: boolean) => void;
-}
-
-function Toggle({ label, value, onChange }: ToggleProps) {
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(!value)}
-      className="w-full flex items-center justify-between p-2 rounded-lg hover:bg-gray-900 transition-colors"
-    >
-      <span className="text-xs text-gray-300">{label}</span>
-      <span
-        className={`w-9 h-5 rounded-full relative transition-colors ${
-          value ? 'bg-gradient-to-r from-pink-500 to-purple-500' : 'bg-gray-700'
-        }`}
-      >
-        <span
-          className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${
-            value ? 'left-[18px]' : 'left-0.5'
-          }`}
-        />
-      </span>
-    </button>
-  );
-}
 
 export default ExportPage;
