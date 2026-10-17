@@ -365,10 +365,13 @@ jobs:
       # 装配安装包自带运行时（嵌入式 Python + 全量依赖 + 源码树 + exe/dll/模型）。
       # 产物 desktop/bundle/ 由 tauri.conf.json 的 resources map 打进 $RESOURCE。
       - name: Assemble desktop runtime bundle
-        run: >-
-          python scripts/build_desktop_bundle.py
-          --go-exe api/live2d-api.exe
-          --face-tracker-exe native/face_tracker/target/release/face_tracker.exe
+        run: |
+          # torch / mediapipe 包内路径很深，直接在仓库路径下装配会撞 Windows 260 字符限制。
+          # 先装配到短路径（%RUNNER_TEMP%\l2d），完成后再整目录移回 desktop\bundle。
+          python scripts/build_desktop_bundle.py --dest "$env:RUNNER_TEMP\l2d" --go-exe api/live2d-api.exe --face-tracker-exe native/face_tracker/target/release/face_tracker.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path desktop/bundle) { Remove-Item -Recurse -Force desktop/bundle }
+          Move-Item "$env:RUNNER_TEMP\l2d" desktop/bundle
         shell: pwsh
 
       - name: Build Tauri app + NSIS installer
