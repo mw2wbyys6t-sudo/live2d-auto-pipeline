@@ -70,8 +70,11 @@ PYTHON_EMBED_URL = (
 )
 
 YUNET_NAME = "face_detection_yunet_2023mar.onnx"
+# 注意：opencv_zoo 用 Git LFS 托管该模型。`raw.githubusercontent.com` 只会返回
+# 131 字节的 LFS 指针文本，必须走 media.githubusercontent.com（或 github.com/.../raw）
+# 才会拿到真正的二进制。
 YUNET_URL = (
-    "https://raw.githubusercontent.com/opencv/opencv_zoo/main/"
+    "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/"
     "models/face_detection_yunet/" + YUNET_NAME
 )
 
@@ -179,7 +182,11 @@ def download(url: str, dest: Path, *, offline: bool, retries: int = 3) -> Path:
             with urllib.request.urlopen(req, timeout=180) as resp, open(tmp, "wb") as out:
                 shutil.copyfileobj(resp, out, length=1 << 20)
             tmp.replace(dest)
-            print(f"    [ok  ] {dest.name}  {human(dest.stat().st_size)}")
+            size = dest.stat().st_size
+            print(f"    [ok  ] {dest.name}  {human(size)}")
+            if size < 1024:
+                print("    [warn] 文件异常小，可能是 Git LFS 指针或错误页；"
+                      "随后的 SHA256 校验会拦截")
             return dest
         except Exception as e:  # 网络抖动：退避重试
             last_err = e
@@ -195,9 +202,16 @@ def verify_hash(path: Path, expected: str, key: str, record: dict) -> None:
         print(f"    [hash] {key} 未在锁定表中设置 → 实测 {actual}")
         return
     if actual.lower() != expected.lower():
+        # 删掉坏缓存，避免以后每次构建都复用同一个错误文件（如 LFS 指针）。
+        try:
+            path.unlink()
+            removed = "已删除该缓存文件，重跑会重新下载。"
+        except OSError:
+            removed = "缓存文件删除失败，可手动清理。"
         sys.exit(
             f"❌ SHA256 校验失败：{key}\n"
             f"   期望 {expected}\n   实测 {actual}\n   文件 {path}\n"
+            f"   {removed}\n"
             f"   若确属版本升级，请更新 {HASHES_FILE.relative_to(ROOT)} 后重试。")
     print(f"    [hash] {key} OK")
 
