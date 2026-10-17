@@ -1,0 +1,134 @@
+name: Windows Installer Acceptance
+
+# 手动触发的「发布包实机安装验收」：从 Release 下载安装包 → 校验 SHA256 →
+# 静默安装 → 启动后端探活 → 跑仓库自带的验收脚本。
+#
+# 不覆盖：GUI 页面逐项点击、摄像头面捕、桌宠窗口行为（这些必须在真机上人工确认）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to install'
+        required: true
+        default: 'v0.10.8'
+      expected_sha256:
+        description: 'Expected SHA256 of the installer (empty = skip the check)'
+        required: false
+        default: 'ff7d8aba4a96e38f93a4f2d5bf9c4314dd32817a43050c321f1551b30387d248'
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: Install and probe the published installer
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Download the published installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          gh release download "${{ inputs.tag }}" --repo "${{ github.repository }}" --pattern "*.exe" --dir dist
+          Get-ChildItem dist | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Verify SHA256
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist/*.exe | Select-Object -First 1
+          $actual = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          Write-Host "file   : $($exe.Name)"
+          Write-Host "size   : $($exe.Length) bytes"
+          Write-Host "sha256 : $actual"
+          $expected = "${{ inputs.expected_sha256 }}".Trim().ToLower()
+          if ($expected -and ($actual -ne $expected)) {
+            Write-Host "::error::SHA256 mismatch (expected $expected)"
+            exit 1
+          }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- SHA256 verified: ``$actual``"
+
+      - name: Silent install
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem dist/*.exe | Select-Object -First 1).FullName
+          $p = Start-Process -FilePath $exe -ArgumentList '/S' -Wait -PassThru
+          Write-Host "installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) {
+            Write-Host "::error::installer failed with exit code $($p.ExitCode)"
+            exit 1
+          }
+
+      - name: Locate installation
+        shell: pwsh
+        run: |
+          $roots = @($env:LOCALAPPDATA, $env:ProgramFiles)
+          $hit = $null
+          foreach ($root in $roots) {
+            if (-not $root -or -not (Test-Path $root)) { continue }
+            $hit = Get-ChildItem -Path $root -Filter 'live2d-api.exe' -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+            if ($hit) { break }
+          }
+          if (-not $hit) {
+            Write-Host "::error::live2d-api.exe not found after install"
+            Get-ChildItem -Path $env:LOCALAPPDATA -Depth 1 -ErrorAction SilentlyContinue | Select-Object Name
+            exit 1
+          }
+          $dir = $hit.Directory.FullName
+          Write-Host "installed to: $dir"
+          "INSTALL_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Get-ChildItem $dir | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Start backend and wait for health
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:INSTALL_DIR 'live2d-api.exe'
+          $proc = Start-Process -FilePath $exe -WorkingDirectory $env:INSTALL_DIR -PassThru
+          $healthy = $false
+          $last = $null
+          for ($i = 0; $i -lt 45; $i++) {
+            Start-Sleep -Seconds 2
+            if ($proc.HasExited) {
+              Write-Host "::error::live2d-api.exe exited early with code $($proc.ExitCode)"
+              exit 1
+            }
+            try {
+              $last = Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/health' -TimeoutSec 3
+              if ($last) { $healthy = $true; break }
+            } catch { }
+          }
+          if (-not $healthy) {
+            Write-Host "::error::backend did not become healthy within 90s"
+            exit 1
+          }
+          Write-Host "backend is healthy"
+          $last | ConvertTo-Json -Depth 6 | Write-Host
+
+      - name: Run the repository acceptance script
+        shell: pwsh
+        run: |
+          $out = & ./scripts/windows/verify_desktop_install.ps1 -InstallDir $env:INSTALL_DIR *>&1 | Out-String
+          Write-Host $out
+          if ($out -match 'RESULT: FAIL') {
+            Write-Host "::error::acceptance script reported FAIL"
+            exit 1
+          }
+
+      - name: Stop backend and report leftovers
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Process live2d-api -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          $left = Get-Process live2d-api, face_tracker -ErrorAction SilentlyContinue
+          if ($left) {
+            Write-Host "::warning::leftover processes: $($left.ProcessName -join ', ')"
+          } else {
+            Write-Host "no leftover processes"
+          }
