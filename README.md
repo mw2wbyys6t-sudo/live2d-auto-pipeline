@@ -114,6 +114,15 @@
 3. 双击安装（NSIS 安装向导）；装完先确认安装目录含 `live2d-api.exe`、`python\`、`app\`、`models\`
 4. 从开始菜单或桌面快捷方式启动，应用会自动拉起本地后端并打开工作台 `http://localhost:8080`
 
+> 🔏 **关于代码签名**：当前安装包**尚未签名**，Windows 首次运行会提示 SmartScreen「未知发布者」——点「更多信息 → 仍要运行」即可。请用 SHA256 确认文件完整：
+>
+> ```powershell
+> (Get-FileHash ".\Live2D.Master.Agent_0.10.8_x64-setup.exe" -Algorithm SHA256).Hash
+> # 期望：FF7D8ABA4A96E38F93A4F2D5BF9C4314DD32817A43050C321F1551B30387D248
+> ```
+>
+> 签名管线已就绪（[scripts/windows/sign_artifacts.ps1](scripts/windows/sign_artifacts.ps1)，支持自定义签名命令 / PFX / 证书指纹）。获得受信任证书后，设置仓库变量 `L2D_SIGN_MODE=required` 并配置对应密钥，构建即自动签名并在签名无效时**阻断发布**。
+
 ### 命令行快速体验（30 秒核心能力）
 
 ```bash
