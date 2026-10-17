@@ -59,6 +59,17 @@ Add-Line ''
 # ---------------------------------------------------------------------
 Add-Line '--- 1. installation ---'
 # ---------------------------------------------------------------------
+# The Tauri shell keeps the Cargo package name (live2d-master-agent.exe);
+# some builds used the product name instead. Accept either.
+function Get-ShellExe {
+    param([string]$Dir)
+    foreach ($name in @('live2d-master-agent.exe', 'Live2D Master Agent.exe')) {
+        $candidate = Join-Path $Dir $name
+        if (Test-Path $candidate) { return $candidate }
+    }
+    return $null
+}
+
 if (-not $InstallDir) {
     $candidates = @(
         (Join-Path $env:LOCALAPPDATA 'Live2D Master Agent'),
@@ -68,7 +79,7 @@ if (-not $InstallDir) {
         $candidates += (Join-Path ${env:ProgramFiles(x86)} 'Live2D Master Agent')
     }
     foreach ($p in $candidates) {
-        if (Test-Path (Join-Path $p 'Live2D Master Agent.exe')) { $InstallDir = $p; break }
+        if (Get-ShellExe $p) { $InstallDir = $p; break }
     }
 }
 
@@ -82,7 +93,6 @@ if (-not $InstallDir -or -not (Test-Path $InstallDir)) {
 }
 
 $need = @(
-    'Live2D Master Agent.exe',
     'live2d-api.exe',
     'face_tracker.exe',
     'onnxruntime.dll',
@@ -106,8 +116,11 @@ if ($InstallDir) {
     foreach ($n in $need) {
         if (-not (Test-Path (Join-Path $InstallDir $n))) { $missing += $n }
     }
+    $shell = Get-ShellExe $InstallDir
+    if (-not $shell) { $missing += 'live2d-master-agent.exe' }
+
     if ($missing.Count -eq 0) {
-        Check ("bundled files ({0})" -f $need.Count) 'OK' 'all present'
+        Check ("bundled files ({0})" -f ($need.Count + 1)) 'OK' 'all present'
     } else {
         Check 'bundled files' 'FAIL' ("missing: " + ($missing -join '; '))
     }
@@ -182,9 +195,13 @@ function Get-Api {
 
 $health = Get-Api '/api/health'
 if (-not $health -and $Launch -and $InstallDir) {
-    $exe = Join-Path $InstallDir 'Live2D Master Agent.exe'
-    Add-Line ("launching: " + $exe)
-    Start-Process -FilePath $exe | Out-Null
+    $exe = Get-ShellExe $InstallDir
+    if ($exe) {
+        Add-Line ("launching: " + $exe)
+        Start-Process -FilePath $exe | Out-Null
+    } else {
+        Add-Line 'launch skipped: shell exe not found'
+    }
     for ($i = 0; $i -lt 40; $i++) {
         Start-Sleep -Seconds 1
         $health = Get-Api '/api/health'

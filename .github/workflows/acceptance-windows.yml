@@ -16,10 +16,11 @@ on:
         description: 'Expected SHA256 of the installer (empty = skip the check)'
         required: false
         default: 'ff7d8aba4a96e38f93a4f2d5bf9c4314dd32817a43050c321f1551b30387d248'
-  # 该文件自身变更时自动跑一次，用于验证验收管线本身可用。
+  # 该文件或验收脚本变更时自动跑一次，用于验证验收管线本身可用。
   push:
     paths:
       - '.github/workflows/acceptance-windows.yml'
+      - 'scripts/windows/verify_desktop_install.ps1'
 
 permissions:
   contents: read
