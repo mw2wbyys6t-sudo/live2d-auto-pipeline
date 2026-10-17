@@ -56,6 +56,8 @@ const CharacterDetailPage: NextPage = () => {
   const [form, setForm] = useState<Partial<Character>>({});
   const [dirty, setDirty] = useState(false);
   const [latestRecord, setLatestRecord] = useState<LatestGeneration | null>(null);
+  // 立绘在应用内弹窗查看，不新开窗口（桌面壳下 target=_blank 会被系统浏览器接管）
+  const [imagePreview, setImagePreview] = useState(false);
 
   // Defer locale-dependent date formatting to client-side to avoid SSR/CSR hydration mismatch
   // NOTE: This must be declared before any early return to follow the Rules of Hooks.
@@ -440,9 +442,13 @@ const CharacterDetailPage: NextPage = () => {
                   </p>
                   <div className="flex gap-3 mt-1.5 text-[11px]">
                     {latestRecord.image_url && (
-                      <a href={latestRecord.image_url} target="_blank" rel="noreferrer" className="text-pink-400 hover:text-pink-300">
+                      <button
+                        type="button"
+                        onClick={() => setImagePreview(true)}
+                        className="text-pink-400 hover:text-pink-300"
+                      >
                         查看立绘
-                      </a>
+                      </button>
                     )}
                     {latestRecord.psd_url && (
                       <a href={latestRecord.psd_url} download className="text-pink-400 hover:text-pink-300">
@@ -493,6 +499,23 @@ const CharacterDetailPage: NextPage = () => {
           This will remove <span className="text-white font-medium">{character.name}</span> and all
           associated generations, embeddings, and outfits. This cannot be undone.
         </p>
+      </Modal>
+
+      {/* 立绘应用内预览：始终留在桌面壳内，不触发系统浏览器 */}
+      <Modal
+        open={imagePreview}
+        onClose={() => setImagePreview(false)}
+        title="最近立绘"
+        size="xl"
+      >
+        {latestRecord?.image_url && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={latestRecord.image_url}
+            alt="最近生成的立绘"
+            className="w-full h-auto max-h-[75vh] object-contain rounded-lg bg-black/30"
+          />
+        )}
       </Modal>
     </div>
   );
