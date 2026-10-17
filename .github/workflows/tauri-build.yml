@@ -157,6 +157,11 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: tauri-standalone-exe
-          path: desktop/target/release/Live2D Master Agent.exe
-          if-no-files-found: ignore
+          # 二进制名来自 desktop/Cargo.toml 的 package.name（live2d-master-agent），
+          # 不是 productName「Live2D Master Agent」。此前按 productName 找导致
+          # 永远命中不到、被 if-no-files-found 静默跳过。
+          # 注意：它只是 Tauri 窗口壳，必须配合安装目录里的 python/app/models 才能跑；
+          # 完整可运行包请用上面的 NSIS 安装包。
+          path: desktop/target/release/live2d-master-agent.exe
+          if-no-files-found: warn
           retention-days: 30
