@@ -56,15 +56,22 @@
 
 | 项 | 值 |
 |---|---|
-| 发布线 | `main`（trunk） |
-| 构建环境 | GitHub Actions `windows-latest`；Node 20 / Go 1.25 / Rust stable / Python 3.12.10 |
-| 钉住的下载物 | `python-3.12.10-embed-amd64.zip`、`onnxruntime-win-x64-1.31.0.zip`、YuNet onnx、`face_landmarker.task`（SHA256 见 `scripts/windows/hashes.json`） |
-| 依赖解析 | `requirements.desktop.txt` → win_amd64 / cp312（29 个直接依赖，装出 **92 个包**，site-packages 约 1.4 GB） |
-| 构建门禁 | 随包解释器导入冒烟（9 项必装模块） |
-| 产物 | `Live2D.Master.Agent_0.10.8_x64-setup.exe`（**306.17 MiB / 321,047,178 字节**，sha256 `ff7d8aba…0387d248`） |
-| 必须通过的检查 | Python 测试 3.10/3.11/3.12、Go build+test、Next.js build、TS check |
-| 回滚目标 | 卸载后重装同一产物；用户数据保留 |
-| 例外 | 安装包未签名（SmartScreen 告警）；无自动更新 |
+| 版本 / 标签 | `v0.10.8`（annotated tag `02592f3` → 提交 `69b27d1`） |
+| 源码修订 | `69b27d1` — `chore(release): v0.10.8 - Honest Desktop`，发布线 `main`（trunk） |
+| 构建运行 | [CI/CD Pipeline #39033114624](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39033114624)（tag 触发；`windows-installer` 仅 tag 构建） |
+| 构建环境 | `windows-latest`；Node 20 / Go 1.25 / Rust stable / Python 3.12.10 |
+| 必须通过的检查 | Python Tests 3.10 / 3.11 / 3.12（3.12 实测 **504 passed / 96 skipped**）、Go build + test、Next.js build + TS check、装配冒烟（**必装 9 项全部可导入**） |
+| 依赖解析 | `requirements.desktop.txt`（29 个直接依赖）→ win_amd64 / cp312，实装 **92 个包**，site-packages **1.4 GB** |
+| 装配产物体积 | python 1.4 GB + app 1.6 MB + models 3.8 MB = **1.5 GB**（未压缩） |
+| 钉住且强制校验 | `python-embed` `4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3`<br>`yunet-onnx` `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`<br>`face-landmarker-task` `64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff`<br>（来源 `scripts/windows/hashes.json`，不匹配即构建失败） |
+| 已实测但未强制 | `onnxruntime-dll` `0c42dc4e278f0968fdf9ebf1b1e54a74c657a9942e70803e453c91993451cf4c`（17,253,176 字节）——`hashes.json` 中该项仍为空，回填后转为强制校验 |
+| 产物 | `Live2D.Master.Agent_0.10.8_x64-setup.exe` — **306.17 MiB / 321,047,178 字节** |
+| 产物校验 | `sha256:ff7d8aba4a96e38f93a4f2d5bf9c4314dd32817a43050c321f1551b30387d248` |
+| 下载可达性 | Release 直链匿名请求 `HTTP 200`，`content-length: 321047178`（已实测） |
+| 替代关系 | 取代 `v0.10.7`；其 8 MB 坏资产已删除，发布说明顶部加了警示 |
+| 回滚目标 | 卸载后重装**同一产物**（v0.10.8）；用户数据在 `%APPDATA%` 与「文档」保留，卸载不清空 |
+| 例外 | 未签名（SmartScreen 告警）；无自动更新；无 MSIX / Store 分发 |
+| 复核方式 | `(Get-FileHash "<安装包>" -Algorithm SHA256).Hash` 与上方 `sha256` 比对 |
 
 ---
 
