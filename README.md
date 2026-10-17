@@ -35,7 +35,7 @@
 | 自动分层（SAM 语义） | ⚠️ 需配置 | 语义分割精度更高，但需下载约 2GB 模型权重 |
 | PSD 导出 | ✅ 可用 | 需 `pip install psd-tools`；缺了也能降级导出 PNG 包 |
 | Live2D moc3 导出 | ✅ 可用 | **自研编译器，已通过 Live2D 官方 Cubism Core 逐像素验收** |
-| 面部捕捉驱动 | ✅ 安装包内置 | 桌面版用 Rust 原生面捕（YuNet + `onnxruntime.dll`），**不需要装 Python / MediaPipe**；从源码运行才走 MediaPipe |
+| 面部捕捉驱动 | ✅ 安装包内置 | 桌面版用 Rust 原生面捕（YuNet + `onnxruntime.dll`），**不需要装 Python / MediaPipe**；从源码运行才走 MediaPipe。CI 已验证 exe / 模型 / dll 齐备，未接摄像头实测驱动效果 |
 | 桌宠运行 | ⚠️ 未实机验证 | pygame 已随包分发，但多窗口 / 置顶行为尚未在真机验收 |
 | LLM 对话 + 语音 | ⚠️ 需 Key | 对话需要 OpenAI/Anthropic API Key 或本地 Ollama |
 | 离线依赖 | ✅ 安装包自带 | 嵌入式 CPython 3.12 + 92 个离线包（site-packages 约 1.4 GB），装完即可跑，无需预装 Python |
@@ -127,6 +127,8 @@ Invoke-RestMethod http://127.0.0.1:8080/api/diagnostics | ConvertTo-Json -Depth 
 ```
 
 仓库还带一键验收脚本：`powershell -ExecutionPolicy Bypass -File .\scripts\windows\verify_desktop_install.ps1 -Launch`
+
+> ✅ 这套验收已在 GitHub 的 Windows runner 上对 v0.10.8 **发布包本身**实跑过，结果 `RESULT: PASS`（[run #39046077810](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39046077810)）：安装器退出码 `0`、17 项文件齐全、随包 Python `3.12.10`、`torch` / `mediapipe` 可导入、`/api/health` 返回 `python_ok=true`。
 
 > 🔏 **关于代码签名**：当前安装包**尚未签名**，Windows 首次运行会提示 SmartScreen「未知发布者」——点「更多信息 → 仍要运行」即可。请用 SHA256 确认文件完整：
 >
@@ -318,7 +320,7 @@ LLM_MODEL=gpt-4o-mini
 
 1. **生成的角色质量取决于 AI 生图服务商**。免费的 Pollinations 出图质量中等；想要高质量赛璐璐立绘，建议配置火山引擎 Seedream。
 2. **SAM 语义分层需要约 2GB 模型权重**。不想下载的话，默认的 K-means 分层也够用。
-3. **面部捕捉依赖摄像头**：安装包内置原生面捕（YuNet + onnxruntime），但尚未在真实机器上完成验收；桌宠虽随包带了 pygame，多窗口 / 置顶行为也未验证。
+3. **面部捕捉依赖摄像头**：安装包内置原生面捕（YuNet + onnxruntime），CI 已验证程序、模型、运行库齐备且诊断项通过，但**未接摄像头实测驱动效果**；桌宠的多窗口 / 置顶行为同样未验证。
 4. **moc3 导出的模型是「可用但粗糙」的起点**。自动绑定无法替代专业 Live2D 技术师的手动精调——它能让你快速有一个能动的模型，但要追求商业级品质仍需人工打磨。
 5. **项目仍在快速迭代中**，API 接口可能随版本变化。
 6. **Windows 安装包未签名**：首次运行会触发 SmartScreen「未知发布者」提示；请用上面给出的 SHA256 校验下载完整性。

@@ -42,10 +42,27 @@
 - `scripts/windows/verify_desktop_install.ps1`：检查 17 项关键文件、随包解释器与核心依赖、`/api/health` 与 `/api/diagnostics`、残留进程，输出 `PASS / PASS with warnings / FAIL`。
 - 新增 `/api/diagnostics` 端点，逐项返回运行时状态（解释器路径、依赖可用性、模型、输出目录）。
 
-### ⚠️ 尚未验证（如实标注）
+### ✅ 实机安装验收（2026-10-17）
 
-- **真机安装验收未完成**：CI 已通过装配冒烟与产物检查，但"双击安装 → 启动 → 走完 5 个页面"尚未在真实 Windows 机器上录得结果。
-- **原生面捕 / 桌宠**未实机验证（仅确认二进制、dll 与模型已打入安装包）。
+在 GitHub `windows-latest` 上对**发布资产本身**做了真实安装验收（[run #39046077810](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39046077810)），结果 **`RESULT: PASS`**：
+
+| 检查 | 实测结果 |
+|---|---|
+| 产物哈希 | `321,047,178` 字节，sha256 与发布值一致 |
+| 静默安装 | 安装器退出码 `0`，落在 `%LOCALAPPDATA%\Live2D Master Agent` |
+| 文件完整性 | **17 项全部存在**（含 `live2d-api.exe` / `live2d-master-agent.exe` / `python\` / `app\` / `models\`） |
+| 随包解释器 | Python `3.12.10`；7 个核心模块可导入；`mediapipe 0.10.31`；`torch 2.14.1+cpu`；`sitecustomize` 生效 |
+| 后端 | `live2d-api.exe` 启动后 `/api/health` 返回 `python_ok=true` |
+| 诊断 | 8 项 `check:*` 全 ok（后端 / 解释器 / 脚本目录 / 产物目录可写 / 面捕程序 / YuNet 模型 / ONNX Runtime / 仅回环监听） |
+| 退出 | 停止后无 `live2d-api` / `face_tracker` 残留 |
+
+> 期间发现并修复了一个**验收脚本自身的 bug**：脚本按 productName 找 `Live2D Master Agent.exe`，而 Tauri 产物实际是 Cargo 包名 `live2d-master-agent.exe`，导致首轮误报 FAIL。现已兼容两种命名。
+
+### ⚠️ 仍需人工确认（自动化覆盖不到）
+
+- GUI 逐项操作：生成 → 分层 → 导出 → 预览 → 桌宠。
+- 摄像头权限与面捕实际驱动效果（已确认程序 / 模型 / 运行库齐备，但未接摄像头跑过）。
+- 桌宠窗口的多窗口 / 置顶行为。
 - **安装包未签名**，首次运行会触发 SmartScreen 告警。签名管线已就绪（`scripts/windows/sign_artifacts.ps1`），默认 `L2D_SIGN_MODE=off` 不生效。
 
 ### ↩️ 回退
@@ -68,6 +85,7 @@
 | 产物 | `Live2D.Master.Agent_0.10.8_x64-setup.exe` — **306.17 MiB / 321,047,178 字节** |
 | 产物校验 | `sha256:ff7d8aba4a96e38f93a4f2d5bf9c4314dd32817a43050c321f1551b30387d248` |
 | 下载可达性 | Release 直链匿名请求 `HTTP 200`，`content-length: 321047178`（已实测） |
+| 实机验收 | [run #39046077810](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39046077810) 在 `windows-latest` 安装该发布资产：`RESULT: PASS`（17 项文件、解释器 3.12.10、7 模块、torch 2.14.1+cpu、`/api/health` `python_ok=true`、8 项 diagnostics 全 ok） |
 | 替代关系 | 取代 `v0.10.7`；其 8 MB 坏资产已删除，发布说明顶部加了警示 |
 | 回滚目标 | 卸载后重装**同一产物**（v0.10.8）；用户数据在 `%APPDATA%` 与「文档」保留，卸载不清空 |
 | 例外 | 未签名（SmartScreen 告警）；无自动更新；无 MSIX / Store 分发 |
