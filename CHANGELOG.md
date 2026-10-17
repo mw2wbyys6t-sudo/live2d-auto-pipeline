@@ -4,6 +4,58 @@
 
 ---
 
+## [v0.10.8] — 2026-10-17 — 代号「Honest Desktop」
+
+> **本版目标**：让安装包"装完真的能用"，并把"看起来能用、实际没有"的东西清掉。
+
+### 🔴 修复（会直接坑到用户）
+
+- **安装包不再缺运行时**：Tauri NSIS 改为自带嵌入式 CPython 3.12 + 全量离线依赖（99 个包）+ `app/` 源码树 + `live2d-api.exe` / `face_tracker.exe` / `onnxruntime.dll` / YuNet / `face_landmarker.task`。装配由 `scripts/build_desktop_bundle.py` 完成，下载物 SHA256 锁定，构建期冒烟 9/9 必装模块。
+- **「后端未找到」根因修复**：`resources` 从数组 `["bin/*"]`（会落进 `$RESOURCE\bin\`）改为 map `{"bundle/": ""}`（扁平），并扩展 `find_go_binary` 的候选路径。
+- **导出页 PSD 100% 失败**：前端改为合并外层 envelope 的 `success`（内层 `data` 本就没有该字段）。
+- **角色保存/删除假成功**：去掉 `.catch()` 伪造对象与静默吞错，失败保留原状态并报错。
+- **See-through 假成功**：接口从不抠图却返回 `200 + success:true`，改为 **501** + 可读原因。
+- **LLM 兜底假回复**：新增 `fallback:true` 标记，并在文案前显示「离线兜底回复」。
+- **Python 面捕假运行**：启动后校验 `is_running()`，失败返回 **503**。
+- **PSD 降级下载 404**：`psd_path` 不再返回目录，改给 `package_dir` + `fallback_reason`。
+
+### 🟡 移除（无效控件，改了也不影响结果）
+
+- 生成页：Provider / 风格 / Steps / CFG。
+- 导出页：Include physics / expressions / motions、Compression。
+- Live2D 页：静态模型结构树、Physics 面板、Wireframe 开关。
+
+### 🟢 如实标注
+
+- `/api/info` 的 `features` 改为按实际探测生成，并新增 `notes`。
+- `/api/models`、`/api/expressions` 明确标注「内置示例列表」。
+- 仪表盘延迟改为真实测量；GPU 显示「未探测」。
+
+### 📦 安装包变化
+
+- 体积从 ~8 MB 变为 **~321 MB**（自包含运行时，正常）。
+- **旧 v0.10.7 的 8 MB 包不可用**（缺 Python/源码树/模型）；请先卸载旧版再装本版。
+
+### ↩️ 回退
+
+- 卸载后重装本版即可；用户产物在 `%APPDATA%\Live2DMasterAgent` 与「文档\Live2DMasterAgent」，卸载不清空。
+
+### 🧾 发布证据（release receipt）
+
+| 项 | 值 |
+|---|---|
+| 发布线 | `main`（trunk） |
+| 构建环境 | GitHub Actions `windows-latest`；Node 20 / Go 1.25 / Rust stable / Python 3.12.10 |
+| 钉住的下载物 | `python-3.12.10-embed-amd64.zip`、`onnxruntime-win-x64-1.31.0.zip`、YuNet onnx、`face_landmarker.task`（SHA256 见 `scripts/windows/hashes.json`） |
+| 依赖解析 | `requirements.desktop.txt` → win_amd64 / cp312（84 个包） |
+| 构建门禁 | 随包解释器导入冒烟（9 项必装模块） |
+| 产物 | `Live2D.Master.Agent_0.10.8_x64-setup.exe`（约 321 MB） |
+| 必须通过的检查 | Python 测试 3.10/3.11/3.12、Go build+test、Next.js build、TS check |
+| 回滚目标 | 卸载后重装同一产物；用户数据保留 |
+| 例外 | 安装包未签名（SmartScreen 告警）；无自动更新 |
+
+---
+
 ## [v0.10.7] — 2026-10-16 — 代号「Dependency Governance」
 
 > **本版目标**：仓库侧依赖治理 + 发布流程修复。抬高 Python/npm 依赖下限以消除已知 CVE 面、降低 FOSSA 安全/质量告警；修复「Release 有 tag 无资产」的发布回归；并清零全栈版本号残留漂移。

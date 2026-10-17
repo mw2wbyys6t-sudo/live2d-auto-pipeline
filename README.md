@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.7-ff69b4?style=flat-square" alt="version"></a>
+  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.8-ff69b4?style=flat-square" alt="version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="license"></a>
 <a href="https://app.fossa.com/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline?ref=badge_shield" alt="FOSSA Status"><img 
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.9+-blue?style=flat-square" alt="python"></a>
@@ -25,7 +25,7 @@
 
 ## 先说清楚：现在能干什么
 
-我不想给你画饼。这个项目有些部分已经很稳，有些还在路上。下面是**截至 v0.10.7 的真实状态**：
+我不想给你画饼。这个项目有些部分已经很稳，有些还在路上。下面是**截至 v0.10.8 的真实状态**：
 
 | 能力 | 状态 | 说明 |
 |------|------|------|
@@ -98,18 +98,21 @@
 
 **下载安装包**（Windows，双击安装）：
 
-👉 [最新 Release v0.10.7](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.7)
+👉 [最新 Release v0.10.8](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.8)
 
 | 下载文件 | 说明 |
 |----------|------|
-| `Live2D.Master.Agent_0.10.7_x64-setup.exe` | **Windows 安装包（NSIS，~7.6 MB）** — 双击安装，装完即可启动内嵌工作台 |
+| `Live2D.Master.Agent_0.10.8_x64-setup.exe` | **Windows 安装包（NSIS，约 321 MB）** — 双击安装，装完即可用 |
 
-> ⚠️ 当前安装包内含 **Go 后端（内嵌 Web UI）+ Rust 面捕二进制**：8 页面工作台与离线占位图兜底开箱即用。AI 高质量生图与语义分层等 Python 能力需本机具备 Python 3.11+ 与 `requirements.txt` 依赖（Python 运行时随包分发属 P0 打包计划，见 [docs/project_understanding.md](docs/project_understanding.md)）。
+> ✅ 本版安装包**自带完整运行时**：嵌入式 CPython 3.12 + 全量离线依赖（含 CPU 版 torch、mediapipe、rembg）+ `app/` 源码树 + 原生面捕（YuNet + `onnxruntime.dll`）。**无需预装 Python**。
+>
+> ⚠️ 体积从旧版约 8 MB 变为约 321 MB 是正常的：旧包只含两个 exe，这正是「后端未找到」的原因。若你下载到的 setup 只有 ~8 MB，说明拿到的是旧 v0.10.7，请改用 v0.10.8。
 
 **使用方式**：
-1. 从 Release 下载 `Live2D.Master.Agent_0.10.7_x64-setup.exe`
-2. 双击安装（NSIS 安装向导），完成后从开始菜单或桌面快捷方式启动
-3. 应用自动拉起本地后端并打开工作台 `http://localhost:8080`
+1. 从 Release 下载 `Live2D.Master.Agent_0.10.8_x64-setup.exe`（确认约 321 MB）
+2. 若之前装过旧版，先运行旧安装目录里的 `uninstall.exe`
+3. 双击安装（NSIS 安装向导）；装完先确认安装目录含 `live2d-api.exe`、`python\`、`app\`、`models\`
+4. 从开始菜单或桌面快捷方式启动，应用会自动拉起本地后端并打开工作台 `http://localhost:8080`
 
 ### 命令行快速体验（30 秒核心能力）
 

@@ -23,7 +23,7 @@
 ; ---------------------------------------------------------------------------
 
 #define MyAppName      "Live2D Master Agent"
-#define MyAppVersion   "0.10.7"
+#define MyAppVersion   "0.10.8"
 #define MyAppPublisher "Live2D Master Agent"
 #define MyAppExeName   "Live2DMasterAgent.exe"
 #define ProjectRoot    "..\.."
