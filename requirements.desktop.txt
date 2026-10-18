@@ -49,7 +49,7 @@ pygame>=2.5.0; python_version < "3.14"
 pygame-ce>=2.5.0; python_version >= "3.14"
 sounddevice>=0.4.6
 soundfile>=0.12.0
-edge-tts>=7.2.8
+edge-tts>=7.3.1
 
 # mediapipe（Python 版面捕：drivers/face_tracker + 桌宠跟随）：
 #   下限 >=0.10.30 是硬要求 —— 从该版本起 mediapipe 改为 py3-none-win_amd64
