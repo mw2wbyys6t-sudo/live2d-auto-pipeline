@@ -8,7 +8,7 @@
 # 依赖下限治理（v0.10.7 复核）：抬高的下限同时消除对应 CVE 面，并减少
 # FOSSA「Security Analysis / Dependency Quality」告警。取值对齐 dependabot
 # 已通过 CI 的升级目标，不做无依据的越级抬升。
-# - requests>=2.32.3: CVE-2024-35195(Session verify=False 粘连，2.32.0 修复)
+# - requests>=2.34.2: CVE-2024-35195(Session verify=False 粘连，2.32.0 修复)
 # - urllib3>=2.8.0:   原 2.2.2 已含 CVE-2024-37891 修复，本次抬到 2.8.0
 # - aiohttp>=3.14.5:  CVE-2024-23334/30251/52304 修复后继续抬到 3.14.5
 # - cryptography>=42.0.0: CVE-2023-49083(PKCS#7 空指针 DoS，41.0.6 修复)
@@ -16,7 +16,7 @@
 # - numpy>=2.5.4:     原 1.24.0 → 2.x（全仓已确认无 numpy 2 移除 API 依赖）
 Pillow>=12.3.0
 numpy>=2.5.4
-requests>=2.32.3
+requests>=2.34.2
 urllib3>=2.8.0
 httpx>=0.28.1
 aiohttp>=3.14.5
