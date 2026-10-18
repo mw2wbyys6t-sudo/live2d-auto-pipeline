@@ -20,7 +20,7 @@ requests>=2.32.3
 urllib3>=2.8.0
 httpx>=0.28.1
 aiohttp>=3.14.5
-aiofiles>=23.0
+aiofiles>=25.1.0
 websockets>=12.0
 psd-tools>=1.24.0
 scipy>=1.10.0
@@ -59,7 +59,7 @@ edge-tts>=7.2.8
 
 # ====== Async / Web (for Go API bridge + web frontend) ======
 # aiohttp>=3.9.0        # already required above
-# aiofiles>=23.0        # already required above
+# aiofiles>=25.1.0        # already required above
 # httpx>=0.28.1         # already required above
 # websockets>=12.0      # already required above
 
