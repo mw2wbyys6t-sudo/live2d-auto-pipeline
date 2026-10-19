@@ -7,7 +7,9 @@ from core.segment_engine.part_split import (
     SIDED_SOURCE_PARTS,
     estimate_midline,
     is_sided_name,
+    split_eye_parts,
     split_garment_details,
+    split_hair_parts,
     split_limb_parts,
     split_mask_sides,
 )
@@ -154,6 +156,58 @@ def test_band_ratios_match_tuning_constants() -> None:
     masks, _ = split_garment_details({"clothes_bottom": skirt}, (100, 200))
     hem_rows = int(np.where((masks["skirt_hem_L"] | masks["skirt_hem_R"]).any(axis=1))[0].size)
     assert hem_rows == 8
+
+
+def test_eye_mask_splits_into_sclera_and_iris() -> None:
+    h, w = 40, 100
+    eye = _rect(h, w, 60, 90, 10, 20)
+    img = np.full((h, w, 3), 30, dtype=np.uint8)
+    img[10:20, 60:90] = (250, 250, 250)
+    img[12:18, 68:82] = (40, 90, 160)
+
+    masks, warnings = split_eye_parts({"eyes_left": eye}, img)
+
+    assert "eyewhite_left" in masks
+    assert "irides_left" in masks
+    assert not (masks["eyewhite_left"] & masks["irides_left"]).any()
+    assert masks["irides_left"].sum() < masks["eyewhite_left"].sum()
+    assert not warnings
+
+
+def test_uniform_eye_is_not_split() -> None:
+    h, w = 40, 100
+    eye = _rect(h, w, 60, 90, 10, 20)
+    img = np.full((h, w, 3), 240, dtype=np.uint8)
+
+    masks, warnings = split_eye_parts({"eyes_left": eye}, img)
+
+    assert "eyes_left" in masks
+    assert "irides_left" not in masks
+    assert any("明暗差不足" in w for w in warnings)
+
+
+def test_duplicate_hair_masks_are_split_by_face_box() -> None:
+    hair = _rect(100, 100, 10, 90, 10, 90)
+    face = _rect(100, 100, 35, 65, 30, 70)
+
+    masks, warnings = split_hair_parts(
+        {"hair_front": hair.copy(), "hair_back": hair.copy(), "face": face}
+    )
+
+    assert not np.array_equal(masks["hair_front"], masks["hair_back"])
+    assert not (masks["hair_front"] & masks["hair_back"]).any()
+    assert int(masks["hair_front"].sum()) == int((hair & face).sum())
+    assert any("拆分" in w for w in warnings)
+
+
+def test_hair_splits_by_top_band_without_face() -> None:
+    hair = _rect(100, 100, 10, 90, 10, 90)
+
+    masks, _ = split_hair_parts({"hair_back": hair})
+
+    assert masks["hair_front"].any()
+    assert masks["hair_back"].any()
+    assert not (masks["hair_front"] & masks["hair_back"]).any()
 
 
 def test_seethrough_sided_names_split_into_left_and_right() -> None:

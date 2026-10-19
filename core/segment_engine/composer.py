@@ -19,7 +19,12 @@ from PIL import Image
 
 from core.logger import get_logger
 from core.segment_engine.amodal import AmodalCompleter
-from core.segment_engine.part_split import split_garment_details, split_limb_parts
+from core.segment_engine.part_split import (
+    split_eye_parts,
+    split_garment_details,
+    split_hair_parts,
+    split_limb_parts,
+)
 
 log = get_logger("segment.composer")
 
@@ -113,8 +118,10 @@ class LayerComposer:
         h, w = img_arr.shape[:2]
 
         part_masks, split_warnings = split_limb_parts(part_masks, (w, h))
+        part_masks, eye_warnings = split_eye_parts(part_masks, img_arr)
+        part_masks, hair_warnings = split_hair_parts(part_masks)
         part_masks, derived_parts = split_garment_details(part_masks, (w, h))
-        for message in split_warnings:
+        for message in split_warnings + eye_warnings + hair_warnings:
             log.warning(message)
         if derived_parts:
             log.info(f"Derived garment layers: {derived_parts}")

@@ -84,6 +84,22 @@ _BAND_DERIVATIONS: Dict[str, Tuple[Tuple[str, str, float], ...]] = {
 #: Parts produced by geometric edge bands rather than by detection.
 DERIVED_PARTS = frozenset({"cuff", "skirt_hem", "collar", "waistband", "boot_cuff"})
 
+#: Eye masks that can be split into sclera (white) and iris by luminance.
+EYE_SOURCES: Dict[str, str] = {
+    "eyes_left": "left",
+    "eyes_right": "right",
+    "eye_left": "left",
+    "eye_right": "right",
+    "eye_white_L": "left",
+    "eye_white_R": "right",
+    "eye_white_left": "left",
+    "eye_white_right": "right",
+}
+
+#: Hair masks that must end up split into front/back.
+HAIR_FRONT = "hair_front"
+HAIR_BACK = "hair_back"
+
 
 def _bbox_center_x(mask: np.ndarray) -> Optional[float]:
     cols = np.where(mask.any(axis=0))[0]
@@ -184,6 +200,118 @@ def split_limb_parts(
         if len(sides) < 2:
             warnings.append(f"{name} 只检测到单侧（{next(iter(sides))}），另一侧缺失")
 
+    return result, warnings
+
+
+def split_eye_parts(
+    part_masks: Dict[str, np.ndarray],
+    image_rgb: np.ndarray,
+) -> Tuple[Dict[str, np.ndarray], List[str]]:
+    """Split each eye mask into sclera (``eyewhite_*``) and iris (``irides_*``).
+
+    The split is luminance-based inside an already-detected eye mask, so no
+    extra detector pass is needed. If the two clusters are not separable, the
+    original eye mask is kept rather than inventing parts.
+    """
+    result: Dict[str, np.ndarray] = dict(part_masks)
+    warnings: List[str] = []
+
+    rgb = np.asarray(image_rgb)
+    if rgb.ndim != 3 or rgb.shape[2] < 3:
+        return result, warnings
+
+    luminance = (
+        0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
+    ).astype(np.float32)
+
+    for name, side in EYE_SOURCES.items():
+        mask = result.pop(name, None)
+        if mask is None:
+            continue
+
+        mask = np.asarray(mask, dtype=bool)
+        if int(mask.sum()) < 30:
+            result[name] = mask
+            continue
+
+        values = luminance[mask]
+        low, high = np.percentile(values, 20), np.percentile(values, 80)
+        if high - low < 10:
+            result[name] = mask
+            warnings.append(f"{name} 明暗差不足，未拆分眼白/瞳孔")
+            continue
+
+        threshold = (low + high) / 2.0
+        iris = mask & (luminance <= threshold)
+        sclera = mask & (luminance > threshold)
+        iris_ratio = float(iris.sum()) / max(1, int(mask.sum()))
+        if not iris.any() or not sclera.any() or not 0.08 <= iris_ratio <= 0.8:
+            result[name] = mask
+            warnings.append(f"{name} 眼白/瞳孔比例异常（{iris_ratio:.0%}），保留整块")
+            continue
+
+        result[f"irides_{side}"] = iris
+        result[f"eyewhite_{side}"] = sclera
+
+    return result, warnings
+
+
+def split_hair_parts(
+    part_masks: Dict[str, np.ndarray],
+) -> Tuple[Dict[str, np.ndarray], List[str]]:
+    """Ensure hair is split into distinct front/back masks.
+
+    Some backends emit one hair mask and copy it into both slots, which draws
+    the same pixels twice. When the two masks are identical (or one is
+    missing), the hair mass is split against the face box: hair covering the
+    face is front hair, the rest is back hair.
+    """
+    result: Dict[str, np.ndarray] = dict(part_masks)
+    warnings: List[str] = []
+
+    front = result.get(HAIR_FRONT)
+    back = result.get(HAIR_BACK)
+    if front is None and back is None:
+        return result, warnings
+
+    front_mask = np.asarray(front, dtype=bool) if front is not None else None
+    back_mask = np.asarray(back, dtype=bool) if back is not None else None
+    if front_mask is not None and back_mask is not None and not np.array_equal(front_mask, back_mask):
+        return result, warnings
+
+    shape = front_mask.shape if front_mask is not None else back_mask.shape
+    hair = np.zeros(shape, dtype=bool)
+    if front_mask is not None:
+        hair |= front_mask
+    if back_mask is not None:
+        hair |= back_mask
+    if not hair.any():
+        return result, warnings
+
+    face = result.get("face")
+    face_mask = np.asarray(face, dtype=bool) if face is not None else None
+
+    if face_mask is not None and face_mask.shape == shape and face_mask.any():
+        new_front = hair & face_mask
+        new_back = hair & ~face_mask
+        source = "面部包围盒"
+    else:
+        rows = np.where(hair.any(axis=1))[0]
+        top, bottom = int(rows.min()), int(rows.max())
+        cut = top + max(1, int((bottom - top + 1) * 0.4))
+        new_front = hair.copy()
+        new_front[cut:, :] = False
+        new_back = hair.copy()
+        new_back[:cut, :] = False
+        source = "上部 40%"
+
+    if not new_front.any() or not new_back.any():
+        warnings.append("头发前后拆分失败，保留原掩码")
+        return result, warnings
+
+    result[HAIR_FRONT] = new_front
+    result[HAIR_BACK] = new_back
+    warnings.append(f"头发前后由同一掩码按{source}拆分")
     return result, warnings
 
 

@@ -37,3 +37,32 @@ def test_unrecognized_name():
     assert r["part"] is None
     assert r["side"] is None
     assert recognize_part("")["part"] is None
+
+
+def test_psd2live_extended_tags():
+    assert recognize_part("back hair")["part"] == "hair_back"
+    assert recognize_part("headwear")["part"] == "headwear"
+    assert recognize_part("face detail")["part"] == "face_detail"
+    assert recognize_part("eye close")["part"] == "eye_close"
+    assert recognize_part("mouth open")["part"] == "mouth_open"
+    assert recognize_part("mouth close")["part"] == "mouth_close"
+    assert recognize_part("tooth-t")["part"] == "tooth_top"
+    assert recognize_part("tooth-b")["part"] == "tooth_bottom"
+    assert recognize_part("tongue")["part"] == "tongue"
+    assert recognize_part("neckwear")["part"] == "neckwear"
+
+
+def test_korean_layer_names():
+    assert recognize_part("뒷머리")["part"] == "hair_back"
+    assert recognize_part("앞머리")["part"] == "hair_front"
+    assert recognize_part("흰자")["part"] == "eye_white"
+    assert recognize_part("눈동자")["part"] == "eye_iris"
+    assert recognize_part("눈썹")["part"] == "eyebrow"
+    assert recognize_part("왼쪽 속눈썹")["side"] == "left"
+    assert recognize_part("오른쪽 속눈썹")["side"] == "right"
+
+
+def test_photoshop_copy_suffix_is_stripped():
+    assert recognize_part("前发 copy 2")["part"] == "hair_front"
+    assert recognize_part("mouth (1)")["part"] == "mouth"
+    assert recognize_part("hair_back 副本")["part"] == "hair_back"

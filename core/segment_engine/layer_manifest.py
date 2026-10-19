@@ -151,6 +151,14 @@ ALIASES: Dict[str, Tuple[str, Optional[str]]] = {
     "tail": ("tail", None),
     "wings": ("wings", None),
     "objects": ("objects", None),
+    "face_detail": ("cheek", None),
+    "eye_close": ("eye_white", None),
+    "mouth_open": ("mouth", None),
+    "mouth_close": ("mouth", None),
+    "tooth_top": ("mouth", None),
+    "tooth_bottom": ("mouth", None),
+    "tongue": ("mouth", None),
+    "neckwear": ("accessories", None),
 }
 
 REQUIRED_FOR_RIG: List[str] = [

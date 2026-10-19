@@ -16,34 +16,44 @@ from typing import Dict, Optional
 
 # 支持的部件类别（与 moc3 参数绑定使用的部件名保持一致）
 _PARTS = (
-    "eye_white", "eye_iris", "eye_pupil", "eyelash", "eyebrow",
-    "mouth", "nose", "face", "ear",
-    "hair_front", "hair_side", "hair_back", "ahoge",
-    "body", "clothes", "arm", "hand", "leg",
+    "eye_white", "eye_iris", "eye_pupil", "eyelash", "eye_close", "eyebrow",
+    "mouth", "mouth_open", "mouth_close", "tooth_top", "tooth_bottom", "tongue",
+    "nose", "face", "face_detail", "ear",
+    "hair_front", "hair_side", "hair_back", "ahoge", "headwear",
+    "body", "neckwear", "clothes", "arm", "hand", "leg",
     "accessory", "blush", "highlight", "background",
 )
 
 # 部件关键词表（小写）；含英/中/日常见写法
 _PART_KEYWORDS: Dict[str, tuple] = {
-    "eye_white": ("eye_white", "eyewhite", "sclera", "白眼", "眼白", "白目"),
-    "eye_iris": ("iris", "eye_iris", "eye", "虹膜", "瞳孔彩", "眼球", "瞳", "目"),
+    "eye_white": ("eye_white", "eyewhite", "sclera", "白眼", "眼白", "白目", "흰자"),
+    "eye_iris": ("iris", "eye_iris", "eye", "虹膜", "瞳孔彩", "眼球", "瞳", "目", "눈동자"),
     "eye_pupil": ("pupil", "瞳孔", "瞳芯"),
-    "eyelash": ("lash", "eyelash", "睫毛", "まつげ", "まつ毛"),
-    "eyebrow": ("brow", "eyebrow", "眉毛", "まゆ", "眉"),
-    "mouth": ("mouth", "lip", "嘴", "唇", "口"),
-    "nose": ("nose", "鼻", "はな"),
-    "face": ("face", "cheek", "脸", "臉", "颜", "顔", "かお", "面部"),
-    "ear": ("ear", "耳", "みみ"),
-    "hair_front": ("hair_front", "front_hair", "bangs", "fringe", "前发", "前髪", "前髮", "刘海", "瀏海", "まえがみ"),
+    "eyelash": ("lash", "eyelash", "睫毛", "まつげ", "まつ毛", "속눈썹"),
+    "eye_close": ("eye close", "eyeclose", "闭眼", "閉眼", "目閉じ", "감은 눈"),
+    "eyebrow": ("brow", "eyebrow", "眉毛", "まゆ", "眉", "눈썹"),
+    "mouth_open": ("mouth open", "mouthopen", "张嘴", "張嘴", "开口", "벌린 입"),
+    "mouth_close": ("mouth close", "mouthclose", "闭嘴", "閉嘴", "闭口", "다문 입"),
+    "mouth": ("mouth", "lip", "嘴", "唇", "口", "입"),
+    "tooth_top": ("tooth-t", "tooth_top", "上牙", "上歯", "上齿", "윗니"),
+    "tooth_bottom": ("tooth-b", "tooth_bottom", "下牙", "下歯", "下齿", "아랫니"),
+    "tongue": ("tongue", "舌头", "舌頭", "舌", "혀"),
+    "nose": ("nose", "鼻", "はな", "코"),
+    "face_detail": ("face detail", "face_detail", "facedetail", "脸部细节", "面部细节", "腮红", "볼터치"),
+    "face": ("face", "cheek", "脸", "臉", "颜", "顔", "かお", "面部", "얼굴"),
+    "ear": ("ear", "耳", "みみ", "귀"),
+    "hair_front": ("hair_front", "front_hair", "bangs", "fringe", "前发", "前髪", "前髮", "刘海", "瀏海", "まえがみ", "앞머리"),
     "hair_side": ("hair_side", "side_hair", "sidelock", "侧发", "側發", "側髪", "鬓", "鬢", "もみあげ"),
-    "hair_back": ("hair_back", "back_hair", "后发", "後髪", "后髪", "うしろがみ", "後ろ髪"),
+    "hair_back": ("hair_back", "back_hair", "后发", "後髪", "后髪", "うしろがみ", "後ろ髪", "뒷머리"),
     "ahoge": ("ahoge", "呆毛", "アホ毛"),
-    "body": ("body", "torso", "neck", "身体", "胴体", "脖子", "颈", "頸", "からだ", "身体姿勢"),
-    "clothes": ("cloth", "clothes", "clothing", "dress", "shirt", "skirt", "衣", "服", "裙", "服裝"),
-    "arm": ("arm", "shoulder", "手臂", "胳膊", "肩", "腕", "うで"),
+    "headwear": ("headwear", "hat", "帽子", "头饰", "頭飾", "모자"),
+    "body": ("body", "torso", "neck", "身体", "胴体", "脖子", "颈", "頸", "からだ", "身体姿勢", "목"),
+    "neckwear": ("neckwear", "领饰", "領飾", "围巾", "목도리"),
+    "clothes": ("cloth", "clothes", "clothing", "dress", "shirt", "skirt", "衣", "服", "裙", "服裝", "상의"),
+    "arm": ("arm", "shoulder", "handwear", "手臂", "胳膊", "肩", "腕", "うで", "팔"),
     "hand": ("hand", "palm", "手指", "手"),
-    "leg": ("leg", "thigh", "腿", "大腿", "脚", "足", "あし"),
-    "accessory": ("accessory", "ribbon", "bow", "hat", "glasses", "ornament", "饰", "飾", "饰品", "蝴蝶结", "帽子", "眼镜", "リボン", "かざり"),
+    "leg": ("leg", "thigh", "legwear", "腿", "大腿", "脚", "足", "あし", "다리"),
+    "accessory": ("accessory", "ribbon", "bow", "glasses", "ornament", "饰", "飾", "饰品", "蝴蝶结", "眼镜", "リボン", "かざり"),
     "blush": ("blush", "脸红", "腮红", "頬"),
     "highlight": ("highlight", "shine", "高光", "ハイライト"),
     "background": ("background", "bg", "backdrop", "背景", "はいけい"),
@@ -51,8 +61,8 @@ _PART_KEYWORDS: Dict[str, tuple] = {
 
 # 左右侧向关键词
 _SIDE_KEYWORDS = {
-    "left": ("left", "_l_", "_l", " l", "左侧", "左", "left ", "hidari", "左目", "左腕"),
-    "right": ("right", "_r_", "_r", " r", "右侧", "右", "right ", "migi", "右目", "右腕"),
+    "left": ("left", "_l_", "_l", " l", "左侧", "左", "left ", "hidari", "左目", "左腕", "왼쪽"),
+    "right": ("right", "_r_", "_r", " r", "右侧", "右", "right ", "migi", "右目", "右腕", "오른쪽"),
 }
 
 # 口型开合素材（a/i/u/e/o 口型约定，含中文写法）
@@ -91,6 +101,8 @@ def recognize_part(layer_name: str) -> Dict[str, Optional[str]]:
          "mouth_vowel": "a"|"i"|"u"|"e"|"o"|None, "matched_by": <命中的关键词>}
     """
     name = (layer_name or "").strip()
+    name = re.sub(r"\s*(?:copy|副本|拷贝)(?:\s*\d+)?$", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"\s*\(\d+\)$", "", name).strip()
     lowered = name.lower()
     tokens = [t for t in _WORD_SPLIT.split(lowered) if t]
 
