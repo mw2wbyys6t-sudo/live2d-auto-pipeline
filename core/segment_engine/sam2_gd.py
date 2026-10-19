@@ -935,6 +935,7 @@ class Sam2GroundingDinoSegmenter:
         image: Image.Image,
         output_dir: Optional[str] = None,
         label_layers: bool = True,
+        depth_map: Optional[np.ndarray] = None,
     ) -> Dict:
         """Segment + export, returning the :meth:`SemanticSegmenter.layer` shape.
 
@@ -977,7 +978,7 @@ class Sam2GroundingDinoSegmenter:
         try:
             from core.segment_engine.composer import LayerComposer
             composer = LayerComposer(device=self.device)
-            composed = composer.compose(masks, image, str(out))
+            composed = composer.compose(masks, image, str(out), depth_map=depth_map)
             ordered = composer.reorder_layers(composed)
             composition = "layer_composer"
         except Exception as exc:

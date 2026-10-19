@@ -246,6 +246,7 @@ class SemanticSegmenter:
         image: Image.Image,
         output_dir: Optional[str] = None,
         label_layers: bool = True,
+        depth_map: Optional[np.ndarray] = None,
     ) -> Dict:
         """Segment ``image`` into Live2D parts and export RGBA layer PNGs.
 
@@ -276,7 +277,7 @@ class SemanticSegmenter:
         if self.model_type == "sam2_gd":
             from core.segment_engine.sam2_gd import Sam2GroundingDinoSegmenter
             return Sam2GroundingDinoSegmenter(device=self.device).layer(
-                image, output_dir=output_dir, label_layers=label_layers
+                image, output_dir=output_dir, label_layers=label_layers, depth_map=depth_map
             )
 
         if image.mode != "RGBA":
@@ -319,7 +320,7 @@ class SemanticSegmenter:
         try:
             from core.segment_engine.composer import LayerComposer
             composer = LayerComposer(device=self.device)
-            composed = composer.compose(masks, image, str(out))
+            composed = composer.compose(masks, image, str(out), depth_map=depth_map)
             ordered = composer.reorder_layers(composed)
         except Exception as exc:
             log.warning(f"LayerComposer failed ({exc}); falling back to direct mask export")

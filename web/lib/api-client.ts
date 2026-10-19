@@ -1086,6 +1086,7 @@ export interface SegmentResult {
   preview_ready?: boolean;
   missing_required?: string[];
   warnings?: string[];
+  custom_models?: string[];
 }
 
 export interface ImportResult {

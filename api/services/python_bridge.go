@@ -456,12 +456,53 @@ img = Image.open(params["image_path"]).convert("RGBA")
 out_dir = Path(params["out_dir"])
 out_dir.mkdir(parents=True, exist_ok=True)
 method = params["method"]
-if method == "kmeans":
-    from core.segment_engine.kmeans import KMeansLayerer
-    result = KMeansLayerer().layer(img, output_dir=str(out_dir))
-else:
-    from core.segment_engine.semantic import SemanticSegmenter
-    result = SemanticSegmenter(model_type="auto").layer(img, output_dir=str(out_dir))
+from core.custom_model import find_task, resolve_roots, run as run_custom
+
+roots = resolve_roots()
+custom_root = params.get("custom_root")
+if custom_root:
+    roots.insert(0, custom_root)
+custom_seg = find_task(roots, "segmentation")
+custom_depth = find_task(roots, "depth")
+custom_used = []
+depth_map = None
+if custom_depth is not None:
+    try:
+        depth_map = run_custom(custom_depth, img)
+        custom_used.append(custom_depth.name + ":depth")
+    except Exception as exc:
+        print("[warn] custom depth model failed:", exc)
+
+result = None
+if custom_seg is not None and method != "kmeans":
+    try:
+        custom_masks = run_custom(custom_seg, img)
+        if custom_masks:
+            from core.segment_engine.composer import LayerComposer
+            composer = LayerComposer(device="cpu")
+            composed = composer.compose(custom_masks, img, str(out_dir), depth_map=depth_map)
+            ordered_custom = composer.reorder_layers(composed)
+            custom_layers = [dict(info, name=key) for key, info in ordered_custom.items()]
+            result = {
+                "success": True,
+                "method": "custom_segmentation",
+                "layers": custom_layers,
+                "output_dir": str(out_dir),
+                "preview_path": None,
+                "composite_preview": "",
+                "layer_count": len(custom_layers),
+            }
+            custom_used.append(custom_seg.name + ":segmentation")
+    except Exception as exc:
+        print("[warn] custom segmentation model failed:", exc)
+
+if result is None:
+    if method == "kmeans":
+        from core.segment_engine.kmeans import KMeansLayerer
+        result = KMeansLayerer().layer(img, output_dir=str(out_dir))
+    else:
+        from core.segment_engine.semantic import SemanticSegmenter
+        result = SemanticSegmenter(model_type="auto").layer(img, output_dir=str(out_dir), depth_map=depth_map)
 names = [l.get("name") for l in (result.get("layers") or []) if l.get("name")]
 from core.psd.creator import PSDCreator
 psd_result = PSDCreator().create_psd(str(out_dir), str(out_dir / "character.psd"), ordered_names=names or None)
@@ -475,7 +516,7 @@ source = SOURCE_COLOR_CLUSTER if method == "kmeans" else SOURCE_SEMANTIC
 manifest = build_manifest(result.get("layers") or [], source=source, canvas=(img.width, img.height))
 manifest_path = write_manifest(str(out_dir), manifest)
 layers = [{"name": l.get("name", ""), "part_name": l.get("part_name", l.get("name", "")), "path": l.get("path", ""), "pixel_count": l.get("pixel_count", 0)} for l in (result.get("layers") or [])]
-print(json.dumps({"method": result.get("method", method), "layers_dir": str(out_dir), "layers": layers, "composite_preview": result.get("composite_preview", "") or "", "psd_path": psd_result.get("psd_path", "") or "", "psd_success": bool(psd_result.get("success")), "manifest_path": manifest_path, "manifest_version": manifest.schema_version, "source": manifest.source, "rig_ready": manifest.rig_ready, "preview_ready": manifest.preview_ready, "missing_required": manifest.missing_required, "warnings": manifest.warnings}))
+print(json.dumps({"method": result.get("method", method), "layers_dir": str(out_dir), "layers": layers, "composite_preview": result.get("composite_preview", "") or "", "psd_path": psd_result.get("psd_path", "") or "", "psd_success": bool(psd_result.get("success")), "manifest_path": manifest_path, "manifest_version": manifest.schema_version, "source": manifest.source, "rig_ready": manifest.rig_ready, "preview_ready": manifest.preview_ready, "missing_required": manifest.missing_required, "warnings": manifest.warnings, "custom_models": custom_used}))
 `
 
 func (pb *PythonBridge) SegmentImage(ctx context.Context, imagePath, method string) (map[string]interface{}, error) {
@@ -497,9 +538,10 @@ func (pb *PythonBridge) SegmentImage(ctx context.Context, imagePath, method stri
 	outDir := filepath.Join(pb.cfg.Output.BaseDir, uniqueOutputName("layers_"))
 	// 语义分割在 CPU 上可能耗时数分钟，预算给足
 	res, err := pb.runBridgeTask(ctx, bridgeSegmentScript, map[string]interface{}{
-		"image_path": imagePath,
-		"out_dir":    outDir,
-		"method":     method,
+		"image_path":  imagePath,
+		"out_dir":     outDir,
+		"method":      method,
+		"custom_root": filepath.Join(filepath.Dir(pb.cfg.Character.StorageDir), "models", "custom"),
 	}, 15*time.Minute)
 	if err != nil {
 		return nil, err

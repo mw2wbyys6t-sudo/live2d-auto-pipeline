@@ -92,6 +92,7 @@ const LayersPage: NextPage = () => {
     previewReady: boolean;
     missing: string[];
     warnings: string[];
+    customModels: string[];
     url: string;
   } | null>(null);
 
@@ -220,6 +221,7 @@ const LayersPage: NextPage = () => {
         previewReady: !!result.preview_ready,
         missing: result.missing_required || [],
         warnings: result.warnings || [],
+        customModels: result.custom_models || [],
         url: result.manifest_url || '',
       });
       if (result.source_image_url) {
@@ -467,6 +469,11 @@ const LayersPage: NextPage = () => {
                   · {w}
                 </p>
               ))}
+              {manifest.customModels.length > 0 && (
+                <p className="text-emerald-300/80 break-all">
+                  自定义模型：{manifest.customModels.join('、')}
+                </p>
+              )}
               {manifest.url && (
                 <a
                   href={manifest.url}
