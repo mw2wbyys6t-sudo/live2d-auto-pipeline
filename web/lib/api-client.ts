@@ -1064,6 +1064,14 @@ export interface SegmentResult {
   psd_path: string;
   psd_url: string;
   psd_success: boolean;
+  manifest_path?: string;
+  manifest_url?: string;
+  manifest_version?: string;
+  source?: string;
+  rig_ready?: boolean;
+  preview_ready?: boolean;
+  missing_required?: string[];
+  warnings?: string[];
 }
 
 export interface ImportResult {

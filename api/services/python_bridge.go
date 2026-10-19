@@ -465,8 +465,17 @@ else:
 names = [l.get("name") for l in (result.get("layers") or []) if l.get("name")]
 from core.psd.creator import PSDCreator
 psd_result = PSDCreator().create_psd(str(out_dir), str(out_dir / "character.psd"), ordered_names=names or None)
+from core.segment_engine.layer_manifest import (
+    SOURCE_COLOR_CLUSTER,
+    SOURCE_SEMANTIC,
+    build_manifest,
+    write_manifest,
+)
+source = SOURCE_COLOR_CLUSTER if method == "kmeans" else SOURCE_SEMANTIC
+manifest = build_manifest(result.get("layers") or [], source=source, canvas=(img.width, img.height))
+manifest_path = write_manifest(str(out_dir), manifest)
 layers = [{"name": l.get("name", ""), "part_name": l.get("part_name", l.get("name", "")), "path": l.get("path", ""), "pixel_count": l.get("pixel_count", 0)} for l in (result.get("layers") or [])]
-print(json.dumps({"method": result.get("method", method), "layers_dir": str(out_dir), "layers": layers, "composite_preview": result.get("composite_preview", "") or "", "psd_path": psd_result.get("psd_path", "") or "", "psd_success": bool(psd_result.get("success"))}))
+print(json.dumps({"method": result.get("method", method), "layers_dir": str(out_dir), "layers": layers, "composite_preview": result.get("composite_preview", "") or "", "psd_path": psd_result.get("psd_path", "") or "", "psd_success": bool(psd_result.get("success")), "manifest_path": manifest_path, "manifest_version": manifest.schema_version, "source": manifest.source, "rig_ready": manifest.rig_ready, "preview_ready": manifest.preview_ready, "missing_required": manifest.missing_required, "warnings": manifest.warnings}))
 `
 
 func (pb *PythonBridge) SegmentImage(ctx context.Context, imagePath, method string) (map[string]interface{}, error) {

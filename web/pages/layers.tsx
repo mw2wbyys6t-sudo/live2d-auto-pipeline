@@ -82,6 +82,15 @@ const LayersPage: NextPage = () => {
   /** 分层/导入产物目录：交给导出页复用（?layers_dir= 交接） */
   const [layersDir, setLayersDir] = useState<string>('');
   const [importing, setImporting] = useState(false);
+  const [manifest, setManifest] = useState<{
+    version: string;
+    source: string;
+    rigReady: boolean;
+    previewReady: boolean;
+    missing: string[];
+    warnings: string[];
+    url: string;
+  } | null>(null);
 
   /** 把导入结果渲染进工作台（各层 PNG 均为整幅画布） */
   const applyImportResult = useCallback((result: ImportResult, dims?: { w: number; h: number }) => {
@@ -97,6 +106,7 @@ const LayersPage: NextPage = () => {
     setLayersDir(result.layers_dir || '');
     setPsdUrl(result.psd_url || '');
     setSegMethod('import');
+    setManifest(null);
     setError(null);
   }, []);
 
@@ -193,6 +203,15 @@ const LayersPage: NextPage = () => {
       setLayersDir(result.layers_dir || '');
       setPsdUrl(result.psd_url || '');
       setSegMethod(result.method || method);
+      setManifest({
+        version: result.manifest_version || '',
+        source: result.source || result.method || method,
+        rigReady: !!result.rig_ready,
+        previewReady: !!result.preview_ready,
+        missing: result.missing_required || [],
+        warnings: result.warnings || [],
+        url: result.manifest_url || '',
+      });
       if (result.source_image_url) {
         setSourceUrl(result.source_image_url);
         fileRef.current = null; // 源图已是服务器产物，无需重复上传
@@ -377,11 +396,57 @@ const LayersPage: NextPage = () => {
                       : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
                   }`}
                 >
-                  {m === 'semantic' ? 'Semantic' : 'K-means'}
+                  {m === 'semantic' ? 'Semantic' : 'K-means（仅预览）'}
                 </button>
               ))}
             </div>
           </div>
+
+          {manifest && (
+            <div
+              className={`rounded-xl border p-3 text-[11px] space-y-1.5 ${
+                manifest.rigReady
+                  ? 'border-emerald-500/40 bg-emerald-500/5'
+                  : 'border-amber-500/40 bg-amber-500/5'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-gray-200">
+                  分层契约 v{manifest.version || '1.0'}
+                </span>
+                <span className={manifest.rigReady ? 'text-emerald-300' : 'text-amber-300'}>
+                  {manifest.rigReady ? '可绑定' : manifest.previewReady ? '仅可预览' : '产物不完整'}
+                </span>
+              </div>
+              <p className="text-gray-400">
+                来源：
+                {manifest.source === 'semantic'
+                  ? '语义分层'
+                  : manifest.source === 'color_cluster'
+                    ? '颜色聚类'
+                    : manifest.source}
+              </p>
+              {manifest.missing.length > 0 && (
+                <p className="text-amber-200/90 break-all">
+                  缺件 {manifest.missing.length}：{manifest.missing.join('、')}
+                </p>
+              )}
+              {manifest.warnings.map((w) => (
+                <p key={w} className="text-amber-200/80">
+                  · {w}
+                </p>
+              ))}
+              {manifest.url && (
+                <a
+                  href={manifest.url}
+                  download="layer_manifest.json"
+                  className="inline-block text-pink-300 hover:text-pink-200"
+                >
+                  下载 layer_manifest.json
+                </a>
+              )}
+            </div>
+          )}
 
           <div className="bg-[#1a1a23] border border-gray-800 rounded-xl overflow-hidden flex flex-col">
             <div className="p-3 border-b border-gray-800 flex items-center justify-between">

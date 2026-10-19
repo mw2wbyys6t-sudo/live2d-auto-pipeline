@@ -527,6 +527,9 @@ func (h *Handler) SegmentImage(c *gin.Context) {
 	if psdPath, _ := result["psd_path"].(string); psdPath != "" {
 		result["psd_url"] = services.OutputURLFor(h.cfg, psdPath)
 	}
+	if manifestPath, _ := result["manifest_path"].(string); manifestPath != "" {
+		result["manifest_url"] = services.OutputURLFor(h.cfg, manifestPath)
+	}
 	if cp, _ := result["composite_preview"].(string); cp != "" {
 		result["composite_preview_url"] = services.OutputURLFor(h.cfg, cp)
 	}
