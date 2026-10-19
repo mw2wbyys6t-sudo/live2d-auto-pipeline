@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PRD · 双模式图像生成（自接 API / 本地算法）</title>
+<style>
+  :root{
+    --bg:#0b0b10; --panel:#14141c; --panel-2:#1a1a23; --line:#2a2a36;
+    --text:#e8e8ef; --muted:#9a9aab; --faint:#6b6b7b;
+    --pink:#ec4899; --violet:#8b5cf6; --emerald:#34d399; --amber:#fbbf24; --red:#f87171;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.75; font-size:15px;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:56px 28px 96px}
+  header.hero{
+    padding:34px 32px;border:1px solid var(--line);border-radius:18px;
+    background:
+      radial-gradient(700px 260px at 10% -10%, rgba(236,72,153,.18), transparent 60%),
+      radial-gradient(700px 260px at 95% 0%, rgba(139,92,246,.18), transparent 60%),
+      linear-gradient(180deg,#16111f,#101017);
+    margin-bottom:44px;
+  }
+  .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--pink);margin-bottom:10px}
+  h1{font-size:30px;line-height:1.3;margin:0 0 12px}
+  .sub{color:var(--muted);max-width:760px;margin:0}
+  .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}
+  .tag{font-size:12px;color:var(--muted);border:1px solid var(--line);background:#0f0f16;border-radius:999px;padding:5px 12px}
+  .tag b{color:var(--text);font-weight:600}
+
+  h2{font-size:21px;margin:52px 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:30px 0 10px;color:#f2f2f8}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:6px 0}
+  code{background:#0f0f16;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:13px}
+
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+  .card{
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px;
+  }
+  .card h4{margin:0 0 8px;font-size:15px}
+  .card p:last-child{margin-bottom:0}
+  .muted{color:var(--muted)}
+  .faint{color:var(--faint);font-size:13px}
+
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+  th{background:#101018;color:#cfcfe0;font-weight:600;font-size:13px}
+  td code{font-size:12.5px}
+
+  .callout{
+    border-left:3px solid var(--violet);background:#12111b;border-radius:0 10px 10px 0;
+    padding:14px 18px;margin:18px 0;color:#d9d9e6;
+  }
+  .callout.warn{border-left-color:var(--amber)}
+  .callout.danger{border-left-color:var(--red)}
+  .callout b{color:#fff}
+
+  .pill{display:inline-block;font-size:12px;padding:2px 9px;border-radius:999px;border:1px solid var(--line)}
+  .p0{color:#fbcfe8;background:rgba(236,72,153,.12);border-color:rgba(236,72,153,.35)}
+  .p1{color:#ddd6fe;background:rgba(139,92,246,.12);border-color:rgba(139,92,246,.35)}
+  .ok{color:#a7f3d0;background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.35)}
+  .tbd{color:#fde68a;background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.35)}
+
+  /* demo */
+  .demo{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#0d0d14}
+  .demo-bar{display:flex;align-items:center;gap:8px;padding:12px 16px;background:#11111a;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+  .dot{width:9px;height:9px;border-radius:50%;background:#2d2d3a}
+  .demo-body{display:grid;grid-template-columns:1.15fr .85fr;gap:0}
+  @media(max-width:820px){.demo-body{grid-template-columns:1fr}}
+  .demo-left{padding:22px;border-right:1px solid var(--line)}
+  @media(max-width:820px){.demo-left{border-right:none;border-bottom:1px solid var(--line)}}
+  .demo-right{padding:22px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:320px;background:
+     linear-gradient(45deg,#111119 25%,transparent 25%,transparent 75%,#111119 75%),
+     linear-gradient(45deg,#111119 25%,#0d0d14 25%,#0d0d14 75%,#111119 75%);
+     background-size:22px 22px;background-position:0 0,11px 11px}
+  .tabs{display:flex;gap:8px;margin-bottom:20px}
+  .tab{flex:1;text-align:center;padding:10px;border:1px solid var(--line);border-radius:10px;background:#0f0f16;color:var(--muted);cursor:pointer;font-size:14px;user-select:none}
+  .tab.active{background:rgba(236,72,153,.14);border-color:rgba(236,72,153,.45);color:#fff}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .field input,.field select,.field textarea{
+    width:100%;background:#0f0f16;border:1px solid var(--line);border-radius:9px;
+    color:var(--text);padding:9px 11px;font-size:14px;font-family:inherit;outline:none
+  }
+  .field input:focus,.field select:focus{border-color:rgba(236,72,153,.5)}
+  .row{display:flex;gap:10px}
+  .row>*{flex:1}
+  button.act{
+    width:100%;padding:11px;border-radius:10px;border:1px solid rgba(236,72,153,.45);
+    background:linear-gradient(90deg,rgba(236,72,153,.85),rgba(139,92,246,.85));
+    color:#fff;font-size:14px;font-weight:600;cursor:pointer
+  }
+  button.ghost{
+    padding:9px 12px;border-radius:9px;border:1px solid var(--line);background:#15151f;color:#d7d7e4;font-size:13px;cursor:pointer
+  }
+  .status{font-size:13px;margin-top:10px;min-height:20px}
+  .status.ok{color:var(--emerald)}
+  .status.err{color:var(--red)}
+  .status.warn{color:var(--amber)}
+  .hidden{display:none !important}
+  .figure{width:190px;height:250px;position:relative}
+  .fig-note{margin-top:14px;font-size:12px;color:var(--faint);text-align:center;max-width:250px}
+  .swatches{display:flex;gap:8px;margin-top:12px}
+  .sw{width:26px;height:26px;border-radius:8px;border:1px solid rgba(255,255,255,.15)}
+  footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);color:var(--faint);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Product Requirements · Live2D Master Agent</div>
+  <h1>双模式图像生成：用户自接 API 与本地算法生成</h1>
+  <p class="sub">
+    让同一条「生成 → 分层 → 绑定 → 导出」主链路，既能由用户自己的图像服务驱动，
+    也能在完全离线、无任何大模型的情况下跑通，并保持产物结构一致。
+  </p>
+  <div class="meta">
+    <span class="tag">状态：<b>待评审</b></span>
+    <span class="tag">版本：<b>0.1（草案）</b></span>
+    <span class="tag">日期：<b>2026-10-19</b></span>
+    <span class="tag">范围：<b>新模块 / 中高复杂度</b></span>
+  </div>
+</header>
+
+<h2>1. 背景与目标</h2>
+
+<p><b>观察到的现状</b></p>
+<ul>
+  <li>生成页当前只有一个「Generate」按钮，用户无法选择、也无法接入自己的图像服务；后端其实已有可路由的上游集合（<code>seedream</code>、<code>sensenova</code>、<code>openai 兼容</code>、<code>pollinations</code>、<code>local_placeholder</code>），但产品界面没有暴露。</li>
+  <li>完全离线时，唯一能出图的是「本地占位图」：只有渐变、剪影和提示词水印，不是可用的人物立绘，更不产出分层。</li>
+  <li>用户在实际验收中已经遇到「生成成功但图片不显示」的情况。该问题属于产物目录与静态服务目录不一致的缺陷，已单独修复，不属于本 PRD 范围。</li>
+</ul>
+
+<p><b>产品判断</b></p>
+<p>
+  用户真正要的不是「更多模型选项」，而是<b>一条永远能走通、且产物结构一致的出图路径</b>：
+  有 Key 的人希望用自己已经付费的服务；没有 Key、没有网络、或不愿把提示词发出去的人，
+  希望本机也能产出一套可以继续分层和绑定的素材。
+</p>
+
+<p><b>目标（可观察结果）</b></p>
+<ul>
+  <li>用户可以在应用内配置一个自己的图像服务，并在生成时明确知道「本次由谁出图」。</li>
+  <li>在无网络、无 Key 的机器上，用户仍能得到一套<b>分层的</b>人物素材，并继续完成分层、导出、预览。</li>
+  <li>两种模式产出的结果对象结构一致，下游页面不需要为「模式」写分支逻辑。</li>
+</ul>
+
+<h2>2. 范围</h2>
+
+<h3>P0（首次可用必须完成）</h3>
+<ul>
+  <li>生成模式选择：<b>自接 API</b> / <b>本地算法</b>。</li>
+  <li>自接 API 的配置、连接测试、生成与失败提示。</li>
+  <li>本地算法生成：参数面板、确定性出图、分层产物与清单。</li>
+  <li>两种模式共用同一份结果契约与同一套错误语义。</li>
+</ul>
+
+<h3>P1（后续增强）</h3>
+<ul>
+  <li>多套 Provider 配置档案与快速切换。</li>
+  <li>用一张参考图提取配色，作为本地算法的输入。</li>
+  <li>算法模式的风格预设（校园 / 奇幻 / 日常）。</li>
+</ul>
+
+<h3>明确不做</h3>
+<ul>
+  <li>不做内置模型下载与权重管理。</li>
+  <li>不做云端账号体系、额度计费、团队共享 Key。</li>
+  <li>不在模式失败时静默替换成另一种模式。</li>
+</ul>
+
+<h2>3. 产品模型</h2>
+
+<div class="grid g2">
+  <div class="card">
+    <h4>模式（Mode）</h4>
+    <p class="muted">
+      <code>api</code>：由用户配置的外部图像服务出图。<br/>
+      <code>algorithmic</code>：由本机程序按参数绘制，不调用任何模型或网络。
+    </p>
+  </div>
+  <div class="card">
+    <h4>生成配置（GenerationProfile）</h4>
+    <p class="muted">
+      一次生成所使用的完整输入：模式、提示词、尺寸、随机种子、可选的角色一致性参数，
+      以及（仅 API 模式）所选的 Provider。
+    </p>
+  </div>
+  <div class="card">
+    <h4>结果（GenerationResult）</h4>
+    <p class="muted">
+      两种模式必须产出同一结构：主图地址、实际使用的来源标识、分层列表、可选的清单文件地址。
+      来源标识用于在界面上如实标注「谁生成的」。
+    </p>
+  </div>
+  <div class="card">
+    <h4>Provider</h4>
+    <p class="muted">
+      一个可被调用的外部图像服务实例：显示名、协议类型、服务地址、模型名、密钥（可空）、
+      当前可用状态。密钥只属于本机。
+    </p>
+  </div>
+</div>
+
+<h2>4. 功能需求</h2>
+
+<h3>FR-01 生成模式选择 <span class="pill p0">P0</span></h3>
+<table>
+  <tr><th style="width:22%">项</th><th>定义</th></tr>
+  <tr><td>目的</td><td>让用户在发起生成前明确本次使用哪条出图路径。</td></tr>
+  <tr><td>位置</td><td>生成页主表单顶部，位于提示词输入框之前。</td></tr>
+  <tr><td>触发</td><td>进入生成页时读取上次使用的模式；用户可随时切换。</td></tr>
+  <tr><td>处理规则</td><td>
+    选择 <b>自接 API</b> 时，若没有任何可用 Provider，主按钮置灰并给出「去配置」入口；<br/>
+    选择 <b>本地算法</b> 时，隐藏 Provider 相关控件，显示算法参数面板。
+  </td></tr>
+  <tr><td>结果与状态</td><td>当前模式在生成按钮上方持续可见；切换模式不自动清空提示词。</td></tr>
+</table>
+
+<h3>FR-02 Provider 配置 <span class="pill p0">P0</span></h3>
+<table>
+  <tr><th style="width:22%">项</th><th>定义</th></tr>
+  <tr><td>目的</td><td>让用户接入自己已经拥有的图像服务。</td></tr>
+  <tr><td>入口</td><td>新增「设置 → 图像生成」；生成页的「去配置」直接跳转此处。</td></tr>
+  <tr><td>字段</td><td>
+    显示名（必填，本机唯一）、协议类型（OpenAI 兼容 / 内置供应商）、服务地址（协议类型为兼容时必填）、
+    模型名、密钥（可空）、是否设为默认。
+  </td></tr>
+  <tr><td>处理规则</td><td>
+    保存前校验地址格式与本机唯一性；密钥输入框默认掩码，仅在用户点击「显示」时明文；<br/>
+    保存后立即进入「未验证」状态，必须由用户主动测试连接后才变为「可用」。
+  </td></tr>
+  <tr><td>结果与状态</td><td>Provider 生命周期：<code>未验证 → 可用 / 不可用</code>；用户可编辑、删除、设为默认。</td></tr>
+  <tr><td>例外</td><td>删除正在被默认引用的 Provider 时，要求用户先指定新的默认，或明确选择「暂无默认」。</td></tr>
+</table>
+
+<h3>FR-03 连接测试与状态 <span class="pill p0">P0</span></h3>
+<table>
+  <tr><th style="width:22%">项</th><th>定义</th></tr>
+  <tr><td>目的</td><td>把「Key 写错了」和「服务挂了」在发起生成前就区分开。</td></tr>
+  <tr><td>触发</td><td>用户点击「测试连接」。</td></tr>
+  <tr><td>处理规则</td><td>发起一次最小代价的探测请求；超时上限固定，不阻塞界面；同一 Provider 进行中不可重复触发。</td></tr>
+  <tr><td>结果与状态</td><td>
+    成功：显示「可用」与耗时；<br/>
+    失败：显示可读原因分类（鉴权失败 / 地址不可达 / 限流 / 超时 / 服务端错误），并保留用户已填内容。
+  </td></tr>
+</table>
+
+<h3>FR-04 自动路由与回退 <span class="pill p0">P0</span></h3>
+<table>
+  <tr><th style="width:22%">项</th><th>定义</th></tr>
+  <tr><td>目的</td><td>在用户未指定 Provider 时仍能出图，同时不隐瞒真实来源。</td></tr>
+  <tr><td>处理规则</td><td>
+    用户指定了 Provider：只调用该 Provider，失败即失败，不回退。<br/>
+    用户未指定：按「默认 Provider → 其余可用 Provider」顺序尝试；<br/>
+    全部失败时<b>不自动切到本地算法</b>，而是提示两条明确选项：「改用本地算法重试」或「返回检查配置」。
+  </td></tr>
+  <tr><td>结果与状态</td><td>结果面板必须显示「本次来源」，回退发生时追加一行「已从 X 回退到 Y」。</td></tr>
+  <tr><td>例外</td><td>用户取消生成后，不得继续尝试后续 Provider。</td></tr>
+</table>
+
+<h3>FR-05 生成执行与结果回执 <span class="pill p0">P0</span></h3>
+<table>
+  <tr><th style="width:22%">项</th><th>定义</th></tr>
+  <tr><td>目的</td><td>让用户知道「已经生成好了」，并能立刻继续下一步。</td></tr>
+  <tr><td>处理规则</td><td>
+    生成期间展示分阶段进度与可取消入口；任一阶段失败，保留已完成阶段的产物可见。
+  </td></tr>
+  <tr><td>结果与状态</td><td>
+    成功：主图、来源标识、分层数量、可用的下一步操作（保存 / 去分层 / 送去 Live2D）。<br/>
+    失败：错误分类、可重试入口、模式与 Provider 保持原选择。
+  </td></tr>
+  <tr><td>边界</td><td>主图加载失败时必须显示明确失败态与「重新加载」，不得留下空白区域或只显示替代文本。</td></tr>
+</table>
+
+<h3>FR-06 本地算法生成参数 <span class="pill p0">P0</span></h3>
+<table>
+  <tr><th style="width:22%">项</th><th>定义</th></tr>
+  <tr><td>目的</td><td>在无模型、无网络条件下，产出一套可控且可复现的人物素材。</td></tr>
+  <tr><td>参数</td><td>
+    体型比例、发型、发色、瞳色、肤色、服装款式与主色、配饰、表情、视角、随机种子、输出尺寸。
+  </td></tr>
+  <tr><td>处理规则</td><td>
+    相同参数 + 相同种子必须产出相同结果；参数变化只影响对应部位，不重绘整张图；<br/>
+    所有绘制在本地完成，不发起任何网络请求。
+  </td></tr>
+  <tr><td>结果与状态</td><td>生成结果必须标注「本地算法生成（非 AI 模型）」；界面提供「换一个种子」快捷操作。</td></tr>
+  <tr><td>边界</td><td>参数组合超出支持范围时，在生成前就地提示，不进入生成流程。</td></tr>
+</table>
+
+<h3>FR-07 分层产物与清单 <span class="pill p0">P0</span></h3>
+<table>
+  <tr><th style="width:22%">项</th><th>定义</th></tr>
+  <tr><td>目的</td><td>让算法模式的结果可以直接进入分层、绑定、导出，而不是一张死图。</td></tr>
+  <tr><td>产物</td><td>
+    背景、后发、身体、服装、面部、眼睛、前发、配饰，各自独立透明背景图片；<br/>
+    一份清单，记录图层顺序、每层用途、画布尺寸与对齐基准点。
+  </td></tr>
+  <tr><td>处理规则</td><td>图层命名与顺序遵循与现有分层结果相同的约定，使下游无需按模式分支。</td></tr>
+  <tr><td>结果与状态</td><td>图层页可直接打开该结果并逐层预览；缺失任一必需图层时，结果标记为「分层不完整」并说明缺哪层。</td></tr>
+  <tr><td>例外</td><td>输出目录不可写时，生成失败并提示路径与原因，不产出半套文件。</td></tr>
+</table>
+
+<h3>FR-08 失败与边界 <span class="pill p0">P0</span></h3>
+<table>
+  <tr><th style="width:26%">场景</th><th>产品行为</th></tr>
+  <tr><td>无可用 Provider</td><td>API 模式主按钮置灰，展示「去配置」与「改用本地算法」两个入口。</td></tr>
+  <tr><td>密钥无效</td><td>提示鉴权失败，聚焦到密钥字段，不自动重试。</td></tr>
+  <tr><td>网络不可达</td><td>提示不可达并给出「改用本地算法」入口。</td></tr>
+  <tr><td>限流</td><td>提示稍后重试，展示建议等待时长（若服务返回）。</td></tr>
+  <tr><td>生成超时</td><td>允许取消；取消后不写入历史，不更新「最近一次生成」。</td></tr>
+  <tr><td>磁盘不可写</td><td>生成前预检并阻止，提示产物目录与解决办法。</td></tr>
+</table>
+
+<h2>5. 共享规则</h2>
+
+<h3>5.1 密钥与隐私</h3>
+<ul>
+  <li>密钥只保存在本机，不上传、不写入日志、不出现在诊断信息中。</li>
+  <li>界面与导出内容中密钥一律掩码显示。</li>
+  <li>本地算法模式不发起任何网络请求，提示词与参数不出本机。</li>
+  <li>发送给外部服务的内容仅限提示词、尺寸与必要的生成参数。</li>
+</ul>
+
+<h3>5.2 来源标注</h3>
+<ul>
+  <li>每条结果都必须带来源标识，并在结果面板可见。</li>
+  <li>本地算法与本地占位图不得被描述为 AI 模型生成。</li>
+</ul>
+
+<h3>5.3 错误分类</h3>
+<p>所有失败统一归入：<code>配置错误</code>、<code>鉴权失败</code>、<code>网络不可达</code>、<code>限流</code>、<code>超时</code>、<code>服务端错误</code>、<code>本地写入失败</code>、<code>产物不完整</code>。界面按分类给出一句可执行的下一步，而不是原始报错堆栈。</p>
+
+<h3>5.4 结果契约</h3>
+<p>两种模式输出同一结构：主图地址、来源标识、分层列表（含每层用途与顺序）、清单地址、生成参数快照。下游页面只依赖该契约。</p>
+
+<h2>6. 交互示意</h2>
+<div class="demo">
+  <div class="demo-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span style="margin-left:8px">生成页 · 模式与配置（示意，非最终视觉）</span></div>
+  <div class="demo-body">
+    <div class="demo-left">
+      <div class="tabs">
+        <div class="tab active" id="tab-api" onclick="setMode('api')">自接 API</div>
+        <div class="tab" id="tab-algo" onclick="setMode('algo')">本地算法</div>
+      </div>
+
+      <div id="panel-api">
+        <div class="field">
+          <label>Provider</label>
+          <select id="provider">
+            <option value="default">默认（自动路由）</option>
+            <option value="p1">我的 OpenAI 兼容服务</option>
+            <option value="p2">Seedream</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>服务地址</label>
+          <input id="baseurl" value="https://api.example.com/v1" />
+        </div>
+        <div class="field">
+          <label>密钥</label>
+          <div class="row">
+            <input id="apikey" type="password" value="sk-demo-not-a-real-key" />
+            <button class="ghost" style="flex:0 0 74px" onclick="toggleKey()">显示</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>提示词</label>
+          <textarea rows="2">masterpiece, best quality, 1girl, black long hair, amber eyes</textarea>
+        </div>
+        <button class="act" onclick="testConn()">测试连接并生成</button>
+        <div class="status" id="status-api"></div>
+      </div>
+
+      <div id="panel-algo" class="hidden">
+        <div class="row">
+          <div class="field"><label>发型</label>
+            <select><option>长直发</option><option>双马尾</option><option>短发</option></select>
+          </div>
+          <div class="field"><label>表情</label>
+            <select><option>平静</option><option>微笑</option><option>困惑</option></select>
+          </div>
+        </div>
+        <div class="field"><label>发色 / 瞳色 / 服装主色</label>
+          <div class="swatches">
+            <div class="sw" style="background:#2b2b33"></div>
+            <div class="sw" style="background:#c9963f"></div>
+            <div class="sw" style="background:#7c5cff"></div>
+          </div>
+        </div>
+        <div class="field"><label>随机种子</label><input value="20261019" /></div>
+        <button class="act" onclick="runAlgo()">生成本地素材</button>
+        <div class="status" id="status-algo"></div>
+      </div>
+    </div>
+
+    <div class="demo-right">
+      <div class="figure">
+        <svg viewBox="0 0 190 250" width="190" height="250" aria-label="示意角色">
+          <defs>
+            <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#1b1b26"/><stop offset="1" stop-color="#12121a"/>
+            </linearGradient>
+          </defs>
+          <rect width="190" height="250" fill="url(#bg)"/>
+          <path d="M58 96c0-26 16-44 37-44s37 18 37 44c0 14-4 24-9 31H67c-5-7-9-17-9-31z" fill="#2b2b33"/>
+          <ellipse cx="95" cy="108" rx="27" ry="31" fill="#f2d2c0"/>
+          <path d="M68 100c2-22 13-33 27-33s25 11 27 33c-8-10-17-14-27-14s-19 4-27 14z" fill="#2b2b33"/>
+          <circle cx="84" cy="110" r="4" fill="#c9963f"/>
+          <circle cx="106" cy="110" r="4" fill="#c9963f"/>
+          <path d="M88 124c4 3 10 3 14 0" stroke="#b06a67" stroke-width="2" fill="none" stroke-linecap="round"/>
+          <path d="M66 142h58l14 62H52z" fill="#7c5cff" opacity=".85"/>
+          <path d="M52 204h86v12H52z" fill="#2b2b33"/>
+        </svg>
+      </div>
+      <div class="fig-note" id="figure-note">API 模式：结果来自所选 Provider，来源会在结果面板标注。</div>
+    </div>
+  </div>
+</div>
+
+<h2>7. 未决问题</h2>
+<table>
+  <tr><th style="width:34%">问题</th><th>为什么重要</th><th style="width:16%">当前处理</th></tr>
+  <tr><td>首发支持哪些内置供应商？</td><td>决定设置页的字段形态与测试成本。</td><td><span class="pill tbd">TBD</span> 默认先做 OpenAI 兼容 + 现有已注册供应商</td></tr>
+  <tr><td>密钥保存方式：本地配置文件还是系统凭据库？</td><td>影响安全强度与是否需要新增依赖。</td><td><span class="pill tbd">TBD</span> 先按本机配置文件、权限收紧处理</td></tr>
+  <tr><td>算法模式的首发风格范围？</td><td>决定参数面板规模与美术工作量。</td><td><span class="pill tbd">TBD</span> 先做单风格、可复现的分层立绘</td></tr>
+  <tr><td>是否需要展示外部服务的费用信息？</td><td>涉及第三方计费口径，无法自行推断。</td><td><span class="pill tbd">TBD</span> 首发不展示</td></tr>
+</table>
+
+<footer>
+  本文档描述产品行为与业务规则，不包含接口、存储或代码实现方案。
+  所有标记为 TBD 的内容需在评审时确认。
+</footer>
+
+</div>
+<script>
+  function setMode(mode){
+    var isApi = mode === 'api';
+    document.getElementById('tab-api').classList.toggle('active', isApi);
+    document.getElementById('tab-algo').classList.toggle('active', !isApi);
+    document.getElementById('panel-api').classList.toggle('hidden', !isApi);
+    document.getElementById('panel-algo').classList.toggle('hidden', isApi);
+    document.getElementById('figure-note').textContent = isApi
+      ? 'API 模式：结果来自所选 Provider，来源会在结果面板标注。'
+      : '算法模式：本机绘制并输出分层素材，标注「本地算法生成（非 AI 模型）」。';
+  }
+  function toggleKey(){
+    var el = document.getElementById('apikey');
+    el.type = el.type === 'password' ? 'text' : 'password';
+  }
+  function testConn(){
+    var s = document.getElementById('status-api');
+    s.className = 'status warn';
+    s.textContent = '正在测试连接…';
+    setTimeout(function(){
+      s.className = 'status err';
+      s.textContent = '鉴权失败：密钥无效（401）。已保留你的输入，修正后可重试；也可改用本地算法。';
+    }, 900);
+  }
+  function runAlgo(){
+    var s = document.getElementById('status-algo');
+    s.className = 'status ok';
+    s.textContent = '已生成 8 个图层与清单，可直接去分层。来源：本地算法生成（非 AI 模型）。';
+  }
+</script>
+</body>
+</html>
