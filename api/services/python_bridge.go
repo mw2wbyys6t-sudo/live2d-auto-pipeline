@@ -196,7 +196,7 @@ func (pb *PythonBridge) GenerateImageViaPython(prompt string, width, height, see
 		return "", fmt.Errorf("工作流脚本不存在: %s", scriptPath)
 	}
 
-	outputDir := filepath.Join(pb.cfg.Python.ScriptsDir, "output")
+	outputDir := pb.cfg.Output.BaseDir
 	os.MkdirAll(outputDir, 0755)
 
 	args := []string{
@@ -247,7 +247,7 @@ func (pb *PythonBridge) GenerateImageViaPython(prompt string, width, height, see
 		}
 	}
 	if !filepath.IsAbs(imagePath) {
-		imagePath = filepath.Join(pb.cfg.Python.ScriptsDir, imagePath)
+		imagePath = filepath.Join(pb.cfg.Output.BaseDir, imagePath)
 	}
 	return imagePath, nil
 }

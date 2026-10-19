@@ -90,6 +90,17 @@ type pythonWorkflowResult struct {
 	Steps          map[string]interface{} `json:"steps,omitempty"`
 }
 
+// workflowOutputDir 返回 Python 工作流的产物目录。
+// 该目录必须与 /output 静态路由（ServeOutput）的服务根目录 cfg.Output.BaseDir
+// 保持一致；桌面版把脚本装在只读的 app/、把产物写在文档目录，两者不同，
+// 若仍按 ScriptsDir/output 写入，前端拿到的 /output/<file> 会全部 404。
+func workflowOutputDir(cfg *config.Config, characterID string) string {
+	if characterID == "" {
+		return cfg.Output.BaseDir
+	}
+	return filepath.Join(cfg.Output.BaseDir, "characters", characterID)
+}
+
 // generateWithWorkflow 使用 core/workflow.py 新工作流（v0.10.1: 使用 --json 模式）
 func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*models.GenerateImageResponse, error) {
 	scriptPath := filepath.Join(g.cfg.Python.ScriptsDir, "core", "workflow.py")
@@ -97,16 +108,16 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 		return nil, fmt.Errorf("工作流脚本不存在: %s", scriptPath)
 	}
 
-	// 确定输出目录
-	outputDir := filepath.Join(g.cfg.Python.ScriptsDir, "output")
+	// 确定输出目录：必须与 /output 静态路由的服务根目录一致，
+	// 否则桌面版（安装目录 app/ 与文档产物目录分离）会出现「生成成功但图片 404」。
 	if req.CharacterID != "" {
 		// character_id 来自 JSON body 且会被拼进文件路径，必须过白名单
 		// （全局中间件只校验 URL path 不校验 body），否则 "../../x" 可穿越建目录。
 		if err := validateStrictID(req.CharacterID); err != nil {
 			return nil, err
 		}
-		outputDir = filepath.Join(g.cfg.Python.ScriptsDir, "output", "characters", req.CharacterID)
 	}
+	outputDir := workflowOutputDir(g.cfg, req.CharacterID)
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return nil, fmt.Errorf("创建输出目录失败: %v", err)
 	}
@@ -220,7 +231,7 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 		}
 	}
 	if !filepath.IsAbs(imagePath) {
-		imagePath = filepath.Join(g.cfg.Python.ScriptsDir, imagePath)
+		imagePath = filepath.Join(g.cfg.Output.BaseDir, imagePath)
 	}
 
 	resp := &models.GenerateImageResponse{
@@ -268,8 +279,13 @@ func (g *ImageGenerator) generateWithLocalGenerator(req models.GenerateImageRequ
 		return nil, fmt.Errorf("本地生成器脚本不存在: %s", scriptPath)
 	}
 
+	if err := os.MkdirAll(g.cfg.Output.BaseDir, 0755); err != nil {
+		return nil, fmt.Errorf("创建输出目录失败: %v", err)
+	}
+
 	args := []string{
 		scriptPath,
+		"--output", g.cfg.Output.BaseDir,
 		"--width", fmt.Sprintf("%d", req.Width),
 		"--height", fmt.Sprintf("%d", req.Height),
 		"--steps", "25",
@@ -326,7 +342,7 @@ func (g *ImageGenerator) generateWithLocalGenerator(req models.GenerateImageRequ
 	}
 
 	if !filepath.IsAbs(outputPath) {
-		outputPath = filepath.Join(g.cfg.Python.ScriptsDir, outputPath)
+		outputPath = filepath.Join(g.cfg.Output.BaseDir, outputPath)
 	}
 
 	return &models.GenerateImageResponse{
@@ -357,7 +373,7 @@ func (g *ImageGenerator) parseOutputPath(output string) string {
 	}
 
 	// 尝试从output目录查找最新文件
-	outputDir := filepath.Join(g.cfg.Python.ScriptsDir, "output")
+	outputDir := g.cfg.Output.BaseDir
 	if files, err := os.ReadDir(outputDir); err == nil {
 		var latestFile os.DirEntry
 		var latestTime time.Time
