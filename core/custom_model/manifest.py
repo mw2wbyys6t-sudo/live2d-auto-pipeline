@@ -248,6 +248,52 @@ def resolve_roots(base_dir: Optional[str] = None) -> List[str]:
     return roots
 
 
+def make_manifest_dict(
+    name: str,
+    task: str,
+    file: str = "model.onnx",
+    shape: Tuple[int, int, int, int] = (1, 3, 512, 512),
+    color_order: str = "RGB",
+    scale: float = 1.0 / 255.0,
+    mean: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    std: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+    output_kind: Optional[str] = None,
+    depth_range: Tuple[float, float] = (0.0, 1.0),
+    near_is_large: bool = True,
+    labels: Optional[Dict[str, str]] = None,
+    notes: str = "",
+) -> Dict[str, Any]:
+    """Build a manifest dict and fail fast when it violates the contract."""
+    kind = output_kind or ("depth" if task == TASK_DEPTH else "label_map")
+    data: Dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "name": name,
+        "task": task,
+        "format": "onnx",
+        "file": file,
+        "input": {
+            "name": "image",
+            "shape": [int(v) for v in shape],
+            "color_order": color_order.upper(),
+            "scale": float(scale),
+            "mean": [float(v) for v in mean],
+            "std": [float(v) for v in std],
+        },
+        "output": {
+            "name": "output",
+            "kind": kind,
+            "depth_range": [float(v) for v in depth_range],
+            "near_is_large": bool(near_is_large),
+            "labels": {str(k): str(v) for k, v in (labels or {}).items()},
+        },
+        "notes": notes,
+    }
+    errors = validate_manifest(data)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return data
+
+
 __all__ = [
     "SCHEMA_VERSION",
     "MANIFEST_FILENAME",
@@ -264,4 +310,5 @@ __all__ = [
     "discover",
     "find_task",
     "resolve_roots",
+    "make_manifest_dict",
 ]

@@ -11,6 +11,7 @@ from core.custom_model import (
     discover,
     find_task,
     load_manifest,
+    make_manifest_dict,
     parse_manifest,
     postprocess_depth,
     postprocess_segmentation,
@@ -108,6 +109,25 @@ def test_resolve_roots_prefers_env_and_base(tmp_path: Path, monkeypatch) -> None
 
     assert roots[0].endswith("env-models")
     assert str(tmp_path / "app" / "models" / "custom") in roots
+
+
+def test_make_manifest_dict_for_depth_and_segmentation() -> None:
+    depth = make_manifest_dict("d", "depth", shape=(1, 3, 256, 256))
+    assert validate_manifest(depth) == []
+
+    parts = make_manifest_dict(
+        "s",
+        "segmentation",
+        shape=(1, 3, 1024, 1024),
+        labels={"0": "background", "1": "hair_back", "2": "face_base"},
+    )
+    assert validate_manifest(parts) == []
+    assert parts["output"]["labels"]["2"] == "face_base"
+
+
+def test_make_manifest_dict_rejects_missing_labels() -> None:
+    with pytest.raises(ValueError):
+        make_manifest_dict("s", "segmentation", output_kind="label_map")
 
 
 def test_preprocess_builds_nchw_tensor() -> None:
