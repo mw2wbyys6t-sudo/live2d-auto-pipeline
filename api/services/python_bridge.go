@@ -600,18 +600,24 @@ func (pb *PythonBridge) ListImageProviders(ctx context.Context) ([]map[string]in
 // ImportPSDLayers 用 psd-tools 把外部 PSD 的每个像素图层按原始坐标
 // 合成为整幅画布 RGBA PNG（底层在前、前景在后），供分层工作台直接
 // 预览与后续 Live2D 导出使用。
-func (pb *PythonBridge) ImportPSDLayers(ctx context.Context, psdPath string) (map[string]interface{}, error) {
+func (pb *PythonBridge) ImportPSDLayers(ctx context.Context, psdPath string, preset string) (map[string]interface{}, error) {
 	if err := validatePath(psdPath); err != nil {
 		return nil, err
 	}
 	if _, err := os.Stat(psdPath); err != nil {
 		return nil, fmt.Errorf("PSD 文件不存在: %s", psdPath)
 	}
+	switch preset {
+	case "minimal", "default", "full":
+	default:
+		preset = "default"
+	}
 	outDir := filepath.Join(pb.cfg.Output.BaseDir, uniqueOutputName("psd_import_"))
 	// psd-tools 逐层导出在超大 PSD 上可能较慢，预算给足
 	res, err := pb.runBridgeTask(ctx, bridgeImportPSDScript, map[string]interface{}{
 		"psd_path": psdPath,
 		"out_dir":  outDir,
+		"preset":   preset,
 	}, 10*time.Minute)
 	if err != nil {
 		return nil, err
@@ -633,10 +639,11 @@ const bridgeImportPSDScript = `
 import sys, json, re
 from pathlib import Path
 from psd_tools import PSDImage
-from core.psd.part_naming import recognize_part
+from core.psd.part_naming import preset_allows, recognize_part
 
 params = json.loads(open(sys.argv[1], encoding="utf-8").read())
 psd_path = params["psd_path"]
+preset = (params.get("preset") or "default").lower()
 out_dir = Path(params["out_dir"])
 out_dir.mkdir(parents=True, exist_ok=True)
 psd = PSDImage.open(psd_path)
@@ -652,6 +659,15 @@ def walk(group):
         else:
             leaves.append(child)
 walk(psd)
+
+def group_path(node):
+    names = []
+    parent = node.parent
+    while parent is not None and parent is not psd and getattr(parent, "is_group", lambda: False)():
+        if parent.name:
+            names.append(parent.name)
+        parent = parent.parent
+    return "/".join(reversed(names))
 
 layers = []
 for idx, child in enumerate(reversed(leaves)):  # 底层在前，前景最后绘制
@@ -683,16 +699,22 @@ for idx, child in enumerate(reversed(leaves)):  # 底层在前，前景最后绘
         "path": str(out),
         "pixel_count": opaque,
         "group": getattr(child.parent, "name", "") or "",
+        "group_path": group_path(child),
     })
+
+kept = [l for l in layers if preset_allows(preset, l["part"])]
+filtered_count = len(layers) - len(kept)
 
 print(json.dumps({
     "ok": True,
     "canvas": [psd.width, psd.height],
     "layers_dir": str(out_dir),
-    "layer_count": len(layers),
-    "layers": layers,
+    "layer_count": len(kept),
+    "layers": kept,
+    "preset": preset,
     "total_found": len(leaves),
-    "recognized_count": sum(1 for l in layers if l["part"]),
+    "filtered_count": filtered_count,
+    "recognized_count": sum(1 for l in kept if l["part"]),
 }))
 `
 

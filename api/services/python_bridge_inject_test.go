@@ -197,7 +197,7 @@ func TestValidatePath_RejectsShellInjection_EndToEnd(t *testing.T) {
 
 	t.Run("ImportPSDLayers_路径注入", func(t *testing.T) {
 		malicious := "output/x`whoami`"
-		_, err := pb.ImportPSDLayers(context.Background(), malicious)
+		_, err := pb.ImportPSDLayers(context.Background(), malicious, "default")
 		if err == nil {
 			t.Fatal("ImportPSDLayers 应拒绝含反引号的路径")
 		}

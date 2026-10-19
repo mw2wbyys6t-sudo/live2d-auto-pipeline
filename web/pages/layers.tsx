@@ -54,6 +54,7 @@ function toLayerInfo(segments: SegmentedLayer[], w: number, h: number): LayerInf
     height: h,
     imageUrl: s.url,
     bounds: { x: 0, y: 0, width: w, height: h },
+    groupPath: s.group_path,
     isGroup: false,
   }));
 }
@@ -82,6 +83,8 @@ const LayersPage: NextPage = () => {
   /** 分层/导入产物目录：交给导出页复用（?layers_dir= 交接） */
   const [layersDir, setLayersDir] = useState<string>('');
   const [importing, setImporting] = useState(false);
+  const [importPreset, setImportPreset] = useState<'minimal' | 'default' | 'full'>('default');
+  const [importSummary, setImportSummary] = useState('');
   const [manifest, setManifest] = useState<{
     version: string;
     source: string;
@@ -101,12 +104,18 @@ const LayersPage: NextPage = () => {
       part_name: l.name,
       url: l.url || '',
       pixel_count: l.pixel_count || 0,
+      group_path: l.group_path,
     }));
     setLayers(toLayerInfo(segmented, w, h));
     setLayersDir(result.layers_dir || '');
     setPsdUrl(result.psd_url || '');
     setSegMethod('import');
     setManifest(null);
+    setImportSummary(
+      result.preset
+        ? `${result.preset} 预设 · 保留 ${result.layer_count} / ${result.total_found ?? result.layer_count} 层 · 已识别 ${result.recognized_count ?? 0}`
+        : '',
+    );
     setError(null);
   }, []);
 
@@ -114,14 +123,14 @@ const LayersPage: NextPage = () => {
     if (!file || importing) return;
     setImporting(true);
     try {
-      const result = await apiClient.importPSD(file);
+      const result = await apiClient.importPSD(file, importPreset);
       applyImportResult(result);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'PSD 导入失败');
     } finally {
       setImporting(false);
     }
-  }, [importing, applyImportResult]);
+  }, [importing, applyImportResult, importPreset]);
 
   const handleImportPNGs = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0 || importing) return;
@@ -203,6 +212,7 @@ const LayersPage: NextPage = () => {
       setLayersDir(result.layers_dir || '');
       setPsdUrl(result.psd_url || '');
       setSegMethod(result.method || method);
+      setImportSummary('');
       setManifest({
         version: result.manifest_version || '',
         source: result.source || result.method || method,
@@ -340,6 +350,27 @@ const LayersPage: NextPage = () => {
               </button>
             )}
             {/* 外部素材导入：自有 PSD / 零散 PNG 直接进入工作台与导出链路 */}
+            <div className="mt-2">
+              <p className="text-[10px] text-gray-500 mb-1">PSD 导入预设</p>
+              <div className="flex gap-1">
+                {(['minimal', 'default', 'full'] as const).map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => setImportPreset(p)}
+                    className={`flex-1 px-1 py-1 rounded-md text-[10px] border transition-colors ${
+                      importPreset === p
+                        ? 'bg-pink-500/20 border-pink-500/40 text-pink-300'
+                        : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
+                    }`}
+                  >
+                    {p === 'minimal' ? '最小' : p === 'default' ? '默认' : '完整'}
+                  </button>
+                ))}
+              </div>
+              {importSummary && (
+                <p className="mt-1 text-[10px] text-gray-500 break-all">{importSummary}</p>
+              )}
+            </div>
             <div className="mt-2 grid grid-cols-2 gap-2">
               <button
                 onClick={() => psdInputRef.current?.click()}
@@ -485,7 +516,12 @@ const LayersPage: NextPage = () => {
                     >
                       {layer.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
                     </button>
-                    <span className="text-xs text-gray-300 truncate flex-1">{layer.name}</span>
+                    <span
+                      className="text-xs text-gray-300 truncate flex-1"
+                      title={layer.groupPath ? `${layer.groupPath}/${layer.name}` : layer.name}
+                    >
+                      {layer.name}
+                    </span>
                     <span className="text-[10px] text-gray-600 font-mono">
                       {Math.round(layer.opacity * 100)}%
                     </span>

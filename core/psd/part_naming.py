@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Live2D Master Agent - PSD 图层名 → 语义部件识别.
-
-借鉴 psd2live（tsunehimatoi/psd2live，GPL-3.0）的"按图层名识别部件"思路：
-导入的 PSD 通常带有语义化图层名（英文/中文/日文），识别出部件类别与左右
-侧向后，下游的自动绑定（参数 → 部件映射）才有稳定的目标。
-
-注意：本模块只借鉴思路与命名约定，全部代码为原创（psd2live 为 GPL-3.0，
-与本仓库 Apache-2.0 不兼容，禁止复制其代码）。
-"""
+"""Live2D Master Agent - PSD 图层名 → 语义部件识别."""
 
 from __future__ import annotations
 
@@ -16,7 +8,7 @@ from typing import Dict, Optional
 
 # 支持的部件类别（与 moc3 参数绑定使用的部件名保持一致）
 _PARTS = (
-    "eye_white", "eye_iris", "eye_pupil", "eyelash", "eye_close", "eyebrow",
+    "eye_white", "eye_iris", "eye_pupil", "eyelash", "eye_close", "eyewear", "eyebrow",
     "mouth", "mouth_open", "mouth_close", "tooth_top", "tooth_bottom", "tongue",
     "nose", "face", "face_detail", "ear",
     "hair_front", "hair_side", "hair_back", "ahoge", "headwear",
@@ -31,6 +23,7 @@ _PART_KEYWORDS: Dict[str, tuple] = {
     "eye_pupil": ("pupil", "瞳孔", "瞳芯"),
     "eyelash": ("lash", "eyelash", "睫毛", "まつげ", "まつ毛", "속눈썹"),
     "eye_close": ("eye close", "eyeclose", "闭眼", "閉眼", "目閉じ", "감은 눈"),
+    "eyewear": ("eyewear", "glasses", "眼镜", "眼鏡", "めがね", "안경"),
     "eyebrow": ("brow", "eyebrow", "眉毛", "まゆ", "眉", "눈썹"),
     "mouth_open": ("mouth open", "mouthopen", "张嘴", "張嘴", "开口", "벌린 입"),
     "mouth_close": ("mouth close", "mouthclose", "闭嘴", "閉嘴", "闭口", "다문 입"),
@@ -49,11 +42,11 @@ _PART_KEYWORDS: Dict[str, tuple] = {
     "headwear": ("headwear", "hat", "帽子", "头饰", "頭飾", "모자"),
     "body": ("body", "torso", "neck", "身体", "胴体", "脖子", "颈", "頸", "からだ", "身体姿勢", "목"),
     "neckwear": ("neckwear", "领饰", "領飾", "围巾", "목도리"),
-    "clothes": ("cloth", "clothes", "clothing", "dress", "shirt", "skirt", "衣", "服", "裙", "服裝", "상의"),
+    "clothes": ("cloth", "clothes", "clothing", "dress", "shirt", "skirt", "topwear", "bottomwear", "上衣", "上装", "下装", "下裝", "衣", "服", "裙", "服裝", "치마", "상의"),
     "arm": ("arm", "shoulder", "handwear", "手臂", "胳膊", "肩", "腕", "うで", "팔"),
     "hand": ("hand", "palm", "手指", "手"),
-    "leg": ("leg", "thigh", "legwear", "腿", "大腿", "脚", "足", "あし", "다리"),
-    "accessory": ("accessory", "ribbon", "bow", "glasses", "ornament", "饰", "飾", "饰品", "蝴蝶结", "眼镜", "リボン", "かざり"),
+    "leg": ("leg", "thigh", "legwear", "footwear", "腿", "大腿", "脚", "腳", "足", "鞋", "あし", "다리", "신발"),
+    "accessory": ("accessory", "ribbon", "bow", "ornament", "饰", "飾", "饰品", "蝴蝶结", "リボン", "かざり"),
     "blush": ("blush", "脸红", "腮红", "頬"),
     "highlight": ("highlight", "shine", "高光", "ハイライト"),
     "background": ("background", "bg", "backdrop", "背景", "はいけい"),
@@ -67,6 +60,30 @@ _SIDE_KEYWORDS = {
 
 # 口型开合素材（a/i/u/e/o 口型约定，含中文写法）
 _MOUTH_VOWELS = ("a", "i", "u", "e", "o")
+
+# 导入预设：决定哪些已识别部件会进入工作台。
+# 未识别图层永远保留（与 PSD2Live 的"未知图层不丢弃"一致）。
+PRESET_MINIMAL = frozenset({
+    "face", "eye_white", "eye_iris", "eyelash", "eyebrow", "mouth",
+    "hair_front", "hair_back", "body", "clothes",
+})
+PRESET_DEFAULT = PRESET_MINIMAL | frozenset({
+    "ear", "earwear", "eyewear", "headwear", "neckwear",
+    "arm", "hand", "leg", "accessory", "tail", "wings",
+})
+PRESETS: Dict[str, Optional[frozenset]] = {
+    "minimal": PRESET_MINIMAL,
+    "default": PRESET_DEFAULT,
+    "full": None,
+}
+
+
+def preset_allows(preset: str, part: Optional[str]) -> bool:
+    """Return whether ``part`` survives the given import preset."""
+    allowed = PRESETS.get((preset or "default").lower(), PRESET_DEFAULT)
+    if allowed is None or part is None:
+        return True
+    return part in allowed
 
 _WORD_SPLIT = re.compile(r"[\s_\-\.()\[\]（）\[\]【】·・/\\]+")
 
@@ -139,4 +156,4 @@ def recognize_part(layer_name: str) -> Dict[str, Optional[str]]:
     return result
 
 
-__all__ = ["recognize_part"]
+__all__ = ["recognize_part", "preset_allows", "PRESETS", "PRESET_MINIMAL", "PRESET_DEFAULT"]

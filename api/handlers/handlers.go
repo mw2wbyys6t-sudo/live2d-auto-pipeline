@@ -697,13 +697,20 @@ func (h *Handler) ImportPSD(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "PSD 文件超过 500MB 限制"})
 		return
 	}
+	// 导入预设：minimal / default / full；非法值按 default 处理。
+	preset := strings.ToLower(strings.TrimSpace(c.DefaultPostForm("preset", "default")))
+	switch preset {
+	case "minimal", "default", "full":
+	default:
+		preset = "default"
+	}
 	// 先落到 uploads，再交给 psd-tools 解析
 	path, err := services.SavePSD(h.cfg, fh)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: err.Error()})
 		return
 	}
-	result, err := h.pythonBridge.ImportPSDLayers(c.Request.Context(), path)
+	result, err := h.pythonBridge.ImportPSDLayers(c.Request.Context(), path, preset)
 	if err != nil {
 		if errors.Is(err, services.ErrPythonTimeout) {
 			c.JSON(http.StatusGatewayTimeout, models.Response{Success: false, Error: err.Error()})

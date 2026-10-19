@@ -748,9 +748,14 @@ export class APIClient {
 
   // ---------- external asset import ----------
 
-  /** 导入外部 PSD：提取全部像素图层为整幅画布 PNG + 图层目录。 */
-  async importPSD(file: File): Promise<ImportResult> {
-    return this.uploadMultipart<ImportResult>('/api/import/psd', file, 'file', 10 * 60_000);
+  /** 导入外部 PSD：提取像素图层为整幅画布 PNG；preset 控制保留的部件范围。 */
+  async importPSD(
+    file: File,
+    preset: 'minimal' | 'default' | 'full' = 'default',
+  ): Promise<ImportResult> {
+    return this.uploadMultipart<ImportResult>('/api/import/psd', file, 'file', 10 * 60_000, {
+      preset,
+    });
   }
 
   /** 导入多张 PNG（按提交顺序作为图层集）。 */
@@ -784,12 +789,18 @@ export class APIClient {
     file: File,
     field: string,
     timeoutMs: number,
+    fields?: Record<string, string>,
   ): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const form = new FormData();
       form.append(field, file);
+      if (fields) {
+        for (const [key, value] of Object.entries(fields)) {
+          form.append(key, value);
+        }
+      }
       const res = await fetch(`${this.baseURL}${path}`, {
         method: 'POST',
         body: form,
@@ -1052,6 +1063,9 @@ export interface SegmentedLayer {
   part_name: string;
   url: string;
   pixel_count: number;
+  group_path?: string;
+  part?: string | null;
+  side?: 'left' | 'right' | null;
 }
 
 export interface SegmentResult {
@@ -1078,10 +1092,22 @@ export interface ImportResult {
   ok?: boolean;
   layers_dir: string;
   layer_count: number;
-  layers: Array<{ name: string; path: string; url?: string; pixel_count?: number; group?: string }>;
+  layers: Array<{
+    name: string;
+    path: string;
+    url?: string;
+    pixel_count?: number;
+    group?: string;
+    group_path?: string;
+    part?: string | null;
+    side?: 'left' | 'right' | null;
+  }>;
   psd_url?: string;
   canvas?: [number, number];
   total_found?: number;
+  preset?: 'minimal' | 'default' | 'full';
+  filtered_count?: number;
+  recognized_count?: number;
 }
 
 export interface ExportedModelInfo {

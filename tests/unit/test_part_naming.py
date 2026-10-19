@@ -1,6 +1,6 @@
 """core/psd/part_naming.py 的单元测试（借鉴 psd2live 图层名识别思路的自研实现）。"""
 
-from core.psd.part_naming import recognize_part
+from core.psd.part_naming import preset_allows, recognize_part
 
 
 def test_english_eye_layers():
@@ -66,3 +66,20 @@ def test_photoshop_copy_suffix_is_stripped():
     assert recognize_part("前发 copy 2")["part"] == "hair_front"
     assert recognize_part("mouth (1)")["part"] == "mouth"
     assert recognize_part("hair_back 副本")["part"] == "hair_back"
+
+
+def test_import_presets_filter_recognized_parts():
+    assert preset_allows("minimal", "face")
+    assert preset_allows("minimal", "eye_white")
+    assert not preset_allows("minimal", "accessory")
+
+    assert preset_allows("default", "accessory")
+    assert preset_allows("default", "headwear")
+    assert not preset_allows("default", "mouth_open")
+
+    assert preset_allows("full", "mouth_open")
+    assert preset_allows("full", "tongue")
+
+    # 未识别图层永远保留，非法预设退回 default
+    assert preset_allows("minimal", None)
+    assert preset_allows("bogus", "accessory")

@@ -144,6 +144,7 @@ export interface LayerInfo {
   imageUrl?: string;
   bounds: LayerBounds;
   groupId?: string;
+  groupPath?: string;
   isGroup: boolean;
   children?: LayerInfo[];
 }
