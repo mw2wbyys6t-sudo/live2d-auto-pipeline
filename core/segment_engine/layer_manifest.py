@@ -138,7 +138,7 @@ REQUIRED_FOR_RIG: List[str] = [
     "eye_white:R",
     "mouth",
     "neck",
-    "torso",
+    "clothes_top",
     "arm:L",
     "arm:R",
     "hand:L",

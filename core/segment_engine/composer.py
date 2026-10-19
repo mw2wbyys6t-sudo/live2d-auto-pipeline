@@ -19,6 +19,7 @@ from PIL import Image
 
 from core.logger import get_logger
 from core.segment_engine.amodal import AmodalCompleter
+from core.segment_engine.part_split import split_limb_parts
 
 log = get_logger("segment.composer")
 
@@ -43,10 +44,20 @@ class LayerComposer:
         "neck",
         "clothes_top",
         "clothes_inner",
-        "arms",
-        "hands",
+        "sleeve_L",
+        "sleeve_R",
+        "arm_L",
+        "arm_R",
+        "hand_L",
+        "hand_R",
         "skirt",
-        "legs",
+        "skirt_back",
+        "leg_L",
+        "leg_R",
+        "sock_L",
+        "sock_R",
+        "boot_L",
+        "boot_R",
         "accessories",
         "tail_ears",
         "effects",
@@ -91,6 +102,10 @@ class LayerComposer:
             original_image = original_image.convert("RGBA")
         img_arr = np.array(original_image)
         h, w = img_arr.shape[:2]
+
+        part_masks, split_warnings = split_limb_parts(part_masks, (w, h))
+        for message in split_warnings:
+            log.warning(message)
 
         occlusion_map = self.generate_occlusion_map(part_masks)
 
