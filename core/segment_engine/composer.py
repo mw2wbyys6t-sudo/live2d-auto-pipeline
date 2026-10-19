@@ -20,6 +20,8 @@ from PIL import Image
 from core.logger import get_logger
 from core.segment_engine.amodal import AmodalCompleter
 from core.segment_engine.part_split import (
+    attach_depths,
+    split_depth_parts,
     split_eye_parts,
     split_garment_details,
     split_hair_parts,
@@ -61,6 +63,9 @@ class LayerComposer:
         "hand_R",
         "skirt",
         "skirt_back",
+        "bottomwear_back",
+        "skirt_front",
+        "bottomwear_front",
         "skirt_hem_L",
         "skirt_hem_R",
         "skirt_hem",
@@ -96,6 +101,7 @@ class LayerComposer:
         part_masks: Dict[str, np.ndarray],
         original_image: Image.Image,
         output_dir: str,
+        depth_map: Optional[np.ndarray] = None,
     ) -> Dict[str, Dict]:
         """Extract, complete, and save per-part RGBA layers.
 
@@ -121,7 +127,10 @@ class LayerComposer:
         part_masks, eye_warnings = split_eye_parts(part_masks, img_arr)
         part_masks, hair_warnings = split_hair_parts(part_masks)
         part_masks, derived_parts = split_garment_details(part_masks, (w, h))
-        for message in split_warnings + eye_warnings + hair_warnings:
+        depth_warnings: List[str] = []
+        if depth_map is not None:
+            part_masks, depth_warnings = split_depth_parts(part_masks, depth_map)
+        for message in split_warnings + eye_warnings + hair_warnings + depth_warnings:
             log.warning(message)
         if derived_parts:
             log.info(f"Derived garment layers: {derived_parts}")
@@ -205,6 +214,9 @@ class LayerComposer:
                 f"  layer {part:14s} pixels={layers[part]['pixel_count']:>7d} "
                 f"bbox={bbox} completed={completed}"
             )
+
+        if depth_map is not None:
+            attach_depths(layers, part_masks, depth_map)
 
         log.success(f"Composed {len(layers)} layers into {out}")
         return layers

@@ -136,30 +136,135 @@ def estimate_midline(part_masks: Dict[str, np.ndarray], width: int) -> float:
     return width / 2.0
 
 
+def _component_labels(mask: np.ndarray):
+    """Return a label image, preferring cv2 then scipy; None when unavailable."""
+    try:
+        import cv2  # type: ignore
+
+        count, labels = cv2.connectedComponents(mask.astype(np.uint8))
+        return labels if count > 1 else None
+    except Exception:
+        pass
+    try:
+        from scipy import ndimage  # type: ignore
+
+        labels, count = ndimage.label(mask)
+        return labels if count > 1 else None
+    except Exception:
+        return None
+
+
+def _split_by_components(
+    mask: np.ndarray,
+    midline: float,
+    minimum: int,
+) -> Dict[str, np.ndarray]:
+    """Assign each connected component to a side by its bbox centre.
+
+    Components are never cut, so a limb drawn across the midline stays whole.
+    """
+    labels = _component_labels(mask)
+    if labels is None:
+        return {}
+
+    left = np.zeros_like(mask, dtype=bool)
+    right = np.zeros_like(mask, dtype=bool)
+    found_left = found_right = False
+
+    for label in range(1, int(labels.max()) + 1):
+        component = labels == label
+        if int(component.sum()) < minimum:
+            continue
+        cols = np.where(component.any(axis=0))[0]
+        centre = float(cols.min() + cols.max()) / 2.0
+        if centre >= midline:
+            left |= component
+            found_left = True
+        else:
+            right |= component
+            found_right = True
+
+    if not (found_left and found_right):
+        return {}
+    return {"L": left, "R": right}
+
+
+def _split_by_column_gap(
+    mask: np.ndarray,
+    midline: float,
+    minimum: int,
+) -> Dict[str, np.ndarray]:
+    """Split at the empty column closest to the body midline.
+
+    Used when no labeling library is available. Only splits when a genuinely
+    empty (or near-empty) column exists, so it cannot cut through a limb.
+    """
+    height, width = mask.shape
+    columns = mask.sum(axis=0).astype(np.int64)
+    occupied = np.where(columns > 0)[0]
+    if occupied.size < 2:
+        return {}
+
+    left_edge, right_edge = int(occupied.min()), int(occupied.max())
+    span = right_edge - left_edge
+    if span < 8:
+        return {}
+
+    low = left_edge + max(1, int(span * 0.15))
+    high = right_edge - max(1, int(span * 0.15))
+    if high <= low:
+        return {}
+
+    best = low + int(np.argmin(columns[low : high + 1]))
+    if int(columns[best]) > max(1, int(columns.max() * 0.05)):
+        return {}
+
+    xs = np.arange(width)[None, :]
+    left = mask & (xs >= best)
+    right = mask & (xs < best)
+    if int(left.sum()) < minimum or int(right.sum()) < minimum:
+        return {}
+    return {"L": left, "R": right}
+
+
 def split_mask_sides(
     mask: np.ndarray,
     midline: float,
     min_side_ratio: float = _MIN_SIDE_RATIO,
+    use_components: bool = True,
 ) -> Dict[str, np.ndarray]:
-    """Split one mask into character-left / character-right parts."""
+    """Split one mask into character-left / character-right parts.
+
+    Order of preference: connected components (keeps each limb whole), then an
+    empty column gap, then a hard cut at the midline.
+    """
     mask = np.asarray(mask, dtype=bool)
     if mask.ndim != 2 or not mask.any():
         return {}
 
-    width = mask.shape[1]
-    xs = np.arange(width)[None, :]
-    character_left = mask & (xs >= midline)
-    character_right = mask & (xs < midline)
-
     total = int(mask.sum())
     minimum = max(1, int(total * min_side_ratio))
 
-    sides: Dict[str, np.ndarray] = {}
-    if int(character_left.sum()) >= minimum:
-        sides["L"] = character_left
-    if int(character_right.sum()) >= minimum:
-        sides["R"] = character_right
-    return sides
+    if use_components:
+        sides = _split_by_components(mask, midline, minimum)
+        if sides:
+            return sides
+
+    sides = _split_by_column_gap(mask, midline, minimum)
+    if sides:
+        return sides
+
+    width = mask.shape[1]
+    xs = np.arange(width)[None, :]
+    left = mask & (xs >= midline)
+    right = mask & (xs < midline)
+
+    result: Dict[str, np.ndarray] = {}
+    if int(left.sum()) >= minimum:
+        result["L"] = left
+    if int(right.sum()) >= minimum:
+        result["R"] = right
+    return result
 
 
 def split_limb_parts(
@@ -313,6 +418,100 @@ def split_hair_parts(
     result[HAIR_BACK] = new_back
     warnings.append(f"头发前后由同一掩码按{source}拆分")
     return result, warnings
+
+
+#: Parent masks that can be split into front/back by a depth map.
+#: Larger depth = nearer to the viewer = front layer.
+DEPTH_SPLIT_PARENTS: Dict[str, Tuple[str, str]] = {
+    "hair": ("hair_front", "hair_back"),
+    "hair_mid": ("hair_front", "hair_back"),
+    "skirt": ("skirt_front", "skirt_back"),
+    "skirt_body": ("skirt_front", "skirt_back"),
+    "clothes_bottom": ("bottomwear_front", "bottomwear_back"),
+}
+
+
+def _normalize_depth(depth_map) -> Optional[np.ndarray]:
+    depth = np.asarray(depth_map, dtype=np.float32)
+    if depth.ndim != 2 or depth.size == 0:
+        return None
+    finite = depth[np.isfinite(depth)]
+    if finite.size == 0:
+        return None
+    peak = float(np.nanmax(finite))
+    if peak > 1.0:
+        depth = depth / peak
+    return depth
+
+
+def split_depth_parts(
+    part_masks: Dict[str, np.ndarray],
+    depth_map,
+) -> Tuple[Dict[str, np.ndarray], List[str]]:
+    """Split selected parts into front/back using a per-pixel depth map.
+
+    No depth map means no split: this function never invents depth values.
+    """
+    depth = _normalize_depth(depth_map)
+    if depth is None:
+        return part_masks, ["深度图不可用，跳过前后分层"]
+
+    result: Dict[str, np.ndarray] = dict(part_masks)
+    warnings: List[str] = []
+
+    for parent, (front_name, back_name) in DEPTH_SPLIT_PARENTS.items():
+        mask = result.get(parent)
+        if mask is None:
+            continue
+
+        mask = np.asarray(mask, dtype=bool)
+        if mask.shape != depth.shape:
+            warnings.append(f"{parent} 与深度图尺寸不一致，跳过")
+            continue
+        total = int(mask.sum())
+        if total < 100:
+            continue
+
+        values = depth[mask]
+        low, high = np.percentile(values, 10), np.percentile(values, 90)
+        if high - low < 0.02:
+            warnings.append(f"{parent} 深度差不足，未拆前后")
+            continue
+
+        threshold = float(np.median(values))
+        front = mask & (depth >= threshold)
+        back = mask & (depth < threshold)
+        if int(front.sum()) < total * 0.1 or int(back.sum()) < total * 0.1:
+            warnings.append(f"{parent} 前后比例失衡，保留整块")
+            continue
+
+        result.pop(parent, None)
+        result[front_name] = result.get(front_name, np.zeros_like(mask)) | front
+        result[back_name] = result.get(back_name, np.zeros_like(mask)) | back
+        warnings.append(f"{parent} 按深度拆为 {front_name}/{back_name}")
+
+    return result, warnings
+
+
+def attach_depths(
+    layers: Dict[str, Dict],
+    part_masks: Dict[str, np.ndarray],
+    depth_map,
+) -> Dict[str, Dict]:
+    """Attach each layer's mean depth so ordering can use depth instead of z."""
+    depth = _normalize_depth(depth_map)
+    if depth is None:
+        return layers
+
+    for name, info in layers.items():
+        mask = part_masks.get(name)
+        if mask is None:
+            continue
+        mask = np.asarray(mask, dtype=bool)
+        if mask.shape != depth.shape or not mask.any():
+            continue
+        info["depth"] = round(float(depth[mask].mean()), 6)
+    return layers
 
 
 def _side_suffix(name: str) -> Optional[str]:

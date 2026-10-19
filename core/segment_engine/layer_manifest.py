@@ -84,6 +84,8 @@ PART_SPECS: Dict[str, Dict[str, Any]] = {
     "skirt_front": {"name_zh": "服装_裙摆_前", "group": "clothing", "z": 47, "sides": False},
     "skirt_side": {"name_zh": "服装_裙摆_侧", "group": "clothing", "z": 46, "sides": True},
     "skirt_back": {"name_zh": "服装_裙摆_后", "group": "clothing", "z": 20, "sides": False},
+    "bottomwear_front": {"name_zh": "服装_下装_前", "group": "clothing", "z": 47, "sides": False},
+    "bottomwear_back": {"name_zh": "服装_下装_后", "group": "clothing", "z": 19, "sides": False},
     "lining": {"name_zh": "服装_内衬", "group": "clothing", "z": 45, "sides": False},
     "sock": {"name_zh": "下半身_袜", "group": "lower", "z": 15, "sides": True},
     "boot": {"name_zh": "下半身_靴", "group": "lower", "z": 16, "sides": True},

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from core.segment_engine.layer_manifest import SOURCE_SEMANTIC, build_manifest
 from core.segment_engine.part_split import (
     SIDED_SOURCE_PARTS,
+    attach_depths,
     estimate_midline,
     is_sided_name,
+    split_depth_parts,
     split_eye_parts,
     split_garment_details,
     split_hair_parts,
@@ -208,6 +211,61 @@ def test_hair_splits_by_top_band_without_face() -> None:
     assert masks["hair_front"].any()
     assert masks["hair_back"].any()
     assert not (masks["hair_front"] & masks["hair_back"]).any()
+
+
+def test_limb_crossing_midline_is_not_cut() -> None:
+    # 左臂跨过中线，右臂在远处：按连通域/空隙拆分应保持每条手臂完整。
+    arms = _rect(60, 100, 40, 57, 10, 30) | _rect(60, 100, 64, 77, 10, 30)
+
+    sides = split_mask_sides(arms, midline=50.0)
+
+    assert set(sides) == {"L", "R"}
+    assert sides["R"][10:30, 40:57].all()
+    assert sides["L"][10:30, 64:77].all()
+    assert not sides["R"][10:30, 64:77].any()
+
+
+def test_depth_split_uses_depth_map() -> None:
+    h, w = 60, 100
+    skirt = _rect(h, w, 20, 80, 20, 60)
+    depth = np.zeros((h, w), dtype=np.float32)
+    depth[20:40, :] = 0.2
+    depth[40:60, :] = 0.8
+
+    masks, warnings = split_depth_parts({"skirt": skirt}, depth)
+
+    assert "skirt" not in masks
+    assert "skirt_front" in masks
+    assert "skirt_back" in masks
+    assert not (masks["skirt_front"] & masks["skirt_back"]).any()
+    assert masks["skirt_front"][40:60, 20:80].all()
+    assert masks["skirt_back"][20:40, 20:80].all()
+    assert any("按深度拆为" in w for w in warnings)
+
+
+def test_uniform_depth_does_not_split() -> None:
+    skirt = _rect(60, 100, 20, 80, 20, 60)
+    depth = np.full((60, 100), 0.5, dtype=np.float32)
+
+    masks, warnings = split_depth_parts({"skirt": skirt}, depth)
+
+    assert "skirt" in masks
+    assert "skirt_front" not in masks
+    assert any("深度差不足" in w for w in warnings)
+
+
+def test_attach_depths_sets_mean_depth_per_layer() -> None:
+    near = _rect(40, 100, 60, 80, 10, 30)
+    far = _rect(40, 100, 20, 40, 10, 30)
+    depth = np.zeros((40, 100), dtype=np.float32)
+    depth[:, 60:80] = 0.9
+    depth[:, 20:40] = 0.1
+    layers = {"near": {"name": "near"}, "far": {"name": "far"}}
+
+    attach_depths(layers, {"near": near, "far": far}, depth)
+
+    assert layers["near"]["depth"] == pytest.approx(0.9, abs=1e-3)
+    assert layers["far"]["depth"] == pytest.approx(0.1, abs=1e-3)
 
 
 def test_seethrough_sided_names_split_into_left_and_right() -> None:
