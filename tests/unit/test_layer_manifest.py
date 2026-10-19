@@ -136,3 +136,37 @@ def test_empty_layers_are_not_preview_ready() -> None:
     assert manifest.preview_ready is False
     assert manifest.rig_ready is False
     assert pytest.approx(len(manifest.missing_required)) == 16
+
+
+def test_seethrough_vocabulary_resolves() -> None:
+    assert resolve_part("topwear")[0] == "clothes_top"
+    assert resolve_part("bottomwear")[0] == "clothes_bottom"
+    assert resolve_part("legwear")[0] == "sock"
+    assert resolve_part("footwear")[0] == "boot"
+    assert resolve_part("eyewhite")[0] == "eye_white"
+    assert resolve_part("irides")[0] == "eye_iris"
+    assert resolve_part("handwear_L") == ("handwear", "handwear", "L")
+    assert resolve_part("ears_R")[0] == "ear"
+
+
+def test_depth_order_is_used_when_every_layer_has_depth() -> None:
+    layers = [
+        {"name": "face", "path": "/tmp/face.png", "depth": 0.4},
+        {"name": "hair_back", "path": "/tmp/hair_back.png", "depth": 0.1},
+        {"name": "hair_front", "path": "/tmp/hair_front.png", "depth": 0.9},
+    ]
+    data = build_manifest(layers, source=SOURCE_SEMANTIC, canvas=(10, 10)).to_dict()
+
+    assert data["order_source"] == "depth"
+    assert data["draw_order"] == ["hair_back", "face", "hair_front"]
+
+
+def test_partial_depth_falls_back_to_static_order() -> None:
+    layers = [
+        {"name": "face", "path": "/tmp/face.png", "depth": 0.4},
+        {"name": "mouth", "path": "/tmp/mouth.png"},
+    ]
+    data = build_manifest(layers, source=SOURCE_SEMANTIC, canvas=(10, 10)).to_dict()
+
+    assert data["order_source"] == "static"
+    assert any("缺少深度" in w for w in data["warnings"])

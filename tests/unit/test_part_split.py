@@ -156,6 +156,15 @@ def test_band_ratios_match_tuning_constants() -> None:
     assert hem_rows == 8
 
 
+def test_seethrough_sided_names_split_into_left_and_right() -> None:
+    face = _rect(40, 100, 40, 61, 5, 25)
+    handwear = _rect(40, 100, 60, 71, 25, 35) | _rect(40, 100, 20, 31, 25, 35)
+
+    masks, _ = split_limb_parts({"face": face, "handwear": handwear}, (100, 40))
+
+    assert {"handwear_L", "handwear_R"} <= set(masks)
+
+
 def test_derived_layers_are_flagged_in_manifest() -> None:
     manifest = build_manifest(
         [{"name": "cuff_L", "path": "/tmp/cuff_L.png"}],

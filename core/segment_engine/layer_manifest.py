@@ -92,6 +92,14 @@ PART_SPECS: Dict[str, Dict[str, Any]] = {
     "watch": {"name_zh": "配件_怀表", "group": "accessory", "z": 70, "sides": False},
     "pendant": {"name_zh": "配件_挂饰", "group": "accessory", "z": 71, "sides": False},
     "accessories": {"name_zh": "配件_未分类", "group": "accessory", "z": 69, "sides": False},
+    "headwear": {"name_zh": "头部_头饰", "group": "head_hair", "z": 68, "sides": False},
+    "eyewear": {"name_zh": "面部_眼镜", "group": "head_face", "z": 48, "sides": False},
+    "ear": {"name_zh": "面部_耳", "group": "head_face", "z": 39, "sides": True},
+    "earwear": {"name_zh": "面部_耳饰", "group": "head_face", "z": 49, "sides": True},
+    "handwear": {"name_zh": "身体_手部服饰", "group": "body", "z": 36, "sides": True},
+    "tail": {"name_zh": "配件_尾巴", "group": "accessory", "z": 8, "sides": False},
+    "wings": {"name_zh": "配件_翅膀", "group": "accessory", "z": 5, "sides": False},
+    "objects": {"name_zh": "配件_道具", "group": "accessory", "z": 72, "sides": False},
 }
 
 _UNKNOWN_SPEC = {
@@ -132,6 +140,17 @@ ALIASES: Dict[str, Tuple[str, Optional[str]]] = {
     "嘴巴": ("mouth", None),
     "衣服": ("clothes_top", None),
     "衣服_暗": ("clothes_top", None),
+    "topwear": ("clothes_top", None),
+    "bottomwear": ("clothes_bottom", None),
+    "legwear": ("sock", None),
+    "footwear": ("boot", None),
+    "irides": ("eye_iris", None),
+    "eyewhite": ("eye_white", None),
+    "eyelash": ("eyelash", None),
+    "ears": ("ear", None),
+    "tail": ("tail", None),
+    "wings": ("wings", None),
+    "objects": ("objects", None),
 }
 
 REQUIRED_FOR_RIG: List[str] = [
@@ -218,6 +237,7 @@ class LayerEntry:
     occluded_by: List[str] = field(default_factory=list)
     amodal_completed: bool = False
     derived: bool = False
+    depth: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -233,6 +253,7 @@ class LayerEntry:
             "occluded_by": list(self.occluded_by),
             "amodal_completed": bool(self.amodal_completed),
             "derived": bool(self.derived),
+            "depth": self.depth,
         }
 
 
@@ -248,8 +269,18 @@ class LayerManifest:
     warnings: List[str]
     schema_version: str = SCHEMA_VERSION
     created_at: str = ""
+    order_source: str = "static"
+
+    def _ordered_entries(self) -> Tuple[List[LayerEntry], str]:
+        if self.layers and all(entry.depth is not None for entry in self.layers):
+            return (
+                sorted(self.layers, key=lambda e: (float(e.depth), e.z, e.id)),
+                "depth",
+            )
+        return sorted(self.layers, key=lambda e: (e.z, e.id)), self.order_source
 
     def to_dict(self) -> Dict[str, Any]:
+        ordered, order_source = self._ordered_entries()
         return {
             "schema_version": self.schema_version,
             "created_at": self.created_at,
@@ -257,9 +288,10 @@ class LayerManifest:
             "canvas": dict(self.canvas),
             "rig_ready": self.rig_ready,
             "preview_ready": self.preview_ready,
-            "draw_order": [entry.id for entry in sorted(self.layers, key=lambda e: (e.z, e.id))],
+            "order_source": order_source,
+            "draw_order": [entry.id for entry in ordered],
             "groups": list(GROUP_ORDER),
-            "layers": [entry.to_dict() for entry in sorted(self.layers, key=lambda e: (e.z, e.id))],
+            "layers": [entry.to_dict() for entry in ordered],
             "missing_required": list(self.missing_required),
             "missing_preview": list(self.missing_preview),
             "warnings": list(self.warnings),
@@ -288,6 +320,8 @@ def build_manifest(
 
         path = str(layer.get("path") or "")
         confidence = layer.get("confidence")
+        depth_value = layer.get("depth")
+        depth = float(depth_value) if isinstance(depth_value, (int, float)) else None
         entries.append(
             LayerEntry(
                 id=raw,
@@ -302,6 +336,7 @@ def build_manifest(
                 occluded_by=list(layer.get("occluded_by", []) or []),
                 amodal_completed=bool(layer.get("completed", layer.get("amodal_completed", False))),
                 derived=canonical in DERIVED_PARTS,
+                depth=depth,
             )
         )
         emitted.add(_qualified(canonical, side))
@@ -321,6 +356,14 @@ def build_manifest(
     if not preview_ready:
         extra_warnings.append("缺少必要部件，无法进入预览/分层检查")
 
+    depth_flags = [entry.depth is not None for entry in entries]
+    if entries and all(depth_flags):
+        order_source = "depth"
+    else:
+        order_source = "static"
+        if any(depth_flags):
+            extra_warnings.append("部分图层缺少深度，绘制顺序退回静态层级")
+
     return LayerManifest(
         source=source,
         canvas={"width": int(canvas[0]), "height": int(canvas[1])},
@@ -331,6 +374,7 @@ def build_manifest(
         missing_preview=missing_preview,
         warnings=extra_warnings,
         created_at=datetime.now(timezone.utc).isoformat(),
+        order_source=order_source,
     )
 
 

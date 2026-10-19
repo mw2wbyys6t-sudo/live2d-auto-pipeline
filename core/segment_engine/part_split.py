@@ -37,6 +37,14 @@ SIDED_SOURCE_PARTS: Dict[str, str] = {
     "boot": "boot",
     "eyebrows": "eyebrow",
     "eyes": "eye_white",
+    "eyewhite": "eye_white",
+    "irides": "eye_iris",
+    "eyelash": "eyelash",
+    "ears": "ear",
+    "earwear": "earwear",
+    "handwear": "handwear",
+    "legwear": "sock",
+    "footwear": "boot",
 }
 
 #: Mask names whose bounding box is used to estimate the body midline, in
