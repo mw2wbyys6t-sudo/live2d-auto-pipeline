@@ -454,8 +454,9 @@ class TestSemanticWiring:
             def __init__(self, device=None):
                 seen["device"] = device
 
-            def layer(self, image, output_dir=None, label_layers=True):
+            def layer(self, image, output_dir=None, label_layers=True, depth_map=None):
                 seen["args"] = (output_dir, label_layers)
+                seen["depth_map"] = depth_map
                 return {"success": True, "method": METHOD_SAM2, "layers": []}
 
             def segment(self, image):
@@ -469,6 +470,7 @@ class TestSemanticWiring:
         assert out["method"] == METHOD_SAM2
         assert seen["device"] == "cpu"
         assert seen["args"] == ("X", False)
+        assert seen["depth_map"] is None
 
         SemanticSegmenter(device="cpu", model_type="sam2_gd").segment(make_image())
         assert seen["segmented"] is True

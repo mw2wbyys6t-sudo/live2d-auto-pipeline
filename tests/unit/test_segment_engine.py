@@ -110,10 +110,18 @@ class TestLayerComposer:
     """Test layer composition and ordering."""
 
     def test_standard_order_exists(self):
-        assert len(LayerComposer.STANDARD_LAYER_ORDER) == 18
-        assert "face_base" in LayerComposer.STANDARD_LAYER_ORDER
-        assert "hair_front" in LayerComposer.STANDARD_LAYER_ORDER
-        assert "hair_back" in LayerComposer.STANDARD_LAYER_ORDER
+        order = LayerComposer.STANDARD_LAYER_ORDER
+        assert len(order) >= 18
+        assert len(order) == len(set(order))
+        assert "face_base" in order
+        assert "hair_front" in order
+        assert "hair_back" in order
+        assert order.index("hair_back") < order.index("hair_front") < order.index("face_base")
+        for part in ("arm", "hand", "leg", "sleeve", "cuff", "sock", "boot"):
+            assert f"{part}_L" in order
+            assert f"{part}_R" in order
+        assert order.index("clothes_top") < order.index("arm_L") < order.index("hand_L")
+        assert order.index("bottomwear_back") < order.index("bottomwear_front")
 
     def test_compose_basic(self):
         composer = LayerComposer()
