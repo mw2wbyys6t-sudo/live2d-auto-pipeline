@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from core.segment_engine.part_split import DERIVED_PARTS
+
 SCHEMA_VERSION = "1.0"
 
 MANIFEST_FILENAME = "layer_manifest.json"
@@ -70,6 +72,10 @@ PART_SPECS: Dict[str, Dict[str, Any]] = {
     "outer_body": {"name_zh": "服装_外套主体", "group": "clothing", "z": 51, "sides": False},
     "outer_collar": {"name_zh": "服装_外套领口", "group": "clothing", "z": 52, "sides": False},
     "sleeve": {"name_zh": "服装_袖子", "group": "clothing", "z": 53, "sides": True},
+    "cuff": {"name_zh": "服装_袖口", "group": "clothing", "z": 54, "sides": True},
+    "collar": {"name_zh": "服装_领口", "group": "clothing", "z": 57, "sides": False},
+    "skirt_hem": {"name_zh": "服装_裙摆", "group": "clothing", "z": 49, "sides": True},
+    "waistband": {"name_zh": "服装_腰带", "group": "clothing", "z": 50, "sides": False},
     "shirt_collar": {"name_zh": "服装_衬衫领口", "group": "clothing", "z": 54, "sides": False},
     "shirt_fold": {"name_zh": "服装_衬衫褶皱", "group": "clothing", "z": 55, "sides": False},
     "brooch": {"name_zh": "服装_胸针", "group": "clothing", "z": 56, "sides": False},
@@ -211,6 +217,7 @@ class LayerEntry:
     confidence: Optional[float] = None
     occluded_by: List[str] = field(default_factory=list)
     amodal_completed: bool = False
+    derived: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -225,6 +232,7 @@ class LayerEntry:
             "confidence": self.confidence,
             "occluded_by": list(self.occluded_by),
             "amodal_completed": bool(self.amodal_completed),
+            "derived": bool(self.derived),
         }
 
 
@@ -293,6 +301,7 @@ def build_manifest(
                 confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
                 occluded_by=list(layer.get("occluded_by", []) or []),
                 amodal_completed=bool(layer.get("completed", layer.get("amodal_completed", False))),
+                derived=canonical in DERIVED_PARTS,
             )
         )
         emitted.add(_qualified(canonical, side))

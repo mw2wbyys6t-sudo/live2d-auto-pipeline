@@ -46,6 +46,28 @@ _MIDLINE_ANCHORS: Tuple[str, ...] = ("face", "head", "neck", "clothes_top")
 #: A side smaller than this fraction of the parent mask is treated as noise.
 _MIN_SIDE_RATIO = 0.02
 
+#: Garment pieces whose edge bands are promoted to their own layers.
+#: ``name -> ((derived base, edge, band ratio of the parent height), ...)``
+#: Multiple bands may be cut from one parent; they are taken in order from the
+#: remaining mask, so later cuts never overlap earlier ones.
+_BAND_DERIVATIONS: Dict[str, Tuple[Tuple[str, str, float], ...]] = {
+    "arm_L": (("cuff", "bottom", 0.14),),
+    "arm_R": (("cuff", "bottom", 0.14),),
+    "sleeve_L": (("cuff", "bottom", 0.14),),
+    "sleeve_R": (("cuff", "bottom", 0.14),),
+    "skirt": (("skirt_hem", "bottom", 0.12), ("waistband", "top", 0.08)),
+    "skirt_body": (("skirt_hem", "bottom", 0.12), ("waistband", "top", 0.08)),
+    "clothes_bottom": (("skirt_hem", "bottom", 0.12), ("waistband", "top", 0.08)),
+    "clothes_top": (("collar", "top", 0.10),),
+    "outer_body": (("collar", "top", 0.10),),
+    "shirt": (("collar", "top", 0.10),),
+    "boot_L": (("boot_cuff", "top", 0.15),),
+    "boot_R": (("boot_cuff", "top", 0.15),),
+}
+
+#: Parts produced by geometric edge bands rather than by detection.
+DERIVED_PARTS = frozenset({"cuff", "skirt_hem", "collar", "waistband", "boot_cuff"})
+
 
 def _bbox_center_x(mask: np.ndarray) -> Optional[float]:
     cols = np.where(mask.any(axis=0))[0]
@@ -149,9 +171,93 @@ def split_limb_parts(
     return result, warnings
 
 
-def is_sided_name(name: str) -> bool:
+def _side_suffix(name: str) -> Optional[str]:
     lowered = str(name).lower()
-    return any(lowered.endswith(suffix) for suffix in ("_l", "_r", "_left", "_right"))
+    for suffix, side in (("_left", "L"), ("_right", "R"), ("_l", "L"), ("_r", "R")):
+        if lowered.endswith(suffix):
+            return side
+    return None
+
+
+def _edge_band(mask: np.ndarray, edge: str, ratio: float) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Return ``(band, remainder)`` for the top or bottom band of a mask."""
+    mask = np.asarray(mask, dtype=bool)
+    rows = np.where(mask.any(axis=1))[0]
+    if rows.size == 0:
+        return None, None
+
+    top, bottom = int(rows.min()), int(rows.max())
+    height = bottom - top + 1
+    band_height = max(2, int(round(height * ratio)))
+    if band_height >= height:
+        return None, None
+
+    band = np.zeros_like(mask, dtype=bool)
+    if edge == "bottom":
+        band[bottom - band_height + 1 : bottom + 1, :] = mask[bottom - band_height + 1 : bottom + 1, :]
+    else:
+        band[top : top + band_height, :] = mask[top : top + band_height, :]
+
+    return band, mask & ~band
+
+
+def split_garment_details(
+    part_masks: Dict[str, np.ndarray],
+    size: Tuple[int, int],
+) -> Tuple[Dict[str, np.ndarray], List[str]]:
+    """Promote cuffs, skirt hem and collar into independent layers.
+
+    These are geometric bands cut from an already-detected garment mask. They
+    are honest *derived* pieces, not learned detections, and are marked as such
+    in the manifest.
+    """
+    width = int(size[0])
+    midline = estimate_midline(part_masks, width)
+
+    result: Dict[str, np.ndarray] = {}
+    derived: List[str] = []
+
+    def _merge(name: str, mask: np.ndarray) -> None:
+        if name in result:
+            result[name] = result[name] | mask
+        else:
+            result[name] = mask
+
+    for name, mask in part_masks.items():
+        specs = _BAND_DERIVATIONS.get(str(name))
+        if specs is None:
+            _merge(str(name), np.asarray(mask, dtype=bool))
+            continue
+
+        side = _side_suffix(str(name))
+        remaining = np.asarray(mask, dtype=bool)
+
+        for base, edge, ratio in specs:
+            band, remainder = _edge_band(remaining, edge, ratio)
+            if band is None or not band.any() or remainder is None or not remainder.any():
+                continue
+
+            if base == "skirt_hem":
+                halves = split_mask_sides(band, midline, min_side_ratio=0.25)
+                if len(halves) == 2:
+                    for half_side, half_mask in halves.items():
+                        _merge(f"{base}_{half_side}", half_mask)
+                        derived.append(f"{base}_{half_side}")
+                    remaining = remainder
+                    continue
+
+            derived_name = f"{base}_{side}" if side else base
+            _merge(derived_name, band)
+            derived.append(derived_name)
+            remaining = remainder
+
+        _merge(str(name), remaining)
+
+    return result, derived
+
+
+def is_sided_name(name: str) -> bool:
+    return _side_suffix(name) is not None
 
 
 def sided_bases(names: Iterable[str]) -> List[str]:

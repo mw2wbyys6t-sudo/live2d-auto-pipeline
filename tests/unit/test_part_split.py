@@ -7,6 +7,7 @@ from core.segment_engine.part_split import (
     SIDED_SOURCE_PARTS,
     estimate_midline,
     is_sided_name,
+    split_garment_details,
     split_limb_parts,
     split_mask_sides,
 )
@@ -87,3 +88,67 @@ def test_eyebrows_are_split_into_independent_sides() -> None:
 
     assert set(masks) == {"face", "eyebrow_L", "eyebrow_R"}
     assert not warnings
+
+
+def test_cuff_is_cut_from_arm_bottom_without_overlap() -> None:
+    face = _rect(100, 100, 40, 61, 5, 25)
+    arm = _rect(100, 100, 60, 80, 20, 60)
+
+    masks, derived = split_garment_details({"face": face, "arm_L": arm}, (100, 100))
+
+    assert "cuff_L" in masks
+    assert "arm_L" in masks
+    assert derived == ["cuff_L"]
+    assert not (masks["cuff_L"] & masks["arm_L"]).any()
+
+    cuff_rows = np.where(masks["cuff_L"].any(axis=1))[0]
+    arm_rows = np.where(masks["arm_L"].any(axis=1))[0]
+    assert cuff_rows.min() > arm_rows.min()
+
+
+def test_skirt_hem_is_split_into_left_and_right() -> None:
+    face = _rect(100, 100, 40, 61, 5, 25)
+    skirt = _rect(100, 100, 20, 80, 40, 100)
+
+    masks, derived = split_garment_details({"face": face, "clothes_bottom": skirt}, (100, 100))
+
+    assert "skirt_hem_L" in masks
+    assert "skirt_hem_R" in masks
+    assert "waistband" in masks
+    assert {"skirt_hem_L", "skirt_hem_R", "waistband"} <= set(derived)
+    assert not (masks["skirt_hem_L"] & masks["skirt_hem_R"]).any()
+
+
+def test_collar_is_cut_from_top_band() -> None:
+    clothes_top = _rect(100, 100, 30, 70, 20, 90)
+
+    masks, derived = split_garment_details({"clothes_top": clothes_top}, (100, 100))
+
+    assert "collar" in masks
+    assert derived == ["collar"]
+    collar_rows = np.where(masks["collar"].any(axis=1))[0]
+    body_rows = np.where(masks["clothes_top"].any(axis=1))[0]
+    assert collar_rows.max() < body_rows.max()
+
+
+def test_boot_cuff_is_cut_from_boot_top() -> None:
+    boot = _rect(100, 100, 20, 40, 60, 100)
+
+    masks, derived = split_garment_details({"boot_L": boot}, (100, 100))
+
+    assert "boot_cuff_L" in masks
+    assert "boot_L" in masks
+    assert derived == ["boot_cuff_L"]
+    cuff_rows = np.where(masks["boot_cuff_L"].any(axis=1))[0]
+    boot_rows = np.where(masks["boot_L"].any(axis=1))[0]
+    assert cuff_rows.min() < boot_rows.max()
+
+
+def test_derived_layers_are_flagged_in_manifest() -> None:
+    manifest = build_manifest(
+        [{"name": "cuff_L", "path": "/tmp/cuff_L.png"}],
+        source=SOURCE_SEMANTIC,
+        canvas=(100, 100),
+    )
+    assert manifest.layers[0].derived is True
+    assert manifest.to_dict()["layers"][0]["derived"] is True

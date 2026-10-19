@@ -19,7 +19,7 @@ from PIL import Image
 
 from core.logger import get_logger
 from core.segment_engine.amodal import AmodalCompleter
-from core.segment_engine.part_split import split_limb_parts
+from core.segment_engine.part_split import split_garment_details, split_limb_parts
 
 log = get_logger("segment.composer")
 
@@ -44,20 +44,29 @@ class LayerComposer:
         "neck",
         "clothes_top",
         "clothes_inner",
+        "waistband",
+        "collar",
         "sleeve_L",
         "sleeve_R",
+        "cuff_L",
+        "cuff_R",
         "arm_L",
         "arm_R",
         "hand_L",
         "hand_R",
         "skirt",
         "skirt_back",
+        "skirt_hem_L",
+        "skirt_hem_R",
+        "skirt_hem",
         "leg_L",
         "leg_R",
         "sock_L",
         "sock_R",
         "boot_L",
         "boot_R",
+        "boot_cuff_L",
+        "boot_cuff_R",
         "accessories",
         "tail_ears",
         "effects",
@@ -104,8 +113,11 @@ class LayerComposer:
         h, w = img_arr.shape[:2]
 
         part_masks, split_warnings = split_limb_parts(part_masks, (w, h))
+        part_masks, derived_parts = split_garment_details(part_masks, (w, h))
         for message in split_warnings:
             log.warning(message)
+        if derived_parts:
+            log.info(f"Derived garment layers: {derived_parts}")
 
         occlusion_map = self.generate_occlusion_map(part_masks)
 
