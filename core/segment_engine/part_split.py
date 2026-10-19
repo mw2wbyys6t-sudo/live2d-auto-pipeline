@@ -46,18 +46,26 @@ _MIDLINE_ANCHORS: Tuple[str, ...] = ("face", "head", "neck", "clothes_top")
 #: A side smaller than this fraction of the parent mask is treated as noise.
 _MIN_SIDE_RATIO = 0.02
 
+#: Edge-band ratios, as a fraction of the parent part's height. These are the
+#: tuning knobs for derived garment pieces: smaller values give thinner bands.
+CUFF_BAND_RATIO = 0.10
+SKIRT_HEM_BAND_RATIO = 0.08
+
+#: Minimum band height in pixels so small parts still produce a usable strip.
+MIN_BAND_PX = 4
+
 #: Garment pieces whose edge bands are promoted to their own layers.
 #: ``name -> ((derived base, edge, band ratio of the parent height), ...)``
 #: Multiple bands may be cut from one parent; they are taken in order from the
 #: remaining mask, so later cuts never overlap earlier ones.
 _BAND_DERIVATIONS: Dict[str, Tuple[Tuple[str, str, float], ...]] = {
-    "arm_L": (("cuff", "bottom", 0.14),),
-    "arm_R": (("cuff", "bottom", 0.14),),
-    "sleeve_L": (("cuff", "bottom", 0.14),),
-    "sleeve_R": (("cuff", "bottom", 0.14),),
-    "skirt": (("skirt_hem", "bottom", 0.12), ("waistband", "top", 0.08)),
-    "skirt_body": (("skirt_hem", "bottom", 0.12), ("waistband", "top", 0.08)),
-    "clothes_bottom": (("skirt_hem", "bottom", 0.12), ("waistband", "top", 0.08)),
+    "arm_L": (("cuff", "bottom", CUFF_BAND_RATIO),),
+    "arm_R": (("cuff", "bottom", CUFF_BAND_RATIO),),
+    "sleeve_L": (("cuff", "bottom", CUFF_BAND_RATIO),),
+    "sleeve_R": (("cuff", "bottom", CUFF_BAND_RATIO),),
+    "skirt": (("skirt_hem", "bottom", SKIRT_HEM_BAND_RATIO), ("waistband", "top", 0.08)),
+    "skirt_body": (("skirt_hem", "bottom", SKIRT_HEM_BAND_RATIO), ("waistband", "top", 0.08)),
+    "clothes_bottom": (("skirt_hem", "bottom", SKIRT_HEM_BAND_RATIO), ("waistband", "top", 0.08)),
     "clothes_top": (("collar", "top", 0.10),),
     "outer_body": (("collar", "top", 0.10),),
     "shirt": (("collar", "top", 0.10),),
@@ -188,7 +196,7 @@ def _edge_band(mask: np.ndarray, edge: str, ratio: float) -> Tuple[Optional[np.n
 
     top, bottom = int(rows.min()), int(rows.max())
     height = bottom - top + 1
-    band_height = max(2, int(round(height * ratio)))
+    band_height = max(MIN_BAND_PX, int(round(height * ratio)))
     if band_height >= height:
         return None, None
 

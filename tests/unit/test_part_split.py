@@ -144,6 +144,18 @@ def test_boot_cuff_is_cut_from_boot_top() -> None:
     assert cuff_rows.min() < boot_rows.max()
 
 
+def test_band_ratios_match_tuning_constants() -> None:
+    arm = _rect(200, 100, 60, 80, 20, 120)
+    masks, _ = split_garment_details({"arm_L": arm}, (100, 200))
+    cuff_rows = int(np.where(masks["cuff_L"].any(axis=1))[0].size)
+    assert cuff_rows == 10
+
+    skirt = _rect(200, 100, 20, 80, 20, 120)
+    masks, _ = split_garment_details({"clothes_bottom": skirt}, (100, 200))
+    hem_rows = int(np.where((masks["skirt_hem_L"] | masks["skirt_hem_R"]).any(axis=1))[0].size)
+    assert hem_rows == 8
+
+
 def test_derived_layers_are_flagged_in_manifest() -> None:
     manifest = build_manifest(
         [{"name": "cuff_L", "path": "/tmp/cuff_L.png"}],
