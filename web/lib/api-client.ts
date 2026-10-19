@@ -617,12 +617,16 @@ export class APIClient {
 
   // ---------- health ----------
 
+  // 连接指示器专用探针：只要收到任何 HTTP 响应即视为「后端可达」。
+  // /api/health 在缺少可选 Python 依赖（PIL/numpy）时返回 503，表示「生成能力降级」
+  // 而非「后端离线」；若用 res.ok 判断，会把降级误报成 Offline。缺项详情由
+  // /health 环境自检页与 /api/status 呈现。
   async healthCheck(): Promise<boolean> {
     try {
       const res = await fetch(`${this.baseURL}/api/health`, {
         signal: AbortSignal.timeout?.(5000),
       });
-      return res.ok;
+      return res.status > 0;
     } catch {
       return false;
     }

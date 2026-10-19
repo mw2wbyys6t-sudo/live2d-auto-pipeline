@@ -18,6 +18,11 @@
 - **LLM 兜底假回复**：新增 `fallback:true` 标记，并在文案前显示「离线兜底回复」。
 - **Python 面捕假运行**：启动后校验 `is_running()`，失败返回 **503**。
 - **PSD 降级下载 404**：`psd_path` 不再返回目录，改给 `package_dir` + `fallback_reason`。
+- **连接状态「Offline」误报**：连接指示器原先按 `/api/health` 的 `res.ok` 判定，
+  而该端点在后端可达、仅缺少**可选** Python 依赖（PIL/numpy）时返回 **503**，
+  导致「弱依赖缺失」被误报成整体离线。现改为**收到任何 HTTP 响应即视为后端可达**
+  （仅网络不可达才判 `Offline`）；缺依赖详情仍由 `/health` 环境自检页与 `/api/status` 呈现。
+  （`web/lib/api-client.ts` 的 `healthCheck()`）
 
 ### 🟡 移除（无效控件，改了也不影响结果）
 
