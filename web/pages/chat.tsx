@@ -66,6 +66,15 @@ const ChatPage: NextPage = () => {
   }, []);
 
   useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem('live2d.persona');
+      if (saved) setPersonality(saved);
+    } catch {
+      /* localStorage 不可用时保持默认人设 */
+    }
+  }, []);
+
+  useEffect(() => {
     const el = scrollRef.current as (HTMLDivElement & { scrollTo?: (opts: ScrollToOptions) => void }) | null;
     if (el && typeof el.scrollTo === 'function') {
       el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
@@ -120,7 +129,7 @@ const ChatPage: NextPage = () => {
 
     try {
       const history: ChatMessage[] = [...messages, userMsg];
-      await apiClient.chat(history, onChunk, characterId).catch(async () => {
+      await apiClient.chat(history, onChunk, characterId, personality).catch(async () => {
         // 后端不可达时如实告知，不伪造 AI 回复误导用户
         const offlineNotice =
           '⚠️ 无法连接到后端服务。请确认 Go API（默认 :12009）或 Python 后端已启动后重试。\n\n' +
@@ -401,7 +410,15 @@ const ChatPage: NextPage = () => {
           <span className="block text-xs font-medium text-gray-400 mb-2">Personality prompt</span>
           <textarea
             value={personality}
-            onChange={(e) => setPersonality(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setPersonality(next);
+              try {
+                window.localStorage.setItem('live2d.persona', next);
+              } catch {
+                /* 存不下时仅当前会话生效 */
+              }
+            }}
             rows={5}
             className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white focus:outline-none focus:border-pink-500 resize-none"
           />

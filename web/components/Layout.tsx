@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react';
-import { Menu, Settings, Bell } from 'lucide-react';
+import Link from 'next/link';
+import { Menu, Settings } from 'lucide-react';
 import Sidebar from './Sidebar';
 import ConnectionStatus from './ConnectionStatus';
 
@@ -36,12 +37,14 @@ export default function Layout({ children, title, actions }: LayoutProps) {
             <div className="flex items-center gap-2 sm:gap-3">
               {actions}
               <ConnectionStatus className="hidden sm:flex" />
-              <button className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition-colors" aria-label="Notifications">
-                <Bell className="w-4 h-4" />
-              </button>
-              <button className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition-colors" aria-label="Settings">
+              <Link
+                href="/health"
+                className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                aria-label="环境自检"
+                title="环境自检"
+              >
                 <Settings className="w-4 h-4" />
-              </button>
+              </Link>
             </div>
           </div>
         </header>

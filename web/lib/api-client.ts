@@ -420,6 +420,7 @@ export class APIClient {
     messages: ChatMessage[],
     onChunk: (text: string) => void,
     characterId?: string,
+    systemPrompt?: string,
   ): Promise<void> {
     // v0.10.1: Use SSE chat/stream endpoint with snake_case payload matching Go ChatRequest
     const controller = new AbortController();
@@ -437,6 +438,9 @@ export class APIClient {
         history,
         stream: true,
       };
+      if (systemPrompt && systemPrompt.trim()) {
+        payload.system_prompt = systemPrompt.trim();
+      }
       const res = await fetch(`${this.baseURL}/api/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
