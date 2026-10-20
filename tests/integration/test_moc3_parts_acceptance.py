@@ -43,9 +43,8 @@ from live2d_builder.exporter.moc3_pipeline import (
 def _enable_mesh_keyforms(monkeypatch):
     """本文件的头部三轴用例要求 ``build_rig_spec`` 产出网格键形。
 
-    ``MESH_KEYFORMS_ENABLED`` 默认关闭（原因见 moc3_pipeline 的说明：真实模型的
-    多网格键形会让内核在加载阶段崩溃）。这里的网格是合成单网格，属于已被官方内核
-    逐像素验收覆盖的路径，所以显式打开。
+    ``MESH_KEYFORMS_ENABLED`` 现在是默认开启的急停开关，这里仍显式打开，
+    保证有人临时关掉闸门时这些用例不会静默退化成静态路径。
     """
     monkeypatch.setattr(moc3_pipeline, "MESH_KEYFORMS_ENABLED", True)
 

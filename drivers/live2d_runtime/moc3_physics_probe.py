@@ -45,10 +45,9 @@ def _pairs(manifest: Path) -> list:
     return out
 
 
-def _param_range(model, ids, name, default):
-    index = ids.index(name)
-    low = float(model.GetParameterMinimumValue(index))
-    high = float(model.GetParameterMaximumValue(index))
+def _param_range(session, name, default):
+    """取参数的声明行程；min==max 时给一个安全步长，避免阶跃为 0。"""
+    low, high = session.parameter_bounds(name)
     if low == high:
         return default, default
     return low, high
@@ -71,7 +70,7 @@ def run(manifest_path: str, frames: int, dt: float, mode: str = "update") -> dic
         return {"ok": False,
                 "error": "缺少 live2d-py，无法运行官方内核验收（执行: pip install live2d-py）"}
 
-    from drivers.live2d_runtime.native import CubismRenderer
+    from drivers.live2d_runtime.native import CubismModelSession
 
     manifest = Path(manifest_path)
     if not manifest.is_file():
@@ -87,15 +86,13 @@ def run(manifest_path: str, frames: int, dt: float, mode: str = "update") -> dic
     pygame.display.set_mode((64, 64), pygame.OPENGL | pygame.DOUBLEBUF)
     sdk.init()
     sdk.glInit()
-    renderer = CubismRenderer(64, 64)
+    session = CubismModelSession(64, 64)
     chains = []
     try:
-        renderer.load_model(manifest_path)
-        model = renderer._model
-        inner = model._model
-        model.SetAutoBlinkEnable(False)
-        model.SetAutoBreathEnable(False)
-        ids = [str(i) for i in renderer.parameter_ids]
+        session.load_model(manifest_path)
+        session.set_auto_blink(False)
+        session.set_auto_breath(False)
+        ids = [str(i) for i in session.parameter_ids]
         missing = [p["input"] for p in pairs if p["input"] not in ids] + \
                   [p["output"] for p in pairs if p["output"] not in ids]
         if missing:
@@ -103,22 +100,21 @@ def run(manifest_path: str, frames: int, dt: float, mode: str = "update") -> dic
                     "missing": sorted(set(missing))}
 
         for chain in pairs:
-            inner_index = ids.index(chain["input"])
             out_index = ids.index(chain["output"])
-            low, high = _param_range(inner, ids, chain["input"], 30.0)
+            low, high = _param_range(session, chain["input"], 30.0)
             step = high if high != low else 1.0
 
             def advance(value):
-                inner.SetAndSaveParameterValueById(chain["input"], value, 1.0)
-                inner.Update(dt)
+                session.set_parameter(chain["input"], value)
+                session.update(dt)
                 if mode == "explicit":
-                    inner.UpdatePhysics(dt)
-                return float(inner.GetParameterValue(out_index))
+                    session.update_physics(dt)
+                return session.get_parameter_value(out_index)
 
             def settle(count, value):
                 for _ in range(count):
                     advance(value)
-                return float(inner.GetParameterValue(out_index))
+                return session.get_parameter_value(out_index)
 
             base = settle(frames, low if low != 0 else 0.0)
             # 阶跃当帧就采样一次，再逐帧记录，才能看出滞后
@@ -145,7 +141,7 @@ def run(manifest_path: str, frames: int, dt: float, mode: str = "update") -> dic
                            if not (c["moved"] and c["lagged"] and c["settled"])],
                 "error": None if ok else "physics 未产生带滞后的可回摆运动"}
     finally:
-        renderer.close()
+        session.close()
         sdk.glRelease()
         sdk.dispose()
         pygame.display.quit()

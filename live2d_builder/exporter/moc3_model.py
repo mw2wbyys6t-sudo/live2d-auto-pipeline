@@ -296,6 +296,14 @@ def _validate_deformer_keys(deformer: WarpDeformerSpec,
             raise UnsupportedRig(
                 f"{deformer.deformer_id}: 键值 {v} 超出参数 "
                 f"{param.parameter_id} 的区间")
+    # 与网格关键形同一条内核约束：键值不覆盖参数完整区间时，参数取到区间外的值
+    # 会让内核越界读取（见 _validate_keyforms 的实测说明）。
+    if not math.isclose(values[0], param.minimum, abs_tol=1e-9) or \
+            not math.isclose(values[-1], param.maximum, abs_tol=1e-9):
+        raise UnsupportedRig(
+            f"{deformer.deformer_id}: 键值 {list(values)} 必须覆盖参数 "
+            f"{param.parameter_id} 的完整区间 "
+            f"[{param.minimum}, {param.maximum}]，否则内核在区间外的取值上越界")
 
 
 def _validate_mesh(mesh: MeshSpec) -> None:
@@ -388,6 +396,18 @@ def _validate_keyforms(mesh: MeshSpec,
                 raise UnsupportedRig(
                     f"{mesh.mesh_id}: 键值 {v} 超出参数 {pid} 的 "
                     f"[{param.minimum}, {param.maximum}] 区间")
+        # 键值必须**覆盖参数的完整区间**。内核按参数值在键之间插值，参数跑到键区间
+        # 之外时不做钳制而是越界读取（实测 Cubism Core 5.0.0：键值 (0, 1) 的参数在
+        # -30 / 30 / ±5 上渲染即段错误，而 0 / 1 正常）。官方导出器的键永远落在参数的
+        # min / default / max 上，因此这里不接受「只覆盖一段」的键。
+        if not math.isclose(keys[0], param.minimum, abs_tol=1e-9):
+            raise UnsupportedRig(
+                f"{mesh.mesh_id}: 参数 {pid} 的首个键值 {keys[0]} 必须等于参数下限 "
+                f"{param.minimum}（键值须覆盖 [min, max]，否则内核在区间外的取值上越界）")
+        if not math.isclose(keys[-1], param.maximum, abs_tol=1e-9):
+            raise UnsupportedRig(
+                f"{mesh.mesh_id}: 参数 {pid} 的末个键值 {keys[-1]} 必须等于参数上限 "
+                f"{param.maximum}（键值须覆盖 [min, max]，否则内核在区间外的取值上越界）")
     expected = keyform_grid_size(axes)
     if len(mesh.keyform_shapes) != expected:
         raise UnsupportedRig(
@@ -912,16 +932,24 @@ def _write_draw_order(doc: Moc3Container, count: int,
                       draw_orders: Optional[List[float]] = None) -> None:
     """写出绘制顺序组。
 
-    ``min_draw_orders`` / ``max_draw_orders`` 必须是本组实际的绘制序范围：内核用它
-    划定绘制序区间，恒写 0 会让声明的区间小于真实取值，越界读取（实测在带键形的
-    多网格模型上直接段错误）。
+    ``min_draw_orders`` / ``max_draw_orders`` 是内核用来**分配绘制序桶**的区间：
+    ``csmiCalculateRenderOrder`` 把桶按 ``draw_order - min`` 取下标。实测
+    （2026-10，Cubism Core 5.0.0，带键形的多网格模型）：
+
+    * 声明 ``max == 实际最大绘制序`` 时，最后一个绘制序的下标等于桶数，
+      越界一格 —— 读到的是堆上残留值，通常直接段错误；
+    * 声明 ``max == 实际最大绘制序 + 1`` 时稳定通过（0/1、0/2、1/2、0/5 四组
+      绘制序各配 max 与 max+1 两档，8 例全对）。
+
+    所以 ``max`` 取**开区间上界**（实际最大值 + 1），而不是最大值本身。
     """
     orders = [int(round(float(o))) for o in (draw_orders or [0])] or [0]
+    low, high = min(orders), max(orders)
     doc.set("draw_order_group.object_begin_indices", [0])
     doc.set("draw_order_group.object_counts", [count])
     doc.set("draw_order_group.object_total_counts", [count])
-    doc.set("draw_order_group.min_draw_orders", [min(orders)])
-    doc.set("draw_order_group.max_draw_orders", [max(orders)])
+    doc.set("draw_order_group.min_draw_orders", [low])
+    doc.set("draw_order_group.max_draw_orders", [high + 1])
     doc.set("draw_order_group_object.types", [0] * count)
     doc.set("draw_order_group_object.indices", list(range(count)))
     doc.set("draw_order_group_object.group_indices", [-1] * count)

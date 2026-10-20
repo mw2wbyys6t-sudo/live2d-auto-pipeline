@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from drivers.live2d_runtime.native import CubismRenderer
+from drivers.live2d_runtime.native import CubismModelSession
 
 
 def _parse_param(text: str) -> tuple[str, float]:
@@ -32,7 +32,7 @@ def probe(manifest: str, params=(), width: int = 400, height: int = 500,
     import live2d.v3 as sdk
     from OpenGL.GL import glReadPixels, glFinish, GL_RGBA, GL_UNSIGNED_BYTE
 
-    renderer = CubismRenderer(width, height)
+    session = CubismModelSession(width, height)
     initialized = gl_ready = False
     applied: dict[str, float] = {}
     parameter_ids: list[str] = []
@@ -45,40 +45,39 @@ def probe(manifest: str, params=(), width: int = 400, height: int = 500,
         initialized = True
         sdk.glInit()
         gl_ready = True
-        renderer.load_model(manifest)
-        model = renderer._model
-        model.StopAllMotions()
-        model.SetAutoBlinkEnable(False)
-        model.SetAutoBreathEnable(False)
+        session.load_model(manifest)
+        session.stop_all_motions()
+        session.set_auto_blink(False)
+        session.set_auto_breath(False)
 
         applied = {}
         # 参数预热：不写任何参数的首帧会得到退化画面（整屏铺满或整体消失），
         # 因此先把每个参数按当前值写一遍，保证几何与声明坐标一致可比。
         if prime:
-            for name in renderer.parameter_ids:
-                index = renderer.parameter_ids.index(name)
-                renderer.set_parameter(name, model.GetParameterValue(index))
+            for index, name in enumerate(session.parameter_ids):
+                session.set_parameter(name, session.get_parameter_value(index))
         for name, value in params:
-            applied[name] = renderer.set_parameter(name, value)
+            applied[name] = session.set_parameter(name, value)
 
-        # 两次空更新让物理/插值稳定，然后冻结时间取帧（与 verify.py 同一手法）。
+        # 两次空更新让物理/插值稳定，然后冻结时间取帧（dt=0 才不会让物理与呼吸
+        # 冒充参数响应）。
         for _ in range(2):
             sdk.clearBuffer()
-            model._model.Update(0.0)
-            model.Draw()
+            session.update(0.0)
+            session.draw()
             glFinish()
         sdk.clearBuffer()
-        model._model.Update(0.0)
-        model.Draw()
+        session.update(0.0)
+        session.draw()
         glFinish()
         pixels = np.frombuffer(
             glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE),
             dtype=np.uint8).reshape(height, width, 4).copy()
         pygame.display.flip()
         pygame.event.pump()
-        parameter_ids = list(renderer.parameter_ids)
+        parameter_ids = list(session.parameter_ids)
     finally:
-        renderer.close()
+        session.close()
         if gl_ready:
             sdk.glRelease()
         if initialized:

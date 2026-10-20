@@ -185,7 +185,9 @@ def _write_draw_order(doc: Moc3Container, spec: MinimalModelSpec) -> None:
     doc.set("draw_order_group.object_counts", [1])
     doc.set("draw_order_group.object_total_counts", [1])
     doc.set("draw_order_group.min_draw_orders", [0])
-    doc.set("draw_order_group.max_draw_orders", [0])
+    # 开区间上界：内核按 draw_order - min 取桶下标，声明 max 恰等于实际最大值会
+    # 越界一格（见 moc3_model._write_draw_order 的实测说明）。
+    doc.set("draw_order_group.max_draw_orders", [1])
 
     # 对象类型：art mesh 用类型 0 表示（与官方 Haru 数据一致）
     doc.set("draw_order_group_object.types", [0])

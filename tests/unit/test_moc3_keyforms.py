@@ -44,8 +44,12 @@ def _shifted(mesh, key_value):
         vertices=[(x + key_value, y) for x, y in mesh.vertices])
 
 
-def _driven(bindings, mesh_count=2, cells=2):
-    """前 len(bindings) 个网格按 (参数, 键值序列) 驱动，其余保持静态。"""
+def _driven(bindings, mesh_count=2, cells=2, params=None):
+    """前 len(bindings) 个网格按 (参数, 键值序列) 驱动，其余保持静态。
+
+    ``params`` 可覆盖参数声明：键值必须覆盖参数的 [min, max]（内核在区间外的
+    取值上会越界），所以键值不满 [-30, 30] 的用例要同时收窄参数区间。
+    """
     meshes = [_grid(f"ArtMesh{i}", cells=cells, offset=float(i * 10))
               for i in range(mesh_count)]
     driven = []
@@ -56,7 +60,7 @@ def _driven(bindings, mesh_count=2, cells=2):
             draw_order=mesh.draw_order,
             keyform_parameter_id=pid,
             keyform_shapes=[_shifted(mesh, k) for k in keys]))
-    params = [ParameterSpec(pid) for pid in ("Param0", "Param1")]
+    params = params or [ParameterSpec(pid) for pid in ("Param0", "Param1")]
     return RigSpec(meshes=driven + meshes[len(bindings):], parameters=params)
 
 
@@ -123,7 +127,8 @@ def test_two_parameters_get_separate_bands_and_bindings():
     doc = compile_static_rig(_driven([
         ("Param0", (-30.0, 30.0)),
         ("Param1", (0.0, 1.0)),
-    ]))
+    ], params=[ParameterSpec("Param0", minimum=-30.0, maximum=30.0),
+               ParameterSpec("Param1", minimum=0.0, maximum=1.0)]))
     assert doc.counts[ms.CountIdx.KEYFORM_BINDING_BANDS] == 3
     assert doc.counts[ms.CountIdx.KEYFORM_BINDINGS] == 2
     assert doc.get("art_mesh.keyform_binding_band_indices") == [1, 2]
@@ -140,7 +145,8 @@ def test_meshes_sharing_a_parameter_share_band_and_binding():
     doc = compile_static_rig(_driven([
         ("Param0", (0.0, 1.0)),
         ("Param0", (0.0, 1.0)),
-    ]))
+    ], params=[ParameterSpec("Param0", minimum=0.0, maximum=1.0),
+               ParameterSpec("Param1")]))
     assert doc.counts[ms.CountIdx.KEYFORM_BINDINGS] == 1
     assert doc.get("art_mesh.keyform_binding_band_indices") == [1, 1]
     assert doc.get("parameter.keyform_binding_counts") == [1, 0]
@@ -222,7 +228,11 @@ def test_non_finite_keyform_vertex_is_rejected():
 
 
 def test_same_parameter_with_two_key_layouts_gets_two_bindings():
-    """同一参数、不同键值布局 -> 两个 binding、两个带，编号在该参数名下连续。"""
+    """同一参数、不同键值布局 -> 两个 binding、两个带，编号在该参数名下连续。
+
+    两套布局都必须覆盖参数的 [-30, 30]（内核在键区间外的取值上会越界），
+    所以这里是「两端点」与「两端点 + 中点」两种密度，而不是子区间。
+    """
     mesh0 = _grid("A0", cells=2)
     mesh1 = _grid("A1", cells=2)
 
@@ -232,16 +242,16 @@ def test_same_parameter_with_two_key_layouts_gets_two_bindings():
                         keyform_shapes=[_shifted(mesh, k) for k in keys])
 
     spec = RigSpec(meshes=[driven("A0", mesh0, (-30.0, 30.0)),
-                           driven("A1", mesh1, (0.0, 1.0)),
+                           driven("A1", mesh1, (-30.0, 0.0, 30.0)),
                            _grid("A2", cells=2)],
                   parameters=[ParameterSpec("Param0"), ParameterSpec("Param1")])
     doc = compile_static_rig(spec)
 
     assert doc.counts[ms.CountIdx.KEYFORM_BINDINGS] == 2
     assert doc.counts[ms.CountIdx.KEYFORM_BINDING_BANDS] == 3
-    assert doc.counts[ms.CountIdx.KEYS] == 4
-    assert doc.get("keys.values") == [-30.0, 30.0, 0.0, 1.0]
-    assert doc.get("keyform_binding.keys_counts") == [2, 2]
+    assert doc.counts[ms.CountIdx.KEYS] == 5
+    assert doc.get("keys.values") == [-30.0, 30.0, -30.0, 0.0, 30.0]
+    assert doc.get("keyform_binding.keys_counts") == [2, 3]
     assert doc.get("keyform_binding.keys_begin_indices") == [0, 2]
     # 两个网格各用各的带，第三个静态网格用空带 0
     assert doc.get("art_mesh.keyform_binding_band_indices") == [1, 2, 0]

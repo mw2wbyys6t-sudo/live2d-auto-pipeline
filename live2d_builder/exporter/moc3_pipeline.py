@@ -269,15 +269,18 @@ def eye_track_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
     return axes, shapes
 
 
-#: 网格键形（逐顶点键形带）总开关，**默认关闭**。
+#: 网格键形（逐顶点键形带）总开关，默认开启；保留为定位问题时的急停开关。
 #:
-#: 关闭原因：只要模型里有 **≥2 个自动绑骨网格带键形**，官方 Cubism Core 就会在
-#: ``LoadModelJson`` 阶段段错误（实测 2026-10；已排除轴数、变形器、参数数量、
-#: 网格规模、退化网格、顶点数值内容等因素，最小合成复现不成立，怀疑 moc3 键形
-#: 索引表在真实网格上的写出有缺陷）。开着会让**任何**导出产物无法被内核加载，
-#: 因此先闸住，等定位后再打开。开启前必须用
-#: ``drivers/live2d_runtime/verify.py`` 做过完整验收。
-MESH_KEYFORMS_ENABLED = False
+#: 2026-10 曾整体关闭：模型里只要 ≥2 个网格带键形，官方 Cubism Core 就在
+#: ``LoadModelJson`` 阶段段错误，且**概率性**复现（同一份字节约 90–95% 崩），
+#: 一致性检查拦不住。当时怀疑是 moc3 键形索引表写错，实际根因在绘制顺序：
+#: ``csmiCalculateRenderOrder`` 按 ``draw_order - min_draw_order`` 取桶下标，
+#: 而桶数组只按 ``max - min`` 分配 —— 声明 ``max == 实际最大绘制序`` 时最后一档
+#: 越界一格，读到什么取决于堆布局，于是表现为「时崩时好、和 draw_order 非单调相关」。
+#: 修复在 ``moc3_model._write_draw_order``（max 取开区间上界）与
+#: ``_validate_keyforms``（键值必须覆盖参数完整区间）。已对 2 / 10 / 40 网格的
+#: 带键形模型做过官方内核加载 + 两端取帧逐像素比对。
+MESH_KEYFORMS_ENABLED = True
 
 # 头部整体：ParamAngleX / ParamAngleY 在 Live2D 里不是纯旋转，而是**点头/转头的
 # 透视复合** —— 正面轮廓按 cos θ 各向异性压扁（转头压水平、点头压垂直，与压扁方向

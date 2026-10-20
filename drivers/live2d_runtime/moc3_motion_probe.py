@@ -106,7 +106,7 @@ def run(manifest_path: str, group: str, frames: int, dt: float,
         mode: str) -> dict:
     import pygame
 
-    from drivers.live2d_runtime.native import CubismRenderer
+    from drivers.live2d_runtime.native import CubismModelSession
 
     manifest = Path(manifest_path)
     spec, problem = load_curves(manifest, group)
@@ -120,18 +120,17 @@ def run(manifest_path: str, group: str, frames: int, dt: float,
     sdk.init()
     sdk.glInit()
 
-    renderer = CubismRenderer(64, 64)
+    session = CubismModelSession(64, 64)
     try:
-        renderer.load_model(manifest_path)
-        model = renderer._model
-        declared = {str(k): v for k, v in (model.GetMotions() or {}).items()}
+        session.load_model(manifest_path)
+        declared = {str(k): v for k, v in session.get_motions().items()}
         if group not in declared:
             return {"ok": False,
                     "error": f"内核没有把 {group!r} 当作动作组读进来："
                              f"{sorted(declared)}",
                     "motions_seen": declared}
 
-        ids = [str(i) for i in renderer.parameter_ids]
+        ids = [str(i) for i in session.parameter_ids]
         index_of = {pid: ids.index(pid) for pid in spec["curves"] if pid in ids}
         missing = sorted(set(spec["curves"]) - set(index_of))
         if not index_of:
@@ -139,13 +138,13 @@ def run(manifest_path: str, group: str, frames: int, dt: float,
                     "error": "motion 曲线里的参数在模型里一个都不存在",
                     "curves": sorted(spec["curves"])}
 
-        model.StopAllMotions()
-        model.SetAutoBlinkEnable(False)
-        model.SetAutoBreathEnable(False)
-        rest = {pid: model.GetParameterValue(index_of[pid]) for pid in index_of}
-        model.StartMotion(group, 0)
+        session.stop_all_motions()
+        session.set_auto_blink(False)
+        session.set_auto_breath(False)
+        rest = {pid: session.get_parameter_value(index_of[pid])
+                for pid in index_of}
+        session.start_motion(group, 0)
 
-        inner = model._model
         # 逐曲线还原段布局：只有全线性曲线能做逐帧数值对账，
         # 含贝塞尔/阶跃的曲线退化为「是否真的动了」的弱判据。
         traces = {}
@@ -163,17 +162,17 @@ def run(manifest_path: str, group: str, frames: int, dt: float,
         duration = spec["duration"] or dt * frames
         for step in range(frames):
             if mode == "motion_update":
-                inner.UpdateMotion(dt)
-                inner.Update(0.0)
+                session.update_motion(dt)
+                session.update(0.0)
             elif mode == "framework":
-                # LAppModel.Update() 里被注释掉的那段官方流程：动作只在
+                # 官方示例外壳 Update() 里被注释掉的那段流程：动作只在
                 # LoadParameters/SaveParameters 括起来的窗口里生效
-                inner.LoadParameters()
-                inner.UpdateMotion(dt)
-                inner.SaveParameters()
-                inner.Update(dt)
+                session.load_parameters()
+                session.update_motion(dt)
+                session.save_parameters()
+                session.update(dt)
             else:
-                inner.Update(dt)
+                session.update(dt)
             elapsed = (step + 1) * dt
             looped = elapsed % duration if duration > 0 else elapsed
             # 淡入/淡出窗口里参数是「上一姿态 ↔ 曲线值」的混合，逐帧对账
@@ -182,7 +181,7 @@ def run(manifest_path: str, group: str, frames: int, dt: float,
                       or duration - looped < spec["fade_out"] - 1e-9)
             frame_error = 0.0
             for pid in index_of:
-                value = model.GetParameterValue(index_of[pid])
+                value = session.get_parameter_value(index_of[pid])
                 observed[pid].append(value)
                 if traces[pid]["linear"] and not fading:
                     # 允许一帧内的时间对齐偏差：内核的取值时刻与「第 n 次
@@ -234,10 +233,10 @@ def run(manifest_path: str, group: str, frames: int, dt: float,
             "mode": mode,
             "curves": curves,
             "missing_parameters": missing,
-            "motion_finished": bool(model.IsMotionFinished()),
+            "motion_finished": session.is_motion_finished(),
         }
     finally:
-        renderer.close()
+        session.close()
         sdk.glRelease()
         sdk.dispose()
         pygame.display.quit()

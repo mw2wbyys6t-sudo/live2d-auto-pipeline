@@ -5,7 +5,11 @@ import json
 from pathlib import Path
 
 import numpy as np
-from drivers.live2d_runtime.native import CubismRenderer, validate_package, package_sha256
+from drivers.live2d_runtime.native import (
+    CubismModelSession,
+    package_sha256,
+    validate_package,
+)
 
 
 def verify(manifest, evidence_dir=None):
@@ -14,7 +18,7 @@ def verify(manifest, evidence_dir=None):
     import pygame
     import live2d.v3 as sdk
     from OpenGL.GL import glReadPixels, glFinish, GL_RGBA, GL_UNSIGNED_BYTE
-    renderer = CubismRenderer(400, 500)
+    session = CubismModelSession(400, 500)
     initialized = gl_ready = False
     try:
         pygame.display.init()
@@ -23,16 +27,15 @@ def verify(manifest, evidence_dir=None):
         pygame.display.set_caption('Live2D controlled pixel verification')
         sdk.init(); initialized = True
         sdk.glInit(); gl_ready = True
-        renderer.load_model(str(path))
-        model = renderer._model
-        model.StopAllMotions()
-        model.SetAutoBlinkEnable(False)
-        model.SetAutoBreathEnable(False)
-        # Freeze time so physics/breathing cannot masquerade as parameter response.
+        session.load_model(str(path))
+        session.stop_all_motions()
+        session.set_auto_blink(False)
+        session.set_auto_breath(False)
+        # Freeze time (dt=0) so physics/breathing cannot masquerade as parameter response.
         def frame():
             sdk.clearBuffer()
-            model._model.Update(0.0)
-            model.Draw()
+            session.update(0.0)
+            session.draw()
             glFinish()
             pixels = np.frombuffer(glReadPixels(0, 0, 400, 500, GL_RGBA, GL_UNSIGNED_BYTE), dtype=np.uint8).reshape(500, 400, 4).copy()
             pygame.display.flip()
@@ -40,16 +43,16 @@ def verify(manifest, evidence_dir=None):
             return pixels
         results = []
         for name in ('ParamAngleX', 'ParamMouthOpenY', 'ParamEyeLOpen'):
-            if name not in renderer.parameter_ids:
+            if name not in session.parameter_ids:
                 continue
-            idx = renderer.parameter_ids.index(name)
-            definition = model.GetParameter(idx)
-            original = model.GetParameterValue(idx)
-            renderer.set_parameter(name, definition.min)
+            idx = session.parameter_ids.index(name)
+            low, high = session.parameter_bounds(name)
+            original = session.get_parameter_value(idx)
+            session.set_parameter(name, low)
             frame(); a = frame(); control = frame()
-            renderer.set_parameter(name, definition.max)
+            session.set_parameter(name, high)
             frame(); b = frame()
-            renderer.set_parameter(name, definition.min)
+            session.set_parameter(name, low)
             frame(); restored = frame()
             changed = int(np.count_nonzero(np.max(np.abs(a.astype(int)-b.astype(int)), axis=2) > 8))
             drift = int(np.count_nonzero(np.max(np.abs(a.astype(int)-control.astype(int)), axis=2) > 8))
@@ -62,7 +65,7 @@ def verify(manifest, evidence_dir=None):
                 dest = Path(evidence_dir); dest.mkdir(parents=True, exist_ok=True)
                 Image.fromarray(np.flipud(a)).save(dest / (name + '-min.png'))
                 Image.fromarray(np.flipud(b)).save(dest / (name + '-max.png'))
-            renderer.set_parameter(name, original)
+            session.set_parameter(name, original)
         verified = bool(results) and all(r['passed'] for r in results)
         if package_sha256(str(path)) != initial_digest:
             raise RuntimeError('Model package changed during verification')
@@ -70,7 +73,7 @@ def verify(manifest, evidence_dir=None):
                     package_sha256=initial_digest, checks=results,
                     deployment_status='ready_for_local_launch' if verified else 'blocked')
     finally:
-        renderer.close()
+        session.close()
         if gl_ready: sdk.glRelease()
         if initialized: sdk.dispose()
         pygame.display.quit()

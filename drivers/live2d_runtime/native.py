@@ -91,7 +91,14 @@ class CubismRenderer:
         self.frames_drawn = 0
         self.parameter_write_verified = False
         if model is not None:
-            model.DestroyRenderer()
+            # live2d-py 0.5.4（内置 Cubism Core 5.0.0）**没有** DestroyRenderer；
+            # 早期版本有。直接调用会让 close() 抛 AttributeError，从而把「模型
+            # 加载成功」误报成失败（实测：moc3_load 子进程正常打印了参数表，却
+            # 因为退出时的 AttributeError 被判成「Core 判定 moc3 不一致」）。
+            # 因此按能力探测，两个版本都能干净收尾。
+            destroy = getattr(model, 'DestroyRenderer', None)
+            if callable(destroy):
+                destroy()
 
     def load_model(self, manifest: str):
         self.close()
@@ -156,3 +163,163 @@ class CubismRenderer:
             'deployment_status': 'requires_visual_verification' if self.frames_drawn else 'blocked',
             'error': self.last_error,
         }
+
+
+class CubismModelSession:
+    """直接驱动 Cubism SDK 的 ``Model``，而不是 ``LAppModel`` 示例外壳。
+
+    验收与交互播放的需求不同，所以是两套对象：
+
+    * ``CubismRenderer``（LAppModel）面向桌面宠物 —— 它自带真实时钟、拖拽、
+      自动眨眼与呼吸，正是运行时该有的行为。
+    * 本类面向 moc3 验收 —— 验收必须能**逐帧指定 deltaTime**（冻结时间，
+      否则物理与呼吸会把「参数没起作用」伪装成「画面变了」），并且要直接调用
+      ``UpdateMotion`` / ``UpdatePhysics`` / ``LoadParameters`` /
+      ``SaveParameters`` 做逐帧对账。
+
+    LAppModel **不暴露**内部 Model，上面这些全都做不到；live2d-py 0.5.4 暴露的
+    ``live2d.v3.Model`` 才是原生可控入口（实测 2026-10：键形模型在
+    ``Model`` 上位移 200 画布像素，与静态参照逐像素一致）。
+
+    注意 ``Model.Update`` 会先 ``LoadParameters``（当前值 ← 已保存值），因此参数
+    必须用 ``SetAndSaveParameterValueById`` 写，否则下一次 Update 会把写入抹掉。
+    """
+
+    def __init__(self, width=600, height=800, mask_buffer_count=1):
+        if width <= 0 or height <= 0:
+            raise ValueError('Canvas dimensions must be positive')
+        self.width, self.height = width, height
+        self._mask_buffer_count = mask_buffer_count
+        self._model = None
+        self.parameter_ids = []
+        self.frames_drawn = 0
+        self.last_error = None
+
+    def load_model(self, manifest: str):
+        self.close()
+        self.last_error = None
+        try:
+            path, _ = validate_package(manifest)
+            sdk = importlib.import_module('live2d.v3')
+            model = sdk.Model()
+            model.LoadModelJson(str(path))
+            model.Resize(self.width, self.height)
+            model.CreateRenderer(self._mask_buffer_count)
+            self._model = model
+            self.parameter_ids = [str(i) for i in model.GetParameterIds()]
+            if not self.parameter_ids:
+                raise ValueError(
+                    'No native parameters loaded; driven model acceptance blocked')
+        except Exception as exc:
+            self.last_error = str(exc)
+            self.close()
+            raise
+
+    def close(self):
+        model, self._model = self._model, None
+        self.parameter_ids = []
+        self.frames_drawn = 0
+        if model is not None:
+            # 必须在 GL 上下文仍然有效时释放；调用方负责先 close() 再 glRelease()。
+            destroy = getattr(model, 'DestroyRenderer', None)
+            if callable(destroy):
+                destroy()
+
+    def parameter_index(self, name: str) -> int:
+        try:
+            return self.parameter_ids.index(name)
+        except ValueError:
+            raise KeyError(name) from None
+
+    def parameter_bounds(self, name: str) -> tuple:
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        index = self.parameter_index(name)
+        return (float(self._model.GetParameterMinimumValue(index)),
+                float(self._model.GetParameterMaximumValue(index)))
+
+    def get_parameter_value(self, index: int) -> float:
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        return float(self._model.GetParameterValue(index))
+
+    def set_parameter(self, name: str, value: float) -> float:
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        value = float(value)
+        if not math.isfinite(value):
+            raise ValueError('Parameter value must be finite')
+        low, high = self.parameter_bounds(name)
+        value = max(low, min(high, value))
+        index = self.parameter_index(name)
+        self._model.SetAndSaveParameterValueById(name, value, 1.0)
+        after = float(self._model.GetParameterValue(index))
+        if not math.isclose(after, value, abs_tol=1e-5):
+            raise RuntimeError('Native parameter readback did not match requested value')
+        return after
+
+    def update(self, delta_seconds: float = 0.0):
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        self._model.Update(float(delta_seconds))
+
+    def update_motion(self, delta_seconds: float):
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        self._model.UpdateMotion(float(delta_seconds))
+
+    def update_physics(self, delta_seconds: float):
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        self._model.UpdatePhysics(float(delta_seconds))
+
+    def load_parameters(self):
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        self._model.LoadParameters()
+
+    def save_parameters(self):
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        self._model.SaveParameters()
+
+    def set_auto_blink(self, enabled: bool):
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        self._model.SetAutoBlink(bool(enabled))
+
+    def set_auto_breath(self, enabled: bool):
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        self._model.SetAutoBreath(bool(enabled))
+
+    def stop_all_motions(self):
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        self._model.StopAllMotions()
+
+    def start_motion(self, group: str, no: int, priority: int = 3):
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        self._model.StartMotion(group, no, priority)
+
+    def is_motion_finished(self) -> bool:
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        return bool(self._model.IsMotionFinished())
+
+    def get_motions(self) -> dict:
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        return dict(self._model.GetMotions() or {})
+
+    def draw(self):
+        if self._model is None:
+            raise RuntimeError('No native model loaded')
+        try:
+            self._model.Draw()
+            self.frames_drawn += 1
+        except Exception as exc:
+            self.last_error = str(exc)
+            self.close()
+            raise

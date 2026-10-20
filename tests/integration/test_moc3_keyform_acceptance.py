@@ -269,6 +269,9 @@ def test_static_package_fails_pixel_verification(tmp_path):
 def _multi_binding_rig(static_control: bool = False):
     """同一参数、两种键值布局各驱动一个网格（多 binding），外加一个静态网格。
 
+    两套布局都必须覆盖 ParamAngleX 的 [-30, 30]：内核在键区间外的取值上越界
+    （见 moc3_model._validate_keyforms）。所以这里是「3 键」与「2 键」两种密度。
+
     static_control=True 时同样的网格不带键形，用作像素负对照。
     """
     outer, uvs_o, tris_o = _square(0.0, 0.0, half=120.0)
@@ -289,8 +292,8 @@ def _multi_binding_rig(static_control: bool = False):
             MeshSpec("ArtMeshInner", inner, tris_i, uvs_i,
                      keyform_parameter_id="ParamAngleX",
                      keyform_shapes=tuple(
-                         KeyformShape(k, [(x + k * 40.0, y) for x, y in inner])
-                         for k in (0.0, 1.0))),
+                         KeyformShape(k, [(x + k * 2.0, y) for x, y in inner])
+                         for k in (-30.0, 30.0))),
             MeshSpec("ArtMeshPlain", plain, tris_p, uvs_p),
         ]
     return RigSpec(meshes=meshes,
