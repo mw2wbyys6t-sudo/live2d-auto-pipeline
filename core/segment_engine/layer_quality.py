@@ -142,13 +142,65 @@ def _iou(a: np.ndarray, b: np.ndarray) -> float:
     return float((a & b).sum() / union) if union else 0.0
 
 
+def _canonical(name: str) -> Tuple[str, Optional[str]]:
+    """把层名归一到 ``layer_manifest`` 的规范部件名（含侧别）。"""
+    from core.segment_engine.layer_manifest import resolve_part
+
+    _pid, base, side = resolve_part(name)
+    return base, side
+
+
+def canonical_index(
+    masks: Dict[str, np.ndarray],
+) -> Dict[Tuple[str, Optional[str]], np.ndarray]:
+    """按规范部件名聚合掩码，同名的拆分层直接并起来。
+
+    合成器会把 ``eyes_left`` 拆成 ``eyewhite_left`` + ``irides_left``，
+    把 ``legs`` 拆成 ``leg_L``/``leg_R``。质量门如果直接拿原始层名比对，
+    就会把**已经分好的**眼睛和腿报成缺失——实测 demo 输入上白报 2 条缺陷，
+    正好把 defect_count 顶到 ``MAX_DEFECTS``，等于一台只会误报的机器。
+    """
+    index: Dict[Tuple[str, Optional[str]], np.ndarray] = {}
+    for name, mask in masks.items():
+        key = _canonical(name)
+        if key[0] == "unknown":
+            # 认不出的层名不参与归并：否则两个不相干的未知层会撞到同一个
+            # ("unknown", side) 键上被并成一块，反而制造出假部件。
+            continue
+        index[key] = (index[key] | mask) if key in index else mask
+    return index
+
+
+def has_part(
+    index: Dict[Tuple[str, Optional[str]], np.ndarray], part: str
+) -> bool:
+    base, side = _canonical(part)
+    if side is not None:
+        # 问「左眼有没有」：分侧的层命中，或者没拆分时的 "eyes" 也算
+        return (base, side) in index or (base, None) in index
+    # 问「眼睛/腿有没有」：任意一侧存在就算有
+    if (base, None) in index:
+        return True
+    return any(existing == base for existing, _side in index)
+
+
+def part_mask(
+    index: Dict[Tuple[str, Optional[str]], np.ndarray], part: str
+) -> Optional[np.ndarray]:
+    base, side = _canonical(part)
+    if (base, side) in index:
+        return index[(base, side)]
+    return index.get((base, None))
+
+
 def check_features_in_face(masks: Dict[str, np.ndarray]) -> List[str]:
-    face = masks.get("face")
+    index = canonical_index(masks)
+    face = part_mask(index, "face")
     if face is None:
         return ["face 掩码缺失，无法校验五官归属"]
     bad = []
     for part in FEATURES_IN_FACE:
-        m = masks.get(part)
+        m = part_mask(index, part)
         if m is None:
             continue
         frac = _containment(m, face)
@@ -256,7 +308,8 @@ def check_vertical_order(masks: Dict[str, np.ndarray]) -> List[str]:
 
 def check_required(masks: Dict[str, np.ndarray],
                    require: Tuple[str, ...] = REQUIRED_PARTS) -> List[str]:
-    return [f"必需部件 {p} 没有掩码" for p in require if p not in masks]
+    index = canonical_index(masks)
+    return [f"必需部件 {p} 没有掩码" for p in require if not has_part(index, p)]
 
 
 def missing_standard(masks: Dict[str, np.ndarray]) -> List[str]:
@@ -265,7 +318,8 @@ def missing_standard(masks: Dict[str, np.ndarray]) -> List[str]:
     Reported, not failed: an illustration may genuinely hide hands or a mouth.
     """
     from core.segment_engine.semantic import SemanticSegmenter
-    return [p for p in SemanticSegmenter.STANDARD_PARTS if p not in masks]
+    index = canonical_index(masks)
+    return [p for p in SemanticSegmenter.STANDARD_PARTS if not has_part(index, p)]
 
 
 CHECKS = (
@@ -459,5 +513,24 @@ def selftest() -> int:
             print(f"[selftest FAIL] {label} 未被 {group} 捕获: "
                   f"{result['defects'] or '无缺陷'}")
             failed += 1
+
+    # 正向对照：合成器会把 eyes_left/eyes_right 拆成 eyewhite_*，把 legs 拆成
+    # leg_L/leg_R。归一后不能再报「必需部件缺失」，否则正常输出会被误判。
+    split = clean()
+    split.pop("eyes_left")
+    split.pop("eyes_right")
+    split.pop("legs")
+    split["eyewhite_left"] = rect(78, 50, 96, 62)
+    split["eyewhite_right"] = rect(104, 50, 122, 62)
+    split["leg_L"] = rect(80, 185, 100, 199)
+    split["leg_R"] = rect(100, 185, 120, 199)
+    split_result = score_masks(split, foreground=fg)
+    if "required_parts" in split_result["defects"] or split_result["missing_parts"]:
+        print("[selftest FAIL] 拆分层名（eyewhite_*/leg_*）仍被报成缺失: "
+              f"{split_result['defects']} / {split_result['missing_parts']}")
+        failed += 1
+    else:
+        print("[selftest ok ] 拆分层名（eyewhite_*/leg_*）被正确归一到必需部件")
+
     print(f"\n[selftest] {'全部通过' if not failed else f'{failed} 项未通过'}")
     return 1 if failed else 0

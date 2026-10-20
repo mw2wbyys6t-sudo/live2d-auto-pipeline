@@ -833,6 +833,9 @@ class SemanticSegmenter:
         优先用 YuNet 真实检测（桌面安装包内置权重），失败才退到肤色连通域，
         最后才用经验框。旧实现只会从掩码里猜皮肤块，导致脸框整体下移、
         中线偏移，眼睛与嘴被切到下巴上。
+
+        ``face_detect.detect_face`` 现在返回带 5 点关键点的 :class:`FaceAnchors`，
+        这里只取 ``box``；定位来源照常记到 ``_last_face_source``。
         """
         h, w = image.shape[:2]
         union = np.zeros((h, w), dtype=bool)
@@ -840,10 +843,11 @@ class SemanticSegmenter:
             seg = np.asarray(m.get("segmentation"), dtype=bool)
             if seg.shape == (h, w):
                 union |= seg
-        box, source = face_detect.detect_face(image, union if union.any() else None)
-        self._last_face_source = source
-        if box is not None:
-            return box
+        anchors = face_detect.detect_face(image, union if union.any() else None)
+        if anchors is not None:
+            self._last_face_source = anchors.source
+            return anchors.box
+        self._last_face_source = face_detect.SOURCE_NONE
         return (int(w * 0.25), int(h * 0.18), int(w * 0.75), int(h * 0.65))
 
     # ---------------------------------------------------------- color fallback
@@ -1098,6 +1102,23 @@ class SemanticSegmenter:
         if hem_y is not None:
             legwear = clothes_bottom & (yy >= hem_y)
             clothes_bottom = clothes_bottom & (yy < hem_y)
+
+        # 结构性图层去碎点：抗锯齿在发丝/描线边缘留下的大量 1~3 像素孤立点
+        # 本身没有语义，却会让图层在 Live2D 里出现游离小点，也会让碎片化检查
+        # 误判（实测 hair_back 264 块里 245 块都是这种碎屑）。
+        # 五官层不做这一步——鼻子本来就只有 9 个像素。
+        speck = max(6, int(0.00003 * h * w))
+        hair_back = self._despeckle(hair_back, speck)
+        hair_front = self._despeckle(hair_front, speck)
+        face = self._despeckle(face, speck)
+        neck = self._despeckle(neck, speck)
+        clothes_top = self._despeckle(clothes_top, speck)
+        clothes_bottom = self._despeckle(clothes_bottom, speck)
+        arms = self._despeckle(arms, speck)
+        hands = self._despeckle(hands, speck)
+        legs = self._despeckle(legs, speck)
+        legwear = self._despeckle(legwear, speck)
+        accessories = self._despeckle(accessories, speck)
 
         out = {
             "hair_back": hair_back,
@@ -1463,6 +1484,27 @@ class SemanticSegmenter:
                 continue  # 竖条不是嘴
             out |= comp
         return out
+
+    @staticmethod
+    def _despeckle(mask: np.ndarray, min_area: int) -> np.ndarray:
+        """去掉孤立碎点，只留下成规模的连通块。
+
+        发丝/描线边缘的抗锯齿会留下大量 1~3 像素的孤立点（实测 hair_back
+        被切出 245 个碎点，合计只有 481 像素），拆成图层后它们就是 Live2D 里
+        跟着头乱飘的小黑点。结构性图层统一过一遍，五官层不过滤——鼻子本来
+        就只有 9 个像素。
+        """
+        mask = np.asarray(mask, dtype=bool)
+        if not mask.any() or not HAS_CV2 or min_area <= 1:
+            return mask
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(
+            mask.astype(np.uint8), 8
+        )
+        if count <= 1:
+            return mask
+        keep = np.zeros(count, dtype=bool)
+        keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= min_area
+        return keep[labels]
 
     @staticmethod
     def _components(mask: np.ndarray) -> List[Tuple[np.ndarray, int, float, float]]:
