@@ -520,3 +520,74 @@ def test_pipeline_keyforms_deform_in_official_runtime(tmp_path):
     assert left["pixels_sha256"] != right["pixels_sha256"], \
         f"参数改了但画面没变：bbox={left['alpha_bbox']}/{right['alpha_bbox']}"
     assert left["centroid"] != right["centroid"]
+
+
+def _per_part_pixels(manifest: str) -> dict:
+    """逐部件渲染：把其余部件透明度设为 0，数每个部件真画出来的像素。"""
+    import numpy as np
+    import pygame
+    import live2d.v3 as sdk
+    from OpenGL.GL import glFinish, glReadPixels, GL_RGBA, GL_UNSIGNED_BYTE
+
+    width, height = 400, 500
+    pygame.display.init()
+    pygame.display.gl_set_attribute(pygame.GL_ALPHA_SIZE, 8)
+    pygame.display.set_mode((width, height), pygame.OPENGL | pygame.DOUBLEBUF)
+    try:
+        sdk.init()
+        sdk.glInit()
+        model = sdk.Model()
+        model.LoadModelJson(manifest)
+        model.Resize(width, height)
+        model.CreateRenderer(1)
+        model.SetAutoBlink(False)
+        model.SetAutoBreath(False)
+        model.StopAllMotions()
+        parts = [str(p) for p in model.GetPartIds()]
+
+        def frame():
+            sdk.clearBuffer()
+            model.Update(0.0)
+            model.Draw()
+            glFinish()
+            return np.frombuffer(
+                glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE),
+                dtype=np.uint8).reshape(height, width, 4).copy()
+
+        counts = {}
+        for index, name in enumerate(parts):
+            for other in range(len(parts)):
+                model.SetPartOpacity(other, 1.0 if other == index else 0.0)
+            counts[name] = int((frame()[:, :, 3] > 8).sum())
+        model.DestroyRenderer()
+        sdk.glRelease()
+        sdk.dispose()
+        return counts
+    finally:
+        pygame.display.quit()
+
+
+@requires_live2d
+@requires_pixels
+def test_every_mesh_contributes_pixels(tmp_path):
+    """多网格模型里**每个**网格都要真的画出来。
+
+    历史缺陷：``draw_order_group`` 的 min/max 两个槽位语义与名字相反，按字面写时
+    绘制序桶下标全为负 —— 1-2 个网格靠运气看不出问题，3 个以上就只剩首尾两个网格
+    有像素。这里用 4 个网格把该回归钉住。
+    """
+    builder_result = _builder_result()
+    for extra in ("leg", "mouth"):
+        builder_result["layers"][extra] = _layer()
+        builder_result["meshes"][extra] = _mesh(extra)
+    _, export_result = _export(tmp_path, builder_result)
+    compiled = compile_export_moc3(
+        builder_result=builder_result,
+        atlas_uvs=export_result["atlas_uvs"],
+        output_dir=export_result["output_dir"], character_name="web_preview")
+    assert compiled["moc3_written"] is True, compiled["blocker"]
+
+    counts = _per_part_pixels(export_result["model3_json"])
+    assert len(counts) == 4, counts
+    empty = {name: px for name, px in counts.items() if px == 0}
+    assert not empty, f"这些网格一个像素都没画出来：{empty}（全部：{counts}）"

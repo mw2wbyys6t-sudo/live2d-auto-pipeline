@@ -61,6 +61,19 @@ def test_index_counts_use_official_field_semantics():
     assert len(doc.get("position_index.indices")) == len(mesh.triangles) * 3
 
 
+def test_draw_order_range_fields_are_written_inverted():
+    """绘制序区间两个字段的语义与名字相反，必须反着写。
+
+    内核按 ``对象绘制序 - max_draw_orders`` 取桶下标，桶数 =
+    ``min_draw_orders - max_draw_orders + 1``。按字面写会让下标变负：1-2 个网格
+    靠运气看不出问题，3 个以上只剩首尾能画出来（见 moc3_model._write_draw_order）。
+    """
+    meshes = [_grid(f"ArtMesh{i}", cells=2, offset=float(i * 10)) for i in range(3)]
+    doc = compile_static_rig(RigSpec(meshes=meshes))
+    assert doc.get("draw_order_group.min_draw_orders") == [20]   # 实际最大绘制序
+    assert doc.get("draw_order_group.max_draw_orders") == [0]    # 实际最小绘制序
+
+
 def test_every_object_references_an_existing_band():
     doc = compile_static_rig(_rig())
     bands = doc.counts[ms.CountIdx.KEYFORM_BINDING_BANDS]

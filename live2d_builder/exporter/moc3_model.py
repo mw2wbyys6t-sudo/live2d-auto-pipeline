@@ -498,8 +498,11 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
     positions: List[float] = []
     uv_begin: List[int] = []
     index_begin: List[int] = []
-    vertex_count: List[int] = []
-    index_count: List[int] = []
+    # 官方语义（对 Haru.moc3 实测，见 docs/native-runtime.md）：
+    # ``art_mesh.position_index_counts`` = **唯一顶点数**，``vertex_counts`` = **索引条目数**，
+    # 与字面直觉相反：前者对应 uv 段（每顶点 2 个 f32），后者对应 position_index 段。
+    unique_vertex_counts: List[int] = []
+    index_entry_counts: List[int] = []
     mesh_keyform_counts: List[int] = []
     mesh_keyform_begin: List[int] = []
     keyform_pos_begin: List[int] = []
@@ -544,8 +547,8 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
             uv.append(float(v))
         for tri in mesh.triangles:
             indices.extend(int(i) for i in tri)
-        vertex_count.append(len(mesh.triangles) * 3)   # 索引条目数
-        index_count.append(len(mesh.vertices))         # 唯一顶点数
+        index_entry_counts.append(len(mesh.triangles) * 3)   # 索引条目数
+        unique_vertex_counts.append(len(mesh.vertices))      # 唯一顶点数
 
         mesh_keyform_begin.append(len(keyform_pos_begin))
         if mesh.keyform_shapes:
@@ -589,9 +592,9 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
     _write_deformers(doc, spec, warps, rotations, band_of_group,
                      warp_keyform_begin, warp_keyform_pos_begin,
                      warp_keyform_opacities)
-    _write_meshes(doc, meshes, vertex_count, index_count, uv_begin, index_begin,
-                  mesh_keyform_counts, mesh_keyform_begin, band_of_group,
-                  spec)
+    _write_meshes(doc, meshes, unique_vertex_counts, index_entry_counts,
+                  uv_begin, index_begin, mesh_keyform_counts, mesh_keyform_begin,
+                  band_of_group, spec)
     _write_geometry(doc, uv, indices, positions,
                     keyform_pos_begin, keyform_opacities, keyform_draw_orders)
     _write_bands(doc, bindings, bands)
@@ -829,7 +832,8 @@ def _write_parts(doc: Moc3Container, meshes: List[MeshSpec]) -> None:
 
 
 def _write_meshes(doc: Moc3Container, meshes: List[MeshSpec],
-                  vertex_count: List[int], index_count: List[int],
+                  unique_vertex_counts: List[int],
+                  index_entry_counts: List[int],
                   uv_begin: List[int], index_begin: List[int],
                   mesh_keyform_counts: List[int],
                   mesh_keyform_begin: List[int],
@@ -852,8 +856,8 @@ def _write_meshes(doc: Moc3Container, meshes: List[MeshSpec],
     ])
     doc.set("art_mesh.texture_indices", [m.texture_index for m in meshes])
     doc.set("art_mesh.drawable_flags", [0] * count)
-    doc.set("art_mesh.position_index_counts", index_count)
-    doc.set("art_mesh.vertex_counts", vertex_count)
+    doc.set("art_mesh.position_index_counts", unique_vertex_counts)
+    doc.set("art_mesh.vertex_counts", index_entry_counts)
     doc.set("art_mesh.uv_begin_indices", uv_begin)
     doc.set("art_mesh.position_index_begin_indices", index_begin)
     doc.set("art_mesh.mask_begin_indices", [0] * count)
@@ -932,24 +936,29 @@ def _write_draw_order(doc: Moc3Container, count: int,
                       draw_orders: Optional[List[float]] = None) -> None:
     """写出绘制顺序组。
 
-    ``min_draw_orders`` / ``max_draw_orders`` 是内核用来**分配绘制序桶**的区间：
-    ``csmiCalculateRenderOrder`` 把桶按 ``draw_order - min`` 取下标。实测
-    （2026-10，Cubism Core 5.0.0，带键形的多网格模型）：
+    **两个区间字段的语义与名字相反**（对 Cubism Core 5.0.0 实测，2026-10）：
 
-    * 声明 ``max == 实际最大绘制序`` 时，最后一个绘制序的下标等于桶数，
-      越界一格 —— 读到的是堆上残留值，通常直接段错误；
-    * 声明 ``max == 实际最大绘制序 + 1`` 时稳定通过（0/1、0/2、1/2、0/5 四组
-      绘制序各配 max 与 max+1 两档，8 例全对）。
+    ``csmiCalculateRenderOrder`` 里维护一张「绘制序桶」表，
+    ``桶下标 = 对象绘制序 - <max_draw_orders 槽位的值>``，
+    ``桶数量 = <min_draw_orders 槽位的值> - <max_draw_orders 槽位的值> + 1``
+    （gdb 直接读内核结构体确认：g+0x18 装 min 段、g+0x1C 装 max 段，
+    两者相减后就是桶数）。
 
-    所以 ``max`` 取**开区间上界**（实际最大值 + 1），而不是最大值本身。
+    也就是说：**``min_draw_orders`` 要写实际最大绘制序，``max_draw_orders`` 要写实际
+    最小绘制序**。写反（按字面写 min/max）时桶下标全是负数 —— 越界写到相邻堆内存：
+    1-2 个网格时靠运气看不出问题，多网格时表现为「只有首尾两个网格画得出来」，
+    网格再多就直接段错误。这正是长期存在的「多网格模型渲染残缺」的根因。
+
+    实测对照（3 网格测试床）：按字面写 min=0/max=2 → 只有首尾；写 min=2/max=0 →
+    三个都画出来；14 网格真实产物写 min=13/max=0 → 14 个网格全部出像素。
     """
     orders = [int(round(float(o))) for o in (draw_orders or [0])] or [0]
     low, high = min(orders), max(orders)
     doc.set("draw_order_group.object_begin_indices", [0])
     doc.set("draw_order_group.object_counts", [count])
     doc.set("draw_order_group.object_total_counts", [count])
-    doc.set("draw_order_group.min_draw_orders", [low])
-    doc.set("draw_order_group.max_draw_orders", [high + 1])
+    doc.set("draw_order_group.min_draw_orders", [high])
+    doc.set("draw_order_group.max_draw_orders", [low])
     doc.set("draw_order_group_object.types", [0] * count)
     doc.set("draw_order_group_object.indices", list(range(count)))
     doc.set("draw_order_group_object.group_indices", [-1] * count)
