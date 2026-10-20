@@ -71,6 +71,11 @@ type PythonConfig struct {
 	// 选此方案（在 Go exec 时注入）而非写注册表或改 Python 启动脚本，
 	// 是因为它只影响本程序的子进程，不污染用户全局环境，卸载无需还原。
 	HfCache string `json:"hf_cache"`
+	// ModelsDir 指向打包在安装包内的本地模型权重目录（桌面版用）。
+	// 非空时，python_bridge 启动 Python 子进程时注入 LIVE2D_MODELS_DIR，
+	// 让 core/segment_engine/isnet_onnx.py 能找到内置的 ISNet 前景权重，
+	// 避免 rembg 静默联网下载失败 → 分层降级成颜色启发式。
+	ModelsDir string `json:"models_dir"`
 }
 
 type OutputConfig struct {

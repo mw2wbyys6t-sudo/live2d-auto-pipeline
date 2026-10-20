@@ -893,13 +893,14 @@ def _run_segment(req: "SegmentRequest") -> Dict[str, Any]:
     )
 
     from core.segment_engine.layer_manifest import (
-        SOURCE_COLOR_CLUSTER,
-        SOURCE_SEMANTIC,
         build_manifest,
+        source_for_method,
         write_manifest,
     )
 
-    source = SOURCE_COLOR_CLUSTER if req.method == "kmeans" else SOURCE_SEMANTIC
+    # source 必须如实反映实际使用的分层方法（含降级状态），否则用户会把
+    # 「颜色启发式兜底」误当成可用语义分层。
+    source = source_for_method(result.get("method", req.method))
     manifest = build_manifest(
         result.get("layers") or [],
         source=source,

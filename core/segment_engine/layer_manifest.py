@@ -32,8 +32,62 @@ SCHEMA_VERSION = "1.0"
 
 MANIFEST_FILENAME = "layer_manifest.json"
 
+#: 分层来源。``source`` 必须**如实反映**实际使用的分层方法，禁止硬编码成
+#: ``semantic``——历史上就是这么掩盖了「模型没加载成功、悄悄退化成颜色启发式」
+#: 的事实，让用户以为拿到的是可用分层。
 SOURCE_SEMANTIC = "semantic"
 SOURCE_COLOR_CLUSTER = "color_cluster"
+#: 学习式前景剪影（ONNX 抠图模型）+ 颜色启发式部件拆分。剪影质量高，但部件
+#: 边界仍由颜色规则切出，不等价于部位级学习分割。
+SOURCE_SEMANTIC_FG_GATED = "semantic_fg_gated_color"
+#: 纯颜色启发式兜底：连前景剪影都没有，属于严重降级。
+SOURCE_SEMANTIC_HSV_FALLBACK = "semantic_hsv_fallback"
+#: 用户自定义分割模型。
+SOURCE_CUSTOM = "custom_segmentation"
+
+#: 允许支撑 Live2D 左右独立绑定的来源。其余来源只能用于预览。
+_RIG_CAPABLE_SOURCES = frozenset({
+    SOURCE_SEMANTIC,
+    SOURCE_SEMANTIC_FG_GATED,
+    SOURCE_CUSTOM,
+})
+
+#: 各来源面向用户的中文说明。
+SOURCE_NOTES: Dict[str, str] = {
+    SOURCE_SEMANTIC: "部位级语义分割",
+    SOURCE_COLOR_CLUSTER: "颜色聚类，仅可预览",
+    SOURCE_SEMANTIC_FG_GATED: "学习式前景剪影 + 颜色启发式部件拆分",
+    SOURCE_SEMANTIC_HSV_FALLBACK: "纯颜色启发式兜底（未获得前景模型）",
+    SOURCE_CUSTOM: "自定义分割模型",
+}
+
+#: 分层器返回的 ``method`` -> manifest ``source``。
+_METHOD_TO_SOURCE: Dict[str, str] = {
+    "kmeans": SOURCE_COLOR_CLUSTER,
+    "k-means": SOURCE_COLOR_CLUSTER,
+    "color": SOURCE_COLOR_CLUSTER,
+    "color_cluster": SOURCE_COLOR_CLUSTER,
+    "semantic": SOURCE_SEMANTIC,
+    "semantic_fg_gated_color": SOURCE_SEMANTIC_FG_GATED,
+    "semantic_hsv_fallback": SOURCE_SEMANTIC_HSV_FALLBACK,
+    "custom_segmentation": SOURCE_CUSTOM,
+}
+
+
+def source_for_method(method: str) -> str:
+    """把分层器的 ``method`` 映射为 manifest 的 ``source``。
+
+    未知方法按最保守的方式处理（视为纯颜色兜底），避免把不明状态粉饰成
+    高质量语义分层。
+    """
+    key = str(method or "").strip().lower()
+    if key in _METHOD_TO_SOURCE:
+        return _METHOD_TO_SOURCE[key]
+    if key.startswith("custom"):
+        return SOURCE_CUSTOM
+    if key.startswith("semantic"):
+        return SOURCE_SEMANTIC
+    return SOURCE_SEMANTIC_HSV_FALLBACK
 
 GROUP_ORDER: List[Dict[str, str]] = [
     {"id": "head_hair", "name_zh": "01_头部·头发", "order": 1},
@@ -353,6 +407,16 @@ def build_manifest(
 
     if source == SOURCE_COLOR_CLUSTER:
         extra_warnings.append("颜色聚类结果仅用于预览，不可用于 Live2D 绑定")
+    elif source == SOURCE_SEMANTIC_FG_GATED:
+        extra_warnings.append(
+            "前景剪影由学习式模型产出，但部件边界来自颜色启发式，不是部位级学习分割"
+        )
+    elif source == SOURCE_SEMANTIC_HSV_FALLBACK:
+        extra_warnings.append(
+            "未找到可用的前景分割模型，已退化为纯颜色启发式，结果仅供预览"
+        )
+    elif source == SOURCE_CUSTOM:
+        extra_warnings.append("部件由用户自定义分割模型产出")
 
     for base, label in _UNSIDED_LIMBS.items():
         if base in emitted:
@@ -361,7 +425,7 @@ def build_manifest(
     missing_preview = [q for q in REQUIRED_FOR_PREVIEW if q not in emitted]
     missing_required = [q for q in REQUIRED_FOR_RIG if q not in emitted]
 
-    rig_ready = source == SOURCE_SEMANTIC and not missing_required
+    rig_ready = source in _RIG_CAPABLE_SOURCES and not missing_required
     preview_ready = not missing_preview
     if not preview_ready:
         extra_warnings.append("缺少必要部件，无法进入预览/分层检查")

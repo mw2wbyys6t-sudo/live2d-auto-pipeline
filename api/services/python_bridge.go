@@ -140,6 +140,15 @@ func (pb *PythonBridge) executePythonScript(parent context.Context, argv []strin
 		)
 	}
 
+	// 便携版：把内置模型权重目录告诉 Python，让 isnet_onnx 优先从安装包内
+	// 读取 ISNet 前景权重。不注入的话 rembg 会尝试联网下载（176MB），
+	// 离线/内网环境下必然失败并静默降级成分层质量崩坏的颜色启发式。
+	// models/rembg 是前景权重的子目录，一并注入，避免两边各自硬编码布局。
+	if models := pb.cfg.Python.ModelsDir; models != "" {
+		cmd.Env = append(cmd.Env, "LIVE2D_MODELS_DIR="+models+
+			string(os.PathListSeparator)+filepath.Join(models, "rembg"))
+	}
+
 	configurePythonProcess(cmd)
 	// ctx 取消（客户端断连）或超时时杀掉**整个进程组**（含 workflow 派生的
 	// 孙子进程）。Go 默认的 CommandContext 只杀直接子进程；孙子进程会继续
@@ -507,12 +516,11 @@ names = [l.get("name") for l in (result.get("layers") or []) if l.get("name")]
 from core.psd.creator import PSDCreator
 psd_result = PSDCreator().create_psd(str(out_dir), str(out_dir / "character.psd"), ordered_names=names or None)
 from core.segment_engine.layer_manifest import (
-    SOURCE_COLOR_CLUSTER,
-    SOURCE_SEMANTIC,
     build_manifest,
+    source_for_method,
     write_manifest,
 )
-source = SOURCE_COLOR_CLUSTER if method == "kmeans" else SOURCE_SEMANTIC
+source = source_for_method(result.get("method", method))
 manifest = build_manifest(result.get("layers") or [], source=source, canvas=(img.width, img.height))
 manifest_path = write_manifest(str(out_dir), manifest)
 layers = [{"name": l.get("name", ""), "part_name": l.get("part_name", l.get("name", "")), "path": l.get("path", ""), "pixel_count": l.get("pixel_count", 0)} for l in (result.get("layers") or [])]

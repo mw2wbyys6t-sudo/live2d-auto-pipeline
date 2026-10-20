@@ -8,6 +8,7 @@
       face_tracker.exe        Rust 原生面捕
       onnxruntime.dll         面捕 load-dynamic 依赖（须与 exe 同目录）
       models/face_detection_yunet_2023mar.onnx
+      models/rembg/isnet-anime.onnx   前景（抠图）权重，分层质量的地基
       python/                 嵌入式 CPython 3.12（含离线 site-packages）
       app/                    Python 工程源码树（core/ drivers/ ...）
       BUILD-INFO.json         版本 + SHA256 + 体积清单
@@ -76,6 +77,20 @@ YUNET_NAME = "face_detection_yunet_2023mar.onnx"
 YUNET_URL = (
     "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/"
     "models/face_detection_yunet/" + YUNET_NAME
+)
+
+# ISNet 动漫前景（抠图）模型权重。
+#
+# 为什么必须内置：rembg 找不到本地权重时会**静默联网下载** 176MB 权重，
+# 离线/内网环境必然失败，分层随之退化成颜色启发式（实测：头发占 46%、
+# 脸仅 0.7%、眼睛完全缺失）。安装包内置权重才能保证分层质量稳定。
+#
+# 官方来源是 HuggingFace 的 skytnt/anime-seg（rembg 2.x 也是从这里取），
+# 国内网络直连 huggingface.co 常不稳定，故追加 hf-mirror.com 镜像兜底。
+ISNET_ANIME_NAME = "isnet-anime.onnx"
+ISNET_ANIME_URLS = (
+    "https://huggingface.co/skytnt/anime-seg/resolve/main/" + ISNET_ANIME_NAME,
+    "https://hf-mirror.com/skytnt/anime-seg/resolve/main/" + ISNET_ANIME_NAME,
 )
 
 ONNXRUNTIME_VERSION = "1.31.0"
@@ -193,6 +208,41 @@ def download(url: str, dest: Path, *, offline: bool, retries: int = 3) -> Path:
             print(f"    [!!  ] 下载失败：{e}")
             time.sleep(2 * attempt)
     sys.exit(f"❌ 下载失败（{retries} 次）：{url}\n   最后错误：{last_err}")
+
+
+def download_any(urls: tuple[str, ...], dest: Path, *, offline: bool) -> Path:
+    """依次尝试多个镜像下载同一文件；任一成功即返回。
+
+    权重 176MB、来源在境外，单一站点抖动就会让整个构建失败，
+    因此按顺序重试所有镜像。
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and dest.stat().st_size > 0:
+        print(f"    [cache] {dest.name}  {human(dest.stat().st_size)}")
+        return dest
+    if offline:
+        sys.exit(f"❌ 离线模式（--skip-download）但缓存缺失：{dest}\n"
+                 f"   请先联网运行一次以填充缓存。")
+    errors = []
+    for url in urls:
+        try:
+            print(f"    [get ] {url}")
+            tmp = dest.with_name(dest.name + ".part")
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "live2d-desktop-bundler/1.0"})
+            with urllib.request.urlopen(req, timeout=600) as resp, open(tmp, "wb") as out:
+                shutil.copyfileobj(resp, out, length=1 << 20)
+            tmp.replace(dest)
+            print(f"    [ok  ] {dest.name}  {human(dest.stat().st_size)}")
+            return dest
+        except Exception as e:
+            errors.append(f"{url} → {e}")
+            print(f"    [!!  ] 下载失败：{e}")
+            try:
+                dest.with_name(dest.name + ".part").unlink()
+            except OSError:
+                pass
+    sys.exit("❌ 全部镜像均下载失败：\n   " + "\n   ".join(errors))
 
 
 def verify_hash(path: Path, expected: str, key: str, record: dict) -> None:
@@ -357,6 +407,9 @@ def main() -> int:
     ap.add_argument("--skip-wheels", action="store_true", help="跳过 wheel 下载/安装")
     ap.add_argument("--skip-app", action="store_true", help="跳过源码树复制")
     ap.add_argument("--skip-native", action="store_true", help="跳过 exe/dll/模型复制")
+    ap.add_argument("--isnet-anime-onnx", default="",
+                    help="本地 isnet-anime.onnx 权重路径（默认优先用 models/rembg/"
+                         "isnet-anime.onnx，其次联网下载）")
     ap.add_argument("--skip-download", action="store_true",
                     help="完全离线：只用缓存中已有的下载物")
     ap.add_argument("--no-smoke-test", action="store_true", help="不跑随包解释器冒烟")
@@ -459,6 +512,24 @@ def main() -> int:
         shutil.copy2(landmarker, models_dir / FACE_LANDMARKER_NAME)
         print(f"    [task] models/{FACE_LANDMARKER_NAME}")
 
+        # ISNet 动漫前景权重：分层质量的地基。缺失时 rembg 会尝试联网下载，
+        # 离线/内网下必然失败 → 分层静默退化成颜色启发式（脸/眼睛全丢）。
+        rembg_dir = models_dir / "rembg"
+        rembg_dir.mkdir(parents=True, exist_ok=True)
+        local_isnet = Path(args.isnet_anime_onnx) if args.isnet_anime_onnx else \
+            ROOT / "models" / "rembg" / ISNET_ANIME_NAME
+        if local_isnet.is_file() and local_isnet.stat().st_size > 0:
+            isnet = local_isnet
+            print(f"    [本地] 使用已有权重 {isnet}")
+        else:
+            isnet = download_any(ISNET_ANIME_URLS, cache / ISNET_ANIME_NAME,
+                                 offline=offline)
+        verify_hash(isnet, hashes.get("isnet-anime-onnx", ""),
+                    "isnet-anime-onnx", record)
+        shutil.copy2(isnet, rembg_dir / ISNET_ANIME_NAME)
+        print(f"    [onnx] models/rembg/{ISNET_ANIME_NAME}  "
+              f"{human((rembg_dir / ISNET_ANIME_NAME).stat().st_size)}")
+
     # ---- 5) 冒烟 + BUILD-INFO ----
     print("[5/5] 冒烟校验与 BUILD-INFO")
     if not args.no_smoke_test:
@@ -488,7 +559,7 @@ def main() -> int:
         print(f"   {k:8} {human(sizes[k])}")
     print(f" BUILD-INFO.json 已写入 {dest / 'BUILD-INFO.json'}")
     missing = [k for k in ("python-embed", "yunet-onnx", "onnxruntime-dll",
-                           "face-landmarker-task")
+                           "face-landmarker-task", "isnet-anime-onnx")
                if not hashes.get(k)]
     if missing:
         print("\n 提示：以下下载物尚未在锁定表中固定 SHA256，已实测并记录到 "

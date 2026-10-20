@@ -76,6 +76,10 @@ func applyDesktopRoot(cfg *Config, resDir string, configProvided bool) {
 	docsRoot := envOr("LIVE2D_DOCS_DIR", documentsRoot())
 
 	cfg.Python.HfCache = filepath.Join(dataRoot, "hf-cache")
+	// 内置模型权重目录（只读，程序本体）：<res>/models。
+	// 注入后 Python 侧的 isnet_onnx 会优先从这里找 ISNet 前景权重，
+	// 不再依赖 rembg 的隐式联网下载（离线/内网必然失败 → 静默降级）。
+	cfg.Python.ModelsDir = filepath.Join(resDir, "models")
 	if !configProvided {
 		// 无 -config 文件时由本函数决定用户目录；文件已显式给出则尊重之。
 		cfg.Output.BaseDir = filepath.Join(docsRoot, "output")
