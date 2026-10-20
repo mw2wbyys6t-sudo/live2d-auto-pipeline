@@ -216,13 +216,13 @@
 <h3>P0：最小完整旅程</h3>
 <div class="flow">
   <span class="node">原画</span><span class="arrow">→</span>
-  <span class="node">分析 + 分层计划</span><span class="arrow">→</span>
-  <span class="node">分割 + 遮挡补绘</span><span class="arrow">→</span>
-  <span class="node">统一画布组装</span><span class="arrow">→</span>
+  <span class="node">分层计划</span><span class="arrow">→</span>
+  <span class="node">分割 + 补绘</span><span class="arrow">→</span>
+  <span class="node">画布组装</span><span class="arrow">→</span>
   <span class="node">导入用 PSD</span><span class="arrow">→</span>
   <span class="node">PSD 自检</span><span class="arrow">→</span>
   <span class="node hot">人工导入 Cubism</span><span class="arrow">→</span>
-  <span class="node">网格/变形器/参数/物理规格</span><span class="arrow">→</span>
+  <span class="node">绑定规格</span><span class="arrow">→</span>
   <span class="node ok">验收报告</span>
 </div>
 <p>
@@ -395,12 +395,22 @@
 
   <div class="callout danger">
     <span class="k">硬约束（任一不满足即导入失败或改色，全部来自官方）</span>
-    ① 保存格式必须是 <b>PSD</b>；② 色彩模式必须是 <b>RGB</b>；③ 通道必须 <b>8bit/channel</b>；
-    ④ 色彩配置必须 <b>sRGB</b>；⑤ <b>不得有同名图层</b>；⑥ <b>不得使用图层蒙版</b>；
-    ⑦ <b>线稿与剪切蒙版必须合并</b>；⑧ 每个组<b>最底层的图层作为纹理</b>，故线稿层与填色层须预先合并；
-    ⑨ 图层属性须能对应 Editor 的 <b>Color blend</b>；⑩ Opacity 会生效，但 <b>Fill 按 100% 输出</b>。
-    来源：<a href="https://docs.live2d.com/en/cubism-editor-manual/precautions-for-psd-data/">Notes on PSD creation</a>、
-    <a href="https://docs.live2d.com/en/cubism-editor-manual/psd-import/">Import PSDs</a>。
+    <ol style="margin:10px 0 8px;padding-left:22px;columns:2;column-gap:30px">
+      <li>保存格式必须是 <b>PSD</b></li>
+      <li>色彩模式必须是 <b>RGB</b></li>
+      <li>通道必须 <b>8bit/channel</b></li>
+      <li>色彩配置必须 <b>sRGB</b></li>
+      <li><b>不得有同名图层</b></li>
+      <li><b>不得使用图层蒙版</b></li>
+      <li><b>线稿与剪切蒙版必须合并</b></li>
+      <li>每组<b>最底层图层作为纹理</b>，故线稿层与填色层须预先合并</li>
+      <li>图层属性须能对应 Editor 的 <b>Color blend</b></li>
+      <li>Opacity 会生效，但 <b>Fill 按 100% 输出</b></li>
+    </ol>
+    <p class="mono" style="margin:0">
+      来源：<a href="https://docs.live2d.com/en/cubism-editor-manual/precautions-for-psd-data/">Notes on PSD creation</a>
+      · <a href="https://docs.live2d.com/en/cubism-editor-manual/psd-import/">Import PSDs</a>
+    </p>
   </div>
 
   <dl>
