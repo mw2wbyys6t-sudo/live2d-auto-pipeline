@@ -480,13 +480,14 @@ def test_pipeline_bakes_keyforms_into_moc3(tmp_path):
     assert doc["art_mesh.keyform_binding_band_indices"] == [1, 1]
     assert doc["parameter.keyform_binding_counts"] == [1]
     # 三个键形里必须有一个逐字复现静止姿态（default 键），否则模型开箱就是歪的。
-    # 顶点先按 (x - w/2, h/2 - y) 换算、再除以 ppu=100 存成单位坐标。
+    # 顶点先按 (x - w/2, y - h/2) 换算（模型 y 向下，见 moc3_pipeline.to_model_xy）、
+    # 再除以 ppu=100 存成单位坐标。
     begins = doc["art_mesh_keyform.keyform_position_begin_indices"]
     positions = doc["keyform_position.xys"]
-    authored = [[(32.0 - 64.0) / 100.0, (64.0 - 32.0) / 100.0],
-                [(96.0 - 64.0) / 100.0, (64.0 - 32.0) / 100.0],
-                [(96.0 - 64.0) / 100.0, (64.0 - 96.0) / 100.0],
-                [(32.0 - 64.0) / 100.0, (64.0 - 96.0) / 100.0]]
+    authored = [[(32.0 - 64.0) / 100.0, (32.0 - 64.0) / 100.0],
+                [(96.0 - 64.0) / 100.0, (32.0 - 64.0) / 100.0],
+                [(96.0 - 64.0) / 100.0, (96.0 - 64.0) / 100.0],
+                [(32.0 - 64.0) / 100.0, (96.0 - 64.0) / 100.0]]
     expected = [v for point in authored for v in point]
     assert len(begins) == 6, f"2 个网格 x 3 个键形，实为 {begins}"
     for keyform_begin in begins:

@@ -93,17 +93,23 @@ requires_pixels = pytest.mark.skipif(
 
 
 def _model_vertices():
-    """图像坐标 -> 模型坐标（原点居中、y 向上），与 build_rig_spec 同一换算。"""
-    return [[x - CANVAS / 2.0, CANVAS / 2.0 - y] for x, y in VERT_IMAGE]
+    """图像坐标 -> 模型坐标（原点居中、y 向下），与 build_rig_spec 同一换算。
+
+    内核把模型 y 当向下为正（实测见 moc3_pipeline.to_model_xy），写反会让整层上下翻转。
+    """
+    return [[x - CANVAS / 2.0, y - CANVAS / 2.0] for x, y in VERT_IMAGE]
 
 
 def _pivot_model(bone):
     px, py = BONES[bone]
-    return (px - CANVAS / 2.0, CANVAS / 2.0 - py)
+    return (px - CANVAS / 2.0, py - CANVAS / 2.0)
 
 
 def _rotate(points, degrees, about):
-    """模型坐标（y 向上）下绕 about 逆时针旋转 —— 待验证的假设本身。"""
+    """模型坐标（y 向下）下绕 about 旋转 —— 与 __init__ 的 _blend 同一公式。
+
+    注意 y 的正方向是向下，所以这套公式在屏幕上看是顺时针。
+    """
     theta = math.radians(degrees)
     cos, sin = math.cos(theta), math.sin(theta)
     ox, oy = about

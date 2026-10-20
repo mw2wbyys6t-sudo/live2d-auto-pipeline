@@ -149,6 +149,16 @@ def _key_times(param: ParameterSpec) -> List[float]:
     return keys
 
 
+def to_model_xy(x, y, width, height):
+    """图像坐标（左上原点、y 向下）-> moc3 模型坐标（原点在画布中心）。
+
+    实测（单色块探针 + 官方内核渲染）：内核把这个 y 当**向下**为正 —— 画布上方的
+    像素对应负 y。写成 ``height/2 - y`` 会让整个模型上下翻转：实测图层 y=96..224
+    被画到 y=288..415，恰好关于画布中线镜像，且每层内容也跟着镜像。
+    """
+    return float(x) - width / 2.0, float(y) - height / 2.0
+
+
 def rotation_keyforms(mesh: Dict[str, Any], parameters_by_id: Dict[str, ParameterSpec],
                       bone_positions: Dict[str, Any], standard_bones: Dict[str, Dict],
                       width: float, height: float):
@@ -195,15 +205,13 @@ def rotation_keyforms(mesh: Dict[str, Any], parameters_by_id: Dict[str, Paramete
         return "", [], [h[0] for h in hits]
 
     pid, param, indices, pivot = hits[0]
-    # 枢轴同样换算成「原点在画布中心、y 向上」的模型坐标
-    px = pivot[0] - width / 2.0
-    py = height / 2.0 - pivot[1]
+    px, py = to_model_xy(pivot[0], pivot[1], width, height)
     shapes = []
     for key_value in _key_times(param):
         theta = math.radians(key_value * _DEGREES_PER_UNIT)
         cosine, sine = math.cos(theta), math.sin(theta)
         vertices = [
-            _blend(float(x) - width / 2.0, height / 2.0 - float(y), px, py,
+            _blend(*to_model_xy(x, y, width, height), px, py,
                    cosine, sine, _vertex_weight(per_vertex, index, indices))
             for index, (x, y) in enumerate(mesh["vertices"])
         ]
@@ -386,8 +394,7 @@ def head_angle_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
     if _peak_influence(per_vertex, indices) <= _MIN_INFLUENCE:
         return (), []
 
-    px = float(joint[0]) - width / 2.0
-    py = height / 2.0 - float(joint[1])
+    px, py = to_model_xy(joint[0], joint[1], width, height)
     xs = [float(v[0]) for v in vertices]
     ys = [float(v[1]) for v in vertices]
     span_x = max(xs) - min(xs)
@@ -602,8 +609,7 @@ def build_deformers(specs: List[MeshSpec],
         elif dtype == "rotation":
             pivot = entry.get("pivot") or (0.0, 0.0)
             # 与网格顶点同一换算：图像坐标 -> 原点居中、y 向上的模型坐标
-            origin = (float(pivot[0]) - width / 2.0,
-                      height / 2.0 - float(pivot[1]))
+            origin = to_model_xy(pivot[0], pivot[1], width, height)
             # 就近匹配容差：画布最大边的 5%。自动绑骨生成的枢轴常因取整/比例换算
             # 偏离骨骼坐标几个像素，标准 Live2D 实践按就近原则归属；5% 足以容纳
             # 正常偏差，又不会把不相关的枢轴错绑到近旁骨骼。
@@ -721,7 +727,7 @@ def build_rig_spec(
         count = len(mesh["vertices"])
         for i, (x, y) in enumerate(mesh["vertices"]):
             x, y = float(x), float(y)
-            vertices.append([x - width / 2.0, height / 2.0 - y])
+            vertices.append(list(to_model_xy(x, y, width, height)))
             if normals is not None:
                 nx, ny = float(normals[i][0]), float(normals[i][1])
             else:

@@ -48,12 +48,17 @@ def _uv(u0=0.0, v0=0.0, u1=1.0, v1=1.0):
     return {"u0": u0, "v0": v0, "u1": u1, "v1": v1}
 
 
-def test_positions_are_centered_and_y_flipped():
+def test_positions_are_centered_and_y_points_down():
+    """模型坐标原点在画布中心，**y 正方向向下**（与图像坐标同向）。
+
+    实测依据：单色块探针在官方内核里 1:1 落在原位；写成 ``h/2 - y`` 会整层上下翻转
+    （见 moc3_pipeline.to_model_xy）。
+    """
     result = _builder_result({"layer_a": _mesh()})
     spec = build_rig_spec(result, {"layer_a": _uv()})
     mesh = spec.meshes[0]
-    assert mesh.vertices[0] == [-64.0, 32.0]    # 左上 -> (左, 上)
-    assert mesh.vertices[2] == [64.0, -32.0]    # 右下 -> (右, 下)
+    assert mesh.vertices[0] == [-64.0, -32.0]   # 左上 -> (左, -y)
+    assert mesh.vertices[2] == [64.0, 32.0]     # 右下 -> (右, +y)
 
 
 def test_uv_uses_atlas_rect_without_extra_vertical_flip():
@@ -142,9 +147,9 @@ def test_rotation_deformer_becomes_a_static_pivot():
     assert deformer.deformer_id == "EyeTrack_L"
     assert spec.meshes[0].deformer_id == "EyeTrack_L"
     assert spec.uncompiled_deformers == []
-    # pivot 是图像坐标（左上原点）；画布 128x64 -> 模型坐标 (40-64, 32-20)
+    # pivot 是图像坐标（左上原点）；画布 128x64 -> 模型坐标 (40-64, 20-32)
     assert len(deformer.keyforms) == 1
-    assert deformer.keyforms[0].origin == pytest.approx((-24.0, 12.0))
+    assert deformer.keyforms[0].origin == pytest.approx((-24.0, -12.0))
     # 只有一个键形 => 不绑参数，也确实不会随参数动，如实记为静态
     assert deformer.parameter_id == ""
     assert spec.static_deformers == ["EyeTrack_L"]
@@ -340,10 +345,10 @@ def test_head_mesh_gets_three_axis_composite_when_all_three_angles_declared():
     assert [len(keys) for _, keys in mesh.keyform_axes] == [3, 3, 3]
     assert len(mesh.keyform_shapes) == 27          # 3 × 3 × 3
     base = mesh.vertices[0]
-    # 枢轴 = Head 关节 (0,-40) 图像坐标 -> 模型坐标 (-64, 72)，在网格左上方
+    # 枢轴 = Head 关节 (0,-40) 图像坐标 -> 模型坐标 (-64, -72)（y 向下，图像上方是负 y）
     # (i_X=2, i_Y=1, i_Z=1) -> 14：只有 X 到极值（点头）=> 纯垂直压缩，不水平动
     v14 = mesh.keyform_shapes[14].vertices[0]
-    assert v14[1] > base[1]                        # 向枢轴（上方）收拢
+    assert v14[1] < base[1]                        # 向枢轴（图像上方，更小的 y）收拢
     assert v14[0] == pytest.approx(base[0])        # 点头不产生水平位移（交叉映射）
     # (i_X=1, i_Y=2, i_Z=1) -> 16：只有 Y 到极值（转头）=> 水平位移 + 水平压扁
     v16 = mesh.keyform_shapes[16].vertices
@@ -490,14 +495,14 @@ def test_rotation_keyforms_bake_rigid_z_rotation():
     # min / default / max 三键，且 default 键必须完全复现静止姿态
     assert [s.key_value for s in shapes] == [-30.0, 0.0, 30.0]
     rest = shapes[1].vertices
-    expected = [v for x, y in _rotated_mesh()["vertices"] for v in (x - 64.0, 64.0 - y)]
+    expected = [v for x, y in _rotated_mesh()["vertices"] for v in (x - 64.0, y - 64.0)]
     flat_rest = [v for point in rest for v in point]
     assert flat_rest == pytest.approx(expected, abs=1e-9)
     # 端点键形必须真的离开静止姿态，且绕枢轴做刚体旋转（距离枢轴保持不变）
     moved = shapes[2].vertices
     assert any(max(abs(a[0] - b[0]), abs(a[1] - b[1])) > 1.0
                for a, b in zip(moved, rest))
-    pivot = (64.0 - 64.0, 64.0 - 30.0)
+    pivot = (64.0 - 64.0, 30.0 - 64.0)
     for (rx, ry), (mx, my) in zip(rest, moved):
         assert (rx - pivot[0]) ** 2 + (ry - pivot[1]) ** 2 == pytest.approx(
             (mx - pivot[0]) ** 2 + (my - pivot[1]) ** 2, abs=1e-6)
