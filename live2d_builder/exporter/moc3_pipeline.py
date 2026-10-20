@@ -710,6 +710,10 @@ def build_rig_spec(
         if rect is None:
             raise UnsupportedRig(f"{name}: 图集中没有该层的 UV 摆放信息")
         u0, v0, u1, v1 = rect["u0"], rect["v0"], rect["u1"], rect["v1"]
+        # 图集可能有多页，网格必须指向自己所在的那一页。曾经漏传 texture_index，
+        # 于是所有网格都取 0 号纹理：多页图集下只有第 0 页的层能画对，其余层的 UV
+        # 落在别的页上，画面只剩零星碎片（实测：29 层 / 7 页的模型只画出 1.3 万像素）。
+        page = int(rect.get("page") or 0)
 
         vertices: List[List[float]] = []
         uvs: List[List[float]] = []
@@ -751,6 +755,7 @@ def build_rig_spec(
                 triangles=triangles,
                 uvs=uvs,
                 draw_order=float(order),
+                texture_index=page,
                 keyform_shapes=eye_shapes,
                 keyform_axes=eye_axes,
             ))
@@ -763,6 +768,7 @@ def build_rig_spec(
                 triangles=triangles,
                 uvs=uvs,
                 draw_order=float(order),
+                texture_index=page,
                 keyform_shapes=head_shapes,
                 keyform_axes=head_axes,
             ))
@@ -777,6 +783,7 @@ def build_rig_spec(
             triangles=triangles,
             uvs=uvs,
             draw_order=float(order),
+            texture_index=page,
             keyform_parameter_id=pid,
             keyform_shapes=shapes,
         ))
