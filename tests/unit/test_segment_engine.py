@@ -213,7 +213,7 @@ class TestForegroundGatedSegmentation:
             seg, "_segment_isnet",
             lambda image: [{"segmentation": fg, "label": "foreground"}])
         monkeypatch.setattr(
-            seg, "_fallback_color_segment", lambda image: color_parts)
+            seg, "_fallback_color_segment", lambda image, fg=None: color_parts)
         return seg
 
     def test_color_parts_are_clipped_to_foreground(self, monkeypatch):
