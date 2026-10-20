@@ -10,6 +10,7 @@ import math
 
 import pytest
 
+from live2d_builder.bones.deformers import BoneHierarchy
 from live2d_builder.mesh.generator import MeshGenerator
 
 
@@ -114,3 +115,171 @@ class TestComputeBoneWeights:
 
         for row in out["weights"]:
             assert all(math.isfinite(w) for w in row)
+
+
+# 真实管线（前景剪影 + 合成器拆分）在 demo 输入上产出的完整层名词表。
+PRODUCTION_LAYERS = {
+    "accessories": "Torso",
+    "arm_L": "ArmBack_L",
+    "arm_R": "ArmBack_R",
+    "clothes_bottom": "Skirt",
+    "clothes_top": "Torso",
+    "collar": "Neck",
+    "cuff_L": "ForearmBack_L",
+    "cuff_R": "ForearmBack_R",
+    "eyebrow_L": "Brow_L",
+    "eyebrow_R": "Brow_R",
+    "eyewhite_left": "Eyeball_L",
+    "eyewhite_right": "Eyeball_R",
+    "face": "Face",
+    "hair_back": "Hair_Back",
+    "hair_front": "Hair_Front",
+    "hand_L": "ForearmBack_L",
+    "hand_R": "ForearmBack_R",
+    "irides_left": "Eyeball_L",
+    "irides_right": "Eyeball_R",
+    "leg_L": "Leg_L",
+    "leg_R": "Leg_R",
+    "mouth": "Mouth",
+    "neck": "Neck",
+    "nose": "Nose",
+    "skirt_hem_L": "Skirt",
+    "skirt_hem_R": "Skirt",
+    "sock_L": "Calf_L",
+    "sock_R": "Calf_R",
+    "waistband": "Waist",
+}
+
+
+def _centroids(layers, w=600, h=1000):
+    """给每个层一个落在身体对应高度的假质心（图像坐标）。"""
+    height_ratio = {
+        "hair_back": 0.25, "hair_front": 0.10, "face": 0.17, "neck": 0.23,
+        "clothes_top": 0.33, "collar": 0.26, "waistband": 0.47,
+        "clothes_bottom": 0.55, "skirt_hem_L": 0.60, "skirt_hem_R": 0.60,
+        "leg_L": 0.70, "leg_R": 0.70, "sock_L": 0.90, "sock_R": 0.90,
+    }
+    out = {}
+    for name in layers:
+        y = h * height_ratio.get(name, 0.33)
+        x = w * (0.40 if name.endswith("_L") or name.endswith("_left") else 0.60)
+        out[name] = (x, y)
+    return out
+
+
+class TestBoneResolution:
+    """层名 -> 骨骼的解析。
+
+    历史缺陷：``LAYER_BONE_MAP`` 只认识 ``face_base``/``eye_left``/``thigh_left``
+    这类旧名字，而真实产出是 ``face``/``arm_L``/``sock_L``/``clothes_top``，
+    22 层里 15 层掉进默认的 ``Face`` —— 衣服、腿、袜子全挂在脸的骨骼下，
+    头一转整件衣服跟着甩。
+    """
+
+    @pytest.mark.parametrize("layer,expected", sorted(PRODUCTION_LAYERS.items()))
+    def test_every_production_layer_name_resolves(self, layer, expected):
+        bone, reason = BoneHierarchy().resolve_bone(layer)
+
+        assert bone == expected
+        assert reason in ("map", "sided")
+
+    def test_unknown_layer_never_lands_in_the_head(self):
+        """兜底不能是 Face/Head，否则未知层会跟着头一起转。"""
+        bone, reason = BoneHierarchy().resolve_bone("mystery_patch")
+
+        assert reason == "default"
+        assert bone == BoneHierarchy.DEFAULT_BONE
+        info = BoneHierarchy.STANDARD_BONES[bone]
+        assert info["group"] not in {"head", "face", "hair", "eyes", "brows"}
+
+    def test_side_suffix_selects_the_matching_limb(self):
+        hierarchy = BoneHierarchy()
+
+        assert hierarchy.resolve_bone("sock_l")[0] == "Calf_L"
+        assert hierarchy.resolve_bone("sock_r")[0] == "Calf_R"
+        assert hierarchy.resolve_bone("leg_left")[0] == "Leg_L"
+        assert hierarchy.resolve_bone("leg_right")[0] == "Leg_R"
+
+    def test_unsided_limb_is_split_by_centroid_side(self):
+        hierarchy = BoneHierarchy()
+        span = (0.0, 0.0, 600.0, 1000.0)
+
+        left, _ = hierarchy.resolve_bone("legs", (100.0, 700.0), span)
+        right, _ = hierarchy.resolve_bone("legs", (500.0, 700.0), span)
+
+        assert left == "Leg_L"
+        assert right == "Leg_R"
+
+    def test_position_inference_covers_body_regions(self):
+        hierarchy = BoneHierarchy()
+        span = (0.0, 0.0, 600.0, 1000.0)
+
+        assert hierarchy.resolve_bone("weird_top_thing", (300.0, 100.0), span)[0] == "Head"
+        assert hierarchy.resolve_bone("weird_chest_thing", (300.0, 300.0), span)[0] == "Chest"
+        assert hierarchy.resolve_bone("weird_waist_thing", (300.0, 550.0), span)[0] == "Waist"
+        assert hierarchy.resolve_bone("weird_bottom_thing", (300.0, 800.0), span)[0].startswith("Leg_")
+
+
+class TestBonePivots:
+    """枢轴必须是图像坐标，落在角色身上。"""
+
+    def test_pivots_are_image_space_not_canvas_centred(self):
+        """历史上默认比例模型是"画布中心为原点"，被调用方再减一次半画布，
+        Head 枢轴因此跑到画布左下角外，头一转就绕着角落甩出去。"""
+        hierarchy = BoneHierarchy()
+        layers = list(PRODUCTION_LAYERS)
+        centroids = _centroids(layers)
+
+        positions = hierarchy.get_bone_positions(centroids)
+
+        head = positions["Head"]
+        assert 0.0 < head[0] < 600.0 and 0.0 < head[1] < 1000.0
+        # 头顶在脚上方
+        assert positions["Head"][1] < positions["Skirt"][1] < positions["Calf_L"][1]
+
+    def test_head_pivot_sits_at_the_neck(self):
+        """头骨枢轴取颈根：既不是脸中心，也不是画布原点。"""
+        hierarchy = BoneHierarchy()
+        centroids = _centroids(list(PRODUCTION_LAYERS))
+
+        positions = hierarchy.get_bone_positions(centroids)
+
+        assert positions["Head"][0] == pytest.approx(positions["Face"][0])
+        assert positions["Head"][1] == pytest.approx(positions["Neck"][1])
+
+    def test_bone_positions_and_assignments_agree(self):
+        """build() 与 get_bone_positions() 必须用同一套解析，否则键形绕着
+        一根没人绑的骨骼转。"""
+        hierarchy = BoneHierarchy()
+        layers = list(PRODUCTION_LAYERS)
+        centroids = _centroids(layers)
+
+        tree = hierarchy.build(layers, centroids=centroids)
+        positions = hierarchy.get_bone_positions(centroids)
+
+        for layer, bone in tree["layer_assignments"].items():
+            assert bone in positions, f"{layer} 绑到 {bone}，但该骨骼没有枢轴"
+
+
+class TestHeadAssemblyExclusion:
+    """衣服/腿/袜子不能进入"头部总成"，否则 ParamAngle 会把它们一起带走。"""
+
+    def test_body_parts_are_outside_the_head_assembly(self):
+        from live2d_builder.exporter.moc3_pipeline import _head_assembly
+
+        hierarchy = BoneHierarchy()
+        layers = list(PRODUCTION_LAYERS)
+        tree = hierarchy.build(layers, centroids=_centroids(layers))
+        assembly = _head_assembly(BoneHierarchy.STANDARD_BONES)
+
+        moving_with_head = {
+            layer for layer, bone in tree["layer_assignments"].items()
+            if bone in assembly
+        }
+
+        assert "clothes_top" not in moving_with_head
+        assert "clothes_bottom" not in moving_with_head
+        assert "leg_L" not in moving_with_head
+        assert "sock_L" not in moving_with_head
+        # 头/发/五官仍然要跟着头动
+        assert {"face", "hair_back", "hair_front"} <= moving_with_head

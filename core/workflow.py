@@ -21,7 +21,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, Union
 
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageFilter
 import numpy as np
 
 from core.version import __version__, FULL_VERSION_STRING
@@ -633,48 +633,38 @@ class WorkflowEngine:
         return result
 
     def _optimize_image(self, img: Image.Image) -> Image.Image:
-        """Optimize image for Live2D layering:
-        - Background removal (threshold or rembg)
-        - Contrast enhancement
-        - Sharpness enhancement
-        - Mild color quantization
+        """为分层准备输入图：只做背景移除，**不改画面像素**。
+
+        这里曾经还做「对比度 ×1.3 + 锐化 ×1.8 + 64 色量化」。那是给颜色聚类
+        准备的，但对现在的颜色启发式分层是净损失，实测（`demo_input.png`）：
+
+        ==================  ========  ==========================================
+        输入                缺陷数    现象
+        ==================  ========  ==========================================
+        仅抠图                 2      face bbox (289,111)-(377,216)，位置正确
+        +对比度/锐化           7      face 涨成 (231,144)-(435,420)：白衬衫被抬过
+                                     肤色阈值并进脸里，下巴线掉到胸口，脖子层
+                                     落在大腿上；锐化的边缘毛刺把部件切碎
+        +量化 64 色            3      比锐化好，但仍不如原始像素
+        ==================  ========  ==========================================
+
+        对比度会把"接近肤色的白色衣物"推进肤色阈值，量化会让同一块布料断成
+        两三种颜色——两者都在制造分层缺陷，而不是改善它。保留原像素也让导出的
+        图层更贴近原画。
         """
         result = img.copy()
 
-        # Background removal (simple threshold on corners)
+        # Background removal
+        #
+        # 这一段曾经是「逐像素比较到四角中位色的距离」：深色网格墙的明暗渐变
+        # 与砖缝让距离大量越界，实测优化图仍有 37.7% 的像素被判成前景——背景
+        # 墙、网格线、压在画面上的白色标注文字全在里面。分层随后把背景算成
+        # 头发、把文字算成上衣，质量门报 7 条缺陷。
+        # 现在统一走「连通剪影」估计（函数内部失败时返回整幅图，不会交出空掩码）。
         if result.mode == 'RGBA':
-            data = np.array(result)
-            r, g, b, a = data[:,:,0], data[:,:,1], data[:,:,2], data[:,:,3]
-            # Sample corner pixels to detect background color
-            corners = np.vstack([
-                data[:20, :20, :3].reshape(-1, 3),
-                data[:20, -20:, :3].reshape(-1, 3),
-                data[-20:, :20, :3].reshape(-1, 3),
-                data[-20:, -20:, :3].reshape(-1, 3),
-            ])
-            bg_color = np.median(corners, axis=0)
+            from core.utils.image_utils import cutout_by_silhouette
 
-            # Create alpha mask from color distance to background
-            rgb = data[:,:,:3].astype(float)
-            dist = np.sqrt(((rgb - bg_color) ** 2).sum(axis=2))
-            # Pixels very close to bg color become transparent; smooth ramp at boundary
-            alpha_ramp = (255.0 * (dist - 25) / 25.0)
-            alpha_ramp = np.clip(alpha_ramp, 0, 255)
-            alpha_new = np.where(dist < 25, 0, np.where(dist < 50, alpha_ramp, 255)).astype(np.uint8)
-            # Also respect existing alpha
-            data[:,:,3] = np.minimum(a, alpha_new)
-            result = Image.fromarray(data, 'RGBA')
-
-        # Contrast enhancement
-        enhancer = ImageEnhance.Contrast(result)
-        result = enhancer.enhance(1.3)
-
-        # Sharpness enhancement
-        enhancer = ImageEnhance.Sharpness(result)
-        result = enhancer.enhance(1.8)
-
-        # Color quantization (mild - reduce to help K-means)
-        result = result.convert('P', palette=Image.Palette.ADAPTIVE, colors=64).convert('RGBA')
+            result = cutout_by_silhouette(result)
 
         return result
 

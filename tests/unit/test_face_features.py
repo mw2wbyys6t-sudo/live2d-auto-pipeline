@@ -167,3 +167,36 @@ class TestFeatureParts:
 
         assert not SemanticLayerer._nose_part(degenerate, ink, (h, w)).any()
         assert not SemanticLayerer._mouth_part(degenerate, ink, (h, w)).any()
+
+
+class TestSkinFaceSelection:
+    """肤色兜底不能把**腿**当成脸。
+
+    旧实现取"画面上 65% 内面积最大的肤色块"，全身立绘上那是腿（被 65%
+    横线截断后 bbox 仍偏方），脸框于是落到大腿上：实测脸层出现在大腿、
+    白衬衫被整片并进 hair_back，质量门报 7 条缺陷。
+    """
+
+    @staticmethod
+    def _canvas(h=400, w=200):
+        rgb = np.zeros((h, w, 3), dtype=np.uint8)
+        rgb[...] = (45, 60, 82)
+        rgb[40:120, 65:135] = SKIN    # 脸：偏方、靠上（面积更小）
+        rgb[260:390, 55:145] = SKIN   # 腿：面积更大、位置更低
+        return rgb
+
+    def test_box_lands_on_the_face_not_the_legs(self):
+        anchors = face_detect.detect_face_skin(self._canvas())
+
+        assert anchors is not None
+        x0, y0, x1, y1 = anchors.box
+        assert y1 < 200, f"脸框落到下半身（y={y0}..{y1}），说明选中了腿"
+        assert 60 <= x0 <= 70 and 130 <= x1 <= 140
+
+    def test_component_picker_returns_none_without_a_face_shaped_blob(self):
+        # 只有两条细长的手臂：宽高比超出脸的范围，不能硬指一个
+        skin = np.zeros((400, 200), dtype=bool)
+        skin[100:380, 20:50] = True
+        skin[100:380, 150:180] = True
+
+        assert face_detect._skin_face_component(skin) is None

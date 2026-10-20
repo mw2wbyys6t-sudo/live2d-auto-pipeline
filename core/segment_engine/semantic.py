@@ -25,6 +25,7 @@ from PIL import Image
 
 from core.logger import get_logger
 from core.segment_engine import face_detect, isnet_onnx
+from core.utils.image_utils import estimate_foreground_silhouette
 
 log = get_logger("segment.semantic")
 
@@ -102,7 +103,10 @@ class SemanticSegmenter:
         # 首次 segment() 之前读取时抛 AttributeError。
         self._last_was_fallback = False
         self._last_was_fg_gated = False
-        #: 前景掩码来源：onnx_local / rembg / anime_seg / none
+        #: 无学习式模型时，前景剪影是否由画面边框颜色自估（见
+        #: :meth:`_synthesise_foreground`）。仅用于诊断/日志。
+        self._last_fg_synthesised = False
+        #: 前景掩码来源：onnx_local / rembg / anime_seg / synthesised / none
         self._last_fg_source = "none"
         #: 脸部定位来源：yunet / skin_heuristic / none
         self._last_face_source = "none"
@@ -186,6 +190,7 @@ class SemanticSegmenter:
         masks: List[Dict] = []
         self._last_was_fallback = False
         self._last_was_fg_gated = False
+        self._last_fg_synthesised = False
         try:
             if self.model_type == "isnet":
                 masks = self._segment_isnet(image)
@@ -502,7 +507,8 @@ class SemanticSegmenter:
 
         log.warning(
             "No foreground segmentation model available. Layering will fall back "
-            "to HSV color heuristics (preview quality only). To enable it, place "
+            "to HSV color heuristics gated by a self-estimated silhouette "
+            "(preview quality only). To enable the learned model, place "
             "isnet-anime.onnx under the bundled 'models/rembg' directory, or "
             "install the anime-segmentation package."
         )
@@ -852,6 +858,37 @@ class SemanticSegmenter:
 
     # ---------------------------------------------------------- color fallback
 
+    #: 背景调色板比色容差（RGB 欧氏距离，0~255）。26 是实测值：再小会把
+    #: 背景墙的明暗渐变留在前景里，再大开始把深色鞋/藏青裙的边吃掉。
+    SILHOUETTE_COLOR_TOLERANCE = 26
+
+    @staticmethod
+    def _alpha_carries_silhouette(image: Image.Image) -> bool:
+        """alpha 通道是否真的描述了剪影。
+
+        流水线会把图统一转成 RGBA（``normalize_image``），所以
+        ``image.mode == "RGBA"`` 本身**不等于**"带透明背景"：整图不透明时
+        按 alpha 取前景得到的还是"整张画布"，背景墙照样被算进头发。
+        """
+        alpha = np.array(image.convert("RGBA"))[:, :, 3]
+        return float((alpha <= 10).mean()) >= 0.02
+
+    def _synthesise_foreground(self, rgb: np.ndarray) -> np.ndarray:
+        """无学习式前景模型时，从画面自身估算角色剪影。
+
+        实现在 :func:`core.utils.image_utils.estimate_foreground_silhouette`：
+        优化图（背景移除）与分层两条路必须用**同一张**剪影，否则会出现
+        "优化图把背景留成不透明、分层再按透明通道取前景"的互相打架。
+
+        旧路径在没有模型、也没有透明背景时直接 ``fg = 全 True``：立绘的深色
+        网格墙与头发同色系，实测 ``hair_back`` 覆盖 68% 画布、bbox 铺满全图；
+        压在画面上的白色标注文字又被切进 ``clothes_top``，把上衣打成 204 个
+        碎块。
+        """
+        return estimate_foreground_silhouette(
+            rgb, tolerance=self.SILHOUETTE_COLOR_TOLERANCE
+        )
+
     def _fallback_color_segment(
         self,
         image: Image.Image,
@@ -865,7 +902,7 @@ class SemanticSegmenter:
 
         Args:
             image: 源图。
-            fg: 前景布尔掩码（学习式模型产出）。为 None 时退化为按 alpha / 全图。
+            fg: 前景布尔掩码（学习式模型产出）。为 None 时按 alpha / 合成剪影。
         """
         rgb = np.array(image.convert("RGB"))
         h, w = rgb.shape[:2]
@@ -875,10 +912,12 @@ class SemanticSegmenter:
             fg = np.asarray(fg, dtype=bool)
             if fg.shape != (h, w):
                 fg = self._resize_mask(fg, image.size)
-        elif image.mode == "RGBA":
+        elif image.mode == "RGBA" and self._alpha_carries_silhouette(image):
             fg = np.array(image)[:, :, 3] > 10
         else:
-            fg = np.ones((h, w), dtype=bool)
+            fg = self._synthesise_foreground(rgb)
+            self._last_fg_synthesised = True
+            self._last_fg_source = "synthesised"
         if not fg.any():
             fg = np.ones((h, w), dtype=bool)
 
@@ -1021,6 +1060,18 @@ class SemanticSegmenter:
             hair = hair & ~(torso_core & (yy > waist_y))
         hair = hair & ~features
 
+        # 「蓝色主导」这条规则会把同色系的领带、裙褶一起抓进头发（实测领带
+        # 整条进了 hair_back）。头发在拓扑上是**一整块**：从头顶一直连到发梢；
+        # 领带/裙褶是独立小岛。所以只保留与"头顶头发"连通的部分，剩下的
+        # 像素自然落回下面 non_skin & ~hair 的衣服分支。
+        seed = hair & (yy < fy0)  # 头顶之上必是头发，用它当种子
+        if seed.any() and HAS_CV2:
+            count, labels = cv2.connectedComponents(hair.astype(np.uint8), 8)
+            keep = np.unique(labels[seed])
+            keep = keep[keep > 0]
+            if keep.size:
+                hair = np.isin(labels, keep)
+
         # 刘海 = 脸部上方、脸宽范围内的头发；其余为后发
         bang_zone = (
             (yy >= fy0 - int(face_h * 1.0))
@@ -1106,19 +1157,22 @@ class SemanticSegmenter:
         # 结构性图层去碎点：抗锯齿在发丝/描线边缘留下的大量 1~3 像素孤立点
         # 本身没有语义，却会让图层在 Live2D 里出现游离小点，也会让碎片化检查
         # 误判（实测 hair_back 264 块里 245 块都是这种碎屑）。
+        # 除了绝对下限，还按部件自身面积设相对下限（见 _despeckle）：发丝
+        # 描边会沿头发轮廓拉出一圈几百像素的细条，绝对阈值拦不住。
         # 五官层不做这一步——鼻子本来就只有 9 个像素。
         speck = max(6, int(0.00003 * h * w))
-        hair_back = self._despeckle(hair_back, speck)
-        hair_front = self._despeckle(hair_front, speck)
-        face = self._despeckle(face, speck)
-        neck = self._despeckle(neck, speck)
-        clothes_top = self._despeckle(clothes_top, speck)
-        clothes_bottom = self._despeckle(clothes_bottom, speck)
-        arms = self._despeckle(arms, speck)
-        hands = self._despeckle(hands, speck)
-        legs = self._despeckle(legs, speck)
-        legwear = self._despeckle(legwear, speck)
-        accessories = self._despeckle(accessories, speck)
+        relative = 0.004
+        hair_back = self._despeckle(hair_back, speck, relative)
+        hair_front = self._despeckle(hair_front, speck, relative)
+        face = self._despeckle(face, speck, relative)
+        neck = self._despeckle(neck, speck, relative)
+        clothes_top = self._despeckle(clothes_top, speck, relative)
+        clothes_bottom = self._despeckle(clothes_bottom, speck, relative)
+        arms = self._despeckle(arms, speck, relative)
+        hands = self._despeckle(hands, speck, relative)
+        legs = self._despeckle(legs, speck, relative)
+        legwear = self._despeckle(legwear, speck, relative)
+        accessories = self._despeckle(accessories, speck, relative)
 
         out = {
             "hair_back": hair_back,
@@ -1486,16 +1540,25 @@ class SemanticSegmenter:
         return out
 
     @staticmethod
-    def _despeckle(mask: np.ndarray, min_area: int) -> np.ndarray:
+    def _despeckle(
+        mask: np.ndarray, min_area: int, relative: float = 0.0
+    ) -> np.ndarray:
         """去掉孤立碎点，只留下成规模的连通块。
 
         发丝/描线边缘的抗锯齿会留下大量 1~3 像素的孤立点（实测 hair_back
         被切出 245 个碎点，合计只有 481 像素），拆成图层后它们就是 Live2D 里
         跟着头乱飘的小黑点。结构性图层统一过一遍，五官层不过滤——鼻子本来
         就只有 9 个像素。
+
+        ``relative`` 是按**本部件自身面积**设的相对下限：发丝描边会沿着头发
+        轮廓留下一圈几百像素的细条，绝对阈值（几十像素）拦不住，但它们各自
+        只占部件面积的千分之几。两部分取大者作为实际阈值。
         """
         mask = np.asarray(mask, dtype=bool)
-        if not mask.any() or not HAS_CV2 or min_area <= 1:
+        if not mask.any() or not HAS_CV2:
+            return mask
+        threshold = max(int(min_area), int(mask.sum() * relative))
+        if threshold <= 1:
             return mask
         count, labels, stats, _ = cv2.connectedComponentsWithStats(
             mask.astype(np.uint8), 8
@@ -1503,7 +1566,7 @@ class SemanticSegmenter:
         if count <= 1:
             return mask
         keep = np.zeros(count, dtype=bool)
-        keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= min_area
+        keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= threshold
         return keep[labels]
 
     @staticmethod

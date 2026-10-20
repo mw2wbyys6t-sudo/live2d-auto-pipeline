@@ -254,3 +254,50 @@ class TestForegroundGatedSegmentation:
         result = seg.layer(img, output_dir=str(tmp_path))
 
         assert result["method"] == "semantic_fg_gated_color"
+
+
+class TestSynthesisedSilhouette:
+    """没有学习式前景模型、图也不带透明背景时，必须自估角色剪影。
+
+    历史行为是 ``fg = 全 True``：立绘的深色网格墙与头发同色系，实测
+    ``hair_back`` 覆盖 68% 画布、bbox 铺满全图，压在画面上的白色标注文字
+    又被切进 ``clothes_top``，把上衣打成二百多个碎块。质量门因此报 7 条
+    缺陷（超过门槛 4）。这里锁定"背景和文字都不能进前景"。
+    """
+
+    @staticmethod
+    def _canvas(h=300, w=200):
+        rgb = np.zeros((h, w, 3), dtype=np.uint8)
+        rgb[...] = (45, 60, 82)          # 深色网格墙
+        rgb[60:260, 70:130] = (40, 150, 210)  # 亮蓝角色，四边都不贴边
+        rgb[40:46, 20:60] = 255          # 白色标注文字，飘在背景上
+        return rgb
+
+    def test_background_and_annotation_text_are_excluded(self):
+        fg = SemanticLayerer()._synthesise_foreground(self._canvas())
+
+        assert fg[150, 100], "角色主体必须留在前景里"
+        assert not fg[10, 10], "画布角落的背景不能算前景"
+        assert not fg[42, 30], "不与角色连通的标注文字不能算前景"
+
+    def test_flat_canvas_falls_back_to_full_frame(self, caplog):
+        fg = SemanticLayerer()._synthesise_foreground(
+            np.full((100, 100, 3), 128, dtype=np.uint8)
+        )
+
+        assert fg.all(), "抓不出剪影时应整幅图兜底，而不是什么都不给"
+
+    def test_alpha_is_trusted_only_when_actually_transparent(self):
+        opaque = Image.new("RGBA", (20, 20), (10, 20, 30, 255))
+        cutout = Image.new("RGBA", (20, 20), (0, 0, 0, 0))
+        cutout.paste((10, 20, 30, 255), (5, 5, 15, 20))
+
+        assert SemanticLayerer._alpha_carries_silhouette(opaque) is False
+        assert SemanticLayerer._alpha_carries_silhouette(cutout) is True
+
+    def test_segment_records_synthesised_silhouette(self):
+        seg = SemanticLayerer(device="cpu", model_type="isnet")
+        seg.segment(Image.fromarray(self._canvas(), "RGB"))
+
+        assert seg._last_fg_synthesised is True
+        assert seg._last_fg_source == "synthesised"

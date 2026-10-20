@@ -40,6 +40,19 @@
   放大过 1024 不会带来任何分割精度，只是把同一份掩码摊到更大画布。
   复核：`tests/unit/test_workflow_upscale_remediation.py`。
 - 默认分层在模型缺失时会**降级为颜色启发式**（`semantic_hsv_fallback`），复杂服装/配饰容易分错。
+- **无模型时不再"整幅图都算前景"**：`estimate_foreground_silhouette()`（`core/utils/image_utils.py`）
+  取四边窄环颜色当背景调色板，把「与背景同色**且与画布边框连通**」的像素判为背景，再闭运算补网格线、
+  开运算削掉标注文字、保留最大连通块并填洞。优化图（`_optimize_image` → `cutout_by_silhouette`）与
+  分层（`SemanticLayerer._synthesise_foreground`）走**同一张**剪影。
+  修复前 `demo_input.png`：优化图仍有 37.7% 像素被判成前景，`hair_back` 覆盖 68% 画布 / bbox 铺满全图，
+  部件并集 = 100% 画布，质量门 **7 条缺陷**（`clothes_top` 碎成 27 块、`eyes_left`/`mouth` 缺失、
+  `neck` 跑到 `clothes_top` 下方）。修复后：并集 23.1%、解释率 0.99、**0 条缺陷**，全链路
+  `steps.layering.quality.ok = true`（此前恒为 false）。
+- 肤色兜底定位脸时必须**按形状+位置挑，不能取"上半部分最大块"**：全身立绘里面积最大的肤色块是腿
+  （被 65% 横线截断后 bbox 仍偏方），脸框落在大腿上，五官锚点整体错位。`_skin_face_component()`
+  改为按 `面积 / (1 + 4·y0/H)` 打分并淘汰宽高比不在 0.5~2.0 的候选。
+  复核：`tests/unit/test_face_features.py::TestSkinFaceSelection`、
+  `tests/unit/test_segment_engine.py::TestSynthesisedSilhouette`。
 - `segmentation_backend="sam2_gd"`（GroundingDINO + SAM2）**刻意不降级**：缺权重直接抛 `ModelUnavailable`，
   workflow 以 `error` 收尾。这是有意的诚实设计，但意味着该后端需要额外模型与依赖（torch/transformers）。
 - `sam2_gd` 的分层质量由 `core/segment_engine/layer_quality.py` 逐图打分并写进
@@ -79,6 +92,17 @@
   值同样会让内核越界读取）。已对 2 / 10 / 40 网格的带键形模型做过官方内核加载
   + 两端取帧逐像素比对。
 - **X/Y 轴键形刻意不生成**（在 Live2D 里是位移 + 透视的复合，属美术判断，不臆造）。
+- **自动绑骨必须按语义解析层名，不能"命中不了就挂 Face"**：`BoneHierarchy.resolve_bone()` 现在按
+  「词表(`LAYER_BONE_MAP`) → 拆 `_L/_R` 选边(`SIDED_BONE_MAP`) → 按质心落点推断 → 兜底 `Torso`」
+  四级解析。修复前词表只认识 `face_base`/`eye_left`/`thigh_left`，而实际产出是
+  `face`/`arm_L`/`sock_L`/`clothes_top`，实测 22 层里 15 层落进 `Face`——**头一转整件衣服跟着甩**。
+  修复后 25 层全部语义命中、0 次兜底；`ParamAngleX/Y/Z` 只烘焙到 `face`/`hair_back`/`hair_front`/
+  `mouth`/`nose` 5 个网格（此前是全部网格），衣服/腿/袜只受 `ParamBodyAngleZ` 或各自的手臂参数驱动。
+- **骨骼枢轴必须是图像坐标**：`get_bone_positions()` 曾返回"以画布中心为原点"的比例值
+  （`Head = (0, -40)`），而调用方 `moc3_pipeline` 会再做一次 `to_model_xy`（减半画布），
+  Head 枢轴于是跑到画布左下角外，头一转整颗头绕着角落甩。现在有质心时全部换到图像坐标，
+  并由子骨骼补出 `Head/Root/Body/Chest`（`Head` 取「脸的水平 + 颈的纵向」）。
+  复核：`tests/unit/test_bone_weights.py::TestBoneResolution / TestBonePivots / TestHeadAssemblyExclusion`。
 - **同一网格命中多个旋转参数时保持静态**（多参数带的轴序尚未实测定论，见评审 F-06）。
 - **glue 类型变形器不支持**，会被记入 `deformers_uncompiled` 并压住 `runtime_ready`。
 - **真实美术观感未签核**：几何判据（画得出、位置尺度对）已闭环，但「像不像原画」仍需人工确认（F-05）。

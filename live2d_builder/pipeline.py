@@ -322,7 +322,10 @@ class Live2DBuilder:
             weighted = 0
             for name, mesh in self._meshes.items():
                 try:
-                    assigned = assignments.get(name, "Head")
+                    # 兜底必须与 BoneHierarchy.build 的默认一致：以前这里写 "Head"、
+                    # build 里写 "Face"，两处不同，未命中的层到底跟谁走取决于
+                    # 走到哪个分支。两者现在统一到 DEFAULT_BONE（躯干）。
+                    assigned = assignments.get(name) or BoneHierarchy.DEFAULT_BONE
                     parent = BoneHierarchy.STANDARD_BONES.get(assigned, {}).get("parent")
                     mesh["weights"] = self.mesh_gen.compute_bone_weights(
                         mesh, bone_positions, assigned, parent

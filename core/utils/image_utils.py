@@ -145,30 +145,127 @@ def remove_background(img: Image.Image, method: str = "auto") -> Image.Image:
     return _remove_background_corner(img)
 
 
-def _remove_background_corner(img: Image.Image) -> Image.Image:
-    """Corner-color-based background removal using a color-distance ramp.
+def estimate_foreground_silhouette(rgb: np.ndarray, tolerance: float = 26.0) -> np.ndarray:
+    """从画面自身估算角色剪影（布尔掩码，``True`` 为前景）。
 
-    Samples the four corner patches, takes the median background color, and
-    pushes pixels near that color toward transparency.
+    做法：取四边窄环的颜色当"背景调色板"，把**与背景同色且与画布边框连通**
+    的像素判为背景，其余为前景；再闭运算补网格线造成的缝、开运算削掉标注
+    文字与引线的细笔画、保留最大连通块并填洞。
+
+    * 必须"与边框连通"而不是单纯比色：立绘裙子的藏蓝与背景墙几乎同色（实测
+      都在 (45,60,82) 附近），单纯比色会把裙子一起掏空；裙子在角色轮廓内部、
+      不与画布边框连通，这一条约束正好把它保住。
+    * 必须"只留最大连通块"：白色标注文字/引线跟背景反差极大，比色一定判成
+      前景，只有"不与角色主体连通"这一条能把它们摘掉。
+
+    估歪了（纯色画布、剪影贴满边框……）时返回全 ``True``：宁可退回"整幅图
+    都是角色"，也不要交出一张空掩码。
+
+    Args:
+        rgb: ``(H, W, 3)`` 的 RGB 数组。
+        tolerance: 与背景调色板的 RGB 欧氏距离容差。
+    """
+    rgb = np.asarray(rgb)
+    h, w = rgb.shape[:2]
+    ones = np.ones((h, w), dtype=bool)
+    if not HAS_CV2:
+        return ones
+
+    img = rgb.astype(np.int32)
+    band = max(2, min(h, w) // 100)
+    ring = np.concatenate([
+        rgb[:band].reshape(-1, 3),
+        rgb[-band:].reshape(-1, 3),
+        rgb[:, :band].reshape(-1, 3),
+        rgb[:, -band:].reshape(-1, 3),
+    ])
+    # 量化到 8 级再统计，避免为每个像素建调色板；只保留足够常见的颜色
+    quantised = (ring // 8) * 8
+    colors, counts = np.unique(quantised, axis=0, return_counts=True)
+    palette = colors[counts >= max(4, int(len(ring) * 0.002))].astype(np.int32)
+    if palette.size == 0:
+        return ones
+
+    best = np.full((h, w), 1 << 30, dtype=np.int32)
+    for color in palette:
+        diff = img - color
+        np.minimum(best, (diff * diff).sum(axis=2), out=best)
+    background_like = best <= tolerance ** 2
+
+    _, labels = cv2.connectedComponents(background_like.astype(np.uint8), connectivity=4)
+    border = set(labels[0].tolist()) | set(labels[-1].tolist()) | \
+        set(labels[:, 0].tolist()) | set(labels[:, -1].tolist())
+    border.discard(0)
+    background = (
+        np.isin(labels, np.fromiter(border, dtype=np.int32))
+        if border else background_like
+    )
+    foreground = (~background).astype(np.uint8)
+
+    foreground = cv2.morphologyEx(
+        foreground, cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+    )
+    foreground = cv2.morphologyEx(
+        foreground, cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+    )
+
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, 8)
+    if len(stats) > 1:
+        foreground = (labels == 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))).astype(np.uint8)
+
+    # 填洞：与画布边框连通的非前景才是真背景，其余凹陷都属于角色内部
+    _, labels = cv2.connectedComponents((1 - foreground).astype(np.uint8), connectivity=4)
+    outside = set(labels[0].tolist()) | set(labels[-1].tolist()) | \
+        set(labels[:, 0].tolist()) | set(labels[:, -1].tolist())
+    outside.discard(0)
+    enclosed = (
+        ~np.isin(labels, np.fromiter(outside, dtype=np.int32))
+        if outside else np.ones((h, w), dtype=bool)
+    )
+    foreground = (foreground > 0) | enclosed
+
+    coverage = float(foreground.mean())
+    if coverage < 0.02 or coverage > 0.95:
+        log.warning(
+            f"Silhouette estimate degenerate (coverage {coverage:.1%}); "
+            f"treating the whole canvas as foreground"
+        )
+        return ones
+    return foreground
+
+
+def _silhouette_alpha(mask: np.ndarray) -> np.ndarray:
+    """剪影掩码 -> alpha 通道，边缘做一像素羽化。"""
+    alpha = (np.asarray(mask, dtype=bool).astype(np.uint8) * 255)
+    if HAS_CV2:
+        alpha = cv2.GaussianBlur(alpha, (3, 3), 0.7)
+    return alpha
+
+
+def cutout_by_silhouette(img: Image.Image) -> Image.Image:
+    """按自估剪影抠图（不依赖任何模型，也不会触发模型下载）。
+
+    与 :func:`remove_background` 的区别：后者在 rembg 可用时会优先用学习式
+    模型，而本地没有权重时 ``rembg.remove`` 会**静默联网下载**。优化步骤要求
+    确定性，所以直接走这里。
     """
     arr = np.array(img.convert("RGBA"))
-    h, w = arr.shape[:2]
-    patch = max(1, min(20, h // 20, w // 20))
-    corners = np.vstack([
-        arr[:patch, :patch, :3].reshape(-1, 3),
-        arr[:patch, -patch:, :3].reshape(-1, 3),
-        arr[-patch:, :patch, :3].reshape(-1, 3),
-        arr[-patch:, -patch:, :3].reshape(-1, 3),
-    ])
-    bg = np.median(corners, axis=0)
-    rgb = arr[:, :, :3].astype(np.float32)
-    dist = np.sqrt(((rgb - bg) ** 2).sum(axis=2))
-    # Smooth ramp between inner and outer thresholds
-    inner, outer = 25.0, 50.0
-    alpha = np.clip(255.0 * (dist - inner) / max(1.0, outer - inner), 0, 255)
-    alpha = np.where(dist < inner, 0.0, np.where(dist > outer, 255.0, alpha))
-    arr[:, :, 3] = np.minimum(arr[:, :, 3], alpha.astype(np.uint8))
+    mask = estimate_foreground_silhouette(arr[:, :, :3])
+    arr[:, :, 3] = np.minimum(arr[:, :, 3], _silhouette_alpha(mask))
     return Image.fromarray(arr, "RGBA")
+
+
+def _remove_background_corner(img: Image.Image) -> Image.Image:
+    """基于自估剪影的背景移除。
+
+    旧实现按"与四角中位色的距离"逐个像素判透明。深色网格墙的明暗渐变和
+    砖缝让距离大量越界，实测整幅图仍有 37.7% 被判成前景（背景墙、网格线、
+    标注文字全在里面），后续分层把背景算成头发、把文字算成上衣。
+    现在改为先估出**连通**剪影，再按剪影给 alpha。
+    """
+    return cutout_by_silhouette(img)
 
 
 def enhance_for_layering(img: Image.Image) -> Image.Image:

@@ -295,10 +295,55 @@ def _largest_component(mask: np.ndarray) -> np.ndarray:
     return mask
 
 
+def _skin_face_component(skin: np.ndarray) -> Optional[np.ndarray]:
+    """从肤色掩码里挑最像"脸"的连通块，而不是最大的一块。
+
+    旧实现取"画面上 65% 内面积最大的肤色块"。全身立绘上面积最大的肤色块
+    是**腿**——腿被 65% 横线截断后 bbox 仍是"偏方"的，于是脸框落在大腿上，
+    五官锚点整体错位，后面所有部件分区（脸/脖子/衣服/头发）跟着崩：实测
+    脸层出现在大腿位置、白衬衫被整片并进 ``hair_back``。
+
+    脸与腿/手臂的差别不在面积，而在**形状与位置**：脸偏方（宽高比接近 1）、
+    宽度只占画布一小段、且靠上。这里按 ``面积 / (1 + 4·y0/H)`` 打分，
+    形状不合格的直接淘汰。
+    """
+    height, width = skin.shape
+    if not skin.any():
+        return None
+
+    if HAS_CV2:
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(
+            skin.astype(np.uint8), 8
+        )
+        best_label, best_score = 0, 0.0
+        min_area = max(64, int(height * width * 0.0015))
+        for label in range(1, count):
+            x, y, bw, bh, area = (int(v) for v in stats[label])
+            if area < min_area or bw <= 1 or bh <= 1:
+                continue
+            aspect = bw / float(bh)
+            if not (0.5 <= aspect <= 2.0):
+                continue
+            if bw > width * 0.6 or y > height * 0.55:
+                continue
+            score = area / (1.0 + 4.0 * y / height)
+            if score > best_score:
+                best_label, best_score = label, score
+        if best_label:
+            return labels == best_label
+        return None
+
+    # 无 cv2：退回"上半部分最大的块"，至少不会落到腿以外的地方
+    upper = np.zeros_like(skin)
+    upper[: max(1, int(height * 0.65)), :] = True
+    candidates = skin & upper
+    return _largest_component(candidates) if candidates.any() else None
+
+
 def detect_face_skin(
     rgb: np.ndarray, fg: Optional[np.ndarray] = None
 ) -> Optional[FaceAnchors]:
-    """肤色连通域兜底：取面积最大的肤色块（并略微向上扩展额头）。
+    """肤色连通域兜底：取最像脸的肤色块（并略微向上扩展额头）。
 
     关键点由标准人脸比例从脸框反推，来源标记为
     :data:`SOURCE_SKIN`（启发式），调用方据此判断精度。
@@ -312,14 +357,9 @@ def detect_face_skin(
         return None
 
     height, width = skin.shape
-    # 脸在上半身：只考虑画面上半部分。
-    upper = np.zeros_like(skin)
-    upper[: max(1, int(height * 0.65)), :] = True
-    candidates = skin & upper
-    if not candidates.any():
+    component = _skin_face_component(skin)
+    if component is None:
         return None
-
-    component = _largest_component(candidates)
     ys, xs = np.where(component)
     if ys.size == 0:
         return None

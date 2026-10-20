@@ -105,23 +105,92 @@ class BoneHierarchy:
     }
 
     # Layer-name to bone mapping for automatic assignment
+    #
+    # 键是**归一化后**的层名（小写、连字符转下划线、去掉数字前缀）。
+    # 这份表必须覆盖分层器真正会产出的词表，否则命中不了就落到默认骨骼上。
+    # 历史就是栽在这里：表里只有 `face_base`/`eye_left`/`thigh_left` 这类
+    # 名字，而实际产出的层叫 `face`/`arm_L`/`sock_L`/`clothes_top`，于是
+    # 22 层里有 15 层落进默认的 `Face`——衣服、腿、袜子全部挂在脸的骨骼下，
+    # 头一转整件衣服跟着甩（实测 ParamAngleX=±30 时全身一起位移）。
     LAYER_BONE_MAP: Dict[str, str] = {
+        # ---- 头发 ----
         "hair_back": "Hair_Back",
         "hair_shadow_back": "Hair_Back",
         "hair_back_left": "Hair_Side_L",
         "hair_back_right": "Hair_Side_R",
         "hair_front": "Hair_Front",
-        "hair_side": "Hair_Front",
+        "hair_bangs": "Hair_Front",
+        "hair_mid": "Hair_Front",
+        "hair_side": "Hair_Side_L",
         "hair_top": "Hair_Top",
+        "ahoge": "Hair_Top",
+        "hair_ornament": "Hair_Top",
+        "headwear": "Hair_Top",
+        "ribbon": "Hair_Top",
+        "scalp": "Hair_Back",
+        # ---- 脸与五官 ----
+        "face": "Face",
         "face_base": "Face",
         "face_blush": "Face",
         "cheek": "Face",
+        "face_detail": "Face",
+        "eyewear": "Face",
+        "ear": "Ear_L",
         "ear_left": "Ear_L",
         "ear_right": "Ear_R",
+        "earwear": "Ear_L",
+        "nose": "Nose",
+        "mouth_cavity": "Mouth",
+        "mouth_tongue": "Mouth",
+        "mouth_teeth": "Mouth",
+        "mouth_lowerlip": "Mouth",
+        "mouth_upperlip": "Mouth",
+        "mouth_open": "Mouth",
+        "mouth_close": "Mouth",
+        "tooth_top": "Mouth",
+        "tooth_bottom": "Mouth",
+        "tongue": "Mouth",
+        "mouth": "Mouth",
+        # ---- 脖子与躯干 ----
         "neck": "Neck",
+        "neck_shadow": "Neck",
+        "neckwear": "Neck",
         "chest": "Chest",
-        "waist_hips": "Waist",
+        "torso": "Torso",
         "body": "Torso",
+        "waist": "Waist",
+        "waist_hips": "Waist",
+        # ---- 服装 ----
+        "clothes": "Torso",
+        "clothes_inner": "Torso",
+        "clothes_outer": "Torso",
+        "clothes_top": "Torso",
+        "topwear": "Torso",
+        "outer_body": "Torso",
+        "shirt_fold": "Torso",
+        "lining": "Torso",
+        "brooch": "Chest",
+        "collar": "Neck",
+        "shirt_collar": "Neck",
+        "outer_collar": "Neck",
+        "waistband": "Waist",
+        "clothes_bottom": "Skirt",
+        "skirt": "Skirt",
+        "skirt_body": "Skirt",
+        "skirt_front": "Skirt",
+        "skirt_back": "Skirt",
+        "bottomwear_front": "Skirt",
+        "bottomwear_back": "Skirt",
+        "bottomwear": "Skirt",
+        "skirt_hem": "Skirt",
+        "skirt_side": "Skirt",
+        # ---- 配件 ----
+        "accessories": "Torso",
+        "objects": "Torso",
+        "pendant": "Chest",
+        "watch": "ForearmBack_L",
+        "handwear": "ForearmBack_L",
+        # ---- 旧词表（学习式分割/早期管线）----
         "eye_left": "Eye_L",
         "eye_l": "Eye_L",
         "eyeball_left": "Eyeball_L",
@@ -136,37 +205,65 @@ class BoneHierarchy:
         "eyelash_r": "Eyelash_R",
         "brow_left": "Brow_L",
         "brow_l": "Brow_L",
-        "eyebrow_l": "Brow_L",
         "brow_right": "Brow_R",
         "brow_r": "Brow_R",
-        "eyebrow_r": "Brow_R",
-        "nose": "Nose",
-        "mouth_cavity": "Mouth",
-        "mouth_tongue": "Mouth",
-        "mouth_teeth": "Mouth",
-        "mouth_lowerlip": "Mouth",
-        "mouth_upperlip": "Mouth",
-        "mouth": "Mouth",
-        "clothes_inner": "Torso",
-        "clothes_outer": "Torso",
-        "clothes": "Torso",
-        "accessories": "Torso",
-        "upper_arm_back_left": "ArmBack_L",
-        "forearm_back_left": "ForearmBack_L",
-        "hand_back_left": "ForearmBack_L",
-        "upper_arm_back_right": "ArmBack_R",
-        "forearm_back_right": "ForearmBack_R",
-        "hand_back_right": "ForearmBack_R",
         "thigh_left": "Leg_L",
         "calf_left": "Calf_L",
         "foot_left": "Foot_L",
         "thigh_right": "Leg_R",
         "calf_right": "Calf_R",
         "foot_right": "Foot_R",
-        "skirt": "Skirt",
+        "upper_arm_back_left": "ArmBack_L",
+        "forearm_back_left": "ForearmBack_L",
+        "hand_back_left": "ForearmBack_L",
+        "upper_arm_back_right": "ArmBack_R",
+        "forearm_back_right": "ForearmBack_R",
+        "hand_back_right": "ForearmBack_R",
         "bg": "Root",
         "background": "Root",
     }
+
+    #: 需要按左右分开绑定的部件 -> ``(左骨, 右骨)``。
+    #:
+    #: 这些名字在两边都成立（``arm_L`` 与 ``arm_R`` 归一后的主体都是 ``arm``），
+    #: 所以不能只靠一张「名字 -> 骨骼」表，必须先把 ``_L/_R`` 后缀拆出来再选边。
+    #: 屏幕左侧（x 更小）对应 ``*_L``，与 ``STANDARD_BONES`` 里负 x 的摆位一致。
+    SIDED_BONE_MAP: Dict[str, Tuple[str, str]] = {
+        "arm": ("ArmBack_L", "ArmBack_R"),
+        "upper_arm": ("ArmBack_L", "ArmBack_R"),
+        "sleeve": ("ArmBack_L", "ArmBack_R"),
+        "forearm": ("ForearmBack_L", "ForearmBack_R"),
+        "hand": ("ForearmBack_L", "ForearmBack_R"),
+        "cuff": ("ForearmBack_L", "ForearmBack_R"),
+        "armwear": ("ForearmBack_L", "ForearmBack_R"),
+        "leg": ("Leg_L", "Leg_R"),
+        "thigh": ("Leg_L", "Leg_R"),
+        "calf": ("Calf_L", "Calf_R"),
+        "sock": ("Calf_L", "Calf_R"),
+        "legwear": ("Calf_L", "Calf_R"),
+        "boot": ("Foot_L", "Foot_R"),
+        "foot": ("Foot_L", "Foot_R"),
+        "boot_cuff": ("Foot_L", "Foot_R"),
+        "footwear": ("Foot_L", "Foot_R"),
+        "eyewhite": ("Eyeball_L", "Eyeball_R"),
+        "eye_white": ("Eyeball_L", "Eyeball_R"),
+        "irides": ("Eyeball_L", "Eyeball_R"),
+        "iris": ("Eyeball_L", "Eyeball_R"),
+        "eye_iris": ("Eyeball_L", "Eyeball_R"),
+        "eyelash": ("Eyelash_L", "Eyelash_R"),
+        "eyebrow": ("Brow_L", "Brow_R"),
+        "ear": ("Ear_L", "Ear_R"),
+    }
+
+    #: 解析不出语义时的兜底骨骼。**不能用 ``Face``/``Head``**：脸的骨骼跟着头
+    #: 转，未知层一旦挂上去就会出现"衣服跟着头甩"。躯干是唯一不会误解的选择。
+    DEFAULT_BONE = "Torso"
+
+    #: ``_L/_R`` 后缀 -> 侧别。顺序敏感：先长后缀，否则 ``_left`` 会被 ``_l`` 截走。
+    _SIDE_SUFFIXES: Tuple[Tuple[str, str], ...] = (
+        ("_left", "L"), ("_right", "R"), ("_l", "L"), ("_r", "R"),
+        ("_左", "L"), ("_右", "R"),
+    )
 
     def __init__(self) -> None:
         self._tree: Dict[str, Dict] = {}
@@ -194,13 +291,20 @@ class BoneHierarchy:
         normalised = [self._normalise(n) for n in layer_names]
         present_groups: set = set()
         assignments: Dict[str, str] = {}
+        span = self._centroid_span(centroids)
 
+        guessed: List[str] = []
         for orig, norm in zip(layer_names, normalised):
-            bone = self.LAYER_BONE_MAP.get(norm, "Face")
+            centroid = (centroids or {}).get(orig)
+            bone, reason = self.resolve_bone(norm, centroid, span)
+            if reason != "map":
+                guessed.append(f"{norm}->{bone}({reason})")
             assignments[orig] = bone
             info = self.STANDARD_BONES.get(bone)
             if info:
                 present_groups.add(info["group"])
+        if guessed:
+            log.info(f"语义未直接命中的图层按位置/兜底绑定: {sorted(guessed)}")
 
         # Always keep root/body/head structural bones
         for structural in ("Root", "Body", "Neck", "Head", "Torso"):
@@ -277,17 +381,144 @@ class BoneHierarchy:
             })
         return result
 
+    @staticmethod
+    def _split_side(name: str) -> Tuple[str, Optional[str]]:
+        """拆出 ``_L/_R`` 后缀：``arm_l`` -> ``("arm", "L")``。"""
+        for suffix, side in BoneHierarchy._SIDE_SUFFIXES:
+            if name.endswith(suffix) and len(name) > len(suffix):
+                return name[: -len(suffix)], side
+        return name, None
+
+    @staticmethod
+    def _centroid_span(
+        centroids: Optional[Dict[str, Tuple[float, float]]],
+    ) -> Optional[Tuple[float, float, float, float]]:
+        """所有图层质心的外包框 ``(x0, y0, x1, y1)``，用作身体比例尺。
+
+        没有画布尺寸也能自洽：质心的上下极值近似"头顶到脚"，横向极值近似
+        "身体宽度"。位置推断只用相对比例，所以不要求它精确。
+        """
+        if not centroids:
+            return None
+        xs = [float(c[0]) for c in centroids.values()]
+        ys = [float(c[1]) for c in centroids.values()]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def resolve_bone(
+        self,
+        norm: str,
+        centroid: Optional[Tuple[float, float]] = None,
+        span: Optional[Tuple[float, float, float, float]] = None,
+    ) -> Tuple[str, str]:
+        """归一化层名 -> ``(骨骼名, 判定依据)``。
+
+        判定依据用于日志与回归测试：``map`` 是词表直接命中，``sided`` 是按
+        ``_L/_R`` 选边，``position`` 是按质心落在身体哪一段推断，``default``
+        是兜底。以前的实现在第 3 步就掉进 ``Face`` 了，衣服因此跟着头动。
+
+        入参可以先不归一化（``arm_L`` 与 ``arm_l`` 等价），内部会归一。
+        """
+        norm = self._normalise(norm)
+        bone = self.LAYER_BONE_MAP.get(norm)
+        if bone:
+            return bone, "map"
+
+        base, side = self._split_side(norm)
+        if base != norm:
+            bone = self.LAYER_BONE_MAP.get(base)
+            if bone:
+                return bone, "map"
+
+        if base in self.SIDED_BONE_MAP:
+            left, right = self.SIDED_BONE_MAP[base]
+            if side is None and centroid is not None and span is not None:
+                side = "L" if float(centroid[0]) <= (span[0] + span[2]) / 2.0 else "R"
+            return (left if side != "R" else right), "sided"
+
+        if base in self.LAYER_BONE_MAP:
+            return self.LAYER_BONE_MAP[base], "map"
+
+        inferred = self._infer_from_centroid(centroid, span)
+        if inferred:
+            return inferred, "position"
+        return self.DEFAULT_BONE, "default"
+
+    def _infer_from_centroid(
+        self,
+        centroid: Optional[Tuple[float, float]],
+        span: Optional[Tuple[float, float, float, float]],
+    ) -> Optional[str]:
+        """按质心落在身体的哪一段猜骨骼。
+
+        比例取七头身立绘的经验值：头 0~20%、肩胸 20~34%、躯干 34~50%、
+        腰胯 50~68%、腿 68% 以下。猜错也只是"衣服跟躯干走"这种可接受的
+        近似，远好过以前一律挂到 ``Face`` 上。
+        """
+        if centroid is None or span is None:
+            return None
+        x0, y0, x1, y1 = span
+        height = max(1.0, y1 - y0)
+        frac = (float(centroid[1]) - y0) / height
+        if frac < 0.20:
+            return "Head"
+        if frac < 0.34:
+            return "Chest"
+        if frac < 0.50:
+            return "Torso"
+        if frac < 0.68:
+            return "Waist"
+        side = "L" if float(centroid[0]) <= (x0 + x1) / 2.0 else "R"
+        return f"Leg_{side}"
+
     def get_bone_positions(
         self,
         centroids: Optional[Dict[str, Tuple[float, float]]] = None,
     ) -> Dict[str, Tuple[float, float]]:
-        """Calculate default bone positions based on layer centroids or a
-        standard proportion model.
+        """骨骼枢轴，**图像坐标**（左上原点、y 向下）。
 
-        Uses an 800x1000 canvas with the character centred. Values are
-        approximate and intended as starting points for Cubism Editor.
+        为什么必须是图像坐标：调用方 ``moc3_pipeline`` 会拿这些点做
+        ``to_model_xy``（减去画布中心）。曾经这里返回的是"以画布中心为原点"
+        的比例值（``Head = (0, -40)``），再被减一次半画布，头骨枢轴就跑到
+        画布左下角外，头一转整颗头绕着角落甩出去。
+
+        没有质心时退回比例模型（同样按"画布中心为原点"）；一旦有质心，就
+        全部换到图像坐标，并由子骨骼补出 ``Head/Root/Body/Chest`` 这些没有
+        自己图层的结构骨骼。
         """
-        positions: Dict[str, Tuple[float, float]] = {
+        if not centroids:
+            return dict(self._proportion_positions())
+
+        positions = dict(self._proportion_positions())
+        span = self._centroid_span(centroids)
+        measured: set = set()
+        for layer_name, (cx, cy) in centroids.items():
+            norm = self._normalise(layer_name)
+            bone, _reason = self.resolve_bone(norm, (cx, cy), span)
+            if bone in positions:
+                positions[bone] = (float(cx), float(cy))
+                measured.add(bone)
+
+        # 结构骨骼没有自己的图层：从已测量到的子骨骼推，保证枢轴落在角色身上
+        if "Head" not in measured:
+            if "Face" in measured:
+                head_y = positions["Neck"][1] if "Neck" in measured else positions["Face"][1]
+                positions["Head"] = (positions["Face"][0], head_y)
+            elif "Neck" in measured:
+                positions["Head"] = positions["Neck"]
+        for bone, source in (("Body", "Waist"), ("Chest", "Torso"), ("Root", "Waist")):
+            if bone not in measured and source in measured:
+                positions[bone] = positions[source]
+
+        return positions
+
+    @staticmethod
+    def _proportion_positions() -> Dict[str, Tuple[float, float]]:
+        """比例模型兜底（**画布中心为原点**）。
+
+        只在拿不到任何图层质心时使用（例如直接构造骨骼树做单元测试）。
+        真实管线一律走 :meth:`get_bone_positions` 的图像坐标分支。
+        """
+        return {
             "Root":          (0.0,    0.0),
             "Body":          (0.0,   50.0),
             "Torso":         (0.0,  120.0),
@@ -325,16 +556,6 @@ class BoneHierarchy:
             "Calf_R":        ( 30.0, 340.0),
             "Foot_R":        ( 30.0, 440.0),
         }
-
-        # Override with actual centroids when provided
-        if centroids:
-            for layer_name, (cx, cy) in centroids.items():
-                norm = self._normalise(layer_name)
-                bone = self.LAYER_BONE_MAP.get(norm)
-                if bone and bone in positions:
-                    positions[bone] = (float(cx), float(cy))
-
-        return positions
 
     @staticmethod
     def _normalise(name: str) -> str:
