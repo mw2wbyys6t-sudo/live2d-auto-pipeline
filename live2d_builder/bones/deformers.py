@@ -598,6 +598,28 @@ class DeformerHierarchy:
          "type": "warp", "targets": ["skirt"]},
         {"name": "BreathChest",    "parent": "Chest","rows": 2, "cols": 2,
          "type": "warp", "targets": ["chest"]},
+        # ---- 表情形变：由官方参数直接驱动 ----
+        #
+        # 张嘴/睁闭眼在 Live2D 里本来就是**纯网格或变形器形变**，没有对应的骨骼可
+        # 依托，所以这里显式写死 ``parameter``（不像呼吸那样靠枢轴就近匹配）。
+        # 放在变形器层而不是网格键形层，是因为网格只能挂**一个**参数带：眼睛网格
+        # 已经用双眼球键形（ParamEyeBallX/Y）、嘴网格已经用头部三轴键形
+        # （ParamAngleX/Y/Z），再叠一个参数在 moc3 里无处可放；变形器与网格键形
+        # 是两层，可以同时生效。
+        #
+        # 历史状态：这两个参数一直"声明了但不动"——官方内核受控像素验证里
+        # ParamMouthOpenY / ParamEyeLOpen 的 changed_pixels 恒为 0。
+        {"name": "MouthOpen", "parent": "Mouth", "rows": 2, "cols": 2,
+         "type": "warp", "parameter": "ParamMouthOpenY", "profile": "open_down",
+         "targets": ["mouth", "mouth_cavity", "mouth_open", "mouth_close"]},
+        {"name": "EyeBlink_L", "parent": "Eye_L", "rows": 2, "cols": 2,
+         "type": "warp", "parameter": "ParamEyeLOpen", "profile": "close_center",
+         "targets": ["eyewhite_left", "irides_left", "eyelash_left", "eyes_left",
+                     "eye_white_left"]},
+        {"name": "EyeBlink_R", "parent": "Eye_R", "rows": 2, "cols": 2,
+         "type": "warp", "parameter": "ParamEyeROpen", "profile": "close_center",
+         "targets": ["eyewhite_right", "irides_right", "eyelash_right", "eyes_right",
+                     "eye_white_right"]},
     ]
 
     DEFAULT_ROTATION_DEFORMERS: List[Dict] = [
@@ -644,6 +666,8 @@ class DeformerHierarchy:
                 grid_rows=spec["rows"],
                 grid_cols=spec["cols"],
                 targets=[t for t in spec["targets"] if t in available_norm],
+                parameter=spec.get("parameter", ""),
+                profile=spec.get("profile", ""),
             )
             self._deformers.append(d)
             self._by_name[d["name"]] = d
@@ -670,6 +694,8 @@ class DeformerHierarchy:
         grid_rows: int = 2,
         grid_cols: int = 2,
         targets: Optional[List[str]] = None,
+        parameter: str = "",
+        profile: str = "",
     ) -> Dict:
         """Create a warp (free-form) deformer with an R*C control grid.
 
@@ -679,6 +705,10 @@ class DeformerHierarchy:
             grid_rows: Number of control point rows.
             grid_cols: Number of control point columns.
             targets:   Layer names this deformer affects.
+            parameter: 显式驱动参数 id（如 ``ParamEyeLOpen``）；空串表示不显式指定，
+                       留给导出阶段按枢轴/名称推导（呼吸就是这么绑的）。
+            profile:   ``parameter`` 的形变方式，取值见
+                       ``moc3_pipeline.DEFORMER_PROFILES``。
 
         Returns:
             Deformer definition dict.
@@ -693,7 +723,7 @@ class DeformerHierarchy:
                     round(c / (cols - 1), 4),
                     round(r / (rows - 1), 4),
                 ])
-        return {
+        out = {
             "name": name,
             "type": "warp",
             "parent": parent,
@@ -703,6 +733,11 @@ class DeformerHierarchy:
             "targets": list(targets or []),
             "base_points": [list(p) for p in points],  # rest position
         }
+        if parameter:
+            out["parameter"] = parameter
+        if profile:
+            out["profile"] = profile
+        return out
 
     def create_rotation_deformer(
         self,

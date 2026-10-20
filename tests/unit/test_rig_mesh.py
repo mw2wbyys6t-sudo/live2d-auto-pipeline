@@ -9,6 +9,7 @@
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from core.segment_engine.rig_split import (
     build_rig_parts,
@@ -16,11 +17,18 @@ from core.segment_engine.rig_split import (
     split_into_segments,
     split_limb_at_joint,
 )
+from live2d_builder.mesh.generator import MeshGenerator
 from live2d_builder.mesh.pixel_grid import (
     PixelGridMesher,
     coverage_of_parts,
     measure_coverage,
 )
+
+
+def _rgba(mask: np.ndarray) -> Image.Image:
+    arr = np.zeros(mask.shape + (4,), dtype=np.uint8)
+    arr[mask] = (200, 80, 80, 255)
+    return Image.fromarray(arr, "RGBA")
 
 
 def _canvas(h=120, w=120):
@@ -86,6 +94,7 @@ class TestPixelGridCoverage:
 
         assert len(mesh["vertices"]) == 0
         assert mesh["indices"] == []
+
 
     def test_vertices_stay_on_pixel_lattice(self):
         """「像素网格」的字面要求：顶点必须落在整数像素格点上。"""
@@ -276,3 +285,58 @@ class TestBuildRigParts:
                 continue
             total = int(np.logical_or.reduce(got).sum())
             assert total == int(source_mask.sum()), f"{source_name} 拆分后像素不守恒"
+
+
+class TestTinyFeatureMesh:
+    """五官这类小图层必须被网格**完整**覆盖。
+
+    历史缺陷：`generate_combined_mesh` 对 39×30 的眼睛按 12px 间距采样轮廓，
+    只取到 6 个边界点，三角化+质心过滤后剩 9 个三角形，实测只盖住眼睛的
+    27%（眼白 166px 里 118px 落在网格外，瞳孔 236px 里漏 64px）。渲染出来
+    就是几块碎片——被脸层复制了同样的眼睛像素掩盖了很久，直到脸层被清理成
+    干净皮肤才显形。
+    """
+
+    @staticmethod
+    def _eye(h=40, w=50, cy=20, cx=25, ry=8, rz=12):
+        mask = np.zeros((h, w), dtype=bool)
+        yy, xx = np.mgrid[0:h, 0:w]
+        mask[((yy - cy) / ry) ** 2 + ((xx - cx) / rz) ** 2 <= 1.0] = True
+        return mask
+
+    def test_small_feature_is_fully_covered_by_a_quad(self):
+        mask = self._eye()
+        assert 100 < int(mask.sum()) <= MeshGenerator.TINY_FEATURE_PIXELS
+
+        mesh = MeshGenerator().generate_combined_mesh(_rgba(mask))
+        cov = measure_coverage(mask, mesh)
+
+        assert len(mesh["vertices"]) == 4, "小图层应走四顶点面片"
+        assert cov["coverage"] == 1.0, cov
+        assert cov["uncovered_px"] == 0
+
+    def test_quad_extends_one_pixel_past_the_mask(self):
+        """抗锯齿边低于 alpha 阈值不算 mask，面片要各留 1px 才不切边。"""
+        mask = np.zeros((40, 40), dtype=bool)
+        mask[10:20, 12:24] = True
+
+        mesh = MeshGenerator().generate_combined_mesh(_rgba(mask))
+        pts = np.asarray(mesh["vertices"], dtype=float)
+
+        assert pts[:, 0].min() == 11 and pts[:, 0].max() == 24
+        assert pts[:, 1].min() == 9 and pts[:, 1].max() == 20
+
+    def test_large_layer_keeps_the_delaunay_mesh(self):
+        mask = np.zeros((200, 200), dtype=bool)
+        mask[20:180, 30:170] = True
+        assert int(mask.sum()) > MeshGenerator.TINY_FEATURE_PIXELS
+
+        mesh = MeshGenerator().generate_combined_mesh(_rgba(mask))
+
+        assert len(mesh["vertices"]) > 4, "大图层不该被降级成面片"
+
+    def test_empty_layer_stays_empty(self):
+        mesh = MeshGenerator().generate_combined_mesh(
+            _rgba(np.zeros((40, 40), dtype=bool)))
+
+        assert len(mesh["vertices"]) == 0

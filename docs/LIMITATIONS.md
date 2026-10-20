@@ -53,6 +53,15 @@
   改为按 `面积 / (1 + 4·y0/H)` 打分并淘汰宽高比不在 0.5~2.0 的候选。
   复核：`tests/unit/test_face_features.py::TestSkinFaceSelection`、
   `tests/unit/test_segment_engine.py::TestSynthesisedSilhouette`。
+- **脸底层导出为"干净皮肤"**（`LayerComposer.FACE_PARTS` / `_erase_features`）：脸层里被
+  眼睛/眉毛/嘴/鼻盖住的像素用周围肤色 inpaint 掉，alpha 保持不变（不能挖洞，否则眨眼时透出背景）。
+  不这么做，`face.png` 在瞳孔位置与 `irides_left.png` 完全同色——眼睛被压扁了脸层又把瞳孔
+  原样露出来，`ParamEyeLOpen` 改了跟没改一样。
+- 因此 `STANDARD_LAYER_ORDER` 必须把 `face`/`face_base` 排在五官**之前**（越靠后越靠前）。
+  历史顺序把脸排在 `eyebrows`/`eyes` 之后，靠"脸层自带眼睛像素"掩盖着；脸层清理干净后
+  立刻暴露出眼睛被盖成碎片的画面。真实层名（`face`/`eyewhite_*`/`irides_*`/`arms`/`legs`/
+  `clothes_bottom` 等）也已补进顺序表——未列出的名字会按字母序被追加到最后，等于画到最前面。
+  复核：`tests/unit/test_segment_engine.py::TestLayerComposer::test_face_is_drawn_before_every_facial_feature`。
 - `segmentation_backend="sam2_gd"`（GroundingDINO + SAM2）**刻意不降级**：缺权重直接抛 `ModelUnavailable`，
   workflow 以 `error` 收尾。这是有意的诚实设计，但意味着该后端需要额外模型与依赖（torch/transformers）。
 - `sam2_gd` 的分层质量由 `core/segment_engine/layer_quality.py` 逐图打分并写进
@@ -104,6 +113,30 @@
   并由子骨骼补出 `Head/Root/Body/Chest`（`Head` 取「脸的水平 + 颈的纵向」）。
   复核：`tests/unit/test_bone_weights.py::TestBoneResolution / TestBonePivots / TestHeadAssemblyExclusion`。
 - **同一网格命中多个旋转参数时保持静态**（多参数带的轴序尚未实测定论，见评审 F-06）。
+- **表情形变（张嘴 / 睁闭眼）走 warp 变形器，不走网格键形**：网格只能挂**一个**参数带，
+  眼睛网格已被双眼球键形（`ParamEyeBallX/Y`）、嘴网格已被头部三轴键形（`ParamAngleX/Y/Z`）
+  占满；变形器与网格键形是两层，可以同时生效。绑定参数**写死**在变形器说明里
+  （`parameter` + `profile`，见 `moc3_pipeline.DEFORMER_PROFILES`）——这两个效果没有对应骨骼，
+  无法像转动/呼吸那样靠枢轴就近匹配推导。
+  * `ParamMouthOpenY`（`open_down`）：**网格上沿钉住**，下沿按 2.5× 网格高度下拉。
+    锚点必须是网格自身而不是控制网格（控制网格含头部键形摆动范围，拿它当锚点会上唇下漂 1.19px）。
+  * `ParamEyeLOpen` / `ParamEyeROpen`（`close_center`）：以网格纵向中心为轴压到原高度的 8%
+    （留 8% 而不是 0：控制网格退化成一条线会让内核的逆映射退化）。
+  * 实测（官方内核受控像素验证，`drivers.live2d_runtime.verify`）：修复前这两个参数的
+    `changed_pixels` **恒为 0**；现在 `ParamMouthOpenY` 62px、`ParamEyeLOpen` 220px，
+    `runtime_verified=true`、`deployment_status=ready_for_local_launch`。
+  * **观感受素材限制**：嘴在多数立绘里只是一条 2~4px 的墨线，没有"张开"的画稿，能做的只是
+    把线按比例撑开；也没有眼睑图层，闭眼只能把眼球内容向中心收拢（没有真正闭合的皮肤褶皱）。
+    要更自然需要美术提供张嘴/闭眼的分层。
+  复核：`tests/unit/test_moc3_deformers.py::TestExpressionDeformerProfiles`、
+  `tests/integration/test_pipeline_moc3_export.py::test_mouth_open_changes_rendered_pixels` /
+  `::test_eye_open_changes_rendered_pixels`。
+- **小图层一律用四顶点面片**（`MeshGenerator.TINY_FEATURE_PIXELS = 400`）：轮廓按 12px 采样，
+  39×30 的眼睛只取到 6 个边界点，三角化+质心过滤后剩 9 个三角形，实测只盖住眼睛的 27%
+  （眼白 IoU 0.275、瞳孔 0.392），渲染出来是几块碎片。面片覆盖 alpha 包围盒（各留 1px），
+  包围盒内的图层像素本身透明，所以画面不会多出内容。这条也是上面两个表情参数能起作用的前提
+  ——嘴只有 27px，Delaunay 连三角形都出不来，整层会从模型里静默消失。
+  复核：`tests/unit/test_rig_mesh.py::TestTinyFeatureMesh`。
 - **glue 类型变形器不支持**，会被记入 `deformers_uncompiled` 并压住 `runtime_ready`。
 - **真实美术观感未签核**：几何判据（画得出、位置尺度对）已闭环，但「像不像原画」仍需人工确认（F-05）。
 

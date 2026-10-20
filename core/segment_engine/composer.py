@@ -44,10 +44,21 @@ class LayerComposer:
         "hair_back",
         "hair_mid",
         "hair_front",
-        "eyebrows",
-        "eyes",
-        "nose_mouth",
+        # 脸底层必须在**五官之前**（列表越靠后 = 画得越靠前）。
+        #
+        # 历史顺序把 face_base 排在 eyebrows/eyes 之后：那时 face 层里复制了眼睛
+        # 像素，谁在前都看不出来。脸层被清成纯皮肤后（见 FACE_PARTS），顺序立刻
+        # 显形——实测眼睛被脸盖成几块碎片。
         "face_base",
+        "face",
+        # 五官：真实分层器产出的名字（eyewhite_* / irides_* / eyebrow_*）都要列上，
+        # 否则它们会落到"未列出→按字母序追加到最后"，被画到头发和衣服之上。
+        "eyebrows", "eyebrow_L", "eyebrow_R",
+        "eyes", "eyes_left", "eyes_right",
+        "eyewhite_left", "eyewhite_right",
+        "irides_left", "irides_right",
+        "eyelash_left", "eyelash_right",
+        "nose", "nose_mouth", "mouth",
         "neck",
         "clothes_top",
         "clothes_inner",
@@ -57,20 +68,25 @@ class LayerComposer:
         "sleeve_R",
         "cuff_L",
         "cuff_R",
+        "arms",
         "arm_L",
         "arm_R",
+        "hands",
         "hand_L",
         "hand_R",
         "skirt",
         "skirt_back",
         "bottomwear_back",
+        "clothes_bottom",
         "skirt_front",
         "bottomwear_front",
         "skirt_hem_L",
         "skirt_hem_R",
         "skirt_hem",
+        "legs",
         "leg_L",
         "leg_R",
+        "legwear",
         "sock_L",
         "sock_R",
         "boot_L",
@@ -85,6 +101,24 @@ class LayerComposer:
     # Mask names that should receive amodal completion (regions typically
     # occluded by other parts in front of them).
     AMODAL_PARTS = {"hair_back", "hair_mid", "clothes_top", "clothes_inner", "neck"}
+
+    #: 脸底层。它必须是**干净皮肤**——下面的五官由各自的网格驱动（眨眼、说话），
+    #: 脸层里若留着同样的五官像素，那些参数就会"改了但看不出来"。
+    #: 实测：`face.png` 在 (308,155) 的像素与 `irides_left.png` 完全相同，
+    #: 于是 ParamEyeLOpen=0 时眼睛确实被压扁了，脸层又把瞳孔原样露出来。
+    FACE_PARTS = ("face", "face_base")
+
+    #: 画在脸上的五官层。导出脸底层时这些区域的像素要被肤色补掉。
+    FACE_FEATURE_PARTS = (
+        "eyes_left", "eyes_right", "eyebrows", "nose", "mouth",
+        "eyewhite_left", "eyewhite_right", "irides_left", "irides_right",
+        "eyelash_left", "eyelash_right", "eye_left", "eye_right",
+        "eye_iris_left", "eye_iris_right", "eye_white_left", "eye_white_right",
+    )
+
+    #: 补掉五官时向外扩的像素数：五官边缘有 1~2px 抗锯齿，不扩会留一圈深色描边，
+    #: 眨眼/闭嘴时那一圈会露出来，看起来像"眼睛还在"。
+    FEATURE_ERASE_MARGIN = 2
 
     def __init__(self, device: str = "auto") -> None:
         """Initialize the composer.
@@ -137,6 +171,15 @@ class LayerComposer:
 
         occlusion_map = self.generate_occlusion_map(part_masks)
 
+        # 脸底层要"掏掉"的五官区域（见 FACE_PARTS 的说明）。先并起来再统一补。
+        face_features = np.zeros((h, w), dtype=bool)
+        for name in self.FACE_FEATURE_PARTS:
+            m = part_masks.get(name)
+            if m is not None:
+                face_features |= np.asarray(m, dtype=bool)
+        if face_features.any() and self.FEATURE_ERASE_MARGIN > 0:
+            face_features = self._dilate(face_features, self.FEATURE_ERASE_MARGIN)
+
         layers: Dict[str, Dict] = {}
         for part, mask in part_masks.items():
             mask = np.asarray(mask, dtype=bool)
@@ -188,6 +231,9 @@ class LayerComposer:
                     layer_arr = self._extract_layer(img_arr, mask)
             else:
                 layer_arr = self._extract_layer(img_arr, mask)
+
+            if part in self.FACE_PARTS and face_features.any():
+                layer_arr = self._erase_features(layer_arr, mask, face_features)
 
             path = out / f"{part}.png"
             Image.fromarray(layer_arr, "RGBA").save(path)
@@ -346,6 +392,55 @@ class LayerComposer:
         out = np.zeros(img_arr.shape, dtype=np.uint8)
         out[mask] = img_arr[mask]
         return out
+
+    @staticmethod
+    def _dilate(mask: np.ndarray, radius: int) -> np.ndarray:
+        """布尔掩码膨胀 ``radius`` 像素（无 cv2 时退化为原样返回）。"""
+        try:
+            import cv2  # type: ignore
+        except ImportError:  # pragma: no cover
+            return mask
+        size = max(1, int(radius) * 2 + 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+        return cv2.dilate(mask.astype(np.uint8), kernel).astype(bool)
+
+    @staticmethod
+    def _erase_features(layer_arr: np.ndarray, mask: np.ndarray,
+                        feature_mask: np.ndarray) -> np.ndarray:
+        """把脸层里被五官盖住的像素换成周围肤色（alpha 不变）。
+
+        为什么不直接把五官区域挖成透明：眨眼/闭嘴时会把脸上的洞露出来，透出背景。
+        这里用「脸层自身可见像素」作为唯一已知区域做 inpaint，填充色因此只会来自
+        额头/脸颊的皮肤，不会把头发或背景的颜色渗进来。
+        """
+        holes = np.asarray(mask, dtype=bool) & np.asarray(feature_mask, dtype=bool)
+        if not holes.any():
+            return layer_arr
+        known = np.asarray(mask, dtype=bool) & ~holes
+        if not known.any():
+            return layer_arr
+        try:
+            import cv2  # type: ignore
+        except ImportError:  # pragma: no cover
+            fill = np.median(layer_arr[known][:, :3], axis=0).astype(np.uint8)
+            layer_arr[holes, :3] = fill
+            return layer_arr
+
+        ys, xs = np.nonzero(mask)
+        pad = 8
+        h, w = mask.shape
+        y0, y1 = max(0, int(ys.min()) - pad), min(h, int(ys.max()) + pad + 1)
+        x0, x1 = max(0, int(xs.min()) - pad), min(w, int(xs.max()) + pad + 1)
+        sub_src = np.ascontiguousarray(layer_arr[y0:y1, x0:x1, :3])
+        # 「脸层可见像素」之外的区域也标成待补：否则 inpaint 会把画布上的黑色当已知色
+        unknown = (~known[y0:y1, x0:x1]).astype(np.uint8) * 255
+        bgr = cv2.cvtColor(sub_src, cv2.COLOR_RGB2BGR)
+        filled = cv2.cvtColor(
+            cv2.inpaint(bgr, unknown, 5, cv2.INPAINT_TELEA), cv2.COLOR_BGR2RGB)
+        sub_holes = holes[y0:y1, x0:x1]
+        view = layer_arr[y0:y1, x0:x1]
+        view[sub_holes, :3] = filled[sub_holes]
+        return layer_arr
 
     @staticmethod
     def _bbox_overlap(a: np.ndarray, b: np.ndarray) -> bool:

@@ -42,6 +42,40 @@ class MeshGenerator:
         self.contour_spacing = max(4, contour_spacing)
         self.alpha_threshold = max(1, min(255, alpha_threshold))
 
+    #: 小部件兜底阈值（像素）。轮廓采样与 Delaunay 都要求足够多的边界点，低于这个
+    #: 规模的图层会得到 0 顶点、整层从模型里**静默消失**：实测 demo 立绘的嘴 27px、
+    #: 鼻 11px 全部丢失，于是 ParamMouthOpenY 连可驱动的网格都不存在。
+    #: Live2D 里这类五官本来就是一张四顶点面片，兜底直接给包围盒四边形。
+    TINY_FEATURE_PIXELS = 400
+
+    def _tiny_feature_mesh(self, mask: np.ndarray, w: int, h: int) -> Dict:
+        """小部件兜底：用 alpha 包围盒的四顶点面片代替 Delaunay 网格。
+
+        四边形覆盖的区域里，图层本身是透明的，所以画面不会多出像素；只是让
+        "有内容但点太少" 的图层也能进模型、能被参数驱动。
+        """
+        ys, xs = np.where(mask > 0)
+        if len(xs) == 0:
+            return self._empty_mesh(w, h)
+        # 四周各留 1px：抗锯齿边低于 alpha_threshold 不计入 mask，没余量会被切掉
+        x0 = float(max(0, int(xs.min()) - 1))
+        x1 = float(min(w - 1, int(xs.max()) + 1))
+        y0 = float(max(0, int(ys.min()) - 1))
+        y1 = float(min(h - 1, int(ys.max()) + 1))
+        if x1 - x0 < 1.0 or y1 - y0 < 1.0:
+            return self._empty_mesh(w, h)
+        pts = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=float)
+        norm = pts.copy()
+        norm[:, 0] /= w
+        norm[:, 1] /= h
+        return {
+            "vertices": pts,
+            "vertices_norm": norm,
+            "indices": [[0, 1, 2], [0, 2, 3]],
+            "width": w,
+            "height": h,
+        }
+
     # ------------------------------------------------------------------
     # Primary entry points
     # ------------------------------------------------------------------
@@ -190,7 +224,23 @@ class MeshGenerator:
                     if 0 <= y < h and 0 <= x < w and mask[y, x] > 0:
                         vertices.append((float(x), float(y)))
 
-        return self._build_delaunay(vertices, mask, w, h)
+        mesh = self._build_delaunay(vertices, mask, w, h)
+        if int(mask.sum()) <= self.TINY_FEATURE_PIXELS:
+            # 五官这类小图层一律用四顶点面片，**不管 Delaunay 有没有出结果**。
+            # 轮廓采样按 12px 间距取点，39×30 的眼睛只取到 6 个边界点，再经
+            # 三角化+质心过滤后只有 9 个三角形：实测网格只盖住眼睛的 27%
+            # （眼白 IoU 0.275、瞳孔 0.392），渲染出来就是几块碎片。
+            # 面片覆盖整个 alpha 包围盒，包围盒内的图层像素本身是透明的，
+            # 所以画面不会多出东西，只是不会再把五官切碎。
+            quad = self._tiny_feature_mesh(mask, w, h)
+            if len(quad["vertices"]):
+                if len(mesh["vertices"]):
+                    log.debug(
+                        f"tiny feature ({int(mask.sum())}px) quad fallback "
+                        f"(was {len(mesh['vertices'])} verts / "
+                        f"{len(mesh['indices'])} tris)")
+                mesh = quad
+        return mesh
 
     # ------------------------------------------------------------------
     # Skinning weights

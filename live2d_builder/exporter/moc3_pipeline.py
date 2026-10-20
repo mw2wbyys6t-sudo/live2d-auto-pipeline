@@ -547,6 +547,80 @@ def _driving_rotation_parameter(pivot: Any,
     return best_hits[0]
 
 
+def _explicit_parameter(entry: Dict[str, Any],
+                        parameters_by_id: Dict[str, ParameterSpec]):
+    """变形器说明里显式声明的驱动参数；未声明或未在模型里注册时返回 None。
+
+    为什么需要"显式"：转动/呼吸可以靠枢轴与骨骼就近匹配推导参数，但**张嘴、睁闭眼
+    在 Live2D 里没有对应骨骼**（就是纯网格形变），无从推导，只能写死。
+    """
+    pid = str(entry.get("parameter") or "")
+    if not pid:
+        return None
+    return parameters_by_id.get(pid)
+
+
+#: 张嘴时下沿最多向下拉多少（相对网格自身高度）。嘴在多数立绘里只是一条 2~4 像素的
+#: 墨线，没有"张开"的现成画稿，能做的只是把这条线按比例撑开：1.0 时几乎看不出，
+#: 3 以上会把线拉成一条粗黑带。2.5 是两者之间的取值。
+MOUTH_OPEN_STRETCH = 2.5
+
+#: 闭眼时眼睛内容压到原高度的多少（相对值）。不能给 0：控制网格退化成一条线后
+#: 内核算变形时的逆映射会退化，留 8% 既接近"闭上"又不制造奇异网格。
+EYE_CLOSED_SCALE = 0.08
+
+
+def _open_down_grids(rect: tuple, n_cols: int, n_rows: int,
+                     param: ParameterSpec, mesh_rect: tuple) -> List[DeformerGrid]:
+    """下巴落下式张嘴：**网格上沿钉住**，下沿按参数值向下拉。
+
+    纵向拉伸而不是整体位移，是因为嘴张开是"开口变大"，整体平移只会让嘴跑到下巴上。
+
+    锚点必须是**网格自身**的上沿，不能是控制网格的上沿：控制网格比网格大一圈
+    （``_member_rect`` 留了 5% 余量，而嘴的 27 个头部键形会把它撑到几十像素），
+    拿它当锚点会让上唇也跟着往下漂 —— 实测上沿漂 1.19px，下沿多拉 4%。
+    以网格上沿为锚、直接按网格高度缩放，位移就正好是 ``MOUTH_OPEN_STRETCH`` 倍网格高度。
+    """
+    anchor = float(mesh_rect[1])
+    grids: List[DeformerGrid] = []
+    for value in _key_times(param):
+        scale = 1.0 + _key_fraction(param, value) * MOUTH_OPEN_STRETCH
+        grids.append(DeformerGrid(
+            float(value),
+            [[x, anchor + (y - anchor) * scale]
+             for x, y in _lattice(rect, n_cols, n_rows)]))
+    return grids
+
+
+def _close_center_grids(rect: tuple, n_cols: int, n_rows: int,
+                        param: ParameterSpec, mesh_rect: tuple) -> List[DeformerGrid]:
+    """睁闭眼：以眼睛纵向中心为轴按开放度压缩（1 = 睁开，0 = 压成一条细线）。
+
+    以**中心**为轴而不是上/下沿：没有眼睑图层时，把眼睛内容向中间收拢才会读成
+    "闭眼"；收到下沿会让瞳孔贴在下睫毛上、上半个眼窝露出脸底色，反而像眯眼。
+
+    中心取**网格自身**的中心（不是含键形外包框的中心），否则眼睛收拢的轴线会被
+    头部键形的摆动范围带偏。
+    """
+    center = (float(mesh_rect[1]) + float(mesh_rect[3])) / 2.0
+    grids: List[DeformerGrid] = []
+    for value in _key_times(param):
+        t = min(1.0, max(0.0, _key_fraction(param, value)))
+        scale = EYE_CLOSED_SCALE + (1.0 - EYE_CLOSED_SCALE) * t
+        grids.append(DeformerGrid(
+            float(value),
+            [[x, center + (y - center) * scale]
+             for x, y in _lattice(rect, n_cols, n_rows)]))
+    return grids
+
+
+#: ``profile`` -> 控制网格生成函数。新增形变方式时只加这里，导出流程不用改。
+DEFORMER_PROFILES = {
+    "open_down": _open_down_grids,
+    "close_center": _close_center_grids,
+}
+
+
 def build_deformers(specs: List[MeshSpec],
                     entries: List[Dict],
                     width: float,
@@ -567,6 +641,7 @@ def build_deformers(specs: List[MeshSpec],
     static: List[str] = []
     bound: List[str] = []
     breath_bound: List[str] = []
+    expression_bound: List[str] = []
     skipped: List[str] = []
     for entry in entries:
         name = str(entry.get("name") or "")
@@ -589,22 +664,45 @@ def build_deformers(specs: List[MeshSpec],
             n_rows = max(2, int(entry.get("grid_rows") or 2))
             n_cols = max(2, int(entry.get("grid_cols") or 2))
             rect = _member_rect(members)
-            grids = [DeformerGrid(0.0, _lattice(rect, n_cols, n_rows))]
-            breath = _breath_parameter(
-                entry, parameters_by_id or {}, bone_positions or {})
-            if breath is not None:
-                lift = (rect[3] - rect[1]) * BREATH_AMPLITUDE
-                span = max(abs(float(breath.minimum)),
-                           abs(float(breath.maximum))) or 1.0
-                for value in _key_times(breath)[1:]:
-                    grids.append(DeformerGrid(
-                        float(value),
-                        [[x, y + lift * (float(value) / span)]
-                         for x, y in _lattice(rect, n_cols, n_rows)]))
-                breath_bound.append(f"{name}={breath.parameter_id}")
+            # 成员网格**静止姿态**的并集范围（不含键形摆动）。形变量要按它算，
+            # 否则嘴/眼会被含键形的外包框放大好几倍（见 _open_down_grids）。
+            mesh_rect = (
+                min(float(x) for m in members for x, _ in m.vertices),
+                min(float(y) for m in members for _, y in m.vertices),
+                max(float(x) for m in members for x, _ in m.vertices),
+                max(float(y) for m in members for _, y in m.vertices),
+            )
+            explicit = _explicit_parameter(entry, parameters_by_id or {})
+            profile = str(entry.get("profile") or "")
+            bound_param = ""
+            if explicit is not None and profile in DEFORMER_PROFILES:
+                # 表情形变（张嘴 / 睁闭眼）：参数写死在说明里，按 profile 生成逐键网格
+                grids = DEFORMER_PROFILES[profile](
+                    rect, n_cols, n_rows, explicit, mesh_rect)
+                bound_param = explicit.parameter_id
+                expression_bound.append(f"{name}={bound_param}")
+            elif explicit is not None:
+                # 声明了参数却没有可用形变方式：不猜形变，保持静态并如实记录
+                skipped.append(f"{name}(未知 profile={profile or '-'})")
+                grids = [DeformerGrid(0.0, _lattice(rect, n_cols, n_rows))]
+            else:
+                grids = [DeformerGrid(0.0, _lattice(rect, n_cols, n_rows))]
+                breath = _breath_parameter(
+                    entry, parameters_by_id or {}, bone_positions or {})
+                if breath is not None:
+                    lift = (rect[3] - rect[1]) * BREATH_AMPLITUDE
+                    span = max(abs(float(breath.minimum)),
+                               abs(float(breath.maximum))) or 1.0
+                    for value in _key_times(breath)[1:]:
+                        grids.append(DeformerGrid(
+                            float(value),
+                            [[x, y + lift * (float(value) / span)]
+                             for x, y in _lattice(rect, n_cols, n_rows)]))
+                    bound_param = breath.parameter_id
+                    breath_bound.append(f"{name}={breath.parameter_id}")
             out.append(WarpDeformerSpec(
                 deformer_id=name, rows=n_rows - 1, cols=n_cols - 1,
-                parameter_id=breath.parameter_id if breath else "",
+                parameter_id=bound_param,
                 grids=grids))
         elif dtype == "rotation":
             pivot = entry.get("pivot") or (0.0, 0.0)
@@ -644,6 +742,8 @@ def build_deformers(specs: List[MeshSpec],
         ]
     if breath_bound:
         log.info(f"呼吸已烘焙（{BREATH_PARAM} 驱动的 warp 双键形）：{breath_bound}")
+    if expression_bound:
+        log.info(f"表情形变已烘焙（warp 逐键网格，真的会随参数变）：{expression_bound}")
     if bound:
         log.info(f"rotation 变形器已绑定官方参数（真的会动）：{bound}")
     return out, skipped, static

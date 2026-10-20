@@ -175,13 +175,51 @@ class TestLayerComposer:
         }
         reordered = composer.reorder_layers(layers)
         keys = list(reordered.keys())
-        # Standard order: hair_back (index 1) comes before face_base (index 7)
-        # face_base (index 7) comes before hair_front (index 3)... wait no
-        # STANDARD_LAYER_ORDER: scalp(0), hair_back(1), hair_mid(2), hair_front(3),
-        #   eyebrows(4), eyes(5), nose_mouth(6), face_base(7)...
-        # So hair_back < hair_front < eyes < face_base
+        # 列表越靠后 = 画得越靠前；头发在脸之前，脸在五官之前
         assert keys.index("hair_back") < keys.index("hair_front")
         assert keys.index("hair_back") < keys.index("eyes")
+
+    def test_face_is_drawn_before_every_facial_feature(self):
+        """脸底层必须排在五官之前。
+
+        脸层现在是**干净皮肤**（见 LayerComposer.FACE_PARTS）：排在五官后面就会把
+        眼睛整块盖掉——实测脸层还带着眼睛像素时顺序错也看不出来，清理干净后立刻
+        露出眼睛被盖成碎片的画面。
+        """
+        order = LayerComposer.STANDARD_LAYER_ORDER
+        face = order.index("face")
+        assert face > order.index("face_base")
+        for feature in ("eyebrows", "eyes", "eyewhite_left", "irides_left",
+                        "eyelash_left", "nose", "mouth"):
+            assert order.index(feature) > face, f"{feature} 被排在脸层之后"
+
+    def test_face_layer_keeps_skin_where_the_mouth_is(self):
+        """脸层里的五官像素必须补成肤色，且不能挖洞。
+
+        历史缺陷：脸层直接复制原图像素，于是 `face.png` 与 `irides_left.png` 在瞳孔
+        位置完全同色——眨眼时眼睛被压扁了，脸层又把瞳孔原样露出来，
+        ParamEyeLOpen 改了跟没改一样。
+        """
+        arr = np.zeros((120, 120, 4), dtype=np.uint8)
+        arr[20:110, 20:110] = (255, 220, 180, 255)   # 脸（肤色）
+        arr[60:70, 50:80] = (60, 30, 30, 255)        # 嘴（深色墨线）
+        img = Image.fromarray(arr, "RGBA")
+
+        face = np.zeros((120, 120), dtype=bool)
+        face[20:110, 20:110] = True
+        mouth = np.zeros((120, 120), dtype=bool)
+        mouth[60:70, 50:80] = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            LayerComposer().compose({"face": face, "mouth": mouth}, img, tmpdir)
+            face_arr = np.array(Image.open(Path(tmpdir) / "face.png").convert("RGBA"))
+            mouth_arr = np.array(Image.open(Path(tmpdir) / "mouth.png").convert("RGBA"))
+
+        center = face_arr[65, 65]
+        assert center[3] == 255, "脸层被挖洞了：眨眼时会透出背景"
+        assert center[0] > 200 and center[1] > 150, f"脸层仍留着嘴的像素: {center}"
+        # 嘴层自己不受影响
+        assert tuple(mouth_arr[65, 65]) == (60, 30, 30, 255)
 
     def test_generate_layer_json(self):
         composer = LayerComposer()

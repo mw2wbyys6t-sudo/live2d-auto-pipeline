@@ -592,3 +592,71 @@ def test_every_mesh_contributes_pixels(tmp_path):
     assert len(counts) == 4, counts
     empty = {name: px for name, px in counts.items() if px == 0}
     assert not empty, f"这些网格一个像素都没画出来：{empty}（全部：{counts}）"
+
+
+def _expression_rig(param_id, default, deformer_name, profile):
+    """一个网格 + 一个由官方表情参数驱动的 warp 变形器。
+
+    只保留一个网格：默认样例里 hair 与 face 两块完全重叠，叠加后测不出
+    形变（不透明像素数被没变形的那块顶住）。
+    """
+    builder_result = _builder_result(deformers=[{
+        "name": deformer_name, "type": "warp", "parent": "Mouth",
+        "grid_rows": 2, "grid_cols": 2,
+        "parameter": param_id, "profile": profile, "targets": ["face"],
+    }])
+    builder_result["layers"] = {"face": _layer()}
+    builder_result["meshes"] = {"face": _mesh("face")}
+    params = [p for p in builder_result["parameters"]["cubism_params"]
+              if p["Id"] != param_id]
+    params.append({"Id": param_id, "Min": 0, "Max": 1, "Value": default})
+    builder_result["parameters"]["cubism_params"] = params
+    return builder_result
+
+
+@requires_pixels
+def test_mouth_open_changes_rendered_pixels(tmp_path):
+    """ParamMouthOpenY 必须真的改变画面。
+
+    此前这个参数只是被声明、没有任何键形或变形器绑定它：官方内核受控像素验证
+    里 ``changed_pixels`` 恒为 0，嘴永远闭着。
+    """
+    builder_result = _expression_rig(
+        "ParamMouthOpenY", 0, "MouthOpen", "open_down")
+    _, export_result = _export(tmp_path, builder_result)
+    compiled = compile_export_moc3(
+        builder_result=builder_result,
+        atlas_uvs=export_result["atlas_uvs"],
+        output_dir=export_result["output_dir"], character_name="web_preview")
+    assert compiled["moc3_written"] is True, compiled["blocker"]
+
+    closed = render_probe(export_result["model3_json"],
+                          params={"ParamMouthOpenY": 0.0}, width=128, height=128)
+    opened = render_probe(export_result["model3_json"],
+                          params={"ParamMouthOpenY": 1.0}, width=128, height=128)
+    assert closed["ok"] and opened["ok"], (closed["blocker"], opened["blocker"])
+    # 下沿被拉下去：不透明像素变多，画面底边（GL 坐标 y 变小）更低
+    assert opened["opaque_pixels"] > closed["opaque_pixels"]
+    assert opened["alpha_bbox"][1] < closed["alpha_bbox"][1]
+
+
+@requires_pixels
+def test_eye_open_changes_rendered_pixels(tmp_path):
+    """ParamEyeLOpen 从 1 到 0：眼睛内容被压扁，不透明像素必须减少。"""
+    builder_result = _expression_rig(
+        "ParamEyeLOpen", 1, "EyeBlink_L", "close_center")
+    _, export_result = _export(tmp_path, builder_result)
+    compiled = compile_export_moc3(
+        builder_result=builder_result,
+        atlas_uvs=export_result["atlas_uvs"],
+        output_dir=export_result["output_dir"], character_name="web_preview")
+    assert compiled["moc3_written"] is True, compiled["blocker"]
+
+    opened = render_probe(export_result["model3_json"],
+                          params={"ParamEyeLOpen": 1.0}, width=128, height=128)
+    closed = render_probe(export_result["model3_json"],
+                          params={"ParamEyeLOpen": 0.0}, width=128, height=128)
+    assert opened["ok"] and closed["ok"], (opened["blocker"], closed["blocker"])
+    assert closed["opaque_pixels"] < opened["opaque_pixels"], (opened, closed)
+    assert (closed["alpha_bbox"][3] - closed["alpha_bbox"][1]) < \
+        (opened["alpha_bbox"][3] - opened["alpha_bbox"][1])
