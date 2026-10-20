@@ -129,3 +129,19 @@ def test_draw_failure_revokes_state(package, sdk):
     with pytest.raises(RuntimeError): renderer.draw()
     assert not renderer.report()['native_loaded']
     assert renderer.report()['deployment_status'] == 'blocked'
+
+
+def test_package_fingerprint_ignores_verification_evidence(package, tmp_path):
+    """证据图写在产物目录里时，指纹只该跟模型字节走。
+
+    受控像素验证会把 min/max 截图落盘；如果调用方把证据目录放在产物里（最自然的
+    放法），「验证期间包没变」这条判断就会对任何产物恒假。
+    """
+    before = native.package_sha256(str(package))
+    evidence = tmp_path / 'evidence'
+    evidence.mkdir()
+    (evidence / 'ParamAngleX-min.png').write_bytes(b'png')
+    assert native.package_sha256(str(package)) != before
+    assert native.package_sha256(str(package), exclude=[evidence]) == before
+    (tmp_path / 'texture.png').write_bytes(b'changed')
+    assert native.package_sha256(str(package), exclude=[evidence]) != before

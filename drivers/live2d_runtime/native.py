@@ -58,16 +58,26 @@ def validate_package(manifest: str) -> tuple[Path, dict]:
     return path, data
 
 
-def package_sha256(manifest):
-    """Fingerprint package bytes, rejecting symlinks outside the model root."""
+def package_sha256(manifest, exclude=()):
+    """Fingerprint package bytes, rejecting symlinks outside the model root.
+
+    ``exclude`` 是不计入指纹的路径（文件或目录）。受控像素验证会把证据图写进
+    产物目录，那是验证过程自己的输出、不属于模型，若不排除就会让「验证期间包没变」
+    这条判断对任何把证据放在产物目录里的调用方恒假。
+    """
     import hashlib
     path, _ = validate_package(manifest)
+    root = path.parent.resolve()
+    skip = [Path(item).resolve() for item in exclude if item]
     digest = hashlib.sha256()
-    for asset in sorted(path.parent.rglob('*')):
-        if not asset.resolve().is_relative_to(path.parent):
+    for asset in sorted(root.rglob('*')):
+        if not asset.resolve().is_relative_to(root):
             raise ValueError('Package entry escapes model directory')
+        if any(asset.resolve() == item or asset.resolve().is_relative_to(item)
+               for item in skip):
+            continue
         if asset.is_file():
-            digest.update(asset.relative_to(path.parent).as_posix().encode())
+            digest.update(asset.relative_to(root).as_posix().encode())
             digest.update(asset.read_bytes())
     return digest.hexdigest()
 

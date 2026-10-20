@@ -584,42 +584,73 @@ class DeformerHierarchy:
     """
 
     DEFAULT_WARP_DEFORMERS: List[Dict] = [
+        # ---- 头发摆动：由 ParamHairSwing 驱动，发根钉住、发梢摆 ----
         {"name": "HairFrontSwing", "parent": "Head", "rows": 3, "cols": 3,
-         "type": "warp", "targets": ["hair_front", "hair_side"]},
+         "type": "warp", "profile": "hair_sway",
+         "parameters": ["ParamHairSwing"],
+         "targets": ["hair_front", "hair_bangs", "hair_mid", "hair_side"]},
         {"name": "HairBackSwing",  "parent": "Head", "rows": 4, "cols": 2,
-         "type": "warp", "targets": ["hair_back", "hair_shadow_back"]},
+         "type": "warp", "profile": "hair_sway",
+         "parameters": ["ParamHairSwing"],
+         "targets": ["hair_back", "hair_shadow_back"]},
         {"name": "HairSideSwing_L","parent": "Head", "rows": 2, "cols": 2,
-         "type": "warp", "targets": ["hair_back_left"]},
+         "type": "warp", "profile": "hair_sway",
+         "parameters": ["ParamHairSwing"],
+         "targets": ["hair_back_left"]},
         {"name": "HairSideSwing_R","parent": "Head", "rows": 2, "cols": 2,
-         "type": "warp", "targets": ["hair_back_right"]},
-        {"name": "BodySway",       "parent": "Torso","rows": 2, "cols": 2,
-         "type": "warp", "targets": ["body", "clothes_inner", "clothes_outer"]},
-        {"name": "SkirtSway",      "parent": "Skirt","rows": 4, "cols": 3,
+         "type": "warp", "profile": "hair_sway",
+         "parameters": ["ParamHairSwing"],
+         "targets": ["hair_back_right"]},
+        # ---- 躯干：侧倾 / 前后倾 / 摆动 / 呼吸（胯部不动，越靠肩位移越大）----
+        {"name": "BodySway",       "parent": "Torso", "rows": 3, "cols": 2,
+         "type": "warp", "profile": "torso",
+         "parameters": ["ParamBodyAngleX", "ParamBodyAngleY",
+                        "ParamBodySway", "ParamBreath"],
+         "targets": ["clothes_top", "clothes_inner", "clothes_outer",
+                     "waistband", "collar", "chest", "body"]},
+        {"name": "SkirtSway",      "parent": "Skirt", "rows": 4, "cols": 3,
          "type": "warp", "targets": ["skirt"]},
-        {"name": "BreathChest",    "parent": "Chest","rows": 2, "cols": 2,
-         "type": "warp", "targets": ["chest"]},
-        # ---- 表情形变：由官方参数直接驱动 ----
+        # ---- 表情形变：参数写死在说明里（这些效果没有对应骨骼，无从推导）----
         #
-        # 张嘴/睁闭眼在 Live2D 里本来就是**纯网格或变形器形变**，没有对应的骨骼可
-        # 依托，所以这里显式写死 ``parameter``（不像呼吸那样靠枢轴就近匹配）。
         # 放在变形器层而不是网格键形层，是因为网格只能挂**一个**参数带：眼睛网格
-        # 已经用双眼球键形（ParamEyeBallX/Y）、嘴网格已经用头部三轴键形
-        # （ParamAngleX/Y/Z），再叠一个参数在 moc3 里无处可放；变形器与网格键形
-        # 是两层，可以同时生效。
-        #
-        # 历史状态：这两个参数一直"声明了但不动"——官方内核受控像素验证里
-        # ParamMouthOpenY / ParamEyeLOpen 的 changed_pixels 恒为 0。
-        {"name": "MouthOpen", "parent": "Mouth", "rows": 2, "cols": 2,
-         "type": "warp", "parameter": "ParamMouthOpenY", "profile": "open_down",
+        # 已经用双眼球键形（ParamEyeBallX/Y）、嘴与眉已经用头部三轴键形
+        # （ParamAngleX/Y/Z）；变形器与网格键形是两层，可以同时生效。
+        # 一个变形器也只能挂一个带，所以同一部件的多个参数合成一条**多轴带**
+        # （见 moc3_pipeline.DEFORMER_PROFILES / moc3_model.WarpDeformerSpec.axes）。
+        {"name": "MouthOpen", "parent": "Mouth", "rows": 2, "cols": 3,
+         "type": "warp", "profile": "mouth",
+         "parameters": ["ParamMouthOpenY", "ParamMouthForm", "ParamMouthSize"],
          "targets": ["mouth", "mouth_cavity", "mouth_open", "mouth_close"]},
         {"name": "EyeBlink_L", "parent": "Eye_L", "rows": 2, "cols": 2,
-         "type": "warp", "parameter": "ParamEyeLOpen", "profile": "close_center",
-         "targets": ["eyewhite_left", "irides_left", "eyelash_left", "eyes_left",
-                     "eye_white_left"]},
+         "type": "warp", "profile": "eye",
+         "parameters": ["ParamEyeLOpen"],
+         "targets": ["eyewhite_left", "irides_left", "eyelash_left",
+                     "eyes_left", "eye_left"]},
         {"name": "EyeBlink_R", "parent": "Eye_R", "rows": 2, "cols": 2,
-         "type": "warp", "parameter": "ParamEyeROpen", "profile": "close_center",
-         "targets": ["eyewhite_right", "irides_right", "eyelash_right", "eyes_right",
-                     "eye_white_right"]},
+         "type": "warp", "profile": "eye",
+         "parameters": ["ParamEyeROpen"],
+         "targets": ["eyewhite_right", "irides_right", "eyelash_right",
+                     "eyes_right", "eye_right"]},
+        {"name": "BrowMove_L", "parent": "Brow_L", "rows": 2, "cols": 3,
+         "type": "warp", "profile": "brow",
+         "parameters": ["ParamBrowLY", "ParamBrowLAngle", "ParamBrowLForm"],
+         "targets": ["eyebrow_L", "brow_L", "brow_left"]},
+        {"name": "BrowMove_R", "parent": "Brow_R", "rows": 2, "cols": 3,
+         "type": "warp", "profile": "brow", "mirror": True,
+         "parameters": ["ParamBrowRY", "ParamBrowRAngle", "ParamBrowRForm"],
+         "targets": ["eyebrow_R", "brow_R", "brow_right"]},
+        # ---- 肩部抬落 ----
+        #
+        # 没有独立的肩部图层，只能抬整条上臂（Live2D 里肩参数本来也会带上臂）。
+        # 幅度刻意小（上臂高度的 12%），避免看起来像"举手"。
+        {"name": "ShoulderLift_L", "parent": "ArmBack_L", "rows": 2, "cols": 2,
+         "type": "warp", "profile": "lift",
+         "parameters": ["ParamShoulderL"],
+         "targets": ["arm_L", "upper_arm_back_left", "sleeve_L"]},
+        {"name": "ShoulderLift_R", "parent": "ArmBack_R", "rows": 2, "cols": 2,
+         "type": "warp", "profile": "lift",
+         "parameters": ["ParamShoulderR"],
+         "targets": ["arm_R", "upper_arm_back_right", "sleeve_R"]},
     ]
 
     DEFAULT_ROTATION_DEFORMERS: List[Dict] = [
@@ -654,32 +685,47 @@ class DeformerHierarchy:
             available = set(meshes.keys())
         available_norm = {n.strip().lower().replace(" ", "_") for n in available}
 
+        def _matched_targets(spec: Dict) -> List[str]:
+            """目标里真的存在的层名（**大小写不敏感**）。
+
+            以前这里拿原始目标去比 ``available_norm``（已小写化），于是
+            ``arm_L`` / ``sleeve_L`` 这种带大写侧别的目标永远命中不了，整个变形器
+            被静默跳过——实测肩部抬落的变形器因此根本没建出来。
+            这里保留原始写法返回，下游 ``build_deformers`` 用 ``_norm`` 匹配网格。
+            """
+            return [t for t in spec["targets"]
+                    if t.strip().lower().replace(" ", "_") in available_norm]
+
         self._deformers = []
         self._by_name = {}
 
         for spec in self.DEFAULT_WARP_DEFORMERS:
-            if not any(t in available_norm for t in spec["targets"]):
+            targets = _matched_targets(spec)
+            if not targets:
                 continue
             d = self.create_warp_deformer(
                 name=spec["name"],
                 parent=spec["parent"],
                 grid_rows=spec["rows"],
                 grid_cols=spec["cols"],
-                targets=[t for t in spec["targets"] if t in available_norm],
-                parameter=spec.get("parameter", ""),
+                targets=targets,
+                parameters=list(spec.get("parameters") or
+                                ([spec["parameter"]] if spec.get("parameter") else [])),
                 profile=spec.get("profile", ""),
+                mirror=bool(spec.get("mirror", False)),
             )
             self._deformers.append(d)
             self._by_name[d["name"]] = d
 
         for spec in self.DEFAULT_ROTATION_DEFORMERS:
-            if not any(t in available_norm for t in spec["targets"]):
+            targets = _matched_targets(spec)
+            if not targets:
                 continue
             d = self.create_rotation_deformer(
                 name=spec["name"],
                 parent=spec["parent"],
                 pivot=spec["pivot"],
-                targets=[t for t in spec["targets"] if t in available_norm],
+                targets=targets,
             )
             self._deformers.append(d)
             self._by_name[d["name"]] = d
@@ -694,8 +740,9 @@ class DeformerHierarchy:
         grid_rows: int = 2,
         grid_cols: int = 2,
         targets: Optional[List[str]] = None,
-        parameter: str = "",
+        parameters: Optional[List[str]] = None,
         profile: str = "",
+        mirror: bool = False,
     ) -> Dict:
         """Create a warp (free-form) deformer with an R*C control grid.
 
@@ -705,10 +752,10 @@ class DeformerHierarchy:
             grid_rows: Number of control point rows.
             grid_cols: Number of control point columns.
             targets:   Layer names this deformer affects.
-            parameter: 显式驱动参数 id（如 ``ParamEyeLOpen``）；空串表示不显式指定，
-                       留给导出阶段按枢轴/名称推导（呼吸就是这么绑的）。
-            profile:   ``parameter`` 的形变方式，取值见
-                       ``moc3_pipeline.DEFORMER_PROFILES``。
+            parameters: 显式驱动参数 id 列表（按 profile 的角色顺序）。空表示不显式
+                       指定，留给导出阶段按枢轴推导（呼吸曾经就是这么绑的）。
+            profile:   形变方式，取值见 ``moc3_pipeline.DEFORMER_PROFILES``。
+            mirror:    左右对称部件的镜像标记（眉毛倾斜方向取反）。
 
         Returns:
             Deformer definition dict.
@@ -733,10 +780,12 @@ class DeformerHierarchy:
             "targets": list(targets or []),
             "base_points": [list(p) for p in points],  # rest position
         }
-        if parameter:
-            out["parameter"] = parameter
+        if parameters:
+            out["parameters"] = list(parameters)
         if profile:
             out["profile"] = profile
+        if mirror:
+            out["mirror"] = True
         return out
 
     def create_rotation_deformer(

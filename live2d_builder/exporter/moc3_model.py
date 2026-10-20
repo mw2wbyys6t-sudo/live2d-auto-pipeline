@@ -96,6 +96,12 @@ class WarpDeformerSpec:
 
     rows/cols 是**格子数**，顶点数是 (rows+1)*(cols+1) —— 对官方 Haru 实测确认。
     单个 grid 表示不随参数变化的静态网格；多个 grid 必须给出驱动参数。
+
+    多参数带：``axes`` 给出 ``((参数 id, 键值元组), ...)`` 时，``grids`` 按展平序
+    排列（``index = i0 + n0*i1 + n0*n1*i2 + ...``，**第一个轴步长为 1**，与网格键形
+    同一定论）。一个部件往往同时被多个官方参数驱动（嘴：开合 × 口型 × 大小；
+    眉：上下 × 角度 × 形状），而内核里**一个变形器只能挂一个带**，所以只能把
+    多个参数合成一条多轴带，不能挂多个单轴带。
     """
     deformer_id: str
     rows: int
@@ -105,6 +111,7 @@ class WarpDeformerSpec:
     parent_part_id: str = ""                   # 空字符串挂到第一个部件
     parent_deformer_id: str = ""               # 空字符串表示根变形器
     opacity: float = 1.0
+    axes: Sequence[Sequence] = ()               # ((参数 id, 键值...), ...)；空 = 单轴
 
     @property
     def vertex_count(self) -> int:
@@ -113,6 +120,18 @@ class WarpDeformerSpec:
     @property
     def key_values(self) -> tuple:
         return tuple(float(g.key_value) for g in self.grids)
+
+    @property
+    def axes_spec(self) -> tuple:
+        """驱动轴 ``((参数 id, 键值元组), ...)``；单轴由 ``parameter_id`` 推出。"""
+        if self.axes:
+            return tuple((str(pid), tuple(float(v) for v in keys))
+                         for pid, keys in self.axes)
+        return ((self.parameter_id, self.key_values),)
+
+    @property
+    def is_keyformed(self) -> bool:
+        return len(self.grids) > 1
 
     @property
     def deformer_type(self) -> int:
@@ -163,6 +182,15 @@ class RotationDeformerSpec:
     @property
     def key_values(self) -> tuple:
         return tuple(float(k.key_value) for k in self.keyforms)
+
+    @property
+    def axes_spec(self) -> tuple:
+        """rotation 只有单轴（一条参数带），与 warp 的接口对齐。"""
+        return ((self.parameter_id, self.key_values),)
+
+    @property
+    def is_keyformed(self) -> bool:
+        return len(self.keyforms) > 1
 
     @property
     def deformer_type(self) -> int:
@@ -245,8 +273,8 @@ class RigSpec:
                 if deformer.parent_deformer_id == deformer.deformer_id:
                     raise UnsupportedRig(
                         f"{deformer.deformer_id}: 父变形器不能是自身")
-            if len(deformer.key_values) > 1:
-                if not deformer.parameter_id:
+            if deformer.is_keyformed:
+                if not getattr(deformer, "axes", ()) and not deformer.parameter_id:
                     raise UnsupportedRig(
                         f"{deformer.deformer_id}: 多个键形必须给出驱动参数")
                 _validate_deformer_keys(deformer, param_by_id)
@@ -281,29 +309,48 @@ class RigSpec:
                     f"{deformer.deformer_id}: 键形字段必须为有限值")
 
 
-def _validate_deformer_keys(deformer: WarpDeformerSpec,
+def _validate_deformer_keys(deformer,
                             param_by_id: Dict[str, ParameterSpec]) -> None:
-    param = param_by_id.get(deformer.parameter_id)
-    if param is None:
-        raise UnsupportedRig(
-            f"{deformer.deformer_id}: 参数 {deformer.parameter_id} 未声明")
-    values = deformer.key_values
-    if not all(a < b for a, b in zip(values, values[1:])):
-        raise UnsupportedRig(
-            f"{deformer.deformer_id}: 键值必须严格递增（{list(values)}）")
-    for v in values:
-        if not param.minimum <= v <= param.maximum:
+    """逐轴校验键值，并核对键形数 = 各轴键数之积。
+
+    多轴时每一条都单独成立：内核按参数值在键之间插值，参数跑到键区间之外时**不做
+    钳制**而是越界读取（实测 Cubism Core 5.0.0：键值 (0,1) 的参数在 ±30 上渲染即
+    段错误），所以每个轴的首/末键都必须等于该参数的 min/max。
+
+    数量核对只对 warp 有意义：warp 的键值写在 ``axes`` 里、控制网格写在 ``grids``
+    里，两者必须对得上；rotation 的键值本来就是从 ``keyforms`` 逐条取出来的，
+    数量天然相等。
+    """
+    axes = deformer.axes_spec
+    for pid, values in axes:
+        param = param_by_id.get(pid)
+        if param is None:
             raise UnsupportedRig(
-                f"{deformer.deformer_id}: 键值 {v} 超出参数 "
-                f"{param.parameter_id} 的区间")
-    # 与网格关键形同一条内核约束：键值不覆盖参数完整区间时，参数取到区间外的值
-    # 会让内核越界读取（见 _validate_keyforms 的实测说明）。
-    if not math.isclose(values[0], param.minimum, abs_tol=1e-9) or \
-            not math.isclose(values[-1], param.maximum, abs_tol=1e-9):
-        raise UnsupportedRig(
-            f"{deformer.deformer_id}: 键值 {list(values)} 必须覆盖参数 "
-            f"{param.parameter_id} 的完整区间 "
-            f"[{param.minimum}, {param.maximum}]，否则内核在区间外的取值上越界")
+                f"{deformer.deformer_id}: 参数 {pid} 未声明")
+        if len(values) < 2:
+            raise UnsupportedRig(
+                f"{deformer.deformer_id}: 参数 {pid} 至少需要 2 个键值")
+        if not all(a < b for a, b in zip(values, values[1:])):
+            raise UnsupportedRig(
+                f"{deformer.deformer_id}: 参数 {pid} 的键值必须严格递增"
+                f"（{list(values)}）")
+        for v in values:
+            if not param.minimum <= v <= param.maximum:
+                raise UnsupportedRig(
+                    f"{deformer.deformer_id}: 键值 {v} 超出参数 "
+                    f"{param.parameter_id} 的区间")
+        if not math.isclose(values[0], param.minimum, abs_tol=1e-9) or \
+                not math.isclose(values[-1], param.maximum, abs_tol=1e-9):
+            raise UnsupportedRig(
+                f"{deformer.deformer_id}: 参数 {param.parameter_id} 的键值 "
+                f"{list(values)} 必须覆盖完整区间 "
+                f"[{param.minimum}, {param.maximum}]，否则内核在区间外的取值上越界")
+    if isinstance(deformer, WarpDeformerSpec):
+        expected = keyform_grid_size(axes)
+        if len(deformer.grids) != expected:
+            raise UnsupportedRig(
+                f"{deformer.deformer_id}: 控制网格数 {len(deformer.grids)} "
+                f"与各轴键数之积 {expected} 不符（展平序 = 第一个轴步长为 1）")
 
 
 def _validate_mesh(mesh: MeshSpec) -> None:
@@ -454,8 +501,9 @@ def keyform_groups(spec: RigSpec) -> tuple:
             bands.append(tuple(register(pid, values)
                                for pid, values in _mesh_axes(mesh)))
     for deformer in spec.deformers:
-        if len(deformer.key_values) > 1:
-            bands.append((register(deformer.parameter_id, deformer.key_values),))
+        if deformer.is_keyformed:
+            bands.append(tuple(register(pid, values)
+                               for pid, values in deformer.axes_spec))
 
     bindings.sort(key=lambda b: position.get(b[0], len(order)))
     # 同一个键值布局（含多轴组合）只占一个带：多个网格/变形器共用同一带。
@@ -604,7 +652,24 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
 
 
 def _deformer_group(deformer) -> tuple:
-    return ((deformer.parameter_id, deformer.key_values),)
+    return deformer.axes_spec
+
+
+def _axes_key_index(axes, param_by_id: Dict[str, ParameterSpec]) -> int:
+    """各轴都取参数默认值时的展平序号（= ``grids`` 里"静止形"的下标）。"""
+    index, stride = 0, 1
+    for pid, keys in axes:
+        param = param_by_id.get(pid)
+        if param is None:
+            raise UnsupportedRig(f"参数 {pid} 未声明")
+        nearest = min(range(len(keys)), key=lambda i: abs(float(keys[i]) - float(param.default)))
+        if not math.isclose(float(keys[nearest]), float(param.default), abs_tol=1e-6):
+            raise UnsupportedRig(
+                f"参数 {pid} 需要恰好一个键值等于参数默认值 {param.default}"
+                f"（当前键值 {list(keys)}）——没有可用的静止形")
+        index += nearest * stride
+        stride *= len(keys)
+    return index
 
 
 def reference_rect(deformer: WarpDeformerSpec,
@@ -618,17 +683,12 @@ def reference_rect(deformer: WarpDeformerSpec,
     if len(deformer.grids) == 1:
         grid = deformer.grids[0]
     else:
-        param = param_by_id.get(deformer.parameter_id)
-        if param is None:
+        index = _axes_key_index(deformer.axes_spec, param_by_id)
+        if index >= len(deformer.grids):
             raise UnsupportedRig(
-                f"{deformer.deformer_id}: 参数 {deformer.parameter_id} 未声明")
-        matched = [g for g in deformer.grids
-                   if float(g.key_value) == float(param.default)]
-        if len(matched) != 1:
-            raise UnsupportedRig(
-                f"{deformer.deformer_id}: 需要恰好一个键值等于参数默认值 "
-                f"{param.default} 的控制网格作为静止形（当前 {len(matched)} 个）")
-        grid = matched[0]
+                f"{deformer.deformer_id}: 静止形下标 {index} 超出控制网格数 "
+                f"{len(deformer.grids)}")
+        grid = deformer.grids[index]
     xs = [float(p[0]) for p in grid.points]
     ys = [float(p[1]) for p in grid.points]
     if max(xs) <= min(xs) or max(ys) <= min(ys):
@@ -695,7 +755,7 @@ def _write_deformers(doc: Moc3Container, spec: RigSpec,
     rotation_slot = {d.deformer_id: i for i, d in enumerate(rotations)}
     doc.set("deformer.ids", ids)
     doc.set("deformer.keyform_binding_band_indices", [
-        band_of_group[_deformer_group(d)] if len(d.key_values) > 1 else 0
+        band_of_group[_deformer_group(d)] if d.is_keyformed else 0
         for d in deformers
     ])
     doc.set("deformer.visibles", [1] * n)
@@ -713,7 +773,7 @@ def _write_deformers(doc: Moc3Container, spec: RigSpec,
 
     if warps:
         doc.set("warp_deformer.keyform_binding_band_indices",
-                [band_of_group[_deformer_group(d)] if len(d.key_values) > 1 else 0
+                [band_of_group[_deformer_group(d)] if d.is_keyformed else 0
                  for d in warps])
         doc.set("warp_deformer.keyform_begin_indices", warp_keyform_begin)
         doc.set("warp_deformer.keyform_counts", [len(d.grids) for d in warps])
@@ -758,7 +818,7 @@ def _write_deformers(doc: Moc3Container, spec: RigSpec,
                 opacities.append(float(keyform.opacity))
             begin += len(deformer.keyforms)
         doc.set("rotation_deformer.keyform_binding_band_indices",
-                [band_of_group[_deformer_group(d)] if len(d.key_values) > 1 else 0
+                [band_of_group[_deformer_group(d)] if d.is_keyformed else 0
                  for d in rotations])
         doc.set("rotation_deformer.keyform_begin_indices", begins)
         doc.set("rotation_deformer.keyform_counts",

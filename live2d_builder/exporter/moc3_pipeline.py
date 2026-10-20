@@ -20,7 +20,7 @@ import json
 import math
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 
 from core.logger import get_logger
 from live2d_builder.exporter.moc3_lint import lint_document
@@ -547,78 +547,203 @@ def _driving_rotation_parameter(pivot: Any,
     return best_hits[0]
 
 
-def _explicit_parameter(entry: Dict[str, Any],
-                        parameters_by_id: Dict[str, ParameterSpec]):
-    """变形器说明里显式声明的驱动参数；未声明或未在模型里注册时返回 None。
-
-    为什么需要"显式"：转动/呼吸可以靠枢轴与骨骼就近匹配推导参数，但**张嘴、睁闭眼
-    在 Live2D 里没有对应骨骼**（就是纯网格形变），无从推导，只能写死。
-    """
-    pid = str(entry.get("parameter") or "")
-    if not pid:
-        return None
-    return parameters_by_id.get(pid)
+def _profile_parameter_ids(entry: Dict[str, Any]) -> List[str]:
+    """入口声明的驱动参数，按 profile 的角色顺序。兼容旧的单参数写法。"""
+    ids = entry.get("parameters")
+    if ids:
+        return [str(p) for p in ids]
+    single = str(entry.get("parameter") or "")
+    return [single] if single else []
 
 
 #: 张嘴时下沿最多向下拉多少（相对网格自身高度）。嘴在多数立绘里只是一条 2~4 像素的
 #: 墨线，没有"张开"的现成画稿，能做的只是把这条线按比例撑开：1.0 时几乎看不出，
 #: 3 以上会把线拉成一条粗黑带。2.5 是两者之间的取值。
 MOUTH_OPEN_STRETCH = 2.5
+#: 口型（笑/撇嘴）把两端抬起或压下的幅度，相对网格高度。
+MOUTH_FORM_BOW = 0.8
+#: 嘴横向缩放幅度（``ParamMouthSize`` ±1 时整体宽度的 ±35%）。
+MOUTH_SIZE_SCALE = 0.35
 
 #: 闭眼时眼睛内容压到原高度的多少（相对值）。不能给 0：控制网格退化成一条线后
 #: 内核算变形时的逆映射会退化，留 8% 既接近"闭上"又不制造奇异网格。
 EYE_CLOSED_SCALE = 0.08
 
+#: 眉毛位移量（相对眉毛自身高度）：上下 / 倾斜 / 中段上拱。
+BROW_LIFT = 0.6
+BROW_TILT = 0.35
+BROW_BOW = 0.25
 
-def _open_down_grids(rect: tuple, n_cols: int, n_rows: int,
-                     param: ParameterSpec, mesh_rect: tuple) -> List[DeformerGrid]:
-    """下巴落下式张嘴：**网格上沿钉住**，下沿按参数值向下拉。
+#: 发梢横向摆幅（相对头发宽度），越靠下发梢摆得越远。
+HAIR_SWAY = 0.10
 
-    纵向拉伸而不是整体位移，是因为嘴张开是"开口变大"，整体平移只会让嘴跑到下巴上。
+#: 躯干：侧倾的横向位移、前后倾的纵向位移、呼吸抬升（均相对网格尺寸）。
+TORSO_LEAN_X = 0.05
+TORSO_LEAN_Y = 0.02
+TORSO_BREATH = 0.03
 
-    锚点必须是**网格自身**的上沿，不能是控制网格的上沿：控制网格比网格大一圈
-    （``_member_rect`` 留了 5% 余量，而嘴的 27 个头部键形会把它撑到几十像素），
-    拿它当锚点会让上唇也跟着往下漂 —— 实测上沿漂 1.19px，下沿多拉 4%。
-    以网格上沿为锚、直接按网格高度缩放，位移就正好是 ``MOUTH_OPEN_STRETCH`` 倍网格高度。
+#: 肩部抬落幅度（相对上臂网格高度）。没有独立肩部图层，只能抬整条上臂。
+SHOULDER_LIFT = 0.12
+
+
+def _centered_fraction(param: ParameterSpec, value: float) -> float:
+    """参数值 -> 相对默认值的归一化偏移 ``[-1, 1]``。
+
+    默认值一定映射到 **0**，所以"静止形 = 恒等变换"是构造保证的，不依赖某个
+    具体参数恰好以 0 为默认值（``ParamBreath`` 的默认是 0.5）。
     """
-    anchor = float(mesh_rect[1])
-    grids: List[DeformerGrid] = []
-    for value in _key_times(param):
-        scale = 1.0 + _key_fraction(param, value) * MOUTH_OPEN_STRETCH
-        grids.append(DeformerGrid(
-            float(value),
-            [[x, anchor + (y - anchor) * scale]
-             for x, y in _lattice(rect, n_cols, n_rows)]))
-    return grids
+    default = float(param.default)
+    span = max(abs(float(param.minimum) - default),
+               abs(float(param.maximum) - default)) or 1.0
+    return (float(value) - default) / span
 
 
-def _close_center_grids(rect: tuple, n_cols: int, n_rows: int,
-                        param: ParameterSpec, mesh_rect: tuple) -> List[DeformerGrid]:
-    """睁闭眼：以眼睛纵向中心为轴按开放度压缩（1 = 睁开，0 = 压成一条细线）。
+def _band_indices(counts: Sequence[int]) -> List[tuple]:
+    """展平序的索引组合：**第一个轴步长为 1**（与网格多轴键形同一定论）。"""
+    total = 1
+    for n in counts:
+        total *= n
+    out: List[tuple] = []
+    for flat in range(total):
+        rest, index = flat, []
+        for n in counts:
+            index.append(rest % n)
+            rest //= n
+        out.append(tuple(index))
+    return out
 
-    以**中心**为轴而不是上/下沿：没有眼睑图层时，把眼睛内容向中间收拢才会读成
-    "闭眼"；收到下沿会让瞳孔贴在下睫毛上、上半个眼窝露出脸底色，反而像眯眼。
 
-    中心取**网格自身**的中心（不是含键形外包框的中心），否则眼睛收拢的轴线会被
-    头部键形的摆动范围带偏。
+def _mouth_deform(points, rect, mesh_rect, values, options):
+    """嘴：横向缩放（大小）∘ 两端上/下弯（口型）∘ 上沿钉住下拉（开合）。
+
+    横向归一化 ``t`` 必须夹到 ``[-1, 1]``：控制网格比网格本身宽得多（含头部键形的
+    摆动范围，实测 55px vs 网格 14px），不夹的话 t² 会到 16，弯曲量被放大 16 倍
+    —— 实测嘴角被拉起 21px，在脸上拉出一道 V 形伤疤。
     """
+    cx = (float(mesh_rect[0]) + float(mesh_rect[2])) / 2.0
+    half_w = max(1e-6, (float(mesh_rect[2]) - float(mesh_rect[0])) / 2.0)
+    top = float(mesh_rect[1])
+    height = max(1e-6, float(mesh_rect[3]) - top)
+    scale_x = 1.0 + MOUTH_SIZE_SCALE * values.get("size", 0.0)
+    bow = -MOUTH_FORM_BOW * height * values.get("form", 0.0)
+    stretch = 1.0 + MOUTH_OPEN_STRETCH * max(0.0, values.get("open", 0.0))
+    out = []
+    for x, y in points:
+        nx = cx + (x - cx) * scale_x
+        t = max(-1.0, min(1.0, (nx - cx) / half_w))
+        out.append((nx, top + (y - top) * stretch + bow * t * t))
+    return out
+
+
+def _eye_deform(points, rect, mesh_rect, values, options):
+    """睁闭眼：以**网格自身**纵向中心为轴按开放度压缩。"""
     center = (float(mesh_rect[1]) + float(mesh_rect[3])) / 2.0
-    grids: List[DeformerGrid] = []
-    for value in _key_times(param):
-        t = min(1.0, max(0.0, _key_fraction(param, value)))
-        scale = EYE_CLOSED_SCALE + (1.0 - EYE_CLOSED_SCALE) * t
-        grids.append(DeformerGrid(
-            float(value),
-            [[x, center + (y - center) * scale]
-             for x, y in _lattice(rect, n_cols, n_rows)]))
-    return grids
+    openness = min(1.0, max(0.0, 1.0 + values.get("open", 0.0)))
+    scale = EYE_CLOSED_SCALE + (1.0 - EYE_CLOSED_SCALE) * openness
+    return [(x, center + (y - center) * scale) for x, y in points]
 
 
-#: ``profile`` -> 控制网格生成函数。新增形变方式时只加这里，导出流程不用改。
-DEFORMER_PROFILES = {
-    "open_down": _open_down_grids,
-    "close_center": _close_center_grids,
+def _brow_deform(points, rect, mesh_rect, values, options):
+    """眉毛：上下平移 ∘ 沿 x 的倾斜 ∘ 中段上拱。
+
+    ``options["mirror"]`` 为真时倾斜方向取反：左眉的"内侧"是右端、右眉是左端，
+    同一个 ``ParamBrowAngle`` 在两侧必须是镜像的。
+    """
+    cx = (float(mesh_rect[0]) + float(mesh_rect[2])) / 2.0
+    half_w = max(1e-6, (float(mesh_rect[2]) - float(mesh_rect[0])) / 2.0)
+    height = max(1e-6, float(mesh_rect[3]) - float(mesh_rect[1]))
+    lift = -BROW_LIFT * height * values.get("y", 0.0)      # 屏幕上方 = -y
+    tilt = BROW_TILT * height * values.get("angle", 0.0)
+    if options.get("mirror"):
+        tilt = -tilt
+    bow = -BROW_BOW * height * values.get("form", 0.0)
+    out = []
+    for x, y in points:
+        t = max(-1.0, min(1.0, (x - cx) / half_w))
+        out.append((x, y + lift + tilt * t + bow * (1.0 - t * t)))
+    return out
+
+
+def _hair_sway_deform(points, rect, mesh_rect, values, options):
+    """头发摆动：越靠下发梢横向摆得越远（发根钉住）。"""
+    width = max(1e-6, float(mesh_rect[2]) - float(mesh_rect[0]))
+    top = float(mesh_rect[1])
+    height = max(1e-6, float(mesh_rect[3]) - top)
+    swing = values.get("swing", 0.0)
+    out = []
+    for x, y in points:
+        depth = min(1.0, max(0.0, (y - top) / height))
+        out.append((x + swing * HAIR_SWAY * width * depth ** 1.5, y))
+    return out
+
+
+def _torso_deform(points, rect, mesh_rect, values, options):
+    """躯干：侧倾/前后倾（越靠上位移越大，胯部不动）+ 呼吸抬升。"""
+    width = max(1e-6, float(mesh_rect[2]) - float(mesh_rect[0]))
+    height = max(1e-6, float(mesh_rect[3]) - float(mesh_rect[1]))
+    bottom = float(mesh_rect[3])
+    lean_x = values.get("angle_y", 0.0) * TORSO_LEAN_X + values.get("sway", 0.0) * TORSO_LEAN_X
+    lean_y = values.get("angle_x", 0.0)
+    breath = values.get("breath", 0.0)
+    out = []
+    for x, y in points:
+        depth = min(1.0, max(0.0, (bottom - y) / height))   # 0 = 胯部, 1 = 肩
+        out.append((x + lean_x * width * depth,
+                    y - lean_y * TORSO_LEAN_Y * height * depth
+                    - breath * TORSO_BREATH * height * depth))
+    return out
+
+
+def _lift_deform(points, rect, mesh_rect, values, options):
+    """整体上下平移（肩部抬落）：+值向上，屏幕上方 = -y。"""
+    height = max(1e-6, float(mesh_rect[3]) - float(mesh_rect[1]))
+    dy = -SHOULDER_LIFT * height * values.get("lift", 0.0)
+    return [(x, y + dy) for x, y in points]
+
+
+#: ``profile`` -> (角色名序列, 形变函数)。
+#:
+#: 入口用 ``parameters`` 按**同样顺序**给出参数 id；任一参数没在模型里声明就整条
+#: 不生成（宁可不驱动，也不交半套形变）。角色名只是给形变函数取值用的键。
+DEFORMER_PROFILES: Dict[str, tuple] = {
+    "mouth": (("open", "form", "size"), _mouth_deform),
+    "eye": (("open",), _eye_deform),
+    "brow": (("y", "angle", "form"), _brow_deform),
+    "hair_sway": (("swing",), _hair_sway_deform),
+    "torso": (("angle_x", "angle_y", "sway", "breath"), _torso_deform),
+    "lift": (("lift",), _lift_deform),
 }
+
+
+def _profile_grids(profile: str,
+                   param_ids: Sequence[str],
+                   rect: tuple,
+                   n_cols: int,
+                   n_rows: int,
+                   mesh_rect: tuple,
+                   parameters_by_id: Dict[str, ParameterSpec],
+                   options: Dict[str, Any]):
+    """按 profile 生成逐键控制网格：返回 ``(axes, grids)``。
+
+    axes 是 ``((参数 id, 键值元组), ...)``，grids 按**第一个轴步长为 1** 展平排列。
+    """
+    roles, deform = DEFORMER_PROFILES[profile]
+    if len(param_ids) != len(roles):
+        return (), []
+    params = [parameters_by_id.get(pid) for pid in param_ids]
+    if any(p is None for p in params):
+        return (), []
+    axes = tuple((pid, tuple(_key_times(p))) for pid, p in zip(param_ids, params))
+    base = _lattice(rect, n_cols, n_rows)
+    grids: List[DeformerGrid] = []
+    for index, combination in enumerate(_band_indices([len(k) for _pid, k in axes])):
+        values = {}
+        for role, (pid, keys), slot in zip(roles, axes, combination):
+            param = parameters_by_id[pid]
+            values[role] = _centered_fraction(param, keys[slot])
+        grids.append(DeformerGrid(float(index),
+                                  deform(base, rect, mesh_rect, values, options)))
+    return axes, grids
 
 
 def build_deformers(specs: List[MeshSpec],
@@ -672,16 +797,25 @@ def build_deformers(specs: List[MeshSpec],
                 max(float(x) for m in members for x, _ in m.vertices),
                 max(float(y) for m in members for _, y in m.vertices),
             )
-            explicit = _explicit_parameter(entry, parameters_by_id or {})
             profile = str(entry.get("profile") or "")
+            param_ids = _profile_parameter_ids(entry)
             bound_param = ""
-            if explicit is not None and profile in DEFORMER_PROFILES:
-                # 表情形变（张嘴 / 睁闭眼）：参数写死在说明里，按 profile 生成逐键网格
-                grids = DEFORMER_PROFILES[profile](
-                    rect, n_cols, n_rows, explicit, mesh_rect)
-                bound_param = explicit.parameter_id
-                expression_bound.append(f"{name}={bound_param}")
-            elif explicit is not None:
+            axes: tuple = ()
+            if profile in DEFORMER_PROFILES and param_ids:
+                axes, grids = _profile_grids(
+                    profile, param_ids, rect, n_cols, n_rows, mesh_rect,
+                    parameters_by_id or {}, entry)
+                if not grids:
+                    missing = [pid for pid in param_ids
+                               if pid not in (parameters_by_id or {})]
+                    skipped.append(
+                        f"{name}(profile={profile} 参数不可用: "
+                        f"{missing or '数量与 profile 不符'})")
+                    grids = [DeformerGrid(0.0, _lattice(rect, n_cols, n_rows))]
+                else:
+                    bound_param = param_ids[0]
+                    expression_bound.append(f"{name}={('×'.join(param_ids))}")
+            elif param_ids:
                 # 声明了参数却没有可用形变方式：不猜形变，保持静态并如实记录
                 skipped.append(f"{name}(未知 profile={profile or '-'})")
                 grids = [DeformerGrid(0.0, _lattice(rect, n_cols, n_rows))]
@@ -703,6 +837,7 @@ def build_deformers(specs: List[MeshSpec],
             out.append(WarpDeformerSpec(
                 deformer_id=name, rows=n_rows - 1, cols=n_cols - 1,
                 parameter_id=bound_param,
+                axes=axes,
                 grids=grids))
         elif dtype == "rotation":
             pivot = entry.get("pivot") or (0.0, 0.0)
@@ -975,6 +1110,61 @@ def _declares_physics(manifest: Path) -> bool:
     return False
 
 
+def driven_parameters(spec: RigSpec) -> Dict[str, List[float]]:
+    """编译后产物里**真正被绑定**的参数 -> 键值序列。
+
+    两个来源：网格键形（``keyform_axes`` / 单轴 ``keyform_parameter_id``）与
+    warp 变形器的带（``axes_spec``）。这是"模型自称能驱动什么"的唯一权威来源：
+    参数表里声明了但没有任何绑定的参数，改了画面不会变（实测 28 个参数里曾有
+    19 个属于这一类）。
+
+    与 :func:`drivable_parameters` 的区别：后者是**编译前**给 motion 排曲线用的，
+    只看单轴网格键形；这里看编译后的规格，包含多轴带与变形器。
+    """
+    from live2d_builder.exporter.moc3_model import _mesh_axes
+
+    keys: Dict[str, set] = {}
+
+    def add(pid, values):
+        keys.setdefault(str(pid), set()).update(float(v) for v in values)
+
+    for mesh in spec.meshes:
+        if not mesh.keyform_shapes:
+            continue
+        for pid, values in _mesh_axes(mesh):
+            if pid:
+                add(pid, values)
+    for deformer in spec.deformers:
+        # warp 与 rotation 都有 axes_spec / is_keyformed（单参数带亦可）
+        if not deformer.is_keyformed:
+            continue
+        for pid, values in deformer.axes_spec:
+            if pid:
+                add(pid, values)
+    return {pid: sorted(values) for pid, values in keys.items()}
+
+
+def _attach_capabilities(output_dir: str, character_name: str,
+                        driven: Dict[str, List[float]]) -> None:
+    """把「本模型能驱动哪些参数」写进 model3.json。
+
+    验收端（``drivers.live2d_runtime.verify``）据此决定**该断言哪些参数会动**：
+    没有这份声明就只能按固定的三个参数抽查，或者干脆把所有声明过的参数都当承诺
+    ——前者漏检，后者把"需要美术图层"的参数（腮红/眼泪）误判成缺陷。
+    非标准键，官方内核只读取它认识的字段，多余键不影响加载（已验证）。
+    """
+    path = Path(output_dir) / f"{character_name}.model3.json"
+    if not path.is_file():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    data.setdefault("Capabilities", {})["DrivableParameters"] = sorted(driven)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+
+
 def compile_export_moc3(
     builder_result: Dict[str, Any],
     atlas_uvs: Dict[str, Dict[str, float]],
@@ -1006,6 +1196,8 @@ def compile_export_moc3(
         "deformers_compiled": [],
         "deformers_uncompiled": [],
         "deformers_static": [],
+        # 真正被绑定的参数 -> 键值序列（写进 model3.json 的 Capabilities）
+        "driven_parameters": {},
     }
 
     try:
@@ -1020,6 +1212,11 @@ def compile_export_moc3(
     result["deformers_static"] = list(spec.static_deformers)
     if spec.uncompiled_deformers:
         result["dropped"] = ["deformers"]
+
+    # 「本模型能驱动哪些参数」写进 model3.json，供受控像素验收逐项断言
+    driven = driven_parameters(spec)
+    result["driven_parameters"] = driven
+    _attach_capabilities(output_dir, character_name, driven)
 
     try:
         doc = compile_static_rig(spec)

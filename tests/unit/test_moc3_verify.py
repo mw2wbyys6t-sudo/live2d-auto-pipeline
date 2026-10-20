@@ -107,3 +107,27 @@ def test_runtime_probe_survives_none_output(tmp_path, monkeypatch):
     result = moc3_verify.render_probe(str(manifest))
     assert result["ok"] is False
     assert result["crashed"] is True
+
+
+class TestDrivableParameterSelection:
+    """验收项从「固定三个参数」改成「模型自报能驱动的参数」。
+
+    历史行为：``verify`` 只查 ParamAngleX / ParamMouthOpenY / ParamEyeLOpen，
+    于是另外 19 个"声明了但没有任何绑定"的参数永远不被发现——它们改了画面不会变，
+    而报告照样显示通过。
+    """
+
+    def test_reads_the_capability_block(self):
+        from drivers.live2d_runtime.verify import drivable_parameters
+
+        data = {"Capabilities": {"DrivableParameters": ["ParamMouthForm", "ParamBreath"]}}
+
+        assert drivable_parameters(data) == ["ParamMouthForm", "ParamBreath"]
+
+    def test_falls_back_to_the_three_probe_parameters(self):
+        """旧产物没有 Capabilities：仍然可验，只是覆盖面回到历史的三个。"""
+        from drivers.live2d_runtime.verify import (
+            FALLBACK_PARAMETERS, drivable_parameters)
+
+        assert drivable_parameters({}) == list(FALLBACK_PARAMETERS)
+        assert drivable_parameters({"Capabilities": {}}) == list(FALLBACK_PARAMETERS)

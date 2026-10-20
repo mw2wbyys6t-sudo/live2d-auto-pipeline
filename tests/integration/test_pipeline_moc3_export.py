@@ -594,23 +594,42 @@ def test_every_mesh_contributes_pixels(tmp_path):
     assert not empty, f"这些网格一个像素都没画出来：{empty}（全部：{counts}）"
 
 
-def _expression_rig(param_id, default, deformer_name, profile):
-    """一个网格 + 一个由官方表情参数驱动的 warp 变形器。
+# 表情形变：一个 20x20 的小网格，形变量足够在 128 画布内看清
+EXPR_BOX = (54, 54, 74, 74)
 
-    只保留一个网格：默认样例里 hair 与 face 两块完全重叠，叠加后测不出
-    形变（不透明像素数被没变形的那块顶住）。
-    """
+
+def _expr_layer():
+    img = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    for y in range(EXPR_BOX[1], EXPR_BOX[3]):
+        for x in range(EXPR_BOX[0], EXPR_BOX[2]):
+            img.putpixel((x, y), (200, 80, 80, 255))
+    return img
+
+
+def _expr_mesh():
+    """3×2 面片（与 MeshGenerator 给小部件的形状一致，中间那列让弯曲有落点）。"""
+    x0, y0, x1, y1 = EXPR_BOX
+    xm = (x0 + x1) / 2.0
+    verts = [[x0, y0], [xm, y0], [x1, y0], [x0, y1], [xm, y1], [x1, y1]]
+    return {"vertices": verts,
+            "vertices_norm": [[x / 128.0, y / 128.0] for x, y in verts],
+            "indices": [[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4]],
+            "width": 128, "height": 128}
+
+
+def _expression_rig(params, deformer_name, profile, grid_cols=3):
+    """``params`` = ``[(参数 id, min, max, default), ...]``，顺序即 profile 的角色序。"""
     builder_result = _builder_result(deformers=[{
         "name": deformer_name, "type": "warp", "parent": "Mouth",
-        "grid_rows": 2, "grid_cols": 2,
-        "parameter": param_id, "profile": profile, "targets": ["face"],
+        "grid_rows": 2, "grid_cols": grid_cols,
+        "parameters": [p[0] for p in params],
+        "profile": profile, "targets": ["part"],
     }])
-    builder_result["layers"] = {"face": _layer()}
-    builder_result["meshes"] = {"face": _mesh("face")}
-    params = [p for p in builder_result["parameters"]["cubism_params"]
-              if p["Id"] != param_id]
-    params.append({"Id": param_id, "Min": 0, "Max": 1, "Value": default})
-    builder_result["parameters"]["cubism_params"] = params
+    builder_result["layers"] = {"part": _expr_layer()}
+    builder_result["meshes"] = {"part": _expr_mesh()}
+    builder_result["parameters"]["cubism_params"] = [
+        {"Id": pid, "Min": lo, "Max": hi, "Value": dv}
+        for pid, lo, hi, dv in params]
     return builder_result
 
 
@@ -622,13 +641,16 @@ def test_mouth_open_changes_rendered_pixels(tmp_path):
     里 ``changed_pixels`` 恒为 0，嘴永远闭着。
     """
     builder_result = _expression_rig(
-        "ParamMouthOpenY", 0, "MouthOpen", "open_down")
+        [("ParamMouthOpenY", 0, 1, 0), ("ParamMouthForm", -1, 1, 0),
+         ("ParamMouthSize", -1, 1, 0)],
+        "MouthOpen", "mouth")
     _, export_result = _export(tmp_path, builder_result)
     compiled = compile_export_moc3(
         builder_result=builder_result,
         atlas_uvs=export_result["atlas_uvs"],
         output_dir=export_result["output_dir"], character_name="web_preview")
     assert compiled["moc3_written"] is True, compiled["blocker"]
+    assert compiled["driven_parameters"]["ParamMouthOpenY"] == [0.0, 1.0]
 
     closed = render_probe(export_result["model3_json"],
                           params={"ParamMouthOpenY": 0.0}, width=128, height=128)
@@ -641,10 +663,39 @@ def test_mouth_open_changes_rendered_pixels(tmp_path):
 
 
 @requires_pixels
+def test_mouth_form_and_size_are_driven_independently(tmp_path):
+    """同一条多轴带里，口型与大小各自都能改变画面。"""
+    builder_result = _expression_rig(
+        [("ParamMouthOpenY", 0, 1, 0), ("ParamMouthForm", -1, 1, 0),
+         ("ParamMouthSize", -1, 1, 0)],
+        "MouthOpen", "mouth")
+    _, export_result = _export(tmp_path, builder_result)
+    compiled = compile_export_moc3(
+        builder_result=builder_result,
+        atlas_uvs=export_result["atlas_uvs"],
+        output_dir=export_result["output_dir"], character_name="web_preview")
+    assert compiled["moc3_written"] is True, compiled["blocker"]
+    driven = compiled["driven_parameters"]
+    assert set(driven) == {"ParamMouthOpenY", "ParamMouthForm", "ParamMouthSize"}
+
+    base = render_probe(export_result["model3_json"], params={}, width=128, height=128)
+    wide = render_probe(export_result["model3_json"],
+                        params={"ParamMouthSize": 1.0}, width=128, height=128)
+    smile = render_probe(export_result["model3_json"],
+                         params={"ParamMouthForm": 1.0}, width=128, height=128)
+    for probe in (base, wide, smile):
+        assert probe["ok"], probe["blocker"]
+    # 变宽：左边界（GL x 最小）更靠外；变弯：整体高度增加而宽度不变
+    assert wide["alpha_bbox"][0] < base["alpha_bbox"][0]
+    assert (smile["alpha_bbox"][3] - smile["alpha_bbox"][1]) > \
+        (base["alpha_bbox"][3] - base["alpha_bbox"][1])
+
+
+@requires_pixels
 def test_eye_open_changes_rendered_pixels(tmp_path):
     """ParamEyeLOpen 从 1 到 0：眼睛内容被压扁，不透明像素必须减少。"""
     builder_result = _expression_rig(
-        "ParamEyeLOpen", 1, "EyeBlink_L", "close_center")
+        [("ParamEyeLOpen", 0, 1, 1)], "EyeBlink_L", "eye", grid_cols=2)
     _, export_result = _export(tmp_path, builder_result)
     compiled = compile_export_moc3(
         builder_result=builder_result,

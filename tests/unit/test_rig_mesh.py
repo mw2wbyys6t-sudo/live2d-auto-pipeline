@@ -304,14 +304,15 @@ class TestTinyFeatureMesh:
         mask[((yy - cy) / ry) ** 2 + ((xx - cx) / rz) ** 2 <= 1.0] = True
         return mask
 
-    def test_small_feature_is_fully_covered_by_a_quad(self):
+    def test_small_feature_is_fully_covered_by_a_patch(self):
         mask = self._eye()
         assert 100 < int(mask.sum()) <= MeshGenerator.TINY_FEATURE_PIXELS
 
         mesh = MeshGenerator().generate_combined_mesh(_rgba(mask))
         cov = measure_coverage(mask, mesh)
 
-        assert len(mesh["vertices"]) == 4, "小图层应走四顶点面片"
+        # 3×2 面片：中间留一列顶点，弯曲类形变（口型/眉角）才有落点
+        assert len(mesh["vertices"]) == 6, "小图层应走 3×2 面片"
         assert cov["coverage"] == 1.0, cov
         assert cov["uncovered_px"] == 0
 

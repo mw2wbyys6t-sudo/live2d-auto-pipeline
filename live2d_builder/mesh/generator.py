@@ -49,10 +49,16 @@ class MeshGenerator:
     TINY_FEATURE_PIXELS = 400
 
     def _tiny_feature_mesh(self, mask: np.ndarray, w: int, h: int) -> Dict:
-        """小部件兜底：用 alpha 包围盒的四顶点面片代替 Delaunay 网格。
+        """小部件兜底：用 alpha 包围盒的 **3×2 面片**代替 Delaunay 网格。
 
         四边形覆盖的区域里，图层本身是透明的，所以画面不会多出像素；只是让
         "有内容但点太少" 的图层也能进模型、能被参数驱动。
+
+        为什么是 3 列而不是 4 个角点：变形器/键形只能移动**顶点**，4 角面片的内部
+        形变只能是双线性插值，中间的列即使被控制网格推动也不影响任何顶点 ——
+        实测 ``ParamMouthForm``（口型）与 ``ParamBrowAngle``（眉角）这类"两端动、
+        中间不动"的形变，在 4 角面片上退化成整体平移（嘴整体上移 4px）。
+        加一列中间顶点后，弯曲才真的能表达出来。
         """
         ys, xs = np.where(mask > 0)
         if len(xs) == 0:
@@ -62,16 +68,19 @@ class MeshGenerator:
         x1 = float(min(w - 1, int(xs.max()) + 1))
         y0 = float(max(0, int(ys.min()) - 1))
         y1 = float(min(h - 1, int(ys.max()) + 1))
-        if x1 - x0 < 1.0 or y1 - y0 < 1.0:
+        if x1 - x0 < 2.0 or y1 - y0 < 1.0:
             return self._empty_mesh(w, h)
-        pts = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=float)
+        xm = (x0 + x1) / 2.0
+        pts = np.array([[x0, y0], [xm, y0], [x1, y0],
+                        [x0, y1], [xm, y1], [x1, y1]], dtype=float)
         norm = pts.copy()
         norm[:, 0] /= w
         norm[:, 1] /= h
         return {
             "vertices": pts,
             "vertices_norm": norm,
-            "indices": [[0, 1, 2], [0, 2, 3]],
+            # 2 行 × 2 列 = 4 个四边形、8 个三角形
+            "indices": [[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4]],
             "width": w,
             "height": h,
         }

@@ -276,6 +276,8 @@ def verify_moc3_runtime(
     result: Dict[str, Any] = {
         "ok": False, "exit_code": None, "stdout": "", "stderr": "",
         "timed_out": False, "crashed": False, "blocker": None, "checks": [],
+        "drivable_parameters": [], "declared_but_not_driven": [],
+        "missing_parameters": [],
     }
     path = Path(manifest_path)
     if not path.is_file():
@@ -311,10 +313,18 @@ def verify_moc3_runtime(
         return result
 
     result["checks"] = payload.get("checks") or []
+    # 验收项来自模型自报的 Capabilities.DrivableParameters；声明了但没绑定的参数
+    # 单独透出（如需要美术图层的腮红/眼泪），让上层能如实展示而不是当成"全通过"。
+    result["drivable_parameters"] = payload.get("drivable_parameters") or []
+    result["declared_but_not_driven"] = payload.get("declared_but_not_driven") or []
+    result["missing_parameters"] = payload.get("missing_parameters") or []
     result["ok"] = bool(payload.get("runtime_verified"))
     if not result["ok"]:
-        result["blocker"] = (payload.get("error")
-                             or "官方内核受控像素验证未通过")
+        failed = [c.get("parameter") for c in result["checks"]
+                  if c.get("driven") and not c.get("passed")]
+        detail = f"（未通过的参数: {', '.join(str(p) for p in failed)}）" if failed else ""
+        result["blocker"] = ((payload.get("error")
+                              or "官方内核受控像素验证未通过") + detail)
     return result
 
 

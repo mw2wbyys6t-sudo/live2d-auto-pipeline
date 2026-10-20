@@ -113,29 +113,56 @@
   并由子骨骼补出 `Head/Root/Body/Chest`（`Head` 取「脸的水平 + 颈的纵向」）。
   复核：`tests/unit/test_bone_weights.py::TestBoneResolution / TestBonePivots / TestHeadAssemblyExclusion`。
 - **同一网格命中多个旋转参数时保持静态**（多参数带的轴序尚未实测定论，见评审 F-06）。
-- **表情形变（张嘴 / 睁闭眼）走 warp 变形器，不走网格键形**：网格只能挂**一个**参数带，
-  眼睛网格已被双眼球键形（`ParamEyeBallX/Y`）、嘴网格已被头部三轴键形（`ParamAngleX/Y/Z`）
-  占满；变形器与网格键形是两层，可以同时生效。绑定参数**写死**在变形器说明里
-  （`parameter` + `profile`，见 `moc3_pipeline.DEFORMER_PROFILES`）——这两个效果没有对应骨骼，
-  无法像转动/呼吸那样靠枢轴就近匹配推导。
-  * `ParamMouthOpenY`（`open_down`）：**网格上沿钉住**，下沿按 2.5× 网格高度下拉。
-    锚点必须是网格自身而不是控制网格（控制网格含头部键形摆动范围，拿它当锚点会上唇下漂 1.19px）。
-  * `ParamEyeLOpen` / `ParamEyeROpen`（`close_center`）：以网格纵向中心为轴压到原高度的 8%
-    （留 8% 而不是 0：控制网格退化成一条线会让内核的逆映射退化）。
-  * 实测（官方内核受控像素验证，`drivers.live2d_runtime.verify`）：修复前这两个参数的
-    `changed_pixels` **恒为 0**；现在 `ParamMouthOpenY` 62px、`ParamEyeLOpen` 220px，
-    `runtime_verified=true`、`deployment_status=ready_for_local_launch`。
+- **表情形变走 warp 变形器，同一个部件的多个参数合成一条「多轴带」**：内核里一个网格只能挂
+  一个参数带（眼睛已被双眼球键形、嘴与眉已被头部三轴键形占满），一个变形器也只能挂一个带，
+  所以口的「开合 × 口型 × 大小」、眉的「上下 × 角度 × 形状」必须压成一条多轴带
+  （`WarpDeformerSpec.axes`，展平序同网格键形：第一个轴步长为 1）。
+  绑定参数写死在变形器说明里（`profile` + `parameters`，见 `moc3_pipeline.DEFORMER_PROFILES`）
+  ——这些效果没有对应骨骼，无法像转动/呼吸那样靠枢轴就近匹配推导。
+
+  | 变形器 | 参数（一条带） | 形变 |
+  |---|---|---|
+  | `MouthOpen` | `MouthOpenY` × `MouthForm` × `MouthSize` | 上沿钉住下拉 2.5×；两端上/下弯 0.8×；横向 0.65~1.35 |
+  | `BrowMove_L/R` | `BrowLY` × `BrowLAngle` × `BrowLForm`（R 侧镜像） | 上下 0.6×；倾斜 0.35×；中段上拱 0.25× |
+  | `EyeBlink_L/R` | `EyeLOpen` / `EyeROpen` | 以纵向中心压到 8%（不给 0：控制网格退化成线会让内核逆映射退化） |
+  | `HairFront/BackSwing` | `HairSwing` | 发根钉住、发梢横向摆幅 ∝ 深度^1.5 |
+  | `BodySway` | `BodyAngleX` × `BodyAngleY` × `BodySway` × `Breath` | 越靠肩位移越大、胯部不动（4 轴 81 格） |
+  | `ShoulderLift_L/R` | `ShoulderL` / `ShoulderR` | 整条上臂抬落 0.12×（没有独立肩层） |
+
+  * 两个必须踩住的坑：**形变量要按网格自身尺寸算**，不能按控制网格（含头部键形摆动范围，
+    嘴的 5px 会被当成 28px）；**横向归一化必须夹到 [-1,1]**，否则控制网格比网格宽 4 倍时
+    `t²` 到 16，嘴角被拉起 21px，脸上拉出一道 V 形伤疤。
+  * 实测（官方内核受控像素验证）：修复前 `ParamMouthOpenY`/`ParamEyeLOpen` 的
+    `changed_pixels` **恒为 0**；现在 28 个参数里 24 个真的会动，
+    嘴 62px、睁闭眼 220/208px、眉 75~95px、口型 33px。
   * **观感受素材限制**：嘴在多数立绘里只是一条 2~4px 的墨线，没有"张开"的画稿，能做的只是
-    把线按比例撑开；也没有眼睑图层，闭眼只能把眼球内容向中心收拢（没有真正闭合的皮肤褶皱）。
-    要更自然需要美术提供张嘴/闭眼的分层。
-  复核：`tests/unit/test_moc3_deformers.py::TestExpressionDeformerProfiles`、
+    把线按比例撑开；也没有眼睑图层，闭眼只能把眼球内容向中心收拢。
+  * 仍未驱动、属于**缺美术图层**的只有 4 个：`ParamCheek`、`ParamTears`、`ParamTearsL/R`
+    （腮红/眼泪特效层）。它们在 `verify` 里列为 `declared_but_not_driven`，不冒充已落地。
+  复核：`tests/unit/test_moc3_deformers.py::TestExpressionDeformerProfiles /
+  TestMultiAxisBandHelpers / TestDrivenParameterReporting`、
   `tests/integration/test_pipeline_moc3_export.py::test_mouth_open_changes_rendered_pixels` /
-  `::test_eye_open_changes_rendered_pixels`。
-- **小图层一律用四顶点面片**（`MeshGenerator.TINY_FEATURE_PIXELS = 400`）：轮廓按 12px 采样，
+  `::test_mouth_form_and_size_are_driven_independently` / `::test_eye_open_changes_rendered_pixels`。
+- **受控像素验收按「模型自报的能力」逐项验，不再固定三个参数**：导出器把编译后真正被绑定的
+  参数写进 `model3.json` 的 `Capabilities.DrivableParameters`（网格键形 + warp 变形器的带，
+  见 `moc3_pipeline.driven_parameters`），`drivers/live2d_runtime/verify.py` 对**每一个**都做
+  min/max 两端取帧比对，其余声明过的参数列为 `declared_but_not_driven`。
+  验收视口取模型画布尺寸（最长边夹到 1024），让「1 模型像素 = 1 渲染像素」——曾经固定 400×500，
+  只有画布的 0.6 倍，口型这类小变化被缩到 19px，卡在 `changed > 20` 阈值上误判为不动。
+  历史读数（同一份产物）：修复前 28 个参数里 **19 个不动**，报告照样显示通过。
+  复核：`tests/unit/test_moc3_verify.py::TestDrivableParameterSelection`。
+- **指纹只覆盖模型字节，不覆盖验证自身的证据图**：`package_sha256` 会遍历整个产物目录，
+  而受控像素验证会把 min/max 截图落盘——调用方把证据目录放在产物里（最自然的放法）时，
+  「验证期间包没变」这条判断就会对任何产物恒假（实测报 `Model package changed during
+  verification`）。`verify()` 现在把证据目录排除在指纹之外；模型文件仍然全部计入。
+  复核：`tests/unit/test_native_runtime.py::test_package_fingerprint_ignores_verification_evidence`。
+- **小图层一律用 3×2 面片**（`MeshGenerator.TINY_FEATURE_PIXELS = 400`）：轮廓按 12px 采样，
   39×30 的眼睛只取到 6 个边界点，三角化+质心过滤后剩 9 个三角形，实测只盖住眼睛的 27%
   （眼白 IoU 0.275、瞳孔 0.392），渲染出来是几块碎片。面片覆盖 alpha 包围盒（各留 1px），
-  包围盒内的图层像素本身透明，所以画面不会多出内容。这条也是上面两个表情参数能起作用的前提
+  包围盒内的图层像素本身透明，所以画面不会多出内容。这条也是上面表情参数能起作用的前提
   ——嘴只有 27px，Delaunay 连三角形都出不来，整层会从模型里静默消失。
+  中间那一列顶点是必需的：4 角面片的形变只能是双线性插值，"两端动、中间不动"的口型/眉角
+  会退化成整体平移（实测嘴整体上移 4px）。
   复核：`tests/unit/test_rig_mesh.py::TestTinyFeatureMesh`。
 - **glue 类型变形器不支持**，会被记入 `deformers_uncompiled` 并压住 `runtime_ready`。
 - **真实美术观感未签核**：几何判据（画得出、位置尺度对）已闭环，但「像不像原画」仍需人工确认（F-05）。
