@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PRD · Live2D 角色自动化制作（素材分层 + 绑定规格）v1</title>
+<style>
+  :root{
+    --bg:#0b0b10; --panel:#14141c; --panel-2:#1a1a23; --line:#2a2a36;
+    --text:#e8e8ef; --muted:#9a9aab; --faint:#6b6b7b;
+    --pink:#ec4899; --violet:#8b5cf6; --emerald:#34d399; --amber:#fbbf24; --red:#f87171; --sky:#38bdf8;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.75; font-size:15px;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:56px 28px 96px}
+  header.hero{
+    padding:34px 32px;border:1px solid var(--line);border-radius:18px;
+    background:
+      radial-gradient(700px 260px at 10% -10%, rgba(236,72,153,.18), transparent 60%),
+      radial-gradient(700px 260px at 95% 0%, rgba(56,189,248,.16), transparent 60%),
+      linear-gradient(180deg,#16111f,#101017);
+    margin-bottom:44px;
+  }
+  .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--pink);margin-bottom:10px}
+  h1{font-size:30px;line-height:1.3;margin:0 0 12px}
+  .sub{color:var(--muted);max-width:800px;margin:0}
+  .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}
+  .tag{font-size:12px;color:var(--muted);border:1px solid var(--line);background:#0f0f16;border-radius:999px;padding:5px 12px}
+  .tag b{color:var(--text);font-weight:600}
+
+  h2{font-size:21px;margin:52px 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:30px 0 10px;color:#f2f2f8}
+  h4{font-size:14px;margin:20px 0 8px;color:#d9d9e4}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:6px 0}
+  code{background:#0f0f16;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:13px}
+  a{color:var(--sky);text-decoration:none;border-bottom:1px dotted rgba(56,189,248,.5)}
+  a:hover{border-bottom-style:solid}
+
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px}
+  .card h4{margin-top:0}
+  .card p:last-child{margin-bottom:0}
+
+  .callout{border-left:3px solid var(--amber);background:rgba(251,191,36,.07);padding:16px 18px;border-radius:0 10px 10px 0;margin:18px 0}
+  .callout.danger{border-left-color:var(--red);background:rgba(248,113,113,.08)}
+  .callout.ok{border-left-color:var(--emerald);background:rgba(52,211,153,.07)}
+  .callout .k{font-weight:700;display:block;margin-bottom:6px}
+
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--panel-2);color:#f2f2f8;font-weight:600;white-space:nowrap}
+  tbody tr:nth-child(even){background:rgba(255,255,255,.015)}
+  td code{font-size:12.5px}
+
+  .pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+  .pill.p0{color:#0b0b10;background:var(--emerald);border-color:transparent;font-weight:700}
+  .pill.p1{color:#0b0b10;background:var(--amber);border-color:transparent;font-weight:700}
+  .pill.no{color:var(--red);border-color:rgba(248,113,113,.5)}
+  .pill.tbd{color:var(--violet);border-color:rgba(139,92,246,.5)}
+
+  .fr{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:22px 24px;margin:22px 0}
+  .fr > header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+  .fr .id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--pink);letter-spacing:.06em}
+  .fr h3{margin:0;font-size:18px}
+  .fr .purpose{color:var(--muted);margin:6px 0 14px}
+  .fr dl{margin:0}
+  .fr dt{font-weight:600;font-size:13px;color:#cfcfe0;margin-top:14px;letter-spacing:.02em}
+  .fr dd{margin:6px 0 0;padding-left:0}
+
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:16px 0;font-size:13px}
+  .flow .node{border:1px solid var(--line);background:var(--panel-2);border-radius:9px;padding:8px 12px}
+  .flow .node.hot{border-color:rgba(248,113,113,.55);background:rgba(248,113,113,.09)}
+  .flow .node.ok{border-color:rgba(52,211,153,.5);background:rgba(52,211,153,.08)}
+  .flow .arrow{color:var(--faint)}
+
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--muted)}
+  .hr{height:1px;background:var(--line);margin:36px 0}
+  footer{margin-top:56px;color:var(--faint);font-size:12.5px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="eyebrow">Product Requirements Document · v1</div>
+  <h1>Live2D 角色自动化制作：素材分层与绑定规格</h1>
+  <p class="sub">
+    把一张角色原画变成「结构合理、可导入 Live2D Cubism、能继续绑定和做动画」的分层素材，
+    并同时产出网格、变形器、参数、物理的规格与验收证据。<b>素材分层完成</b>与
+    <b>模型绑定完成</b>在本产品中是两个独立状态，各自要求不同的证据。
+  </p>
+  <div class="meta">
+    <span class="tag">深度 <b>Heavy · 新工作流</b></span>
+    <span class="tag">主用户 <b>Live2D 绑定师</b></span>
+    <span class="tag">交付形态 <b>PSD + 规格包 + 验收报告</b></span>
+    <span class="tag">状态 <b>待评审</b></span>
+  </div>
+</header>
+
+<h2>1. 背景与目标</h2>
+
+<p>
+  当前链路已经能把原画切成 29 个语义图层，并算出每个部件的像素网格、关节拆分与覆盖率
+  （实测一张 600×900 立绘：37 个绑定部件、12509 顶点、119812 个角色像素 100% 被网格覆盖）。
+  但产出的东西<b>无法直接交给 Live2D 继续做</b>，原因不在分层质量，而在交接形态：
+</p>
+
+<div class="grid g2">
+  <div class="card">
+    <h4>问题一：交接物不是 Cubism 能吃的格式</h4>
+    <p>
+      现在交付的是 PNG 图层包与 JSON。Cubism 的官方入口只有一个：
+      <b>导入 PSD 自动生成 ArtMesh</b>。PNG 包无法代入层级、无法保留坐标原点、
+      无法让绑定师在 Editor 里继续工作。
+    </p>
+  </div>
+  <div class="card">
+    <h4>问题二：「分层好了」被误读成「模型能动了」</h4>
+    <p>
+      分层完成只说明图被切开了。模型能不能动取决于网格密度、变形器层级、参数键形与物理，
+      这些是另一套工作。两者混为一谈，就会把「切图成功」当成「模型可交付」。
+    </p>
+  </div>
+</div>
+
+<div class="callout danger">
+  <span class="k">决定性约束：Cubism 没有可编程的建模接口</span>
+  官方「外部应用集成 API」的全部指令是：注册插件、读取/写入参数值、读取参数与参数组、
+  读取文档与当前模型、读取当前编辑模式、读取物理 FPS、写日志，以及四类<b>导出完成通知</b>
+  （<span class="mono">NotifyMocFileExported / NotifyPhysicsFileExported / NotifyMotionFileExported / NotifyMotionSyncFileExported</span>）。
+  <b>没有任何指令能创建 ArtMesh、设置网格顶点、创建变形器、创建参数或关键形状，也没有保存工程文件的指令。</b>
+  参见 <a href="https://docs.live2d.com/en/cubism-editor-manual/external-application-integration-api-list/">官方指令表</a>。
+  官方 Core 只提供读取 <span class="mono">.moc3</span> 的接口，<span class="mono">.cmo3</span>
+  是 Editor 的工程格式且无公开规范（见
+  <a href="https://docs.live2d.com/en/cubism-editor-manual/file-type-and-extension/">文件类型</a> 与
+  <a href="https://docs.live2d.com/wp-content/uploads/2021/03/NativeCoreAPIReference_en_r8.pdf">Core API</a>）。
+</div>
+
+<p>
+  由此得到一个必须写进产品契约的结论：<b>「一键生成 Live2D 可编辑工程」在官方路径上不成立。</b>
+  产品的真实价值点不是伪造这一步，而是把「导入前」的一切做到可导入、可校验、可继续绑定，
+  并把「导入后」的剩余工作显式交出去。
+</p>
+
+<h3>目标（可观测）</h3>
+<ul>
+  <li>绑定师拿到的 PSD <b>能被 Cubism Editor 一次导入成功</b>，图层结构直接映射成部件树，不出现导入报错或图层丢失。</li>
+  <li>每个部件都带有<b>网格规格</b>（顶点/三角形/覆盖率），绑定师可以选择沿用或替换自动生成的网格。</li>
+  <li>每份交付都附带<b>状态与证据</b>：哪些是机器已验证的、哪些需要人工签核、哪些没做——三者不混写。</li>
+</ul>
+
+<h2>2. 产品契约与能力边界</h2>
+
+<p>这是本 PRD 最重要的部分。下面的边界决定了产品能承诺什么，也决定了验收怎么判。</p>
+
+<table>
+  <thead>
+    <tr><th style="width:26%">能力</th><th style="width:14%">归属</th><th>说明与依据</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>原画分析、部件规划、分割、遮挡补绘</td>
+      <td><span class="pill p0">产品负责</span></td>
+      <td>可直接产出并逐像素验收。</td>
+    </tr>
+    <tr>
+      <td>构建符合 Cubism 硬约束的导入用 PSD</td>
+      <td><span class="pill p0">产品负责</span></td>
+      <td>硬约束见 §5 FR-04，全部来自官方「PSD 创建注意事项」。</td>
+    </tr>
+    <tr>
+      <td>产出网格 / 变形器 / 参数 / 物理的<b>规格文件</b></td>
+      <td><span class="pill p0">产品负责</span></td>
+      <td>规格可机器校验（顶点是否落在部件上、覆盖率、父子关系是否成环）。</td>
+    </tr>
+    <tr>
+      <td>生成 <span class="mono">physics3.json</span></td>
+      <td><span class="pill p0">产品负责</span></td>
+      <td>物理配置是<b>运行时文件</b>，不依赖 Editor 编辑态，可直接生成并校验。</td>
+    </tr>
+    <tr>
+      <td>在 Cubism Editor 内创建 ArtMesh / 变形器 / 键形</td>
+      <td><span class="pill no">产品不负责</span></td>
+      <td>官方无对应 API（见上方约束）。导入时 Editor 自动生成「最少顶点 + 1px 内边距」的 ArtMesh，此为官方行为，与产品无关。</td>
+    </tr>
+    <tr>
+      <td>输出 <span class="mono">.cmo3</span> 可编辑工程</td>
+      <td><span class="pill no">不承诺</span></td>
+      <td>无公开格式规范、无官方写入接口。任何此类产物都属逆向实现，不得作为默认交付物宣传。</td>
+    </tr>
+    <tr>
+      <td>「模型能动了」的判定</td>
+      <td><span class="pill tbd">条件成立</span></td>
+      <td>仅在「已通过官方内核加载 + 参数变化产生预期形变 + 人工观感签核」三项齐备时才成立，见 §6 证据等级。</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <span class="k">推论：网格规格的真实用途</span>
+  产品算出的像素网格在官方路径上有三个合法用途：<b>①</b> 作为绑定师替换自动网格时的目标规格；
+  <b>②</b> 作为自检依据（对比 Editor 自动生成的网格密度是否够用）；
+  <b>③</b> 若走自建 <span class="mono">.moc3</span> 编译链路，则作为该链路的输入。
+  它<b>不是</b>「导入即生效」的东西，交付文案不得这样描述。
+</div>
+
+<h2>3. 范围</h2>
+
+<h3>P0：最小完整旅程</h3>
+<div class="flow">
+  <span class="node">原画</span><span class="arrow">→</span>
+  <span class="node">分析 + 分层计划</span><span class="arrow">→</span>
+  <span class="node">分割 + 遮挡补绘</span><span class="arrow">→</span>
+  <span class="node">统一画布组装</span><span class="arrow">→</span>
+  <span class="node">导入用 PSD</span><span class="arrow">→</span>
+  <span class="node">PSD 自检</span><span class="arrow">→</span>
+  <span class="node hot">人工导入 Cubism</span><span class="arrow">→</span>
+  <span class="node">网格/变形器/参数/物理规格</span><span class="arrow">→</span>
+  <span class="node ok">验收报告</span>
+</div>
+<p>
+  入口条件：用户提供一张角色原画（含透明通道或可分离背景）。<br />
+  完成证据：一份可被 Cubism 导入的 PSD + 规格包 + 验收报告，报告中每一层都能追溯到「已验证 / 待签核 / 未做」。
+</p>
+<p>
+  最重要的失败恢复：<b>PSD 导入失败</b>。产品必须在交付前自己先做一次「重开 + 图层结构 + 合成比对」，
+  把会因为「同名图层、图层蒙版、非 8bit、非 sRGB、线稿未合并」而被 Editor 拒绝或改色的问题挡在交付之前。
+</p>
+
+<h3>P1：可选增强</h3>
+<ul>
+  <li>参数键形与网格键形的自动烘焙（依赖自建 <span class="mono">.moc3</span> 编译链路，且须先解决已知内核崩溃问题）。</li>
+  <li>眼白/瞳孔/高光/上下睫毛的进一步细分，以及嘴型多态（<code>mouth_a/i/u/e/o</code>）。</li>
+  <li>多视角设定图（正面/侧面/背面）驱动同一套部件的形变参考。</li>
+</ul>
+
+<h3>明确不做</h3>
+<ul>
+  <li>不做「导入 Editor 后自动完成建模」的宣称或暗示。</li>
+  <li>不把 AI 补绘结果直接标为高质量完成（必须经过审核标记）。</li>
+  <li>不为了增加图层数量而过度拆分；不需要独立运动的细节必须合并。</li>
+</ul>
+
+<h2>4. 角色与对象模型</h2>
+
+<h3>4.1 角色</h3>
+<table>
+  <thead><tr><th style="width:22%">角色</th><th>职责</th><th style="width:30%">关键权限</th></tr></thead>
+  <tbody>
+    <tr><td>原画提供者</td><td>提供原画与动作意图（要做什么动作、哪些部位必须能独立动）</td><td>提供/替换输入；确认分层计划</td></tr>
+    <tr><td>绑定师（主用户）</td><td>导入 PSD、调整网格与变形器、做键形与物理、判定观感</td><td>接受/修改/驳回规格；执行观感签核</td></tr>
+    <tr><td>审核人</td><td>判定补绘是否可接受、观感是否像原画</td><td>通过/驳回补绘与观感</td></tr>
+  </tbody>
+</table>
+<p class="mono">说明：本产品不设「自动发布」角色。任何进入成品目录的动作都必须有人签核。</p>
+
+<h3>4.2 核心对象</h3>
+<table>
+  <thead><tr><th style="width:18%">对象</th><th>定义</th><th style="width:34%">关键属性</th></tr></thead>
+  <tbody>
+    <tr><td>作品（Model）</td><td>一次任务的全部产物</td><td>画布尺寸、DPR、状态、证据清单</td></tr>
+    <tr><td>部件（Part）</td><td>一个可独立运动或可独立显隐的绘图单元</td><td>名称、所属分组、遮挡序、是否需补绘、审核状态</td></tr>
+    <tr><td>网格规格（MeshSpec）</td><td>某部件的顶点与三角形目标</td><td>顶点数、三角形数、覆盖率、外框比</td></tr>
+    <tr><td>变形器（Deformer）</td><td>装载部件或子变形器的容器</td><td>类型（warp/rotation）、父子关系、控制目标</td></tr>
+    <tr><td>参数（Parameter）</td><td>驱动形变的自变量</td><td>ID、范围、默认值、关键形状列表</td></tr>
+    <tr><td>物理（Physics）</td><td>由输入参数驱动的摆动</td><td>输入/输出参数、摆动组、适用部件</td></tr>
+    <tr><td>证据（Evidence）</td><td>某项断言的可复查依据</td><td>等级、生成方式、是否人工签核</td></tr>
+  </tbody>
+</table>
+
+<h3>4.3 部件分层基准</h3>
+<p>
+  拆分依据是<b>运动能力与遮挡关系</b>，不是颜色。下表为评估清单；实际拆分数量随角色而变，
+  但「必须独立」的一律不得合并。
+</p>
+<table>
+  <thead><tr><th style="width:20%">分组</th><th>评估部件</th><th style="width:22%">默认处理</th></tr></thead>
+  <tbody>
+    <tr><td>头部 · 发</td><td>后发、侧发、前发、刘海、辫子、散发、发饰</td><td>长发分段（2~3 段），刘海独立</td></tr>
+    <tr><td>头部 · 脸</td><td>脸、耳、眉（左/右）、眼白、虹膜、瞳孔、高光、上下睫毛、鼻、嘴</td><td>眼白与虹膜必须分离；高光可并入虹膜</td></tr>
+    <tr><td>躯干</td><td>脖子、颈部阴影、躯干、腰</td><td>脖子独立；胸/腰按服装分段</td></tr>
+    <tr><td>上肢</td><td>上臂、前臂、手；袖口</td><td>上臂/前臂必须按关节分离</td></tr>
+    <tr><td>下肢</td><td>大腿、小腿、脚；袜、靴、靴口装饰</td><td>大腿/小腿必须按关节分离</td></tr>
+    <tr><td>服装</td><td>前片、后片、袖子、领口、领结、裙摆（前/后/左/右）、内衬、腰带、肩带</td><td>裙摆必须分片；领口/袖口可作派生层</td></tr>
+    <tr><td>配件</td><td>饰品、飘带、手持物、链条、耳饰</td><td>会摆动的必须独立并可挂物理</td></tr>
+  </tbody>
+</table>
+
+<h2>5. 功能需求</h2>
+
+<!-- FR-01 -->
+<section class="fr">
+  <header><span class="id">FR-01</span><h3>输入分析与分层计划</h3><span class="pill p0">P0</span></header>
+  <p class="purpose">让绑定师在动手切图之前就能判断「这套素材能不能支撑我要做的动作」。</p>
+  <dl>
+    <dt>触发</dt>
+    <dd>用户提交原画并确认开始。</dd>
+
+    <dt>处理规则</dt>
+    <dd>
+      分析并记录：画布分辨率与色彩模式；角色完整轮廓；头/躯干/四肢位置；
+      头发·脸·五官·服装·配饰的结构；部件之间的前后遮挡关系；用户声明的预期动作；
+      哪些区域被遮挡需要补绘；哪些部位适合合并、哪些必须独立。
+      <br />
+      当原画为多视角设定图时，必须指定「以哪一视角为主视角」，其余视角仅作补绘参考，
+      <b>不得混入同一画布</b>。
+    </dd>
+
+    <dt>结果与状态变化</dt>
+    <dd>
+      输出<b>分层计划</b>：部件清单（名称、分组、遮挡序、是否需补绘）+ 动作需求映射
+      + 合并/独立判定及理由。计划通过后才允许进入分割。
+    </dd>
+
+    <dt>例外</dt>
+    <dd>
+      原画缺少必要部位（如手被完全遮挡且无法补绘）时，计划中必须标为
+      <b>「缺失·不可补绘」</b>，并说明该动作将无法实现；不得用占位图形冒充。
+    </dd>
+  </dl>
+</section>
+
+<!-- FR-02 -->
+<section class="fr">
+  <header><span class="id">FR-02</span><h3>部件分割与遮挡补绘</h3><span class="pill p0">P0</span></header>
+  <p class="purpose">产出既干净又能支撑运动的部件像素；被遮挡的部分要补出来，且补绘必须可追溯。</p>
+  <dl>
+    <dt>触发</dt>
+    <dd>分层计划被确认。</dd>
+
+    <dt>处理规则</dt>
+    <dd>
+      按计划切出各部件；同一部件内的线稿、底色、阴影、高光按「是否需要独立控制」决定合并或分离——
+      默认合并，只有需要单独变色/单独运动时才分离。
+      <br />
+      对下列区域执行补绘：头发遮挡的额头、侧发后方的脸缘、袖内手臂、衣服下方躯干、
+      裙摆下可能露出的腿、被遮挡的关节连接处。
+      补绘须匹配原图的线稿、色彩、光照、透视与材质。
+    </dd>
+
+    <dt>结果与状态变化</dt>
+    <dd>
+      每个补绘区域产生一条<b>补绘记录</b>：区域范围、补绘依据（哪一侧的对称/哪段连续线稿）、
+      状态（<code>待审核</code> / <code>已审核</code> / <code>驳回</code>）。
+      状态为 <code>待审核</code> 的补绘<b>不得</b>让作品进入「素材分层完成」。
+    </dd>
+
+    <dt>例外</dt>
+    <dd>
+      补绘与周围像素的线稿/明暗接不上时，该区域降级为 <code>驳回</code> 并保留原始空洞，
+      由绑定师决定是否接受「带空洞的部件」。
+    </dd>
+
+    <dt>禁止项</dt>
+    <dd>不得把棋盘格图案当作透明；不得把纯白背景合并进角色部件；不得把未补绘的拆分图当作完成品。</dd>
+  </dl>
+</section>
+
+<!-- FR-03 -->
+<section class="fr">
+  <header><span class="id">FR-03</span><h3>统一画布与透明坐标</h3><span class="pill p0">P0</span></header>
+  <p class="purpose">保证部件在 PSD 里回到原位，不因自动裁边而错位。</p>
+  <dl>
+    <dt>处理规则</dt>
+    <dd>
+      所有部件使用<b>同一画布尺寸与同一坐标原点</b>；部件必须带真正的 Alpha 透明像素，
+      透明区不得是白色或棋盘格。
+      <br />
+      若为节省体积对部件做了裁切，必须记录<b>偏移坐标</b>（原画布坐标系下的左上角），
+      并在构建 PSD 时按偏移复位。偏移量为 0 的部件也要显式记为 0，便于校验。
+    </dd>
+
+    <dt>结果与状态变化</dt>
+    <dd>
+      生成一张<b>复位校验图</b>：所有部件按偏移贴回画布后的合成结果，与原画逐像素比对；
+      差异必须在报告中标明位置与幅度。
+    </dd>
+
+    <dt>例外</dt>
+    <dd>若某部件因裁切导致复位后与邻接部件出现缝隙或重叠，阻断交付并要求重新组装。</dd>
+  </dl>
+</section>
+
+<!-- FR-04 -->
+<section class="fr">
+  <header><span class="id">FR-04</span><h3>导入用 PSD 构建</h3><span class="pill p0">P0</span></header>
+  <p class="purpose">产出一份「Cubism 一定吃得下」的 PSD。这是整个产品最关键的一次交接。</p>
+
+  <div class="callout danger">
+    <span class="k">硬约束（任一不满足即导入失败或改色，全部来自官方）</span>
+    ① 保存格式必须是 <b>PSD</b>；② 色彩模式必须是 <b>RGB</b>；③ 通道必须 <b>8bit/channel</b>；
+    ④ 色彩配置必须 <b>sRGB</b>；⑤ <b>不得有同名图层</b>；⑥ <b>不得使用图层蒙版</b>；
+    ⑦ <b>线稿与剪切蒙版必须合并</b>；⑧ 每个组<b>最底层的图层作为纹理</b>，故线稿层与填色层须预先合并；
+    ⑨ 图层属性须能对应 Editor 的 <b>Color blend</b>；⑩ Opacity 会生效，但 <b>Fill 按 100% 输出</b>。
+    来源：<a href="https://docs.live2d.com/en/cubism-editor-manual/precautions-for-psd-data/">Notes on PSD creation</a>、
+    <a href="https://docs.live2d.com/en/cubism-editor-manual/psd-import/">Import PSDs</a>。
+  </div>
+
+  <dl>
+    <dt>触发</dt>
+    <dd>部件分割与补绘全部通过审核。</dd>
+
+    <dt>处理规则</dt>
+    <dd>
+      按 §4.3 的分组建立<b>多层组结构</b>（组可多层嵌套）。每个部件在组内是<b>单一图层</b>，
+      线稿与填色已合并。图层名唯一且稳定，直接使用部件名，不使用序号前缀之外的装饰性文字。
+      <br />
+      图层顺序即遮挡顺序：后排在下、前排在上，与编辑器里的 z 序一致。
+    </dd>
+
+    <dt>参考层的处理（容易踩坑）</dt>
+    <dd>
+      官方明确「<b>PSD 中隐藏的图层与组也会被导入</b>」。因此<b>原图参考层不能直接放进导入用 PSD</b>，
+      否则会被转成一个占满画布的 ArtMesh。参考图只能通过以下方式承载：
+      <b>①</b> 作为独立文件随包交付；
+      <b>②</b> 走「重新导入 → 仅注册 PSD、不添加 ArtMesh」的方式挂到项目里；
+      <b>③</b> 作为「原图 / 模型导引图」使用。
+      白色背景参考层同理，不得作为普通图层进入导入用 PSD。
+    </dd>
+
+    <dt>结果与状态变化</dt>
+    <dd>
+      产出一份 PSD，以及一份<b>图层清单</b>：图层名、分组路径、画布偏移、像素数、遮挡序、对应部件。
+      图层清单是后续「导入是否完整」的比对基准。
+    </dd>
+
+    <dt>例外</dt>
+    <dd>
+      部件名在合并后出现重名（例如左右拆分后同名）时，必须自动加侧别后缀并同步更新图层清单；
+      不得静默丢弃其中一个。
+    </dd>
+  </dl>
+</section>
+
+<!-- FR-05 -->
+<section class="fr">
+  <header><span class="id">FR-05</span><h3>PSD 自检</h3><span class="pill p0">P0</span></header>
+  <p class="purpose">在交出去之前，自己先当一次 Cubism：能不能打开、层对不对、合出来像不像。</p>
+  <dl>
+    <dt>触发</dt>
+    <dd>PSD 构建完成。</dd>
+    <dt>处理规则</dt>
+    <dd>
+      三项必查：<b>①</b> 重新打开 PSD，逐层读取并核对与图层清单一致（数量、名称、分组、尺寸、偏移）；
+      <b>②</b> 检查硬约束（格式/位深/色彩模式/同名/蒙版/Fill 与 Opacity）；
+      <b>③</b> 把 PSD 各层按遮挡序合成，与原画比对。
+    </dd>
+    <dt>结果与状态变化</dt>
+    <dd>
+      自检通过的 PSD 才标记为 <code>可导入</code>；任一硬约束不通过则标记 <code>不可导入</code>
+      并阻断交付，同时列出具体违规项。
+    </dd>
+    <dt>例外</dt>
+    <dd>
+      合成差异可能来自补绘区域（原画中被遮挡，合成时露出来了）。报告必须<b>区分</b>
+      「补绘导致的合理差异」与「分割/组装错误导致的差异」。
+    </dd>
+  </dl>
+</section>
+
+<!-- FR-06 -->
+<section class="fr">
+  <header><span class="id">FR-06</span><h3>像素网格规格</h3><span class="pill p0">P0</span></header>
+  <p class="purpose">让绑定师知道每个部件该用多密的网格，并给出可直接核对的目标顶点集。</p>
+  <dl>
+    <dt>处理规则</dt>
+    <dd>
+      为每个部件生成网格规格，并<b>逐像素校验覆盖率</b>：部件里每一个不透明像素都必须落在
+      某个三角形内，未覆盖像素数必须为 0。同时报告<b>外框比</b>（网格面积 ÷ 部件面积），
+      作为「网格是否过松」的量化依据。
+      <br />
+      网格密度按部件规模自适应：大面积部件用较粗的初始格，轮廓与细节处细分到更小的格；
+      极小部件（如鼻尖）允许外框比偏高，但必须在报告中列出。
+    </dd>
+
+    <dt>结果与状态变化</dt>
+    <dd>
+      每个部件产出一条规格：顶点数、三角形数、覆盖率、外框比；以及整体统计。
+      规格用于三种用途：替换 Editor 自动网格时的目标、自检 Editor 网格密度是否够用、
+      自建编译链路的输入。
+    </dd>
+
+    <dt>重点检查部位</dt>
+    <dd>脸轮廓、眼睛与睫毛、嘴部、细长发束、手指与关节、裙摆与飘带、饰品轮廓。</dd>
+
+    <dt>例外</dt>
+    <dd>
+      轮廓里若存在「不属于任何部件但确实属于角色」的像素（色块接缝、外轮廓暗边），
+      必须收进<b>残差层</b>并如实报告其占比，不得静默丢弃后再宣称 100% 覆盖。
+    </dd>
+  </dl>
+</section>
+
+<!-- FR-07 -->
+<section class="fr">
+  <header><span class="id">FR-07</span><h3>变形器层级规格</h3><span class="pill p0">P0</span></header>
+  <p class="purpose">把「每个部件该挂在哪、由谁带动」写清楚，避免绑定师从零设计层级。</p>
+  <dl>
+    <dt>处理规则</dt>
+    <dd>
+      为每个部件指定：所属变形器、变形器类型（<b>warp</b> 用于形变，<b>rotation</b> 用于旋转）、
+      父子关系。层级必须满足：无环、每个部件恰好一个父级、关节段（上臂/前臂、大腿/小腿）
+      的父级是它的近端段。
+      <br />
+      必须明确每个变形器的<b>控制目标</b>（它想实现什么动作），而不是只给一个名字。
+    </dd>
+
+    <dt>结果与状态变化</dt>
+    <dd>
+      输出变形器树 + 每个部件的挂载关系。校验项：无环、无孤立部件、关节父子链完整。
+    </dd>
+
+    <dt>禁止项</dt>
+    <dd>
+      不得把变形器当成三维骨骼来描述或设计。Live2D 的核心是二维网格 + 变形器 + 参数 + 关键形状。
+    </dd>
+  </dl>
+</section>
+
+<!-- FR-08 -->
+<section class="fr">
+  <header><span class="id">FR-08</span><h3>参数与关键形状规格</h3><span class="pill p0">P0</span></header>
+  <p class="purpose">定义每个参数的作用、范围与关键形状，让「参数存在」和「参数有用」分开。</p>
+  <dl>
+    <dt>参数集合（P0）</dt>
+    <dd>
+      <code>ParamAngleX</code> <code>ParamAngleY</code> <code>ParamAngleZ</code>
+      <code>ParamBodyAngleX</code> <code>ParamBodyAngleZ</code>
+      <code>ParamEyeLOpen</code> <code>ParamEyeROpen</code>
+      <code>ParamEyeBallX</code> <code>ParamEyeBallY</code>
+      <code>ParamMouthOpenY</code> <code>ParamMouthForm</code>
+      <code>ParamBrowLY</code> <code>ParamBrowRY</code>
+      <code>ParamBreath</code>
+    </dd>
+
+    <dt>处理规则</dt>
+    <dd>
+      每个参数必须声明：作用（驱动哪些部件产生什么变化）、取值范围、默认值、
+      关键形状列表（在哪些参数值上存在形状）。
+      <br />
+      范围须与角色的可动幅度一致（例如头部左右转不能超过脖子能承受的角度），
+      不得给出会让部件穿模的范围。
+    </dd>
+
+    <dt>结果与状态变化</dt>
+    <dd>
+      输出参数表 + 每个参数的关键形状列表。
+      <b>「参数已创建」不等于「参数已能驱动」</b>：只有关键形状被实际制作、并在参数变化时观察到
+      预期形变，才能把该参数标为 <code>已生效</code>；否则保持 <code>仅声明</code>。
+    </dd>
+
+    <dt>例外</dt>
+    <dd>
+      某些参数在当前画布上无法产生可观测变化（例如没有对应的可动部件），必须标为
+      <code>不可用</code> 并说明原因，不得用空关键形状凑数。
+    </dd>
+  </dl>
+</section>
+
+<!-- FR-09 -->
+<section class="fr">
+  <header><span class="id">FR-09</span><h3>物理演算配置</h3><span class="pill p0">P0</span></header>
+  <p class="purpose">让摆动类部件在无手动运镜时也有自然的次级运动，且不会失控。</p>
+  <dl>
+    <dt>制作顺序（必须遵守）</dt>
+    <dd>① 后发 → ② 侧发与发梢 → ③ 飘带 → ④ 耳饰与链条 → ⑤ 裙摆与服装。</dd>
+
+    <dt>处理规则</dt>
+    <dd>
+      先完成基础变形，再启用物理。每个摆动组必须声明<b>输入参数</b>与<b>输出参数</b>，
+      并绑定到具体的变形器/部件。摆动参数需与部件长度相关：越长的发束摆幅与延迟越大。
+    </dd>
+
+    <dt>结果与状态变化</dt>
+    <dd>
+      输出 <span class="mono">physics3.json</span> 与一份物理清单（组名、输入、输出、适用部件）。
+      物理配置文件属于运行时文件，可随包直接交付。
+    </dd>
+
+    <dt>验收判据（可观测）</dt>
+    <dd>
+      不得出现：持续抖动、部件漂浮、明显穿模、无法回归默认位置。
+      具体数值容差 <span class="pill tbd">TBD</span>，由验收人按角色幅度确认；
+      判据先以「静置后收敛、回到默认参数后复原、极端参数下不穿模」三条为准。
+    </dd>
+  </dl>
+</section>
+
+<!-- FR-10 -->
+<section class="fr">
+  <header><span class="id">FR-10</span><h3>检测、验收与证据等级</h3><span class="pill p0">P0</span></header>
+  <p class="purpose">把「做过了」和「验证过了」分开，避免用一句「导出成功」掩盖能力缺口。</p>
+  <dl>
+    <dt>必测项</dt>
+    <dd>
+      原始姿势合成、头部左右转、抬头低头、头部倾斜、眼球移动、眨眼、嘴部开合、表情切换、
+      身体倾斜、手臂运动、头发与饰品物理、裙摆与飘带运动。
+      每项输出结果 + 问题清单。
+    </dd>
+
+    <dt>证据分级</dt>
+    <dd>
+      <b>E0 机器已验</b>：可由程序复算（覆盖率、像素守恒、图层清单一致、硬约束校验、层级无环）。<br />
+      <b>E1 内核已验</b>：模型能被官方内核加载，且参数变化产生预期形变（逐像素比对）。<br />
+      <b>E2 人工已签核</b>：补绘可接受、观感像原画、物理手感自然。
+      只有 E2 由人给出，产品不得代签。
+    </dd>
+
+    <dt>结果与状态变化</dt>
+    <dd>
+      验收报告逐项列出：断言、等级、依据、结论。同一份报告里不得出现
+      「E2 未做但整体标为通过」。
+    </dd>
+
+    <dt>例外</dt>
+    <dd>
+      环境不具备官方内核时，E1 项必须标为 <code>未验证·环境缺失</code>，
+      不得因为「CI 全绿」推断为通过。
+    </dd>
+  </dl>
+</section>
+
+<!-- FR-11 -->
+<section class="fr">
+  <header><span class="id">FR-11</span><h3>交付物与作品状态机</h3><span class="pill p0">P0</span></header>
+  <p class="purpose">让任何人拿到产物就能判断它处在哪一步、还差什么。</p>
+  <dl>
+    <dt>交付物</dt>
+    <dd>
+      ① 导入用 PSD；② 图层清单与网格规格；③ 独立部件 PNG（带偏移）；④ 变形器/参数/物理规格；
+      ⑤ <span class="mono">physics3.json</span>；⑥ 分层计划与补绘记录；⑦ 验收报告；⑧ 预览图。
+      <br />
+      可编辑工程（<span class="mono">.cmo3</span>）<b>不在默认交付物内</b>，见 §2。
+    </dd>
+
+    <dt>作品状态机</dt>
+    <dd>
+      <code>已受理</code> → <code>已规划</code> → <code>已分割</code> → <code>已补绘待审</code>
+      → <code>素材分层完成</code> → <code>已导入</code> → <code>绑定中</code> → <code>绑定完成</code>。
+      每次跃迁必须有对应证据；缺少证据时停留在原状态并给出缺口清单。
+    </dd>
+
+    <dt>两个完成态的定义</dt>
+    <dd>
+      <b>素材分层完成</b>：PSD 自检通过 + 补绘全部为 <code>已审核</code> + 网格规格覆盖率 100%。
+      <br />
+      <b>绑定完成</b>：E0 全部通过 + E1 全部通过 + E2 全部签核。
+    </dd>
+
+    <dt>禁止项</dt>
+    <dd>
+      不得把空图层模板、原图复制层、未补绘的拆分图、未经验证的 PSD 声称为完整可动的 Live2D 成品。
+      任何降级产出必须在产物中显式标注降级原因。
+    </dd>
+  </dl>
+</section>
+
+<h2>6. 共享规则</h2>
+
+<h3>6.1 命名规则</h3>
+<ul>
+  <li>图层名 = 部件名，<b>全局唯一</b>；左右对称部件用统一后缀（<code>_L</code> / <code>_R</code>）。</li>
+  <li>关节段命名固定为 <code>upper_arm_*</code> / <code>forearm_*</code> / <code>thigh_*</code> / <code>shin_*</code>，
+      便于父子链自动建立。</li>
+  <li>同名冲突时自动加侧别或序号后缀，并同步写入图层清单；<b>不允许静默覆盖</b>。</li>
+</ul>
+
+<h3>6.2 坐标规则</h3>
+<ul>
+  <li>全作品统一画布，原点统一为左上角。</li>
+  <li>裁切必须记录偏移；偏移为 0 也要记录。</li>
+  <li>任何会改变部件位置的步骤，都必须重跑复位校验（FR-03）。</li>
+</ul>
+
+<h3>6.3 状态与证据的一致性</h3>
+<ul>
+  <li>一个状态的跃迁条件只有一个定义，散落在功能章节里的必须回到本节口径。</li>
+  <li>「已审核」只能由审核人给出；系统只能置为「待审核」。</li>
+  <li>报告里的每一条「通过」都必须挂一个证据等级；无等级即视为未验证。</li>
+</ul>
+
+<h3>6.4 降级与不可用</h3>
+<table>
+  <thead><tr><th style="width:30%">情形</th><th>产品行为</th></tr></thead>
+  <tbody>
+    <tr><td>补绘模型不可用</td><td>保留空洞，标 <code>缺失·不可补绘</code>，并在计划中说明哪些动作无法实现</td></tr>
+    <tr><td>官方内核不可用</td><td>E1 标 <code>未验证·环境缺失</code>，不得推断为通过</td></tr>
+    <tr><td>网格键形无法烘焙</td><td>参数保持 <code>仅声明</code>，说明「参数存在但不驱动画面」</td></tr>
+    <tr><td>PSD 硬约束不满足</td><td>标记 <code>不可导入</code> 并阻断交付，列出违规项</td></tr>
+  </tbody>
+</table>
+
+<h2>7. 开放问题</h2>
+<table>
+  <thead><tr><th style="width:34%">问题</th><th>为什么现在定不了</th><th style="width:22%">影响</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>目标画布尺寸与 DPI 是否强制 4096×5120 / 350dpi？</td>
+      <td>参考图给出的是这一组值，但未确认是「本作品要求」还是「示例」。尺寸直接影响网格密度与纹理页数。</td>
+      <td>FR-03、FR-06</td>
+    </tr>
+    <tr>
+      <td>网格规格的默认密度取多少？</td>
+      <td>密度是「形变精度」与「顶点数」的权衡，需要绑定师按动作幅度确认；当前只在 demo 上验证过一组参数。</td>
+      <td>FR-06</td>
+    </tr>
+    <tr>
+      <td>「绑定完成」是否要求物理手感也纳入签核？</td>
+      <td>物理手感偏主观，是否单列一项 E2 需要与审核流程对齐。</td>
+      <td>FR-09、FR-10</td>
+    </tr>
+    <tr>
+      <td>是否接受自建 <span class="mono">.moc3</span> 编译作为「绑定完成」的合法路径？</td>
+      <td>该路径能绕开 Editor 手工操作，但存在已知的内核加载不稳定问题；是否纳入 P1 取决于风险偏好。</td>
+      <td>§2、FR-08</td>
+    </tr>
+  </tbody>
+</table>
+
+<footer>
+  依据来源：Live2D 官方编辑手册（PSD 导入、PSD 创建注意事项、素材拆分、外部应用集成 API、文件类型）、
+  Live2D Cubism Core API Reference，以及本仓库已实测的分层/网格/导出能力记录。
+  文中未标注来源的数值均为本作品实测值，未做外推。
+</footer>
+
+</div>
+</body>
+</html>
