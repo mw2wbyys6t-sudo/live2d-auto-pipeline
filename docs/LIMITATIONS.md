@@ -136,13 +136,43 @@
     `changed_pixels` **恒为 0**；现在 28 个参数里 24 个真的会动，
     嘴 62px、睁闭眼 220/208px、眉 75~95px、口型 33px。
   * **观感受素材限制**：嘴在多数立绘里只是一条 2~4px 的墨线，没有"张开"的画稿，能做的只是
-    把线按比例撑开；也没有眼睑图层，闭眼只能把眼球内容向中心收拢。
+    把线按比例撑开；眼睑也是同样——没有画稿，只能从脸层合成一条眼皮带（见下一条）。
   * 仍未驱动、属于**缺美术图层**的只有 4 个：`ParamCheek`、`ParamTears`、`ParamTearsL/R`
     （腮红/眼泪特效层）。它们在 `verify` 里列为 `declared_but_not_driven`，不冒充已落地。
   复核：`tests/unit/test_moc3_deformers.py::TestExpressionDeformerProfiles /
   TestMultiAxisBandHelpers / TestDrivenParameterReporting`、
   `tests/integration/test_pipeline_moc3_export.py::test_mouth_open_changes_rendered_pixels` /
   `::test_mouth_form_and_size_are_driven_independently` / `::test_eye_open_changes_rendered_pixels`。
+- **上眼睑与口内是分层阶段「合成」出来的两层**：原始立绘里没有这两个画稿（眼睛睁着、嘴闭着），
+  缺了它们，眨眼只能把眼球压扁、张嘴只能把墨线撑粗。合成规则如下（`LayerComposer.
+  synthesize_face_geometry`）：
+
+  | 层 | 形状 | 颜色 | 静止时 |
+  |---|---|---|---|
+  | `eyelid_left/right` | 眼睛上方一条「眼高」高的带 + 眼球顶部 2 行 | 脸层**原像素** | 叠在脸上等于原地重画 |
+  | `mouth_cavity` | 与嘴线层**完全重合**的轮廓 | 嘴线中位色向暖红抬 45% | 正好被嘴唇盖住 |
+
+  * 驱动方式是**两条独立带**：`EyeLid_L/R`（`lid` profile，整条带下移，眼高 ×1.0）、
+    `MouthCavity`（`mouth_cavity` profile，上沿钉住、向下张 4.0×，必须明显大于嘴唇的 2.5×，
+    否则口内永远正好被嘴唇盖住）。眼皮**不能**用 `eye` 的压扁式形变——压扁会把眼皮本身
+    压成一条线，反而露出眼球。
+  * 静止姿态**逐像素不变**（实测合成前后最大差 0）：这是整条路线的前提，也是
+    `TestSynthesisedFaceGeometry::test_rest_pose_keeps_every_pixel` 的判据。
+    唯一例外：脸层在刘海位置是**镂空**的，形变时那些洞会随带下移。只给「静止时会被更靠前的
+    层盖住」的洞补皮肤色；没有覆盖的 1px 发丝缝不补——补了会在静止画面留 66 px 皮肤噪点，
+    而闭眼时那几列只是细线，读起来像眼皮褶。
+  * 因为要补色，**刘海必须排在眼睑之后**（`hair_front`/`hair_bangs`）。实测这一改动顺带
+    让合成图更接近原画（MAE 1.5767 → 1.5695），也修掉了「刘海靠脸的洞透出来」这一怪结构。
+  * 实测（667×1000 真实立绘）：闭眼盖住 92.8% / 89.8% 的可见眼球，残留只有眼睛被压到
+    8% 后那条 2px 细线；张嘴 `ParamMouthOpenY=1` 时口内由 27 px 张到 135 px，其中 44 px
+    露在嘴唇外。
+  * **观感仍受素材限制**：这是"皮肤盖下来"，不是有厚度、有睫毛翻动的真眼皮；口内是单一
+    暖色，没有舌头/牙。真实美术观感仍需人工签核（同 F-05）。
+  复核：`tests/unit/test_segment_engine.py::TestSynthesisedFaceGeometry`、
+  `tests/unit/test_moc3_deformers.py::TestLidAndCavityProfiles /
+  TestSynthesisedLayerDeformersCompile`、
+  `tests/integration/test_pipeline_moc3_export.py::test_eyelid_covers_the_eye_in_the_official_core` /
+  `::test_mouth_cavity_shows_when_the_mouth_opens`。
 - **受控像素验收按「模型自报的能力」逐项验，不再固定三个参数**：导出器把编译后真正被绑定的
   参数写进 `model3.json` 的 `Capabilities.DrivableParameters`（网格键形 + warp 变形器的带，
   见 `moc3_pipeline.driven_parameters`），`drivers/live2d_runtime/verify.py` 对**每一个**都做

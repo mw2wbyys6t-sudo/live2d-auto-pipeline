@@ -251,6 +251,9 @@ class BoneHierarchy:
         "iris": ("Eyeball_L", "Eyeball_R"),
         "eye_iris": ("Eyeball_L", "Eyeball_R"),
         "eyelash": ("Eyelash_L", "Eyelash_R"),
+        # 合成上眼睑（见 LayerComposer.synthesize_face_geometry）。挂到睫毛骨而不是
+        # 眼球骨：眼皮不该跟着视线平移，只该跟着头走。
+        "eyelid": ("Eyelash_L", "Eyelash_R"),
         "eyebrow": ("Brow_L", "Brow_R"),
         "ear": ("Ear_L", "Ear_R"),
     }
@@ -620,7 +623,23 @@ class DeformerHierarchy:
         {"name": "MouthOpen", "parent": "Mouth", "rows": 2, "cols": 3,
          "type": "warp", "profile": "mouth",
          "parameters": ["ParamMouthOpenY", "ParamMouthForm", "ParamMouthSize"],
-         "targets": ["mouth", "mouth_cavity", "mouth_open", "mouth_close"]},
+         "targets": ["mouth", "mouth_open", "mouth_close"]},
+        # 口内：与嘴线同源、但**张得更深**，所以在嘴唇下方露出一条腔体。
+        # 若挂在 MouthOpen 下（同样的 2.5×），它会永远正好被嘴唇盖住——等于没做。
+        {"name": "MouthCavity", "parent": "Mouth", "rows": 2, "cols": 2,
+         "type": "warp", "profile": "mouth_cavity",
+         "parameters": ["ParamMouthOpenY"],
+         "targets": ["mouth_cavity", "mouth_inner"]},
+        # 上眼睑：整条带下移。眼球自己仍会被 EyeBlink 压扁，但闭上时它已经被眼皮
+        # 盖住，所以看到的是"皮肤下来"，而不是"瞳孔被压成一条线"。
+        {"name": "EyeLid_L", "parent": "Eye_L", "rows": 2, "cols": 2,
+         "type": "warp", "profile": "lid",
+         "parameters": ["ParamEyeLOpen"],
+         "targets": ["eyelid_left", "eyelid_l"]},
+        {"name": "EyeLid_R", "parent": "Eye_R", "rows": 2, "cols": 2,
+         "type": "warp", "profile": "lid",
+         "parameters": ["ParamEyeROpen"],
+         "targets": ["eyelid_right", "eyelid_r"]},
         {"name": "EyeBlink_L", "parent": "Eye_L", "rows": 2, "cols": 2,
          "type": "warp", "profile": "eye",
          "parameters": ["ParamEyeLOpen"],

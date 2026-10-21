@@ -585,6 +585,14 @@ TORSO_BREATH = 0.03
 #: 肩部抬落幅度（相对上臂网格高度）。没有独立肩部图层，只能抬整条上臂。
 SHOULDER_LIFT = 0.12
 
+#: 闭眼时上眼睑下移的距离（相对眼睑网格自身高度）。眼睑带按「眼高 + 睫毛行数」生成，
+#: 所以 1.0 会多盖 2 行——宁可多盖（多出来的是皮肤），也不能少盖（会留一条瞳孔缝）。
+EYELID_TRAVEL = 1.0
+
+#: 张嘴时口内向下张开的幅度，相对嘴线网格高度。必须**明显大于** ``MOUTH_OPEN_STRETCH``：
+#: 口内与嘴唇同形同源，倍数一样就会永远正好被嘴唇盖住，做了等于没做。
+MOUTH_CAVITY_STRETCH = 4.0
+
 
 def _centered_fraction(param: ParameterSpec, value: float) -> float:
     """参数值 -> 相对默认值的归一化偏移 ``[-1, 1]``。
@@ -701,13 +709,34 @@ def _lift_deform(points, rect, mesh_rect, values, options):
     return [(x, y + dy) for x, y in points]
 
 
+def _lid_deform(points, rect, mesh_rect, values, options):
+    """上眼睑：整条带下移（纯平移）。
+
+    眼睑带上方是脸层皮肤、下沿是睫毛，所以平移就够了——不能用 ``_eye_deform``
+    那种"向中心压扁"：压扁会把眼皮本身压成一条线，反而露出眼球。
+    """
+    height = max(1e-6, float(mesh_rect[3]) - float(mesh_rect[1]))
+    openness = min(1.0, max(0.0, 1.0 + values.get("open", 0.0)))
+    dy = (1.0 - openness) * height * EYELID_TRAVEL
+    return [(x, y + dy) for x, y in points]
+
+
+def _mouth_cavity_deform(points, rect, mesh_rect, values, options):
+    """口内：上沿钉住、向下张得比嘴唇更深，于是从唇下露出一条腔体。"""
+    top = float(mesh_rect[1])
+    stretch = 1.0 + MOUTH_CAVITY_STRETCH * max(0.0, values.get("open", 0.0))
+    return [(x, top + (y - top) * stretch) for x, y in points]
+
+
 #: ``profile`` -> (角色名序列, 形变函数)。
 #:
 #: 入口用 ``parameters`` 按**同样顺序**给出参数 id；任一参数没在模型里声明就整条
 #: 不生成（宁可不驱动，也不交半套形变）。角色名只是给形变函数取值用的键。
 DEFORMER_PROFILES: Dict[str, tuple] = {
     "mouth": (("open", "form", "size"), _mouth_deform),
+    "mouth_cavity": (("open",), _mouth_cavity_deform),
     "eye": (("open",), _eye_deform),
+    "lid": (("open",), _lid_deform),
     "brow": (("y", "angle", "form"), _brow_deform),
     "hair_sway": (("swing",), _hair_sway_deform),
     "torso": (("angle_x", "angle_y", "sway", "breath"), _torso_deform),

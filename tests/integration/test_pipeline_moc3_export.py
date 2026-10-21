@@ -11,6 +11,7 @@ import json
 import struct
 from pathlib import Path
 
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -711,3 +712,115 @@ def test_eye_open_changes_rendered_pixels(tmp_path):
     assert closed["opaque_pixels"] < opened["opaque_pixels"], (opened, closed)
     assert (closed["alpha_bbox"][3] - closed["alpha_bbox"][1]) < \
         (opened["alpha_bbox"][3] - opened["alpha_bbox"][1])
+
+
+# ---------------------------------------------------------------------------
+# 合成眼皮 / 口内：官方内核里的真实像素判据
+#
+# 这两个图层在原始立绘里不存在，是分层阶段合成的（见
+# LayerComposer.synthesize_face_geometry）。这里用最小合成件证明它们**在官方内核里
+# 真的起作用**：闭眼是"皮肤盖住眼球"，而不是"眼球被压扁"。
+# ---------------------------------------------------------------------------
+
+LID_BOX = (54, 40, 74, 60)      # 眼皮带（肤色），紧贴眼球上方
+EYE_BOX = (54, 60, 74, 80)      # 眼球（深色），闭眼时应该被盖子盖住
+LIP_BOX = (54, 90, 74, 92)      # 嘴线（深色，2px 墨线）
+
+
+def _solid(box, colour):
+    img = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    for y in range(box[1], box[3]):
+        for x in range(box[0], box[2]):
+            img.putpixel((x, y), colour)
+    return img
+
+
+def _box_mesh(box):
+    x0, y0, x1, y1 = box
+    xm = (x0 + x1) / 2.0
+    verts = [[x0, y0], [xm, y0], [x1, y0], [x0, y1], [xm, y1], [x1, y1]]
+    return {"vertices": verts,
+            "vertices_norm": [[x / 128.0, y / 128.0] for x, y in verts],
+            "indices": [[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4]],
+            "width": 128, "height": 128}
+
+
+def _synthetic_rig(layers, boxes, deformers, params):
+    builder_result = _builder_result(deformers=deformers)
+    builder_result["layers"] = layers
+    builder_result["meshes"] = {name: _box_mesh(boxes[name]) for name in layers}
+    builder_result["parameters"]["cubism_params"] = [
+        {"Id": pid, "Min": lo, "Max": hi, "Value": dv}
+        for pid, lo, hi, dv in params]
+    return builder_result
+
+
+@requires_pixels
+def test_eyelid_covers_the_eye_in_the_official_core(tmp_path):
+    """闭眼 = 皮肤把眼球盖住（而不是把眼球压扁）。"""
+    builder_result = _synthetic_rig(
+        {"eyelid": _solid(LID_BOX, (240, 200, 170, 255)),
+         "iris": _solid(EYE_BOX, (30, 40, 90, 255))},
+        {"eyelid": LID_BOX, "iris": EYE_BOX},
+        [{"name": "EyeLid_L", "type": "warp", "parent": "Eye_L",
+          "grid_rows": 2, "grid_cols": 2, "profile": "lid",
+          "parameters": ["ParamEyeLOpen"], "targets": ["eyelid"]}],
+        [("ParamEyeLOpen", 0, 1, 1)])
+    _, export_result = _export(tmp_path, builder_result)
+    compiled = compile_export_moc3(
+        builder_result=builder_result,
+        atlas_uvs=export_result["atlas_uvs"],
+        output_dir=export_result["output_dir"], character_name="web_preview")
+    assert compiled["moc3_written"] is True, compiled["blocker"]
+
+    open_png = tmp_path / "eyelid_open.png"
+    closed_png = tmp_path / "eyelid_closed.png"
+    opened = render_probe(export_result["model3_json"],
+                          params={"ParamEyeLOpen": 1.0},
+                          png=str(open_png), width=128, height=128)
+    closed = render_probe(export_result["model3_json"],
+                          params={"ParamEyeLOpen": 0.0},
+                          png=str(closed_png), width=128, height=128)
+    assert opened["ok"] and closed["ok"], (opened["blocker"], closed["blocker"])
+
+    a = np.array(Image.open(open_png).convert("RGBA"))
+    b = np.array(Image.open(closed_png).convert("RGBA"))
+    opaque = (a[..., 3] > 200) & (b[..., 3] > 200)
+    was_eye = opaque & (a[..., :3].mean(axis=2) < 90)
+    now_skin = b[..., :3].mean(axis=2) > 150
+    covered = int((was_eye & now_skin).sum())
+    assert was_eye.sum() > 300, "眼球没画出来，判据无效"
+    assert covered > was_eye.sum() * 0.9, (
+        f"闭眼只盖住 {covered}/{int(was_eye.sum())} 个眼球像素")
+
+
+@requires_pixels
+def test_mouth_cavity_shows_when_the_mouth_opens(tmp_path):
+    """张嘴时口内从唇下露出来：不透明像素变多、下沿更低，且颜色偏暖。"""
+    builder_result = _synthetic_rig(
+        {"mouth": _solid(LIP_BOX, (40, 20, 24, 255)),
+         "mouth_cavity": _solid(LIP_BOX, (140, 56, 56, 255))},
+        {"mouth": LIP_BOX, "mouth_cavity": LIP_BOX},
+        [{"name": "MouthOpen", "type": "warp", "parent": "Mouth",
+          "grid_rows": 2, "grid_cols": 2, "profile": "mouth",
+          "parameters": ["ParamMouthOpenY", "ParamMouthForm", "ParamMouthSize"],
+          "targets": ["mouth"]},
+         {"name": "MouthCavity", "type": "warp", "parent": "Mouth",
+          "grid_rows": 2, "grid_cols": 2, "profile": "mouth_cavity",
+          "parameters": ["ParamMouthOpenY"], "targets": ["mouth_cavity"]}],
+        [("ParamMouthOpenY", 0, 1, 0), ("ParamMouthForm", -1, 1, 0),
+         ("ParamMouthSize", -1, 1, 0)])
+    _, export_result = _export(tmp_path, builder_result)
+    compiled = compile_export_moc3(
+        builder_result=builder_result,
+        atlas_uvs=export_result["atlas_uvs"],
+        output_dir=export_result["output_dir"], character_name="web_preview")
+    assert compiled["moc3_written"] is True, compiled["blocker"]
+
+    closed = render_probe(export_result["model3_json"],
+                          params={"ParamMouthOpenY": 0.0}, width=128, height=128)
+    opened = render_probe(export_result["model3_json"],
+                          params={"ParamMouthOpenY": 1.0}, width=128, height=128)
+    assert closed["ok"] and opened["ok"], (closed["blocker"], opened["blocker"])
+    assert opened["opaque_pixels"] > closed["opaque_pixels"], (opened, closed)
+    assert opened["alpha_bbox"][1] < closed["alpha_bbox"][1]

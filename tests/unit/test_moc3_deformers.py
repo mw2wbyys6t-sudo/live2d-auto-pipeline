@@ -127,6 +127,8 @@ def test_deformer_count_without_specs_still_refused():
 
 from live2d_builder.exporter.moc3_pipeline import (  # noqa: E402
     EYE_CLOSED_SCALE,
+    EYELID_TRAVEL,
+    MOUTH_CAVITY_STRETCH,
     MOUTH_OPEN_STRETCH,
     build_deformers,
     driven_parameters,
@@ -311,6 +313,91 @@ class TestExpressionDeformerProfiles:
         assert any("MouthOpen" in s for s in skipped)
 
 
+class TestLidAndCavityProfiles:
+    """合成层专用的两条带：上眼睑整条下移，口内张得比嘴唇更深。
+
+    这两条与 ``eye`` / ``mouth`` 的**区别**就是它们的意义：眼球是被压扁的，
+    眼皮必须平移（压扁会把眼皮本身压成一条线，反而露出瞳孔）；口内若与嘴唇同倍数，
+    就会永远正好被嘴唇盖住，做了等于没做。
+    """
+
+    def test_eyelid_rests_at_default_and_moves_down_when_closed(self):
+        meshes = [_patch("eyelid_left", 0.0, 0.0, 40.0, 10.0)]
+        warps, _skipped, _static = _build(
+            meshes,
+            [_entry("EyeLid_L", ["ParamEyeLOpen"], "lid", ["eyelid_left"], cols=2)],
+            [ParameterSpec("ParamEyeLOpen", 0.0, 1.0, 1.0)])
+
+        assert len(warps) == 1
+        deformer = warps[0]
+        assert deformer.parameter_id == "ParamEyeLOpen"
+        rest = _grid_by_keys(deformer, [1.0])
+        closed = _grid_by_keys(deformer, [0.0])
+        # 静止形 = 恒等：闭眼距离按**网格自身**高度算，不含键形摆动范围
+        assert [round(p[0], 6) for p in rest.points] == \
+            [round(p[0], 6) for p in closed.points]
+        top_rest = min(p[1] for p in rest.points)
+        top_closed = min(p[1] for p in closed.points)
+        assert top_closed - top_rest == pytest.approx(10.0 * EYELID_TRAVEL, abs=1e-6)
+        # 纯平移：带宽不变（不是压扁）
+        span_rest = max(p[1] for p in rest.points) - top_rest
+        span_closed = max(p[1] for p in closed.points) - top_closed
+        assert span_closed == pytest.approx(span_rest, abs=1e-6)
+
+    def test_mouth_cavity_opens_deeper_than_the_lips(self):
+        meshes = [_patch("mouth", 0.0, 0.0, 40.0, 10.0),
+                  _patch("mouth_cavity", 0.0, 0.0, 40.0, 10.0)]
+        warps, _skipped, _static = _build(
+            meshes,
+            [_entry("MouthOpen",
+                    ["ParamMouthOpenY", "ParamMouthForm", "ParamMouthSize"],
+                    "mouth", ["mouth"]),
+             _entry("MouthCavity", ["ParamMouthOpenY"], "mouth_cavity",
+                    ["mouth_cavity"], cols=2)],
+            MOUTH_PARAMS)
+
+        by_name = {d.deformer_id: d for d in warps}
+        lips = by_name["MouthOpen"]
+        cavity = by_name["MouthCavity"]
+
+        def rest_keys(deformer):
+            return [0.0, 0.0, 0.0] if deformer is lips else [0.0]
+
+        def open_keys(deformer):
+            return [1.0, 0.0, 0.0] if deformer is lips else [1.0]
+
+        def y_at_mesh(grid, rest, mesh_y):
+            """把控制网格按**静止形**线性映射回网格坐标，取 ``mesh_y`` 处的实际 y。
+
+            控制网格比网格本身大 5%，所以 t 必须用静止形的上下界算；用网格边界算
+            会把 5% 余量当成"网格自己"，读数整体偏一格。
+            """
+            rest_lo = min(p[1] for p in rest.points)
+            rest_hi = max(p[1] for p in rest.points)
+            t = (mesh_y - rest_lo) / (rest_hi - rest_lo)
+            lo = min(p[1] for p in grid.points)
+            hi = max(p[1] for p in grid.points)
+            return lo + t * (hi - lo)
+
+        for deformer in (lips, cavity):
+            rest = _grid_by_keys(deformer, rest_keys(deformer))
+            opened = _grid_by_keys(deformer, open_keys(deformer))
+            # 上沿钉住：张嘴只有下沿往下走
+            assert y_at_mesh(opened, rest, 0.0) == pytest.approx(
+                y_at_mesh(rest, rest, 0.0), abs=1e-6)
+            assert y_at_mesh(opened, rest, 10.0) > y_at_mesh(rest, rest, 10.0)
+
+        assert MOUTH_CAVITY_STRETCH > MOUTH_OPEN_STRETCH, (
+            "口内必须比嘴唇张得更深，否则永远被嘴唇盖住")
+
+        def depth(deformer):
+            rest = _grid_by_keys(deformer, rest_keys(deformer))
+            opened = _grid_by_keys(deformer, open_keys(deformer))
+            return y_at_mesh(opened, rest, 10.0) - y_at_mesh(rest, rest, 10.0)
+
+        assert depth(cavity) > depth(lips) * 1.5
+
+
 class TestMultiAxisBandHelpers:
     def test_band_indices_run_first_axis_fastest(self):
         assert _band_indices([2, 3]) == [
@@ -335,6 +422,43 @@ class TestMultiAxisBandHelpers:
         ], deformers=[deformer], pixels_per_unit=PPU)
         with pytest.raises(UnsupportedRig, match="各轴键数之积"):
             compile_static_rig(spec)
+
+
+class TestSynthesisedLayerDeformersCompile:
+    """眼皮 / 口内两条带必须真的能编进 moc3（不只是 build_deformers 认可）。
+
+    校验器会逐轴要求「键值覆盖完整区间」并且「存在恰好等于参数默认值的静止形」；
+    两条带的静止形分别是 open=1（睁眼）与 open=0（闭嘴），这里把整条链路跑一遍。
+    """
+
+    def test_lid_and_cavity_compile_into_a_static_rig(self):
+        meshes = [_patch("eyelid_left", 0.0, 0.0, 40.0, 30.0),
+                  _patch("eyelid_right", 60.0, 0.0, 100.0, 30.0),
+                  _patch("mouth_cavity", 0.0, 60.0, 40.0, 66.0)]
+        params = [
+            ParameterSpec("ParamEyeLOpen", 0.0, 1.0, 1.0),
+            ParameterSpec("ParamEyeROpen", 0.0, 1.0, 1.0),
+            ParameterSpec("ParamMouthOpenY", 0.0, 1.0, 0.0),
+        ]
+        warps, skipped, _static = _build(
+            meshes,
+            [_entry("EyeLid_L", ["ParamEyeLOpen"], "lid", ["eyelid_left"], cols=2),
+             _entry("EyeLid_R", ["ParamEyeROpen"], "lid", ["eyelid_right"], cols=2),
+             _entry("MouthCavity", ["ParamMouthOpenY"], "mouth_cavity",
+                    ["mouth_cavity"], cols=2)],
+            params)
+
+        assert [d.deformer_id for d in warps] == [
+            "EyeLid_L", "EyeLid_R", "MouthCavity"], skipped
+        assert {m.mesh_id: m.deformer_id for m in meshes} == {
+            "eyelid_left": "EyeLid_L", "eyelid_right": "EyeLid_R",
+            "mouth_cavity": "MouthCavity"}
+        spec = RigSpec(meshes=meshes, parameters=params, deformers=warps,
+                       canvas_width=120.0, canvas_height=120.0,
+                       pixels_per_unit=PPU)
+        doc = compile_static_rig(spec)
+        assert doc is not None
+        assert not lint_document(doc)
 
 
 class TestDrivenParameterReporting:

@@ -116,7 +116,16 @@ class TestLayerComposer:
         assert "face_base" in order
         assert "hair_front" in order
         assert "hair_back" in order
-        assert order.index("hair_back") < order.index("hair_front") < order.index("face_base")
+        # 后发在脸后，**刘海在脸前**：分出来的脸在刘海位置是镂空，刘海若排在这里
+        # (= 画在脸后)，眼皮带一补色就把刘海涂成皮肤（实测 1206 px）。
+        assert order.index("hair_back") < order.index("face_base") < order.index("hair_front")
+        # 眼皮带补色靠刘海遮住，所以刘海必须在眼睑之后；同时不能在眉毛之后，
+        # 否则刘海会盖住眉毛（实测刘海与眉毛、眼球的重叠都是 0，这里只钉顺序）。
+        assert order.index("irides_right") < order.index("eyelid_right")
+        assert order.index("eyelid_right") < order.index("hair_front")
+        assert order.index("hair_front") < order.index("eyebrow_R")
+        # 口内必须在嘴线之前（先画腔体，再画嘴唇），否则张嘴时腔体盖住嘴唇。
+        assert order.index("mouth_cavity") < order.index("mouth")
         for part in ("arm", "hand", "leg", "sleeve", "cuff", "sock", "boot"):
             assert f"{part}_L" in order
             assert f"{part}_R" in order
@@ -235,6 +244,155 @@ class TestLayerComposer:
             data = json.loads(Path(path).read_text())
             assert "layers" in data
             assert data["layer_count"] == 1
+
+
+class TestSynthesisedFaceGeometry:
+    """合成上眼睑 / 口内：静止必须逐像素不变，闭眼张嘴必须真的盖得住。
+
+    这两个图层在原始立绘里**不存在**（眼睛睁着、嘴闭着），但没有它们，眨眼只能把
+    眼球压扁、张嘴只能把墨线撑粗——参数动了，表现却不像"闭眼/张嘴"。
+    """
+
+    SIZE = 160
+
+    @classmethod
+    def _character(cls):
+        size = cls.SIZE
+        arr = np.zeros((size, size, 4), dtype=np.uint8)
+        arr[40:140, 40:120] = (255, 220, 180, 255)    # 脸
+        arr[40:60, 50:110] = (70, 90, 200, 255)       # 刘海压在脸上：脸层这里要镂空
+        arr[70:90, 55:75] = (40, 60, 120, 255)        # 左眼
+        arr[70:90, 85:105] = (40, 60, 120, 255)       # 右眼
+        arr[115:118, 74:86] = (40, 20, 24, 255)       # 嘴（墨线）
+        img = Image.fromarray(arr, "RGBA")
+
+        def box(x0, y0, x1, y1):
+            mask = np.zeros((size, size), dtype=bool)
+            mask[y0:y1, x0:x1] = True
+            return mask
+
+        face = box(40, 40, 120, 140) & ~box(50, 40, 110, 60)
+        return img, {
+            "face": face,
+            "hair_front": box(50, 40, 110, 60),
+            "irides_left": box(55, 70, 75, 90),
+            "irides_right": box(85, 70, 105, 90),
+            "mouth": box(74, 115, 86, 118),
+        }
+
+    @classmethod
+    def _composite(cls, layers, order):
+        canvas = np.zeros((cls.SIZE, cls.SIZE, 4), dtype=np.float64)
+        for name in order:
+            info = layers.get(name)
+            if not info:
+                continue
+            src = np.array(Image.open(info["path"]).convert("RGBA")).astype(np.float64)
+            alpha = src[..., 3:4] / 255.0
+            canvas[..., :3] = src[..., :3] * alpha + canvas[..., :3] * (1 - alpha)
+            canvas[..., 3:4] = alpha * 255.0 + canvas[..., 3:4] * (1 - alpha)
+        return canvas
+
+    def _compose(self, tmpdir):
+        img, masks = self._character()
+        composer = LayerComposer()
+        layers = composer.compose(masks, img, tmpdir)
+        order = list(composer.reorder_layers(layers).keys())
+        return composer, layers, order
+
+    def test_layers_are_synthesised(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, layers, order = self._compose(tmpdir)
+            for name in ("eyelid_left", "eyelid_right", "mouth_cavity"):
+                assert layers[name].get("synthesized") is True
+                assert Path(layers[name]["path"]).is_file()
+        assert {"eyelid_left", "eyelid_right", "mouth_cavity"} <= set(layers)
+        assert order.index("mouth_cavity") < order.index("mouth")
+        assert order.index("irides_left") < order.index("eyelid_left")
+
+    def test_rest_pose_keeps_every_pixel(self):
+        """合成层在静止姿态下不能改变任何一个像素。
+
+        这是整条合成路线的前提：眼睑带取的是脸层原像素，洞内补色靠刘海遮住，
+        口内与嘴唇轮廓完全重合。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, layers, order = self._compose(tmpdir)
+            added = [n for n, info in layers.items() if info.get("synthesized")]
+            without = {k: v for k, v in layers.items() if k not in added}
+            full = self._composite(layers, order)
+            base = self._composite(without, [n for n in order if n in without])
+        diff = np.abs(full - base).max()
+        assert diff < 1.0, f"合成层改变了静止画面：最大差 {diff}"
+
+    def test_eyelid_is_opaque_above_the_eye(self):
+        """眼皮带上方必须是不透光皮肤（否则闭眼时瞳孔从缝里透出来）。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, layers, _ = self._compose(tmpdir)
+            lid = np.array(Image.open(layers["eyelid_left"]["path"]).convert("RGBA"))
+            eye = np.array(Image.open(layers["irides_left"]["path"]).convert("RGBA"))
+            face = np.array(Image.open(layers["face"]["path"]).convert("RGBA"))
+        ys, xs = np.nonzero(eye[..., 3] > 8)
+        x0, x1, y0 = int(xs.min()), int(xs.max()), int(ys.min())
+        band_top = int(np.nonzero(lid[..., 3])[0].min())
+        band = lid[band_top:y0, x0:x1 + 1]
+        assert (band[..., 3] == 255).mean() > 0.9, "眼皮带不是整块不透光"
+        # 下沿逐字节复制眼睛层顶部：静止时叠在眼睛上等于原地重画
+        lash = lid[y0:y0 + 2, x0:x1 + 1]
+        eye_top = eye[y0:y0 + 2, x0:x1 + 1]
+        solid = eye_top[..., 3] == 255
+        assert np.array_equal(lash[solid], eye_top[solid])
+        # 肤色来自脸层自身，不是凭空造的颜色
+        skin = face[y0 - 1, x0 + 1]
+        assert lid[y0 - 1, x0 + 1, 3] == 255
+        assert np.abs(lid[y0 - 1, x0 + 1, :3].astype(int) - skin[:3].astype(int)).max() <= 24
+
+    def test_eyelid_covers_the_eye_when_closed(self):
+        """把眼皮带按眼高整条下移后，眼睛区域必须被盖住。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, layers, _ = self._compose(tmpdir)
+            lid = np.array(Image.open(layers["eyelid_left"]["path"]).convert("RGBA"))
+            eye = np.array(Image.open(layers["irides_left"]["path"]).convert("RGBA"))
+        eye_mask = eye[..., 3] > 8
+        ys, xs = np.nonzero(eye_mask)
+        travel = int(ys.max() - ys.min() + 1)
+        shifted = np.zeros_like(lid)
+        shifted[travel:] = lid[:-travel]
+        covered = (shifted[..., 3] == 255) & eye_mask
+        ratio = covered.sum() / eye_mask.sum()
+        assert ratio > 0.95, f"闭眼只盖住 {ratio:.0%} 的眼睛"
+
+    def test_mouth_cavity_hides_under_the_lip_and_is_warm(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, layers, _ = self._compose(tmpdir)
+            cavity = np.array(Image.open(layers["mouth_cavity"]["path"]).convert("RGBA"))
+            mouth = np.array(Image.open(layers["mouth"]["path"]).convert("RGBA"))
+        open_cavity = cavity[..., 3] > 0
+        assert open_cavity.any()
+        # 轮廓必须落在嘴唇里：否则静止时就露出一圈腔体
+        assert not (open_cavity & ~(mouth[..., 3] > 0)).any()
+        line = mouth[mouth[..., 3] > 0][:, :3].mean(axis=0)
+        fill = cavity[open_cavity][:, :3].mean(axis=0)
+        assert fill[0] - fill[2] > line[0] - line[2], (
+            f"口内色不够暖：嘴线 {line} / 口内 {fill}")
+
+    def test_synthesis_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            composer, layers, _ = self._compose(tmpdir)
+            again = composer.synthesize_face_geometry(layers, self.SIZE, self.SIZE)
+        assert again == []
+
+    def test_no_face_layer_means_no_invented_lid(self):
+        """没有脸层可取样时宁可不做，也不凭空画一块颜色。"""
+        size = self.SIZE
+        arr = np.zeros((size, size, 4), dtype=np.uint8)
+        arr[70:90, 55:75] = (40, 60, 120, 255)
+        img = Image.fromarray(arr, "RGBA")
+        masks = {"irides_left": np.zeros((size, size), dtype=bool)}
+        masks["irides_left"][70:90, 55:75] = True
+        with tempfile.TemporaryDirectory() as tmpdir:
+            layers = LayerComposer().compose(masks, img, tmpdir)
+        assert "eyelid_left" not in layers
 
 
 class TestForegroundGatedSegmentation:
