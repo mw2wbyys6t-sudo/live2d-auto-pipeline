@@ -87,8 +87,16 @@ YUNET_URL = (
 #
 # 官方来源是 HuggingFace 的 skytnt/anime-seg（rembg 2.x 也是从这里取），
 # 国内网络直连 huggingface.co 常不稳定，故追加 hf-mirror.com 镜像兜底。
+#
+# **rembg 官方 release 排第一**：2026-10-21 起 skytnt/anime-seg 两个地址都返回
+# 404（上游仓库被删/改名），桌面构建因此在「装配运行时」阶段整条挂掉
+# （run 39576584827）。rembg 的 v0.0.0 release 里那份 isnet-anime.onnx 与锁定表
+# 的 SHA256 逐字节一致（实测 176,069,933 B → f15622d8…），是同一个文件，
+# 所以只换下载源、不动哈希锁定。
 ISNET_ANIME_NAME = "isnet-anime.onnx"
 ISNET_ANIME_URLS = (
+    "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+    + ISNET_ANIME_NAME,
     "https://huggingface.co/skytnt/anime-seg/resolve/main/" + ISNET_ANIME_NAME,
     "https://hf-mirror.com/skytnt/anime-seg/resolve/main/" + ISNET_ANIME_NAME,
 )
