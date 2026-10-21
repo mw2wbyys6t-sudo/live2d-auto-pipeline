@@ -127,7 +127,6 @@ def test_deformer_count_without_specs_still_refused():
 
 from live2d_builder.exporter.moc3_pipeline import (  # noqa: E402
     EYE_CLOSED_SCALE,
-    EYELID_TRAVEL,
     MOUTH_CAVITY_STRETCH,
     MOUTH_OPEN_STRETCH,
     build_deformers,
@@ -313,36 +312,43 @@ class TestExpressionDeformerProfiles:
         assert any("MouthOpen" in s for s in skipped)
 
 
-class TestLidAndCavityProfiles:
-    """合成层专用的两条带：上眼睑整条下移，口内张得比嘴唇更深。
+class TestEyeCollapseAndCavityProfiles:
+    """闭眼与口内两条带：眼球向上收拢，口内张得比嘴唇更深。
 
-    这两条与 ``eye`` / ``mouth`` 的**区别**就是它们的意义：眼球是被压扁的，
-    眼皮必须平移（压扁会把眼皮本身压成一条线，反而露出瞳孔）；口内若与嘴唇同倍数，
-    就会永远正好被嘴唇盖住，做了等于没做。
+    闭眼**不是**"眼球被压扁"——压扁会把眼球压成一条横在眼睛中间的线，像眯眼。
+    正确的样子是眼球整体**向上收拢**进上睫毛线里，于是画在眼球**下面**的
+    「闭眼图」（皮肤 + 原画上睫毛）露出来。所以这里的判据是：收拢后的控制网格
+    贴着网格**上沿**，而不是夹在中间。
     """
 
-    def test_eyelid_rests_at_default_and_moves_down_when_closed(self):
-        meshes = [_patch("eyelid_left", 0.0, 0.0, 40.0, 10.0)]
+    def test_eye_band_collapses_upward_to_the_top_edge(self):
+        meshes = [_patch("eyewhite_left", 0.0, 0.0, 40.0, 20.0)]
         warps, _skipped, _static = _build(
             meshes,
-            [_entry("EyeLid_L", ["ParamEyeLOpen"], "lid", ["eyelid_left"], cols=2)],
+            [_entry("EyeBlink_L", ["ParamEyeLOpen"], "eye", ["eyewhite_left"],
+                    cols=2)],
             [ParameterSpec("ParamEyeLOpen", 0.0, 1.0, 1.0)])
 
         assert len(warps) == 1
         deformer = warps[0]
         assert deformer.parameter_id == "ParamEyeLOpen"
-        rest = _grid_by_keys(deformer, [1.0])
-        closed = _grid_by_keys(deformer, [0.0])
-        # 静止形 = 恒等：闭眼距离按**网格自身**高度算，不含键形摆动范围
-        assert [round(p[0], 6) for p in rest.points] == \
-            [round(p[0], 6) for p in closed.points]
-        top_rest = min(p[1] for p in rest.points)
-        top_closed = min(p[1] for p in closed.points)
-        assert top_closed - top_rest == pytest.approx(10.0 * EYELID_TRAVEL, abs=1e-6)
-        # 纯平移：带宽不变（不是压扁）
-        span_rest = max(p[1] for p in rest.points) - top_rest
-        span_closed = max(p[1] for p in closed.points) - top_closed
-        assert span_closed == pytest.approx(span_rest, abs=1e-6)
+        closed, opened = deformer.grids
+
+        def span(grid):
+            ys = [p[1] for p in grid.points]
+            return min(ys), max(ys)
+
+        closed_lo, closed_hi = span(closed)
+        open_lo, open_hi = span(opened)
+        # 收拢后只剩眼高的 EYE_CLOSED_SCALE
+        assert closed_hi - closed_lo == pytest.approx(
+            (open_hi - open_lo) * EYE_CLOSED_SCALE, rel=0.02)
+        # 轴心在**上沿**：收拢后的一小条要贴在网格上沿，而不是缩在中间。
+        # （用网格自身的上下沿比，不用控制网格的：控制网格带 5% 余量。）
+        mesh_top, mesh_bottom = 0.0, 20.0
+        assert closed_hi <= mesh_top + 0.15 * (mesh_bottom - mesh_top), (
+            f"收拢后仍停在 {closed_hi:.2f}，没有贴住上沿 {mesh_top}")
+        assert closed_hi < (open_lo + open_hi) / 2.0
 
     def test_mouth_cavity_opens_deeper_than_the_lips(self):
         meshes = [_patch("mouth", 0.0, 0.0, 40.0, 10.0),
@@ -425,15 +431,20 @@ class TestMultiAxisBandHelpers:
 
 
 class TestSynthesisedLayerDeformersCompile:
-    """眼皮 / 口内两条带必须真的能编进 moc3（不只是 build_deformers 认可）。
+    """闭眼 / 口内必须真的能编进 moc3（不只是 build_deformers 认可）。
 
     校验器会逐轴要求「键值覆盖完整区间」并且「存在恰好等于参数默认值的静止形」；
-    两条带的静止形分别是 open=1（睁眼）与 open=0（闭嘴），这里把整条链路跑一遍。
+    静止形分别是 open=1（睁眼）与 open=0（闭嘴），这里把整条链路跑一遍。
+
+    「闭眼图」（``eyelid_left/right``）是**静态**的：它画在眼球下面，靠眼球向上
+    收拢"让出来"，所以它不挂任何变形器 —— 挂了反而会跟着变形跑偏。
     """
 
-    def test_lid_and_cavity_compile_into_a_static_rig(self):
+    def test_closed_eye_image_stays_static_while_the_eye_collapses(self):
         meshes = [_patch("eyelid_left", 0.0, 0.0, 40.0, 30.0),
                   _patch("eyelid_right", 60.0, 0.0, 100.0, 30.0),
+                  _patch("eyewhite_left", 0.0, 0.0, 40.0, 30.0),
+                  _patch("eyewhite_right", 60.0, 0.0, 100.0, 30.0),
                   _patch("mouth_cavity", 0.0, 60.0, 40.0, 66.0)]
         params = [
             ParameterSpec("ParamEyeLOpen", 0.0, 1.0, 1.0),
@@ -442,16 +453,44 @@ class TestSynthesisedLayerDeformersCompile:
         ]
         warps, skipped, _static = _build(
             meshes,
-            [_entry("EyeLid_L", ["ParamEyeLOpen"], "lid", ["eyelid_left"], cols=2),
-             _entry("EyeLid_R", ["ParamEyeROpen"], "lid", ["eyelid_right"], cols=2),
+            [_entry("EyeBlink_L", ["ParamEyeLOpen"], "eye", ["eyewhite_left"],
+                    cols=2),
+             _entry("EyeBlink_R", ["ParamEyeROpen"], "eye", ["eyewhite_right"],
+                    cols=2),
+             _entry("MouthCavity", ["ParamMouthOpenY"], "mouth_cavity",
+                    ["mouth_cavity"], cols=2)],
+            params)
+
+        binding = {m.mesh_id: m.deformer_id for m in meshes}
+        # 闭眼图不挂变形器：它是静态的，靠眼球收拢让出来
+        assert binding["eyelid_left"] == ""
+        assert binding["eyelid_right"] == ""
+        # 眼球挂 EyeBlink，口内挂 MouthCavity
+        assert binding["eyewhite_left"] == "EyeBlink_L"
+        assert binding["eyewhite_right"] == "EyeBlink_R"
+        assert binding["mouth_cavity"] == "MouthCavity"
+        assert skipped == []
+
+    def test_eye_and_cavity_compile_into_a_static_rig(self):
+        meshes = [_patch("eyewhite_left", 0.0, 0.0, 40.0, 30.0),
+                  _patch("irides_left", 60.0, 0.0, 100.0, 30.0),
+                  _patch("mouth_cavity", 0.0, 60.0, 40.0, 66.0)]
+        params = [
+            ParameterSpec("ParamEyeLOpen", 0.0, 1.0, 1.0),
+            ParameterSpec("ParamMouthOpenY", 0.0, 1.0, 0.0),
+        ]
+        warps, skipped, _static = _build(
+            meshes,
+            [_entry("EyeBlink_L", ["ParamEyeLOpen"], "eye", ["eyewhite_left"],
+                    cols=2),
              _entry("MouthCavity", ["ParamMouthOpenY"], "mouth_cavity",
                     ["mouth_cavity"], cols=2)],
             params)
 
         assert [d.deformer_id for d in warps] == [
-            "EyeLid_L", "EyeLid_R", "MouthCavity"], skipped
+            "EyeBlink_L", "MouthCavity"], skipped
         assert {m.mesh_id: m.deformer_id for m in meshes} == {
-            "eyelid_left": "EyeLid_L", "eyelid_right": "EyeLid_R",
+            "eyewhite_left": "EyeBlink_L", "irides_left": "",
             "mouth_cavity": "MouthCavity"}
         spec = RigSpec(meshes=meshes, parameters=params, deformers=warps,
                        canvas_width=120.0, canvas_height=120.0,

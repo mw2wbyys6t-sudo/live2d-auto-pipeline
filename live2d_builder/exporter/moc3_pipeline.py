@@ -565,8 +565,8 @@ MOUTH_FORM_BOW = 0.8
 #: 嘴横向缩放幅度（``ParamMouthSize`` ±1 时整体宽度的 ±35%）。
 MOUTH_SIZE_SCALE = 0.35
 
-#: 闭眼时眼睛内容压到原高度的多少（相对值）。不能给 0：控制网格退化成一条线后
-#: 内核算变形时的逆映射会退化，留 8% 既接近"闭上"又不制造奇异网格。
+#: 闭眼时眼球向上收拢后剩下的一条线，占眼高比例。压到 0 会让控制网格退化成线、
+#: 内核逆映射退化（实测 Cubism Core 5.0.0），所以留 8%。
 EYE_CLOSED_SCALE = 0.08
 
 #: 眉毛位移量（相对眉毛自身高度）：上下 / 倾斜 / 中段上拱。
@@ -584,10 +584,6 @@ TORSO_BREATH = 0.03
 
 #: 肩部抬落幅度（相对上臂网格高度）。没有独立肩部图层，只能抬整条上臂。
 SHOULDER_LIFT = 0.12
-
-#: 闭眼时上眼睑下移的距离（相对眼睑网格自身高度）。眼睑带按「眼高 + 睫毛行数」生成，
-#: 所以 1.0 会多盖 2 行——宁可多盖（多出来的是皮肤），也不能少盖（会留一条瞳孔缝）。
-EYELID_TRAVEL = 1.0
 
 #: 张嘴时口内向下张开的幅度，相对嘴线网格高度。必须**明显大于** ``MOUTH_OPEN_STRETCH``：
 #: 口内与嘴唇同形同源，倍数一样就会永远正好被嘴唇盖住，做了等于没做。
@@ -644,11 +640,19 @@ def _mouth_deform(points, rect, mesh_rect, values, options):
 
 
 def _eye_deform(points, rect, mesh_rect, values, options):
-    """睁闭眼：以**网格自身**纵向中心为轴按开放度压缩。"""
-    center = (float(mesh_rect[1]) + float(mesh_rect[3])) / 2.0
+    """睁闭眼：把眼球**向上收拢**到睫毛线上。
+
+    闭眼不是"眼球缩小"，而是"上眼皮落下来盖住眼球"。所以压缩的轴心取眼睛
+    轮廓的**上沿**（不是纵向中心）：眼球整体向上收进睫毛线里，看上去就是眼皮
+    盖下来了。收拢后露出来的是画在眼球**下面**的闭眼图（脸层肤色 + 原画上睫毛，
+    见 ``LayerComposer._synthesize_eyelid``）。
+
+    用纵向中心收拢（原来的做法）会把眼球压成一条横在眼睛中间的线，像眯眼。
+    """
+    top = float(mesh_rect[1])
     openness = min(1.0, max(0.0, 1.0 + values.get("open", 0.0)))
     scale = EYE_CLOSED_SCALE + (1.0 - EYE_CLOSED_SCALE) * openness
-    return [(x, center + (y - center) * scale) for x, y in points]
+    return [(x, top + (y - top) * scale) for x, y in points]
 
 
 def _brow_deform(points, rect, mesh_rect, values, options):
@@ -709,18 +713,6 @@ def _lift_deform(points, rect, mesh_rect, values, options):
     return [(x, y + dy) for x, y in points]
 
 
-def _lid_deform(points, rect, mesh_rect, values, options):
-    """上眼睑：整条带下移（纯平移）。
-
-    眼睑带上方是脸层皮肤、下沿是睫毛，所以平移就够了——不能用 ``_eye_deform``
-    那种"向中心压扁"：压扁会把眼皮本身压成一条线，反而露出眼球。
-    """
-    height = max(1e-6, float(mesh_rect[3]) - float(mesh_rect[1]))
-    openness = min(1.0, max(0.0, 1.0 + values.get("open", 0.0)))
-    dy = (1.0 - openness) * height * EYELID_TRAVEL
-    return [(x, y + dy) for x, y in points]
-
-
 def _mouth_cavity_deform(points, rect, mesh_rect, values, options):
     """口内：上沿钉住、向下张得比嘴唇更深，于是从唇下露出一条腔体。"""
     top = float(mesh_rect[1])
@@ -736,7 +728,6 @@ DEFORMER_PROFILES: Dict[str, tuple] = {
     "mouth": (("open", "form", "size"), _mouth_deform),
     "mouth_cavity": (("open",), _mouth_cavity_deform),
     "eye": (("open",), _eye_deform),
-    "lid": (("open",), _lid_deform),
     "brow": (("y", "angle", "form"), _brow_deform),
     "hair_sway": (("swing",), _hair_sway_deform),
     "torso": (("angle_x", "angle_y", "sway", "breath"), _torso_deform),

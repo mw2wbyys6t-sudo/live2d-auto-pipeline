@@ -218,15 +218,42 @@ def _amodal_parts() -> set:
     return set(LayerComposer.AMODAL_PARTS)
 
 
+def _synthesized_overlay_sources() -> Dict[str, set]:
+    """合成层 → 它取自的层（闭眼图取自眼球层、口内取自嘴线层）。
+
+    这些层是**故意**与源层 100% 重叠的：闭眼图就是眼睛那块面积填了皮肤，口内
+    就是嘴线那块面积填了暖色。质量门按"谁盖住谁"判缺陷，认不出这条关系就会把
+    设计报成越界扩张（实测 5 条，占满 MAX_DEFECTS 门槛，把整轮分层判为不合格）。
+    """
+    from core.segment_engine.composer import LayerComposer
+    return {
+        name: set(sources)
+        for name, sources in LayerComposer.synthesized_overlay_sources().items()
+    }
+
+
+def _is_synthesized_overlay_pair(overlays: Dict[str, set],
+                                 small: str, large: str) -> bool:
+    """``small``/``large`` 是不是「合成层 ↔ 它取自的层」这一对。
+
+    与面积无关：合成层可能比源层大（闭眼图填了整块眼睛区域），也可能更小
+    （抗锯齿边缘被切掉），所以两个方向都要认。
+    """
+    return (small in overlays.get(large, ())
+            or large in overlays.get(small, ()))
+
+
 def check_duplicates(masks: Dict[str, np.ndarray]) -> Tuple[List[str], List[str]]:
     """A layer swallowed whole by another one.
 
     An amodal layer (hair_back, clothes_top, neck, ...) is *supposed* to grow
     behind the parts in front of it, so it containing another part is design,
     not a defect — those go to ``notes``. A non-amodal layer covering another
-    part is a real over-extension.
+    part is a real over-extension. The same holds for a **synthesized overlay**
+    (closed-eye image, mouth cavity) against the layers it was built from.
     """
     amodal = _amodal_parts()
+    overlays = _synthesized_overlay_sources()
     names = sorted(masks)
     bad: List[str] = []
     notes: List[str] = []
@@ -246,6 +273,11 @@ def check_duplicates(masks: Dict[str, np.ndarray]) -> Tuple[List[str], List[str]
                 notes.append(
                     f"{small} 落在 amodal 层 {large} 内（{dup:.2f}，IoU {iou:.2f}）"
                     "——补全设计如此"
+                )
+            elif _is_synthesized_overlay_pair(overlays, small, large):
+                notes.append(
+                    f"{small} 落在合成层 {large} 内（{dup:.2f}，IoU {iou:.2f}）"
+                    "——合成层就是照着它造的"
                 )
             else:
                 bad.append(

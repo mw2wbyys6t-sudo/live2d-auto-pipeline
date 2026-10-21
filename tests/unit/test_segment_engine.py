@@ -117,11 +117,11 @@ class TestLayerComposer:
         assert "hair_front" in order
         assert "hair_back" in order
         # 后发在脸后，**刘海在脸前**：分出来的脸在刘海位置是镂空，刘海若排在这里
-        # (= 画在脸后)，眼皮带一补色就把刘海涂成皮肤（实测 1206 px）。
+        # (= 画在脸后)，闭眼图一补色就把刘海涂成皮肤（实测 1206 px）。
         assert order.index("hair_back") < order.index("face_base") < order.index("hair_front")
-        # 眼皮带补色靠刘海遮住，所以刘海必须在眼睑之后；同时不能在眉毛之后，
-        # 否则刘海会盖住眉毛（实测刘海与眉毛、眼球的重叠都是 0，这里只钉顺序）。
-        assert order.index("irides_right") < order.index("eyelid_right")
+        # 闭眼图必须排在眼球**之前**（= 画在眼球下面）：闭眼时眼球整体向上收拢进
+        # 上睫毛线，收拢后露出来的就是这张图。它画在眼球上面就永远看不见。
+        assert order.index("eyelid_right") < order.index("irides_right")
         assert order.index("eyelid_right") < order.index("hair_front")
         assert order.index("hair_front") < order.index("eyebrow_R")
         # 口内必须在嘴线之前（先画腔体，再画嘴唇），否则张嘴时腔体盖住嘴唇。
@@ -261,8 +261,12 @@ class TestSynthesisedFaceGeometry:
         arr = np.zeros((size, size, 4), dtype=np.uint8)
         arr[40:140, 40:120] = (255, 220, 180, 255)    # 脸
         arr[40:60, 50:110] = (70, 90, 200, 255)       # 刘海压在脸上：脸层这里要镂空
-        arr[70:90, 55:75] = (40, 60, 120, 255)        # 左眼
-        arr[70:90, 85:105] = (40, 60, 120, 255)       # 右眼
+        arr[70:90, 55:75] = (40, 60, 120, 255)        # 左眼（虹膜）
+        arr[70:90, 85:105] = (40, 60, 120, 255)       # 右眼（虹膜）
+        # 上睫毛线：暗、且各通道接近 —— 闭眼图靠它认出"哪条是睫毛"（见
+        # LayerComposer.EYELID_LASH_LUM / _SPREAD）。真实立绘都有这一条。
+        arr[70:73, 55:75] = (30, 25, 30, 255)
+        arr[70:73, 85:105] = (30, 25, 30, 255)
         arr[115:118, 74:86] = (40, 20, 24, 255)       # 嘴（墨线）
         img = Image.fromarray(arr, "RGBA")
 
@@ -308,13 +312,14 @@ class TestSynthesisedFaceGeometry:
                 assert Path(layers[name]["path"]).is_file()
         assert {"eyelid_left", "eyelid_right", "mouth_cavity"} <= set(layers)
         assert order.index("mouth_cavity") < order.index("mouth")
-        assert order.index("irides_left") < order.index("eyelid_left")
+        # 闭眼图画在眼球**下面**（= 排在眼球之前）
+        assert order.index("eyelid_left") < order.index("irides_left")
 
     def test_rest_pose_keeps_every_pixel(self):
         """合成层在静止姿态下不能改变任何一个像素。
 
-        这是整条合成路线的前提：眼睑带取的是脸层原像素，洞内补色靠刘海遮住，
-        口内与嘴唇轮廓完全重合。
+        这是整条合成路线的前提：闭眼图的皮肤取自脸层原像素、睫毛逐字节复制眼球层
+        自己的像素，口内与嘴唇轮廓完全重合。
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             _, layers, order = self._compose(tmpdir)
@@ -325,42 +330,55 @@ class TestSynthesisedFaceGeometry:
         diff = np.abs(full - base).max()
         assert diff < 1.0, f"合成层改变了静止画面：最大差 {diff}"
 
-    def test_eyelid_is_opaque_above_the_eye(self):
-        """眼皮带上方必须是不透光皮肤（否则闭眼时瞳孔从缝里透出来）。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            _, layers, _ = self._compose(tmpdir)
-            lid = np.array(Image.open(layers["eyelid_left"]["path"]).convert("RGBA"))
-            eye = np.array(Image.open(layers["irides_left"]["path"]).convert("RGBA"))
-            face = np.array(Image.open(layers["face"]["path"]).convert("RGBA"))
-        ys, xs = np.nonzero(eye[..., 3] > 8)
-        x0, x1, y0 = int(xs.min()), int(xs.max()), int(ys.min())
-        band_top = int(np.nonzero(lid[..., 3])[0].min())
-        band = lid[band_top:y0, x0:x1 + 1]
-        assert (band[..., 3] == 255).mean() > 0.9, "眼皮带不是整块不透光"
-        # 下沿逐字节复制眼睛层顶部：静止时叠在眼睛上等于原地重画
-        lash = lid[y0:y0 + 2, x0:x1 + 1]
-        eye_top = eye[y0:y0 + 2, x0:x1 + 1]
-        solid = eye_top[..., 3] == 255
-        assert np.array_equal(lash[solid], eye_top[solid])
-        # 肤色来自脸层自身，不是凭空造的颜色
-        skin = face[y0 - 1, x0 + 1]
-        assert lid[y0 - 1, x0 + 1, 3] == 255
-        assert np.abs(lid[y0 - 1, x0 + 1, :3].astype(int) - skin[:3].astype(int)).max() <= 24
+    def test_closed_eye_image_is_opaque_where_the_eye_was(self):
+        """闭眼图在眼睛原本不透明的地方必须**不透明**。
 
-    def test_eyelid_covers_the_eye_when_closed(self):
-        """把眼皮带按眼高整条下移后，眼睛区域必须被盖住。"""
+        闭眼时眼球向上收拢，空出来的地方要由闭眼图填住；那里要是透明的，
+        就会露出后面的脸/头发，闭眼变成"眼睛被挖了个洞"。
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             _, layers, _ = self._compose(tmpdir)
             lid = np.array(Image.open(layers["eyelid_left"]["path"]).convert("RGBA"))
             eye = np.array(Image.open(layers["irides_left"]["path"]).convert("RGBA"))
         eye_mask = eye[..., 3] > 8
-        ys, xs = np.nonzero(eye_mask)
-        travel = int(ys.max() - ys.min() + 1)
-        shifted = np.zeros_like(lid)
-        shifted[travel:] = lid[:-travel]
-        covered = (shifted[..., 3] == 255) & eye_mask
+        assert eye_mask.any()
+        covered = (lid[..., 3] == 255) & eye_mask
         ratio = covered.sum() / eye_mask.sum()
-        assert ratio > 0.95, f"闭眼只盖住 {ratio:.0%} 的眼睛"
+        assert ratio > 0.95, f"闭眼图只盖住 {ratio:.0%} 的眼球区域"
+
+    def test_closed_eye_image_keeps_the_original_lash_line(self):
+        """闭眼图里的上睫毛线必须是原画自己的像素，不能是凭空造的。
+
+        判据是逐字节相同：闭眼图取的就是眼球层的暗色描边行。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, layers, _ = self._compose(tmpdir)
+            lid = np.array(Image.open(layers["eyelid_left"]["path"]).convert("RGBA"))
+            eye = np.array(Image.open(layers["irides_left"]["path"]).convert("RGBA"))
+        eye_solid = eye[..., 3] == 255
+        assert eye_solid.any()
+        # 闭眼图里那些"与眼球层逐字节相同"的像素就是保留下来的睫毛线
+        same = np.all(lid[..., :3] == eye[..., :3], axis=2) & eye_solid
+        assert same.sum() > 0, "闭眼图没有保留任何原画的睫毛像素"
+
+    def test_closed_eye_image_is_filled_with_skin(self):
+        """闭眼图的非睫毛区域必须是肤色，不能还是蓝虹膜。
+
+        这条最关键：留了虹膜色就等于没闭眼，只是把眼睛缩小了。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, layers, _ = self._compose(tmpdir)
+            lid = np.array(Image.open(layers["eyelid_left"]["path"]).convert("RGBA"))
+            eye = np.array(Image.open(layers["irides_left"]["path"]).convert("RGBA"))
+        lid_pixels = lid[..., 3] == 255
+        assert lid_pixels.any()
+        # 虹膜是蓝的（40,60,120）；闭眼图里蓝色通道不该压过红色通道
+        rgb = lid[..., :3].astype(int)[lid_pixels]
+        blue_dominant = int((rgb[:, 2] > rgb[:, 0]).sum())
+        assert blue_dominant < len(rgb) * 0.2, (
+            f"闭眼图还有 {blue_dominant}/{len(rgb)} 个蓝色像素（虹膜色没被皮肤盖住）")
+        # 也不可能整张都是同一个暗色描边
+        assert len(np.unique(rgb, axis=0)) > 1
 
     def test_mouth_cavity_hides_under_the_lip_and_is_warm(self):
         with tempfile.TemporaryDirectory() as tmpdir:

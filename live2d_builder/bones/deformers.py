@@ -630,16 +630,10 @@ class DeformerHierarchy:
          "type": "warp", "profile": "mouth_cavity",
          "parameters": ["ParamMouthOpenY"],
          "targets": ["mouth_cavity", "mouth_inner"]},
-        # 上眼睑：整条带下移。眼球自己仍会被 EyeBlink 压扁，但闭上时它已经被眼皮
-        # 盖住，所以看到的是"皮肤下来"，而不是"瞳孔被压成一条线"。
-        {"name": "EyeLid_L", "parent": "Eye_L", "rows": 2, "cols": 2,
-         "type": "warp", "profile": "lid",
-         "parameters": ["ParamEyeLOpen"],
-         "targets": ["eyelid_left", "eyelid_l"]},
-        {"name": "EyeLid_R", "parent": "Eye_R", "rows": 2, "cols": 2,
-         "type": "warp", "profile": "lid",
-         "parameters": ["ParamEyeROpen"],
-         "targets": ["eyelid_right", "eyelid_r"]},
+        # 闭眼：眼球整体**向上收拢**进上睫毛线里（``eye`` profile 的轴心取眼睛
+        # 轮廓上沿）。眼睛下面已经画好了「闭眼图」（脸层肤色 + 原画上睫毛，见
+        # LayerComposer._synthesize_eyelid），收拢后露出来就是闭眼的样子。
+        # 闭眼图是**静态**的，所以不占变形器：它由 EyeBlink 的收拢动作"让出来"。
         {"name": "EyeBlink_L", "parent": "Eye_L", "rows": 2, "cols": 2,
          "type": "warp", "profile": "eye",
          "parameters": ["ParamEyeLOpen"],

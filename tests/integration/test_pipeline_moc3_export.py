@@ -715,15 +715,19 @@ def test_eye_open_changes_rendered_pixels(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 合成眼皮 / 口内：官方内核里的真实像素判据
+# 合成闭眼图 / 口内：官方内核里的真实像素判据
 #
 # 这两个图层在原始立绘里不存在，是分层阶段合成的（见
 # LayerComposer.synthesize_face_geometry）。这里用最小合成件证明它们**在官方内核里
-# 真的起作用**：闭眼是"皮肤盖住眼球"，而不是"眼球被压扁"。
+# 真的起作用**。
+#
+# 闭眼的新机制是「闭眼图 + 眼球向上收拢」：
+# * 闭眼图 = 眼睛那块面积填成的皮肤（+ 原画上睫毛），画在眼球**下面**；
+# * 眼球向上收拢进上睫毛线（``eye`` profile），收拢后露出来的就是闭眼图。
+# 所以闭眼的判据是"眼睛那块地方变成皮肤"，而不是"眼球被压扁"。
 # ---------------------------------------------------------------------------
 
-LID_BOX = (54, 40, 74, 60)      # 眼皮带（肤色），紧贴眼球上方
-EYE_BOX = (54, 60, 74, 80)      # 眼球（深色），闭眼时应该被盖子盖住
+EYE_BOX = (54, 40, 74, 60)      # 眼睛区域：闭眼图与眼球同形
 LIP_BOX = (54, 90, 74, 92)      # 嘴线（深色，2px 墨线）
 
 
@@ -756,15 +760,19 @@ def _synthetic_rig(layers, boxes, deformers, params):
 
 
 @requires_pixels
-def test_eyelid_covers_the_eye_in_the_official_core(tmp_path):
-    """闭眼 = 皮肤把眼球盖住（而不是把眼球压扁）。"""
+def test_eye_collapses_upward_and_reveals_the_closed_eye_image(tmp_path):
+    """闭眼 = 眼球向上收拢，露出来的是画在下面的「闭眼图」（皮肤）。
+
+    绘制顺序：闭眼图先（画在下面）、眼球后（画在上面）。眼球一收拢，
+    眼睛那块地方就露出闭眼图的皮肤色。
+    """
     builder_result = _synthetic_rig(
-        {"eyelid": _solid(LID_BOX, (240, 200, 170, 255)),
+        {"closed": _solid(EYE_BOX, (240, 200, 170, 255)),
          "iris": _solid(EYE_BOX, (30, 40, 90, 255))},
-        {"eyelid": LID_BOX, "iris": EYE_BOX},
-        [{"name": "EyeLid_L", "type": "warp", "parent": "Eye_L",
-          "grid_rows": 2, "grid_cols": 2, "profile": "lid",
-          "parameters": ["ParamEyeLOpen"], "targets": ["eyelid"]}],
+        {"closed": EYE_BOX, "iris": EYE_BOX},
+        [{"name": "EyeBlink_L", "type": "warp", "parent": "Eye_L",
+          "grid_rows": 2, "grid_cols": 2, "profile": "eye",
+          "parameters": ["ParamEyeLOpen"], "targets": ["iris"]}],
         [("ParamEyeLOpen", 0, 1, 1)])
     _, export_result = _export(tmp_path, builder_result)
     compiled = compile_export_moc3(
@@ -773,8 +781,8 @@ def test_eyelid_covers_the_eye_in_the_official_core(tmp_path):
         output_dir=export_result["output_dir"], character_name="web_preview")
     assert compiled["moc3_written"] is True, compiled["blocker"]
 
-    open_png = tmp_path / "eyelid_open.png"
-    closed_png = tmp_path / "eyelid_closed.png"
+    open_png = tmp_path / "eye_open.png"
+    closed_png = tmp_path / "eye_closed.png"
     opened = render_probe(export_result["model3_json"],
                           params={"ParamEyeLOpen": 1.0},
                           png=str(open_png), width=128, height=128)
@@ -790,8 +798,21 @@ def test_eyelid_covers_the_eye_in_the_official_core(tmp_path):
     now_skin = b[..., :3].mean(axis=2) > 150
     covered = int((was_eye & now_skin).sum())
     assert was_eye.sum() > 300, "眼球没画出来，判据无效"
-    assert covered > was_eye.sum() * 0.9, (
+    # 眼睛那块地方基本都变成皮肤了（残余是收拢后贴在**上沿**的那条）
+    assert covered > was_eye.sum() * 0.85, (
         f"闭眼只盖住 {covered}/{int(was_eye.sum())} 个眼球像素")
+
+    # 关键判据：残余的眼球像素必须贴在眼睛的**上沿**。
+    # 这正是"向上收拢"与"从中间压扁"的区别 —— 压扁会把眼球留在眼睛中间，
+    # 看起来像眯眼；收拢则把它收进上睫毛线里。
+    ys, _xs = np.nonzero(was_eye)
+    eye_top, eye_bottom = int(ys.min()), int(ys.max())
+    residual = was_eye & ~now_skin
+    rys, _ = np.nonzero(residual)
+    if len(rys):
+        assert int(rys.max()) <= eye_top + int((eye_bottom - eye_top) * 0.2), (
+            f"残余眼球像素落在 {int(rys.max())} 行（眼睛上沿是 {eye_top}），"
+            "说明是压扁而不是向上收拢")
 
 
 @requires_pixels

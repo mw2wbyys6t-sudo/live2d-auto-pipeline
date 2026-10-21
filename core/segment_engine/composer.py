@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image
@@ -45,8 +45,8 @@ class LayerComposer:
         "hair_mid",
         # 刘海（hair_front / hair_bangs）**不在这里**：见下方眼睑之后的位置。
         # 原因：脸层在刘海位置是镂空的（分出来的脸只有可见皮肤），所以"刘海"原本
-        # 是靠脸的洞透出来的。眼皮带一旦给那些洞填色，刘海就被涂成皮肤（实测
-        # 1206 px）。把刘海排到脸/眼皮之后，它直接盖在上面，与 `preview.png` 的
+        # 是靠脸的洞透出来的。闭眼图一旦给那些洞填色，刘海就被涂成皮肤（实测
+        # 1206 px）。把刘海排到脸/闭眼图之后，它直接盖在上面，与 `preview.png` 的
         # 逐像素误差反而更小（MAE 1.5767 → 1.5695）。
         # 脸底层必须在**五官之前**（列表越靠后 = 画得越靠前）。
         #
@@ -55,17 +55,17 @@ class LayerComposer:
         # 显形——实测眼睛被脸盖成几块碎片。
         "face_base",
         "face",
+        # 闭眼图：合成层（见 synthesize_face_geometry）。必须排在眼球**之前**
+        # （列表越靠后 = 画得越靠前）—— 闭眼图是"眼皮落下后露出来的那张脸"，
+        # 画在眼球下面，眼球向上收拢时才露出来。
+        "eyelid_left", "eyelid_right",
         # 五官：真实分层器产出的名字（eyewhite_* / irides_* / eyebrow_*）都要列上，
         # 否则它们会落到"未列出→按字母序追加到最后"，被画到头发和衣服之上。
         "eyes", "eyes_left", "eyes_right",
         "eyewhite_left", "eyewhite_right",
         "irides_left", "irides_right",
         "eyelash_left", "eyelash_right",
-        # 上眼睑：合成层（见 synthesize_face_geometry）。必须排在眼球**之后**
-        # （列表越靠后 = 画得越靠前），否则闭眼时眼皮盖不住瞳孔；同时必须排在
-        # 眉毛**之前**，否则眼皮带（从眼睛上方取的脸层像素）会把眉毛涂掉。
-        "eyelid_left", "eyelid_right",
-        # 刘海：必须排在眼睑**之后**（画在眼皮前），否则眼皮带的补色会盖住刘海。
+        # 刘海：必须排在闭眼图之后（画在闭眼图前），否则闭眼图的补色会盖住刘海。
         "hair_front", "hair_bangs",
         "eyebrows", "eyebrow_L", "eyebrow_R",
         "nose", "nose_mouth",
@@ -134,26 +134,43 @@ class LayerComposer:
 
     #: 合成上眼睑：层名 -> 可以作为"眼睛可见区域"的候选层（按优先级）。
     #:
-    #: 立绘里没有眼皮画稿，闭眼只能把眼球压扁——眼睛变成一坨被压扁的色块。这里从
-    #: 眼睛层上方**取脸层自己的皮肤**做一条带，闭眼时整条带下移盖住眼球：皮肤是原画
-    #: 的像素，盖上去等于"H 眼皮"，而不是凭空造一块颜色。
+    #: 立绘里没有眼皮画稿，闭眼只能把眼球压扁——眼睛变成一坨被压扁的色块。这里合成
+    #: 一张「闭眼图」：眼睛轮廓内填皮肤 + 原画自己的**上睫毛线**。
+    #:
+    #: 为什么不用"眼皮带下移"：带子要从眼睛上方取像素，而眼睛正上方整片是头发，
+    #: 脸层在那儿存的是**发色**（不是皮肤）——照抄下来闭眼时眼睛上会留一条蓝带
+    #: （实测左眼 40px 宽）。所以改成"闭眼图"：形状与颜色都在眼睛**内部**取，
+    #: 绝不借用眼睛外的像素。
     EYELID_SOURCES = (
         ("eyelid_left",
          ("irides_left", "eyewhite_left", "eyes_left", "eye_left")),
         ("eyelid_right",
          ("irides_right", "eyewhite_right", "eyes_right", "eye_right")),
     )
-    #: 从眼睛层最上面复制几行做"睫毛线"。静止时必须与眼睛层的像素**逐字节相同**，
-    #: 否则闭眼参数一动就会看到一条副本痕迹（这也是静止姿态逐像素不变的来源）。
-    EYELID_LASH_ROWS = 2
-    #: 眼睑带左右各外扩的像素数：调大可以让闭眼时眼睛边缘不留缝。
-    EYELID_PAD = 1
+    #: 睫毛线：眼球层里"暗且各通道接近"的像素（描边/睫毛），虹膜是蓝的会被排除。
+    EYELID_LASH_LUM = 110
+    EYELID_LASH_SPREAD = 30
 
     #: 口内层：从嘴线层取形状与色调，合成"口腔内侧"。
     MOUTH_CAVITY_SOURCES = ("mouth", "mouth_outer", "mouth_line")
     MOUTH_CAVITY_NAME = "mouth_cavity"
     #: 口内色 = 嘴线色向暖红偏移的比例（嘴线通常是近黑的墨线）。
     MOUTH_CAVITY_WARMTH = 0.45
+
+    @classmethod
+    def synthesized_overlay_sources(cls) -> Dict[str, Tuple[str, ...]]:
+        """合成层 → 它**取自**哪些层。
+
+        闭眼图与口内都是拿源层的**同一块面积**造出来的（闭眼图 = 眼睛那块面积填
+        皮肤 + 原画上睫毛；口内 = 嘴线那块面积填暖色），所以它们必然与源层
+        100% 重叠。质量门按"谁盖住谁"判缺陷，不认识这条关系就会把设计报成越界
+        扩张（实测 4 条：eyelid_* 各盖住 eyewhite_* 与 irides_*）。
+        """
+        out: Dict[str, Tuple[str, ...]] = {
+            name: tuple(sources) for name, sources in cls.EYELID_SOURCES
+        }
+        out[cls.MOUTH_CAVITY_NAME] = tuple(cls.MOUTH_CAVITY_SOURCES)
+        return out
 
     def __init__(self, device: str = "auto") -> None:
         """Initialize the composer.
@@ -313,14 +330,15 @@ class LayerComposer:
         w: int,
         out: Optional[Path] = None,
     ) -> List[str]:
-        """合成「上眼睑」与「口内」两层，返回新增的层名。
+        """合成「闭眼图」与「口内」两层，返回新增的层名。
 
         立绘里没有这两种画稿：眼睛是睁开的、嘴是闭着的。缺了它们，眨眼只能把眼球
         压扁，张嘴只能把墨线撑粗——参数确实动了，但表现不像"闭眼/张嘴"。
 
         静止姿态必须**逐像素不变**，所以两层都不是凭空画形状：
-        * 眼睑 = 眼睛上方「脸层自己的像素」+ 眼睛层最上面 ``EYELID_LASH_ROWS`` 行；
-          原位置、原像素，静止时叠在脸上等于原地重画；闭眼时整条带下移盖住眼球。
+        * 闭眼图 = 眼睛轮廓内填皮肤 + **原画自己的上睫毛线**（眼球层里"暗且各通道
+          接近"的像素）。整张图画在眼球**下面**，闭眼时眼球向上收拢进睫毛线，
+          露出来的就是它。
         * 口内 = 嘴线层的形状，填成偏暖的口内色；静止时正好被嘴唇完全遮住。
 
         合成失败（缺脸层/缺眼睛层/层为空）一律**不产出**，不交半层。
@@ -364,86 +382,86 @@ class LayerComposer:
     def _synthesize_eyelid(self, name: str, sources: List[str],
                            layers: Dict[str, Dict], h: int,
                            w: int) -> Optional[np.ndarray]:
-        """生成一条「眼皮带」：上方是脸层皮肤，下沿是眼球层顶部 ``lash`` 行。
+        """合成「闭眼图」，画在眼球**下面**（见 ``STANDARD_LAYER_ORDER``）。
 
-        只复制 **alpha 正好 255** 的像素。这是"静止逐像素不变"的关键：半透明像素
-        再叠一次会得到 `src·a + base·(1-a)`，与只画一层不同（实测会差 2 像素）。
-        脸层/眼球层的抗锯齿边因此不复制——它们本来就在原层上。
+        闭眼时眼球整体**向上收拢**进上睫毛里（``eye`` profile，轴心取眼睛轮廓上沿），
+        收拢后露出来的就是这张图。
+
+        闭眼图 = 眼睛轮廓内填皮肤 + **原画自己的上睫毛线**（暗、且各通道接近的
+        像素；虹膜是蓝的，各通道差大，会被排除）。
+
+        为什么不能"从眼睛上方搬一条眼皮带下来"：眼睛正上方整片是头发，脸层在那儿
+        存的是**发色**（原图像素），照抄下来闭眼时眼睛上会留一条 40px 宽的蓝带
+        （实测）。闭眼图的像素全部取自眼睛**内部**，不借用眼睛外的像素。
+
+        静止姿态逐像素不变：
+        * 皮肤部分 = 脸层自己的像素（该区域已被 inpaint 成肤色）；
+        * 睫毛部分 = 眼球层自己的像素，叠在眼球层上完全一样。
         """
+        eye = self._alpha_over([self._layer_array(layers, n) for n in sources], h, w)
+        if eye is None:
+            return None
+        solid = eye[..., 3] == 255
+        if not solid.any():
+            return None
+
         face = self._layer_array(layers, "face")
         if face is None:
             face = self._layer_array(layers, "face_base")
         if face is None:
             return None
-        eye = self._alpha_over([self._layer_array(layers, n) for n in sources], h, w)
-        if eye is None:
-            return None
-        mask = eye[..., 3] > 8
-        if not mask.any():
-            return None
-        ys, xs = np.nonzero(mask)
-        x0, x1 = int(xs.min()), int(xs.max())
+
+        ys, xs = np.nonzero(solid)
         y0, y1 = int(ys.min()), int(ys.max())
-        travel = y1 - y0 + 1                     # 下移距离 = 眼高，正好盖满
-        pad = max(0, int(self.EYELID_PAD))
-        lash = max(1, int(self.EYELID_LASH_ROWS))
-        bx0, bx1 = max(0, x0 - pad), min(w - 1, x1 + pad)
-        by0 = max(0, y0 - travel)
-        if by0 >= y0:
+        x0, x1 = int(xs.min()), int(xs.max())
+
+        # 上睫毛线：眼球层里暗、且各通道接近的像素。只取眼睛**上半部** ——
+        # 下半部的深色是下睫毛/眼眶线，闭眼时不该留在原位。
+        rgb = eye[..., :3].astype(np.int16)
+        lum = rgb.mean(axis=2)
+        spread = rgb.max(axis=2) - rgb.min(axis=2)
+        dark = solid & (lum < self.EYELID_LASH_LUM) & (spread < self.EYELID_LASH_SPREAD)
+        upper = np.zeros_like(dark)
+        upper[y0:(y0 + y1) // 2 + 1, :] = True
+        lash = dark & upper
+        if not lash.any():
             return None
+
+        # 皮肤：脸层在眼区已被 inpaint 成肤色，直接搬过来；脸层透明的地方
+        # （眼区在脸层是有洞的）用眼睛下方脸颊的肤色补上。
+        skin = self._skin_color_below(face, y1)
+        if skin is None:
+            return None
+        region_face = face[y0:y1 + 1, x0:x1 + 1]
+        body = region_face[..., :3].astype(np.int16).copy()
+        hole = region_face[..., 3] != 255
+        body[hole] = skin.astype(np.int16)
 
         lid = np.zeros((h, w, 4), dtype=np.uint8)
-        # 皮肤带：脸层原像素；**只**给"静止时会被更靠前的层盖住"的洞补皮肤色。
-        #
-        # 脸层在刘海位置是**镂空**的（分出来的脸只有可见皮肤），而眼皮带必须整块
-        # 不透光，否则闭眼时瞳孔会从洞里透出来。补色取"同一列最近的皮肤"，补出来
-        # 是一块连续皮肤而不是平色。但不加条件地补会把这些洞在静止时也点亮——
-        # 实测 147 px 在刘海缝里冒出肤色。所以只在 `cover`（画在眼皮之后、
-        # 且真的存在的层）下面补，静止时逐像素不变。
-        band_src = face[by0:y0, bx0:bx1 + 1]
-        solid = band_src[..., 3] == 255
-        if not solid.any():
-            return None
-        filled = self._nearest_fill(band_src[..., :3].astype(np.int16), solid)
-        covered = self._cover_mask(layers, name, h, w)[by0:y0, bx0:bx1 + 1]
-        paint = solid | covered
-        # 没有覆盖的 1px 发丝缝**不补**：补了会在静止画面上留下几十个皮肤色噪点
-        # （实测 66 px），而闭眼时那几列只是细线，读起来像眼皮褶。静止逐像素不变
-        # 是更硬的要求。
-        band = lid[by0:y0, bx0:bx1 + 1]
-        band[..., :3] = filled.astype(np.uint8)
-        band[..., 3] = np.where(paint, 255, 0)
-
-        # 睫毛线：眼球层顶部 lash 行（随眼皮一起下移）。半透明像素不复制，
-        # 否则叠两次会得到与只画一层不同的颜色（实测差 2 像素）。
-        eye_rows = min(h, y0 + lash)
-        top_src = eye[y0:eye_rows]
-        top_solid = top_src[..., 3] == 255
-        if top_solid.any():
-            row_view = lid[y0:eye_rows]
-            row_view[top_solid] = top_src[top_solid]
+        region = lid[y0:y1 + 1, x0:x1 + 1]
+        region[..., :3] = np.clip(body, 0, 255).astype(np.uint8)
+        region[..., 3] = np.where(solid[y0:y1 + 1, x0:x1 + 1], 255, 0)
+        # 睫毛线：原样保留眼球层的像素（静止时与眼球层逐字节相同）。
+        local_lash = lash[y0:y1 + 1, x0:x1 + 1]
+        region[local_lash] = eye[y0:y1 + 1, x0:x1 + 1][local_lash]
         return lid
 
-    @staticmethod
-    def _nearest_fill(rgb: np.ndarray, solid: np.ndarray) -> np.ndarray:
-        """把 ``solid`` 之外的像素按**同列最近**的实心像素颜色补齐。"""
-        out = rgb.copy()
-        known = rgb[solid].astype(np.float64)
-        fallback = (np.median(known, axis=0) if len(known)
-                    else np.array([233.0, 214.0, 198.0]))
-        rows, cols = solid.shape
-        for c in range(cols):
-            col = solid[:, c]
-            if not col.any():
-                out[:, c] = fallback.astype(np.int16)
-                continue
-            idx = np.nonzero(col)[0]
-            for r in range(rows):
-                if col[r]:
-                    continue
-                nearest = idx[int(np.abs(idx - r).argmin())]
-                out[r, c] = out[nearest, c]
-        return out
+    def _skin_color_below(self, face: Optional[np.ndarray], eye_bottom: int
+                           ) -> Optional[np.ndarray]:
+        """眼睛下方脸颊的肤色中位数（闭眼图里补脸层破洞用）。"""
+        if face is None:
+            return None
+        below = face[eye_bottom + 1:, :, :3]
+        alpha = face[eye_bottom + 1:, :, 3]
+        keep = alpha == 255
+        if not keep.any():
+            return None
+        rgb = below[keep].astype(np.int16)
+        lum = rgb.mean(axis=1)
+        spread = rgb.max(axis=1) - rgb.min(axis=1)
+        skinish = (lum >= 140) & (spread <= 90)
+        pool = rgb[skinish] if skinish.any() else rgb
+        return np.median(pool, axis=0).astype(np.uint8)
 
     def _synthesize_mouth_cavity(self, layers: Dict[str, Dict],
                                  sources: List[str], h: int,
@@ -496,20 +514,6 @@ class LayerComposer:
         if cache is not None:
             cache[path] = arr
         return arr
-
-    def _cover_mask(self, layers: Dict[str, Dict], name: str,
-                    h: int, w: int) -> np.ndarray:
-        """``name`` **之后**绘制、且真的存在的层所占的像素（静止时能盖住的东西）。"""
-        rank = {n: i for i, n in enumerate(self.STANDARD_LAYER_ORDER)}
-        mine = rank.get(name, len(rank))
-        cover = np.zeros((h, w), dtype=bool)
-        for other in layers:
-            if other == name or rank.get(other, len(rank)) <= mine:
-                continue
-            arr = self._layer_array(layers, other)
-            if arr is not None:
-                cover |= arr[..., 3] > 0
-        return cover
 
     @staticmethod
     def _load_png(path) -> Optional[np.ndarray]:

@@ -128,6 +128,50 @@ class TestDespeckle:
         assert not SemanticLayerer._despeckle(mask, min_area=4).any()
 
 
+class TestSynthesizedOverlayIsNotAnOverExtension:
+    """合成层（闭眼图 / 口内）与它**取自**的层 100% 重叠是设计，不是越界扩张。
+
+    闭眼图就是眼睛那块面积填成的皮肤，口内就是嘴线那块面积填的暖色 ——
+    它们与源层必然完全重合。质量门按"谁盖住谁"判缺陷，认不出这条关系就会把
+    自己的正确输出判成不合格（实测 5 条，正好占满 ``MAX_DEFECTS`` 门槛）。
+    """
+
+    def test_closed_eye_image_covering_the_eye_is_a_note_not_a_defect(self):
+        parts = clean_parts()
+        parts.pop("eyes_left")
+        # 真实分层里眼白与虹膜是**两块不相交**的区域（实测眼白 166 px、
+        # 虹膜 236 px，交集 0），闭眼图是两者并集那 402 px。
+        # 放在脸外的空白处，免得与夹具里别的部件相交。
+        parts["eyewhite_left"] = rect(10, 150, 28, 162)
+        parts["irides_left"] = rect(29, 150, 47, 162)
+        parts["eyelid_left"] = rect(10, 150, 47, 162)
+
+        bad, notes = LQ.check_duplicates(parts)
+
+        assert bad == [], f"合成层被误报成越界扩张: {bad}"
+        assert any("eyelid_left" in note for note in notes)
+
+    def test_mouth_cavity_covering_the_mouth_is_a_note_not_a_defect(self):
+        parts = clean_parts()
+        parts["mouth_cavity"] = rect(85, 82, 115, 94)   # 与嘴线层完全重合
+
+        bad, notes = LQ.check_duplicates(parts)
+
+        assert bad == [], f"口内层被误报成越界扩张: {bad}"
+        assert any("mouth_cavity" in note for note in notes)
+
+    def test_a_real_over_extension_is_still_reported(self):
+        """豁免只认「合成层 ↔ 它取自的层」这一对；真的越界扩张照报不误。"""
+        parts = clean_parts()
+        parts["eyelid_left"] = rect(78, 50, 96, 62)
+        # 闭眼图盖住了**嘴线** —— 不是它的源层，是真越界
+        parts["eyelid_left"] = rect(78, 50, 115, 94)
+
+        bad, _notes = LQ.check_duplicates(parts)
+
+        assert bad, "闭眼图盖住嘴线这种真越界必须报出来"
+
+
 class TestSelftest:
     def test_module_selftest_reports_no_false_alarms(self):
         buf = io.StringIO()
