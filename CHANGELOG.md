@@ -38,8 +38,8 @@
 
 ### 📦 安装包变化
 
-- 体积从 ~8 MB 变为 **306.17 MiB（321,047,178 字节）**（自包含运行时，正常）。
-- SHA256：`ff7d8aba4a96e38f93a4f2d5bf9c4314dd32817a43050c321f1551b30387d248`
+- 体积从 ~8 MB 变为 **461.62 MiB（484,048,467 字节）**（自包含运行时，正常）。
+- SHA256：`01862574322e45410ecad57587bcdce7413e968387b267fe1fdf8a4d605b71b5`
 - **旧 v0.10.7 的 8 MB 包不可用**（缺 Python 运行时 / 源码树 / 模型），该资产已从 Release 撤下并在发布说明中加了警示；请先卸载旧版再装本版。
 
 ### 🧪 安装后自检（本版新增）
@@ -84,13 +84,15 @@
 | 构建环境 | `windows-latest`；Node 20 / Go 1.25 / Rust stable / Python 3.12.10 |
 | 必须通过的检查 | Python Tests 3.10 / 3.11 / 3.12（3.12 实测 **504 passed / 96 skipped**）、Go build + test、Next.js build + TS check、装配冒烟（**必装 9 项全部可导入**） |
 | 依赖解析 | `requirements.desktop.txt`（29 个直接依赖）→ win_amd64 / cp312，实装 **92 个包**，site-packages **1.4 GB** |
-| 装配产物体积 | python 1.4 GB + app 1.6 MB + models 3.8 MB = **1.5 GB**（未压缩） |
+| 装配产物体积 | python 1.4 GB + app 1.9 MB + models 171.7 MB = **1.76 GB**（未压缩） |
 | 钉住且强制校验 | `python-embed` `4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3`<br>`yunet-onnx` `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`<br>`face-landmarker-task` `64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff`<br>（来源 `scripts/windows/hashes.json`，不匹配即构建失败） |
 | 已实测但未强制 | `onnxruntime-dll` `0c42dc4e278f0968fdf9ebf1b1e54a74c657a9942e70803e453c91993451cf4c`（17,253,176 字节）——`hashes.json` 该项为空，且脚本当前未对该文件调用 `verify_hash`；**回填哈希并补上校验调用**后才转为强制 |
-| 产物 | `Live2D.Master.Agent_0.10.8_x64-setup.exe` — **306.17 MiB / 321,047,178 字节** |
-| 产物校验 | `sha256:ff7d8aba4a96e38f93a4f2d5bf9c4314dd32817a43050c321f1551b30387d248` |
-| 下载可达性 | Release 直链匿名请求 `HTTP 200`，`content-length: 321047178`（已实测） |
-| 实机验收 | [run #39046077810](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39046077810) 在 `windows-latest` 安装该发布资产：`RESULT: PASS`（17 项文件、解释器 3.12.10、7 模块、torch 2.14.1+cpu、`/api/health` `python_ok=true`、8 项 diagnostics 全 ok） |
+| 产物 | `Live2D.Master.Agent_0.10.8_x64-setup.exe` — **461.62 MiB / 484,048,467 字节** |
+| 产物校验 | `sha256:01862574322e45410ecad57587bcdce7413e968387b267fe1fdf8a4d605b71b5` |
+| 下载可达性 | Release 直链匿名请求 `HTTP 200`，`content-length: 484048467`（已实测） |
+| 实机验收 | [run #39046077810](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39046077810) 在 `windows-latest` 安装**上一版 0.10.8 资产**（321,047,178 字节）：`RESULT: PASS`（17 项文件、解释器 3.12.10、7 模块、torch 2.14.1+cpu、`/api/health` `python_ok=true`、8 项 diagnostics 全 ok） |
+| 资产替换 | 2026-10-21 用 CI run [#39580133583](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39580133583)（提交 `d7c46e0`）的产物替换了 Release 资产，加入腮红/眼泪网格键形不透明度驱动修复；文件名与下载 URL 不变 |
+| 待办 | 新资产尚未重跑上表实机验收；需手动触发 `acceptance-windows.yml`（默认 SHA 已更新为本版） |
 | 替代关系 | 取代 `v0.10.7`；其 8 MB 坏资产已删除，发布说明顶部加了警示 |
 | 回滚目标 | 卸载后重装**同一产物**（v0.10.8）；用户数据在 `%APPDATA%` 与「文档」保留，卸载不清空 |
 | 例外 | 未签名（SmartScreen 告警）；无自动更新；无 MSIX / Store 分发 |

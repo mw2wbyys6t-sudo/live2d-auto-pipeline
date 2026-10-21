@@ -15,7 +15,7 @@ on:
       expected_sha256:
         description: 'Expected SHA256 of the installer (empty = skip the check)'
         required: false
-        default: 'ff7d8aba4a96e38f93a4f2d5bf9c4314dd32817a43050c321f1551b30387d248'
+        default: '01862574322e45410ecad57587bcdce7413e968387b267fe1fdf8a4d605b71b5'
   # 该文件或验收脚本变更时自动跑一次，用于验证验收管线本身可用。
   push:
     paths:
@@ -33,7 +33,7 @@ jobs:
     env:
       # push 触发时 inputs 为空，这里给出与 workflow_dispatch 默认值一致的兜底。
       TAG: ${{ inputs.tag || 'v0.10.8' }}
-      EXPECTED_SHA: ${{ inputs.expected_sha256 || 'ff7d8aba4a96e38f93a4f2d5bf9c4314dd32817a43050c321f1551b30387d248' }}
+      EXPECTED_SHA: ${{ inputs.expected_sha256 || '01862574322e45410ecad57587bcdce7413e968387b267fe1fdf8a4d605b71b5' }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

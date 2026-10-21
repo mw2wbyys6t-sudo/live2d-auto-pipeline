@@ -11,10 +11,10 @@
 ## 0. 测试前准备
 
 - [ ] **先卸载旧版本**：设置 → 应用 → 已安装的应用 → 找到 `Live2D Master Agent` → 卸载（避免旧文件残留）
-- [ ] **下载正确的新包**：打开运行页 <https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39224247537>，页面底部 **Artifacts** 区点 **`tauri-nsis-installer`** 下载
-- [ ] 解压后确认文件名：`Live2D.Master.Agent_0.10.8_x64-setup.exe`
-- [ ] **校验体积 ≈ 328.95 MiB（`344,924,272` 字节）**
-      ⚠️ 若只有 ≈ **306 MiB（`321,047,178` 字节）**，那是 Release 里**未含本次修复的旧包**，请重新确认下载来源
+- [ ] **下载正确的新包**：打开 <https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.8>，下载 `Live2D.Master.Agent_0.10.8_x64-setup.exe`
+- [ ] 确认文件名：`Live2D.Master.Agent_0.10.8_x64-setup.exe`
+- [ ] **校验体积 = `484,048,467` 字节（461.62 MiB）**，SHA256 = `01862574322e45410ecad57587bcdce7413e968387b267fe1fdf8a4d605b71b5`
+      ⚠️ 若只有 ≈ **306 MiB（`321,047,178` 字节）**，那是 2026-10-21 替换前的旧资产（未含腮红/眼泪修复），请重新下载
 - [ ] 双击安装（按提示完成）→ 打开应用
 
 **记录测试机信息**
