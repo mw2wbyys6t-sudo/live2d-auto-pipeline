@@ -90,9 +90,8 @@
 | 产物 | `Live2D.Master.Agent_0.10.8_x64-setup.exe` — **461.62 MiB / 484,048,467 字节** |
 | 产物校验 | `sha256:01862574322e45410ecad57587bcdce7413e968387b267fe1fdf8a4d605b71b5` |
 | 下载可达性 | Release 直链匿名请求 `HTTP 200`，`content-length: 484048467`（已实测） |
-| 实机验收 | [run #39046077810](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39046077810) 在 `windows-latest` 安装**上一版 0.10.8 资产**（321,047,178 字节）：`RESULT: PASS`（17 项文件、解释器 3.12.10、7 模块、torch 2.14.1+cpu、`/api/health` `python_ok=true`、8 项 diagnostics 全 ok） |
+| 实机验收 | 新资产 [run #39605949729](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39605949729)（提交 `ce20820`）：`RESULT: PASS`——`484,048,467` 字节、sha256 与发布值一致、安装器退出码 `0`、`/api/health` `python_ok=true`、17 项自检通过。上一版资产为 [run #39046077810](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39046077810)，同样 PASS |
 | 资产替换 | 2026-10-21 用 CI run [#39580133583](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39580133583)（提交 `d7c46e0`）的产物替换了 Release 资产，加入腮红/眼泪网格键形不透明度驱动修复；文件名与下载 URL 不变 |
-| 待办 | 新资产尚未重跑上表实机验收；需手动触发 `acceptance-windows.yml`（默认 SHA 已更新为本版） |
 | 替代关系 | 取代 `v0.10.7`；其 8 MB 坏资产已删除，发布说明顶部加了警示 |
 | 回滚目标 | 卸载后重装**同一产物**（v0.10.8）；用户数据在 `%APPDATA%` 与「文档」保留，卸载不清空 |
 | 例外 | 未签名（SmartScreen 告警）；无自动更新；无 MSIX / Store 分发 |
