@@ -666,6 +666,25 @@ class DeformerHierarchy:
          "targets": ["arm_R", "upper_arm_back_right", "sleeve_R"]},
     ]
 
+    # ---- rotation 变形器：当前**不会**被创建，保留定义只为标明意图 ----
+    #
+    # 三条实测结论（2026-10-21，用 Work/base 的真实 32 层跑 build() 验证）：
+    # 1) targets 里的 ``eyeball_l`` / ``eye_left`` 与分层阶段实际产出的层名
+    #    （``eyewhite_left`` / ``irides_left`` / ``eyelid_left``）不匹配，
+    #    ``_matched_targets`` 恒为空 —— 真实流水线里 rotation 变形器 **0 个**。
+    # 2) pivot(-35,-40) 取自 ``_DEFAULT_BONE_POSITIONS`` 的**比例兜底**值，不是
+    #    图像坐标；真实眼骨经质心换算后并不在这个点上（见 LIMITATIONS §3
+    #    「骨骼枢轴必须是图像坐标」）。
+    # 3) 即便前两条成立，``moc3_pipeline._driving_rotation_parameter`` 也只在
+    #    ``ROTATION_KEYFORM_PARAMS``（Head / Body / 双臂 / 三束头发）里找 Z 轴
+    #    参数，而眼球对应的是 ParamEyeBallX/Y（平移，不是旋转），永远绑不上。
+    #
+    # 眼球跟随实际由 ``moc3_pipeline.eye_track_keyforms`` 用 ParamEyeBallX/Y 双轴
+    # 网格键形实现，头部三轴转动由 ``head_angle_keyforms`` 实现 —— 效果不缺，
+    # 缺的是「这两条不是 rotation 变形器」这件事被说清楚。
+    # 要让 rotation 变形器真正投入使用，必须换一个不被 warp 变形器占用、且语义
+    # 确实是刚体旋转的部件（例如手臂绕肩/绕肘），并同步调整网格归属。那是美术
+    # 决策，不能靠推断代替。
     DEFAULT_ROTATION_DEFORMERS: List[Dict] = [
         {"name": "EyeTrack_L",     "parent": "Eye_L",  "pivot": (-35, -40),
          "type": "rotation", "targets": ["eyeball_l", "eye_left"]},
@@ -730,9 +749,20 @@ class DeformerHierarchy:
             self._deformers.append(d)
             self._by_name[d["name"]] = d
 
+        rotation_skipped: List[Dict] = []
         for spec in self.DEFAULT_ROTATION_DEFORMERS:
             targets = _matched_targets(spec)
             if not targets:
+                # 不许静默跳过：targets 与真实分层产出长期不匹配（见
+                # DEFAULT_ROTATION_DEFORMERS 的说明）。静默会让「模型里没有
+                # rotation 变形器」被误读成「rotation 已支持但没绑参数」，
+                # 两者的修法完全不同，必须留下可查的原因。
+                rotation_skipped.append({
+                    "name": spec["name"],
+                    "reason": "目标层名未命中",
+                    "targets": list(spec["targets"]),
+                    "available_sample": sorted(available_norm)[:6],
+                })
                 continue
             d = self.create_rotation_deformer(
                 name=spec["name"],
@@ -743,8 +773,16 @@ class DeformerHierarchy:
             self._deformers.append(d)
             self._by_name[d["name"]] = d
 
+        if rotation_skipped:
+            log.warning(
+                "rotation 变形器未创建 %d 个（目标层名与分层产出不匹配）：%s。"
+                "眼球/头部转动由网格键形承担，见 docs/LIMITATIONS.md §3。"
+                % (len(rotation_skipped),
+                   [d["name"] for d in rotation_skipped]))
+
         log.info(f"Created {len(self._deformers)} deformers")
-        return {"deformers": self._deformers, "by_name": self._by_name}
+        return {"deformers": self._deformers, "by_name": self._by_name,
+                "rotation_skipped": rotation_skipped}
 
     def create_warp_deformer(
         self,

@@ -86,8 +86,24 @@
 这部分最值得注意 —— 仓库用 `runtime_ready` / `dropped` / `deformers_static` 等字段**如实标注**能力状态，
 请以产物里的这些字段为准，不要以「导出成功」推断「能动画」。
 
-- **rotation 变形器目前只产出静态姿态**：结构与单位已定论、能过官方内核，但**没有参数绑定**，
-  因此眼球跟随之类的效果**不会动**。它被单独记入 `deformers_static`，不会冒充成已落地。
+- **rotation 变形器在真实流水线里不会被创建**——注意这**不是**「已支持但没绑参数」，
+  两者的修法完全不同。三条实测原因（2026-10-21，用 `Work/base` 的真实 32 层跑
+  `DeformerHierarchy.build()` 复核）：
+  1. 生成器 `DEFAULT_ROTATION_DEFORMERS` 声明的 targets 是 `eyeball_l` / `eye_left`，
+     而分层阶段实际产出的层名是 `eyewhite_left` / `irides_left` / `eyelid_left`，
+     `_matched_targets` 恒为空 → rotation 变形器 **0 个**；
+  2. 枢轴 `(-35,-40)` 取自 `_DEFAULT_BONE_POSITIONS` 的**比例兜底**值，不是图像坐标；
+  3. 即便前两条都修好，`_driving_rotation_parameter` 也只在 Head / Body / 双臂 / 三束
+     头发里找 Z 轴参数，而眼球对应的是 `ParamEyeBallX/Y`（平移，非旋转），永远绑不上。
+
+  「枢轴命中即绑定逐键键形」这条逻辑本身是好的（`tests/unit/test_moc3_pipeline.py`
+  有覆盖），绑定失败时也会如实记入 `deformers_static`。**真正承载转动的两条路径是
+  网格键形**：`head_angle_keyforms`（`ParamAngleX/Y/Z` 三轴 → face/hair/mouth/nose）
+  与 `eye_track_keyforms`（`ParamEyeBallX/Y` 双轴 + `Eyeball_L/R` 权重 → 眼白/虹膜）。
+  被跳过时现在会带 `rotation_skipped`（名字 + 原因 + 期望层名）并打 warning，
+  不再静默消失，见 `tests/unit/test_deformer_hierarchy_rotation.py`。
+  要让 rotation 变形器真正投入使用，必须换一个不被 warp 占用、语义确实是刚体旋转的
+  部件（例如手臂绕肩/绕肘），那是美术决策，不做推断。
 - **warp 变形器**已可编译并过官方内核 + 逐像素验收。
 - **网格键形（逐顶点键形带）已开启**（`moc3_pipeline.MESH_KEYFORMS_ENABLED = True`），
   保留为急停开关。曾经整体关闭的现象是：模型里有 ≥2 个网格带键形时，官方 Cubism Core 在
@@ -112,7 +128,14 @@
   Head 枢轴于是跑到画布左下角外，头一转整颗头绕着角落甩。现在有质心时全部换到图像坐标，
   并由子骨骼补出 `Head/Root/Body/Chest`（`Head` 取「脸的水平 + 颈的纵向」）。
   复核：`tests/unit/test_bone_weights.py::TestBoneResolution / TestBonePivots / TestHeadAssemblyExclusion`。
-- **同一网格命中多个旋转参数时保持静态**（多参数带的轴序尚未实测定论，见评审 F-06）。
+- **同一网格命中多个旋转参数时保持静态**：参与网格路径的只有 `ParamAngleZ`
+  （头/脸/发/眼/眉/耳）与 `ParamBodyAngleZ`（身体），而 `_affected_bones` 会沿祖先
+  上溯 —— 一处同时带 Head 与 Neck 权重的网格（脖子、衣领）两个都会命中，于是退回静态、
+  完全不跟随。
+  多参数带的**格式**已不是障碍：2-binding 的轴序已实测定论（X 在前、步长 1，见
+  `tools/probe_multiband_axis_order.py` 与评审 F-06），网格键形与 warp 变形器都在用。
+  剩下的是**语义**判断：把「头部转动 × 身体转动」合成一条多轴带会让脖子同时受两级
+  转动影响，是否符合美术预期需要确认，因此暂不生成。
 - **表情形变走 warp 变形器，同一个部件的多个参数合成一条「多轴带」**：内核里一个网格只能挂
   一个参数带（眼睛已被双眼球键形、嘴与眉已被头部三轴键形占满），一个变形器也只能挂一个带，
   所以口的「开合 × 口型 × 大小」、眉的「上下 × 角度 × 形状」必须压成一条多轴带
