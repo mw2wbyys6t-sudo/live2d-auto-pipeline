@@ -137,7 +137,9 @@ class Model3Exporter:
         # single-quad preview), so we also export one full-canvas PNG per
         # layer plus a manifest. The web player stacks these into a coherent
         # character and can deform each part independently.
-        preview_layers = self._export_preview_layers(layers, out, character_name)
+        preview_layers = self._export_preview_layers(
+            layers, out, character_name,
+            rest_opacity=builder_result.get("layer_opacity") or {})
 
         # 8. Motions. 曲线只覆盖真的有键形驱动的参数：给一个动不了的参数排
         #    曲线会得到「文件齐全但画面一动不动」的假产物。
@@ -287,8 +289,13 @@ class Model3Exporter:
         layers: Dict[str, Image.Image],
         out: Path,
         character_name: str,
+        rest_opacity: Optional[Dict[str, float]] = None,
     ) -> List[Dict[str, Any]]:
         """Save one full-canvas PNG per layer and return a preview manifest.
+
+        ``rest_opacity`` 里值为 0 的层**不写进预览清单**：腮红/眼泪这类表情层静止
+        时是透明的，浏览器预览只做"静止叠图"，把它们放进去会在静止画面上凭空
+        多出腮红和泪光（moc3 不受影响，那边由不透明度键形控制）。
 
         Fail-open: any layer that cannot be saved is skipped so model3.json
         export never breaks.
@@ -297,6 +304,8 @@ class Model3Exporter:
         manifest: List[Dict[str, Any]] = []
         if not layers:
             return manifest
+        hidden = {name for name, value in (rest_opacity or {}).items()
+                  if float(value or 0.0) <= 0.0}
         try:
             preview_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -304,6 +313,9 @@ class Model3Exporter:
             return manifest
 
         for z, (name, img) in enumerate(layers.items()):
+            if name in hidden:
+                log.debug(f"预览层跳过静止不可见的 '{name}'（rest_opacity=0）")
+                continue
             try:
                 safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
                 fname = f"{z:03d}_{safe}.png"

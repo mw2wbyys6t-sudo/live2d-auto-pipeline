@@ -505,6 +505,7 @@ class WorkflowEngine:
                 from collections import OrderedDict
                 from live2d_builder.pipeline import RiggingPipeline
                 layers_for_rig = OrderedDict()
+                layer_opacity: Dict[str, float] = {}
                 for info in layer_result["layers"]:
                     path = info["path"]
                     name = info.get("name") or Path(path).stem
@@ -512,12 +513,17 @@ class WorkflowEngine:
                         layers_for_rig[name] = Image.open(path).convert("RGBA")
                     except Exception as exc:
                         log.warning(f"Skipping unreadable layer '{name}': {exc}")
+                        continue
+                    opacity = float(info.get("rest_opacity", 1.0))
+                    if opacity < 1.0:
+                        layer_opacity[name] = opacity
                 rig_output = str(self.output_dir / f"rigged_{timestamp}")
                 rig_result = RiggingPipeline().run(
                     layers_for_rig,
                     output_dir=rig_output,
                     character_name=(self._character_card.name if self._character_card
                                     else "generated_character"),
+                    layer_opacity=layer_opacity,
                 )
                 result["steps"]["rigging"] = {
                     "output_dir": rig_output,

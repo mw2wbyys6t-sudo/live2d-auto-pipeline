@@ -133,16 +133,21 @@
     嘴的 5px 会被当成 28px）；**横向归一化必须夹到 [-1,1]**，否则控制网格比网格宽 4 倍时
     `t²` 到 16，嘴角被拉起 21px，脸上拉出一道 V 形伤疤。
   * 实测（官方内核受控像素验证）：修复前 `ParamMouthOpenY`/`ParamEyeLOpen` 的
-    `changed_pixels` **恒为 0**；现在 28 个参数里 24 个真的会动，
-    嘴 62px、睁闭眼 220/208px、眉 75~95px、口型 33px。
+    `changed_pixels` **恒为 0**；现在声明的 28 个参数**全部**能改变画面，
+    嘴 212px、睁闭眼 411/336px、眉 75~124px、口型 46~57px、腮红 217px、
+    眼泪 221/129/92px。
   * **观感受素材限制**：嘴在多数立绘里只是一条 2~4px 的墨线，没有"张开"的画稿，能做的只是
     把线按比例撑开；眼皮也是同样——没有画稿，只能从脸层与眼球层合成一张闭眼图（见下一条）。
-  * 仍未驱动、属于**缺美术图层**的只有 4 个：`ParamCheek`、`ParamTears`、`ParamTearsL/R`
-    （腮红/眼泪特效层）。它们在 `verify` 里列为 `declared_but_not_driven`，不冒充已落地。
+  * `ParamCheek` / `ParamTears` / `ParamTearsL/R` 曾经是"缺美术图层"而完全不响应
+    （`verify` 里列为 `declared_but_not_driven`）。现在由分层阶段合成的
+    **淡入层**（`cheek` / `tear_left` / `tear_right`）驱动，见下一条；
+    `declared_but_not_driven` 为空。
   复核：`tests/unit/test_moc3_deformers.py::TestExpressionDeformerProfiles /
-  TestMultiAxisBandHelpers / TestDrivenParameterReporting`、
+  TestMultiAxisBandHelpers / TestOpacityKeyformLayers / TestDrivenParameterReporting`、
   `tests/integration/test_pipeline_moc3_export.py::test_mouth_open_changes_rendered_pixels` /
-  `::test_mouth_form_and_size_are_driven_independently` / `::test_eye_open_changes_rendered_pixels`。
+  `::test_mouth_form_and_size_are_driven_independently` / `::test_eye_open_changes_rendered_pixels` /
+  `::test_cheek_fades_in_only_when_the_parameter_moves` /
+  `::test_tears_open_from_the_master_or_a_single_side`。
 - **闭眼图与口内是分层阶段「合成」出来的两层**：原始立绘里没有这两个画稿（眼睛睁着、嘴闭着），
   缺了它们，眨眼只能把眼球压扁、张嘴只能把墨线撑粗。合成规则如下（`LayerComposer.
   synthesize_face_geometry`）：
@@ -178,6 +183,37 @@
   TestSynthesisedLayerDeformersCompile`、
   `tests/integration/test_pipeline_moc3_export.py::test_eye_collapses_upward_and_reveals_the_closed_eye_image` /
   `::test_mouth_cavity_shows_when_the_mouth_opens`。
+- **腮红与眼泪是「淡入层」：静止不可见，靠不透明度键形淡入**（`cheek` /
+  `tear_left` / `tear_right`，见 `LayerComposer.REST_INVISIBLE_PARTS`）：
+
+  | 层 | 形状 | 驱动 | 静止 |
+  |---|---|---|---|
+  | `cheek` | 两眼下方**各自向外偏**的柔粉椭圆（颜色取自脸层肤色 + 暖粉偏） | `ParamCheek` | 不透明度 0 |
+  | `tear_left/right` | 下眼睑一条薄新月，淡蓝白 | `ParamTears`（总开关）× `ParamTearsL/R`（单侧） | 不透明度 0 |
+
+  * 它们和闭眼图/口内的"静止不可见"策略不同：后两者**被别的层挡住**，这两层是
+    **不透明度 0**。所以 `rest_opacity=0` 必须一路带到合成预览
+    （`semantic._write_composite_preview` 会跳过），否则静止画面凭空多出腮红
+    （实测最大差 100.9）。
+  * 驱动只用**网格键形的 opacity**，不用 warp 变形器：warp 改不了透明度。
+    一个网格只能挂一条键形带，所以 `ParamTears` 与 `ParamTearsL/R` 合成一条
+    **多轴带**，多轴取值取各轴归一化值的 **max**：总开关打开 = 两侧都有，单侧打开
+    = 只有那一侧。用乘积会让任何单轴都变不动（验收逐参数扫描，实测 changed=0）。
+  * 这两层的网格走**覆盖 alpha 包围盒的规则网格**（`Live2DBuilder._patch_mesh`），
+    不走轮廓采样：它们的形状是一整片柔和渐变，轮廓采样会把渐变外圈当噪声丢掉——
+    实测腮红层 618 px 却连网格都没生成、眼泪层 28×11 的渐变只被 10×5 的小块覆盖，
+    于是参数拉满也只亮一小块。
+  * **观感仍受素材限制**：没有原画腮红/眼泪笔触，腮红是肤色色偏 + 径向衰减，
+    眼泪是一条薄高光；不是有厚度的泪珠或带睫毛翻动的真眼泪。真实美术观感仍需人工签核。
+  * **浏览器预览里它们是静止可见的（近似，不等于 moc3）**：`model3.json` 目前不写
+    `PreviewLayers`，网页端把图集页整块绘制、不支持逐层不透明度，所以预览里腮红/
+    泪光会一直挂着；moc3 里由参数键形正确控制（静止帧实测 0 像素）。这条如实记录，
+    不当作"预览已对等"。
+  复核：`tests/unit/test_segment_engine.py::test_fade_in_layers_are_invisible_at_rest`、
+  `tests/unit/test_moc3_deformers.py::TestOpacityKeyformLayers`、
+  `tests/unit/test_rig_mesh.py::TestFadeInLayerMesh`、
+  `tests/integration/test_pipeline_moc3_export.py::test_cheek_fades_in_only_when_the_parameter_moves` /
+  `::test_tears_open_from_the_master_or_a_single_side`。
 - **受控像素验收按「模型自报的能力」逐项验，不再固定三个参数**：导出器把编译后真正被绑定的
   参数写进 `model3.json` 的 `Capabilities.DrivableParameters`（网格键形 + warp 变形器的带，
   见 `moc3_pipeline.driven_parameters`），`drivers/live2d_runtime/verify.py` 对**每一个**都做

@@ -359,6 +359,9 @@ class SemanticSegmenter:
                 "mean_color": info.get("mean_color", (128, 128, 128)),
                 "bbox": info.get("bbox", (0, 0, 0, 0)),
                 "amodal_completed": bool(info.get("completed", False)),
+                # 静止姿态下的不透明度。腮红/眼泪这类"淡入"表情层为 0：
+                # 静止时不可见，由参数键形在运行时抬到 1。
+                "rest_opacity": float(info.get("rest_opacity", 1.0)),
             })
 
         # 4. Save preview (original optimized image) and composite preview
@@ -444,9 +447,16 @@ class SemanticSegmenter:
         size: tuple,
         path: Path,
     ) -> None:
-        """Alpha-composite all exported layers onto a transparent canvas."""
+        """Alpha-composite all exported layers onto a transparent canvas.
+
+        Layers whose ``rest_opacity`` is 0 are skipped: 腮红/眼泪静止时是透明的，
+        把它们按不透明 PNG 叠上去会让静止画面凭空多出腮红和泪光
+        （实测会破坏「静止逐像素不变」这条路线的前提）。
+        """
         composite = Image.new("RGBA", size, (0, 0, 0, 0))
         for info in layers:
+            if float(info.get("rest_opacity", 1.0)) <= 0.0:
+                continue
             try:
                 layer_img = Image.open(info["path"]).convert("RGBA")
                 composite = Image.alpha_composite(composite, layer_img)

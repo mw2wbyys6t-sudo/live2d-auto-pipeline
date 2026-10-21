@@ -232,6 +232,16 @@ def _synthesized_overlay_sources() -> Dict[str, set]:
     }
 
 
+def _rest_invisible_parts() -> set:
+    """静止时**不画出来**的合成层（腮红 / 眼泪，靠不透明度键形淡入）。
+
+    它们与任何层的重叠都不是"越界扩张"：静止姿态下它们根本不存在，运行时的
+    可见性完全由参数控制。所以两两重叠/包含检查都要绕过它们。
+    """
+    from core.segment_engine.composer import LayerComposer
+    return set(LayerComposer.REST_INVISIBLE_PARTS)
+
+
 def _is_synthesized_overlay_pair(overlays: Dict[str, set],
                                  small: str, large: str) -> bool:
     """``small``/``large`` 是不是「合成层 ↔ 它取自的层」这一对。
@@ -254,6 +264,7 @@ def check_duplicates(masks: Dict[str, np.ndarray]) -> Tuple[List[str], List[str]
     """
     amodal = _amodal_parts()
     overlays = _synthesized_overlay_sources()
+    hidden = _rest_invisible_parts()
     names = sorted(masks)
     bad: List[str] = []
     notes: List[str] = []
@@ -268,6 +279,8 @@ def check_duplicates(masks: Dict[str, np.ndarray]) -> Tuple[List[str], List[str]
             dup = inter / min(sa, sb)
             iou = _iou(ma, mb)
             if dup <= DUP_CONTAINMENT or iou <= IOU_MAX:
+                continue
+            if small in hidden or large in hidden:
                 continue
             if large in amodal:
                 notes.append(
@@ -289,10 +302,14 @@ def check_duplicates(masks: Dict[str, np.ndarray]) -> Tuple[List[str], List[str]
 
 def check_overlap(masks: Dict[str, np.ndarray]) -> List[str]:
     """Pairwise IoU that is high but not a duplicate (partial collisions)."""
+    hidden = _rest_invisible_parts()
     names = sorted(masks)
     bad = []
     for i, a in enumerate(names):
         for b in names[i + 1:]:
+            if a in hidden or b in hidden:
+                # 静止时不画的层不参与两两重叠判定（见 _rest_invisible_parts）
+                continue
             ma, mb = masks[a], masks[b]
             smaller = min(int(ma.sum()), int(mb.sum()))
             if not smaller:

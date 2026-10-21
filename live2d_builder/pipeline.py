@@ -94,6 +94,7 @@ class Live2DBuilder:
         self,
         layers: Dict[str, Image.Image],
         part_masks: Optional[Dict[str, np.ndarray]] = None,
+        layer_opacity: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
         """Run the full build pipeline.
 
@@ -101,12 +102,20 @@ class Live2DBuilder:
             layers:     Ordered dict of ``{layer_name: PIL.Image}`` in RGBA.
             part_masks: Optional dict of ``{layer_name: np.ndarray}`` binary
                         masks for parts (used to refine mesh boundaries).
+            layer_opacity: 静止姿态下每层的不透明度。腮红/眼泪这类"淡入"表情层
+                        为 0（静止不可见，由参数键形抬到 1）；缺省视为全部 1.0。
+                        导出端据此从浏览器预览里剔除静止不可见的层。
 
         Returns:
             dict with paths to all generated files and intermediate data.
         """
         t0 = time.time()
         log.section(f"Building Live2D model: {self.character_name}")
+        # 静止不可见的层（腮红/眼泪）在网格阶段要走"铺满 bbox 的规则网格"，
+        # 见 _generate_meshes 的说明。
+        self._layer_opacity: Dict[str, float] = {
+            str(k): float(v) for k, v in (layer_opacity or {}).items()
+        }
 
         # Step 1: Meshes
         log.step(1, self.TOTAL_STEPS, "Generating meshes")
@@ -162,6 +171,7 @@ class Live2DBuilder:
             "parameters": param_defs,
             "expressions": expr_list,
             "physics3": self._physics3,
+            "layer_opacity": dict(layer_opacity or {}),
         }
         from live2d_builder.exporter.moc3_pipeline import drivable_parameters
 
@@ -256,6 +266,11 @@ class Live2DBuilder:
 
         Uses the combined contour+grid mesh for best quality on organic
         character shapes.
+
+        例外：**静止不可见**的淡入层（腮红/眼泪，``layer_opacity == 0``）用覆盖
+        整个 alpha 包围盒的规则网格。它们的形状就是一整片柔和渐变，轮廓采样会把
+        渐变外圈当成噪声丢掉——实测腮红层 618 px 却连网格都没生成、眼泪层
+        28x11 的渐变只被 10x5 的小块覆盖。
         """
         meshes: Dict[str, Dict] = {}
         for name, layer in layers.items():
@@ -263,11 +278,14 @@ class Live2DBuilder:
                 log.warning(f"Skipping non-image layer: {name}")
                 continue
             try:
-                mesh = self.mesh_gen.generate_combined_mesh(
-                    layer,
-                    grid_spacing=self.mesh_gen.internal_spacing,
-                    contour_spacing=self.mesh_gen.contour_spacing,
-                )
+                if self._layer_opacity.get(name, 1.0) <= 0.0:
+                    mesh = self._patch_mesh(layer)
+                else:
+                    mesh = self.mesh_gen.generate_combined_mesh(
+                        layer,
+                        grid_spacing=self.mesh_gen.internal_spacing,
+                        contour_spacing=self.mesh_gen.contour_spacing,
+                    )
                 if len(mesh["vertices"]) >= 3 and len(mesh["indices"]) > 0:
                     meshes[name] = mesh
                     nv = len(mesh["vertices"])
@@ -280,6 +298,48 @@ class Live2DBuilder:
 
         log.info(f"Generated meshes for {len(meshes)}/{len(layers)} layers")
         return meshes
+
+    #: 淡入层网格的密度（列数 x 行数）。它们只是柔和渐变，不需要跟着轮廓走；
+    #: 网格必须**铺满** alpha 包围盒，否则渐变外圈不会被画出来。
+    PATCH_GRID_COLS = 4
+    PATCH_GRID_ROWS = 3
+
+    def _patch_mesh(self, layer: Image.Image) -> Dict:
+        """覆盖 alpha 包围盒的规则网格（不做轮廓裁剪，也不做 mask 剔除）。"""
+        arr = np.array(layer.convert("RGBA"))
+        alpha = arr[..., 3]
+        h, w = alpha.shape
+        ys, xs = np.nonzero(alpha > 0)
+        if len(xs) == 0:
+            return {"vertices": [], "vertices_norm": [], "indices": [],
+                    "width": w, "height": h}
+        x0, x1 = float(xs.min()), float(xs.max()) + 1.0
+        y0, y1 = float(ys.min()), float(ys.max()) + 1.0
+        cols, rows = self.PATCH_GRID_COLS, self.PATCH_GRID_ROWS
+
+        vertices: List[List[float]] = []
+        for r in range(rows + 1):
+            for c in range(cols + 1):
+                vertices.append([
+                    x0 + (x1 - x0) * c / cols,
+                    y0 + (y1 - y0) * r / rows,
+                ])
+        indices: List[List[int]] = []
+        stride = cols + 1
+        for r in range(rows):
+            for c in range(cols):
+                i0 = r * stride + c
+                i1, i2 = i0 + 1, i0 + stride
+                i3 = i2 + 1
+                indices.append([i0, i1, i3])
+                indices.append([i0, i3, i2])
+        return {
+            "vertices": vertices,
+            "vertices_norm": [[x / w, y / h] for x, y in vertices],
+            "indices": indices,
+            "width": w,
+            "height": h,
+        }
 
     def _layout_uvs(
         self,
@@ -479,11 +539,12 @@ class RiggingPipeline:
         layers: Dict[str, Image.Image],
         output_dir: str,
         character_name: str = "character",
+        layer_opacity: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
         """Run the rigging pipeline (backward-compatible entry point)."""
         builder = Live2DBuilder(
             output_dir=output_dir,
             character_name=character_name,
         )
-        result = builder.build(layers)
+        result = builder.build(layers, layer_opacity=layer_opacity)
         return result

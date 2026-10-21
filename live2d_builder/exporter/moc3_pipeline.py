@@ -735,6 +735,64 @@ DEFORMER_PROFILES: Dict[str, tuple] = {
 }
 
 
+#: 「淡入淡出」型表情层：层名 -> ``((参数 id, 键值元组), ...)``。
+#:
+#: 腮红与眼泪没有形状变化，只有**不透明度**变化，所以用网格键形的 opacity 而不是
+#: warp 变形器（warp 改不了透明度）。一个网格只能挂一条键形带，而
+#: ``ParamTears`` 是总开关、``ParamTearsL/R`` 是左右，所以必须合成一条**多轴带**。
+#:
+#: 多轴组合取各轴归一化值的 **max** 而不是乘积：``ParamTears`` 打开就该两侧都有，
+#: ``ParamTearsL`` 单独打开就该只有左侧。乘积会让任何单轴都变不动（官方内核验收
+#: 是逐参数从 min 扫到 max、其它参数停在默认值，实测 changed=0），也不符合
+#: "总开关"的语义。
+#:
+#: 官方 Cubism Core 5.0.0 实测（逐帧取像素）：键形 opacity=0 时 0 像素、=1 时
+#: 2500 像素；多轴按 (总开关, 单侧) 落在对应键形上。参数没声明时整条不挂、
+#: 保持静态 —— 同其它 profile 的「宁可不驱动，也不交半套」。
+OPACITY_KEYFORM_LAYERS: Dict[str, tuple] = {
+    "cheek": (("ParamCheek", (0.0, 1.0)),),
+    "tear_left": (("ParamTears", (0.0, 1.0)), ("ParamTearsL", (0.0, 1.0))),
+    "tear_right": (("ParamTears", (0.0, 1.0)), ("ParamTearsR", (0.0, 1.0))),
+}
+
+
+def _opacity_keyforms(name: str,
+                      params_by_id: Dict[str, ParameterSpec],
+                      vertices: List[List[float]]):
+    """该层的不透明度键形 ``(axes, shapes)``；不是淡入层或参数缺失时返回 None。
+
+    键形顶点与静止顶点完全相同 —— 只有 opacity 变。``shapes`` 按展平序排列，
+    **第一个轴步长为 1**（与网格多轴键形同一定论，见
+    :func:`_band_indices`）。多轴的不透明度取各轴归一化值的最大值（见
+    ``OPACITY_KEYFORM_LAYERS`` 的说明）。
+    """
+    axes = OPACITY_KEYFORM_LAYERS.get(_norm(name))
+    if not axes:
+        return None
+    resolved = []
+    for pid, keys in axes:
+        param = params_by_id.get(pid)
+        if param is None:
+            log.info(f"淡入层 {name} 的参数 {pid} 未声明，保持静态")
+            return None
+        ordered = tuple(float(v) for v in keys)
+        if len(ordered) < 2 or not all(a < b for a, b in zip(ordered, ordered[1:])):
+            return None
+        resolved.append((pid, ordered))
+
+    shapes: List[KeyformShape] = []
+    counts = [len(keys) for _pid, keys in resolved]
+    for index, combination in enumerate(_band_indices(counts)):
+        opacity = 0.0
+        for (_pid, keys), slot in zip(resolved, combination):
+            lo, hi = keys[0], keys[-1]
+            span = hi - lo
+            frac = (keys[slot] - lo) / span if span > 0 else 1.0
+            opacity = max(opacity, frac)
+        shapes.append(KeyformShape(float(index), vertices, opacity=opacity))
+    return tuple(resolved), tuple(shapes)
+
+
 def _profile_grids(profile: str,
                    param_ids: Sequence[str],
                    rect: tuple,
@@ -959,6 +1017,7 @@ def build_rig_spec(
     from live2d_builder.bones.deformers import BoneHierarchy
     standard_bones = BoneHierarchy.STANDARD_BONES
     keyformed, multi_hit, eyes_tracked, head_tracked = [], [], [], []
+    opacity_driven: List[str] = []
 
     for order, (name, mesh) in enumerate(meshes.items()):
         width = float(mesh.get("width") or 0)
@@ -995,6 +1054,27 @@ def build_rig_spec(
 
         triangles = ensure_front_facing(
             vertices, [[int(a), int(b), int(c)] for a, b, c in mesh["indices"]])
+
+        # 淡入层（腮红 / 眼泪）优先：它们只有不透明度变化，且必须是**独立网格**，
+        # 否则会跟眼球追踪/头部键形抢同一条键形带（一个网格只能挂一条）。
+        opacity_spec = (_opacity_keyforms(name, params_by_id, vertices)
+                        if MESH_KEYFORMS_ENABLED else None)
+        if opacity_spec is not None:
+            opacity_axes, opacity_shapes = opacity_spec
+            opacity_driven.append(
+                f"{name}={'×'.join(pid for pid, _keys in opacity_axes)}")
+            specs.append(MeshSpec(
+                mesh_id=str(name),
+                vertices=vertices,
+                triangles=triangles,
+                uvs=uvs,
+                draw_order=float(order),
+                texture_index=page,
+                keyform_axes=opacity_axes,
+                keyform_shapes=opacity_shapes,
+            ))
+            continue
+
         if MESH_KEYFORMS_ENABLED:
             eye_axes, eye_shapes = eye_track_keyforms(mesh, vertices, params_by_id)
             head_axes, head_shapes = head_angle_keyforms(
@@ -1062,6 +1142,8 @@ def build_rig_spec(
     if keyformed:
         driven = sorted({m.keyform_parameter_id for m in specs if m.keyform_shapes})
         log.info(f"参数形变键形已烘焙：{len(keyformed)} 个网格，驱动参数 {driven}")
+    if opacity_driven:
+        log.info(f"淡入表情层已烘焙（不透明度键形）：{opacity_driven}")
     if multi_hit:
         log.warning(
             f"{len(multi_hit)} 个网格同时受多个旋转参数影响，需要多参数带；"

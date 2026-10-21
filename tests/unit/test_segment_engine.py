@@ -285,11 +285,14 @@ class TestSynthesisedFaceGeometry:
         }
 
     @classmethod
-    def _composite(cls, layers, order):
+    def _composite(cls, layers, order, respect_rest_opacity=True):
         canvas = np.zeros((cls.SIZE, cls.SIZE, 4), dtype=np.float64)
         for name in order:
             info = layers.get(name)
             if not info:
+                continue
+            if respect_rest_opacity and float(info.get("rest_opacity", 1.0)) <= 0.0:
+                # 静止时不可见的层（腮红/眼泪）不参与静止画面
                 continue
             src = np.array(Image.open(info["path"]).convert("RGBA")).astype(np.float64)
             alpha = src[..., 3:4] / 255.0
@@ -314,12 +317,18 @@ class TestSynthesisedFaceGeometry:
         assert order.index("mouth_cavity") < order.index("mouth")
         # 闭眼图画在眼球**下面**（= 排在眼球之前）
         assert order.index("eyelid_left") < order.index("irides_left")
+        # 腮红在脸皮上、五官之下；眼泪在眼睛之上
+        assert order.index("face") < order.index("cheek") < order.index("irides_left")
+        assert order.index("irides_left") < order.index("tear_left")
 
     def test_rest_pose_keeps_every_pixel(self):
-        """合成层在静止姿态下不能改变任何一个像素。
+        """**静止可见**的合成层不能改变任何一个像素。
 
         这是整条合成路线的前提：闭眼图的皮肤取自脸层原像素、睫毛逐字节复制眼球层
         自己的像素，口内与嘴唇轮廓完全重合。
+
+        腮红/眼泪不在这条断言里 —— 它们静止时 ``rest_opacity=0``，压根不画
+        （见 ``test_fade_in_layers_are_invisible_at_rest``）。
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             _, layers, order = self._compose(tmpdir)
@@ -329,6 +338,30 @@ class TestSynthesisedFaceGeometry:
             base = self._composite(without, [n for n in order if n in without])
         diff = np.abs(full - base).max()
         assert diff < 1.0, f"合成层改变了静止画面：最大差 {diff}"
+
+    def test_fade_in_layers_are_invisible_at_rest(self):
+        """腮红/眼泪必须标记为静止不可见，且真的不参与静止画面。
+
+        它们是"淡入"型表情层：不透明度由参数键形驱动，静止姿态是 0。如果忘了标
+        ``rest_opacity``，静止画面会凭空多出腮红和泪光（实测最大差 100.9）。
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, layers, order = self._compose(tmpdir)
+            for name in ("cheek", "tear_left", "tear_right"):
+                assert name in layers, f"{name} 没有合成出来"
+                assert float(layers[name]["rest_opacity"]) == 0.0, (
+                    f"{name} 的 rest_opacity 不是 0，静止画面会被改动")
+            # 有像素内容（不是空层），只是静止时透明
+            for name in ("cheek", "tear_left", "tear_right"):
+                arr = np.array(Image.open(layers[name]["path"]).convert("RGBA"))
+                assert (arr[..., 3] > 0).any(), f"{name} 是空层，等于没做"
+            # 尊重 rest_opacity 的合成结果 == 完全不含这些层的结果
+            visible = self._composite(layers, order)
+            without = self._composite(
+                {k: v for k, v in layers.items()
+                 if k not in ("cheek", "tear_left", "tear_right")}, order)
+        diff = np.abs(visible - without).max()
+        assert diff < 1.0, f"静止时仍有 {diff} 的差异，淡入层没被隐去"
 
     def test_closed_eye_image_is_opaque_where_the_eye_was(self):
         """闭眼图在眼睛原本不透明的地方必须**不透明**。

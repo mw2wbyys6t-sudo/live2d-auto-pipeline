@@ -35,6 +35,55 @@ def _canvas(h=120, w=120):
     return np.zeros((h, w), dtype=bool)
 
 
+class TestFadeInLayerMesh:
+    """静止不可见的淡入层（腮红/眼泪）必须被网格**铺满**。
+
+    它们的形状是一整片柔和渐变，轮廓采样会把渐变外圈当噪声丢掉——实测腮红层
+    618 px 的层连网格都没生成、眼泪层 28x11 的渐变只被 10x5 的小块覆盖，
+    于是参数拉满也只亮一小块。
+    """
+
+    def _soft_blob(self, h=100, w=100):
+        arr = np.zeros((h, w, 4), dtype=np.uint8)
+        yy, xx = np.mgrid[0:h, 0:w]
+        dist = np.sqrt((xx - 50.0) ** 2 + (yy - 40.0) ** 2) / 30.0
+        alpha = np.clip(1.0 - dist, 0.0, 1.0) ** 1.5 * 120
+        arr[..., :3] = (250, 170, 170)
+        arr[..., 3] = alpha.astype(np.uint8)
+        return Image.fromarray(arr, "RGBA")
+
+    def test_patch_mesh_covers_the_whole_alpha_bbox(self):
+        from live2d_builder.pipeline import Live2DBuilder
+
+        builder = Live2DBuilder.__new__(Live2DBuilder)
+        layer = self._soft_blob()
+        mesh = builder._patch_mesh(layer)
+
+        ys, xs = np.nonzero(np.array(layer)[..., 3] > 0)
+        vx = [v[0] for v in mesh["vertices"]]
+        vy = [v[1] for v in mesh["vertices"]]
+        assert min(vx) <= xs.min() and max(vx) >= xs.max() + 1
+        assert min(vy) <= ys.min() and max(vy) >= ys.max() + 1
+        assert len(mesh["indices"]) == 2 * Live2DBuilder.PATCH_GRID_COLS \
+            * Live2DBuilder.PATCH_GRID_ROWS
+
+    def test_fade_in_layers_take_the_patch_path(self):
+        """``layer_opacity == 0`` 的层走规则网格；其它层仍走轮廓网格。"""
+        from live2d_builder.pipeline import Live2DBuilder
+
+        builder = Live2DBuilder.__new__(Live2DBuilder)
+        builder.mesh_gen = MeshGenerator()
+        builder._layer_opacity = {"cheek": 0.0}
+        layers = {"cheek": self._soft_blob(), "face": self._soft_blob()}
+
+        meshes = builder._generate_meshes(layers)
+
+        assert "cheek" in meshes
+        verts = meshes["cheek"]["vertices"]
+        assert len(verts) == (Live2DBuilder.PATCH_GRID_COLS + 1) * \
+            (Live2DBuilder.PATCH_GRID_ROWS + 1)
+
+
 class TestPixelGridCoverage:
     @pytest.mark.parametrize("spacing,min_cell", [(16, 4), (12, 4), (8, 2), (24, 6)])
     def test_block_is_fully_covered(self, spacing, min_cell):

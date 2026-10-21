@@ -134,6 +134,7 @@ from live2d_builder.exporter.moc3_pipeline import (  # noqa: E402
     _attach_capabilities,
     _band_indices,
     _centered_fraction,
+    _opacity_keyforms,
 )
 
 
@@ -496,6 +497,93 @@ class TestSynthesisedLayerDeformersCompile:
                        canvas_width=120.0, canvas_height=120.0,
                        pixels_per_unit=PPU)
         doc = compile_static_rig(spec)
+        assert doc is not None
+        assert not lint_document(doc)
+
+
+class TestOpacityKeyformLayers:
+    """腮红 / 眼泪只有**不透明度**变化，靠网格键形的 opacity 驱动。
+
+    官方 Cubism Core 5.0.0 实测：键形 opacity 0 时静止帧 0 像素、1 时 2500 像素。
+    这里锁死两件事：键形数 = 各轴键数之积，且多轴不透明度取各轴归一化值的**最大**
+    值（总开关或单侧任一打开都可见，见 ``OPACITY_KEYFORM_LAYERS``）。
+    """
+
+    VERTS = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+
+    def _params(self, *ids):
+        return {pid: ParameterSpec(pid, 0.0, 1.0, 0.0) for pid in ids}
+
+    def test_cheek_fades_in_on_a_single_axis(self):
+        spec = _opacity_keyforms("cheek", self._params("ParamCheek"), self.VERTS)
+
+        assert spec is not None
+        axes, shapes = spec
+        assert axes == (("ParamCheek", (0.0, 1.0)),)
+        assert len(shapes) == 2
+        assert [s.opacity for s in shapes] == [0.0, 1.0]
+        # 顶点不变，只有不透明度变
+        assert [list(v) for v in shapes[1].vertices] == [list(v) for v in self.VERTS]
+
+    def test_tears_open_with_either_the_master_or_one_side(self):
+        spec = _opacity_keyforms(
+            "tear_left",
+            self._params("ParamTears", "ParamTearsL"), self.VERTS)
+
+        assert spec is not None
+        axes, shapes = spec
+        assert [pid for pid, _ in axes] == ["ParamTears", "ParamTearsL"]
+        assert len(shapes) == 4
+        # 展平序：第一个轴步长为 1 -> (master, side) = (0,0) (1,0) (0,1) (1,1)
+        # 总开关或单侧任一为 1 都要可见（乘积会失效：验收是逐参数扫描的）
+        assert [s.opacity for s in shapes] == [0.0, 1.0, 1.0, 1.0]
+
+    def test_undeclared_parameter_leaves_the_layer_static(self):
+        """宁可不驱动，也不交半套：只声明了总开关时整条不挂。"""
+        assert _opacity_keyforms("tear_left", self._params("ParamTears"),
+                                 self.VERTS) is None
+
+    def test_unrelated_layer_is_not_touched(self):
+        assert _opacity_keyforms("irides_left", self._params("ParamCheek"),
+                                 self.VERTS) is None
+
+    def test_fade_in_layers_are_reported_as_driven(self):
+        """编译端必须把它们算进「能驱动哪些参数」，否则验收端不会去验。"""
+        _axes, shapes = _opacity_keyforms(
+            "tear_left", self._params("ParamTears", "ParamTearsL"), self.VERTS)
+        mesh = MeshSpec(
+            mesh_id="tear_left", vertices=self.VERTS,
+            triangles=[(0, 1, 2), (0, 2, 3)],
+            uvs=[(0.0, 0.0)] * 4,
+            keyform_axes=(("ParamTears", (0.0, 1.0)),
+                          ("ParamTearsL", (0.0, 1.0))),
+            keyform_shapes=shapes)
+        spec = RigSpec(meshes=[mesh], parameters=[
+            ParameterSpec("ParamTears", 0.0, 1.0, 0.0),
+            ParameterSpec("ParamTearsL", 0.0, 1.0, 0.0),
+        ], pixels_per_unit=PPU)
+
+        driven = driven_parameters(spec)
+
+        assert driven["ParamTears"] == [0.0, 1.0]
+        assert driven["ParamTearsL"] == [0.0, 1.0]
+
+    def test_opacity_keyforms_compile_into_a_static_rig(self):
+        _axes, shapes = _opacity_keyforms(
+            "cheek", self._params("ParamCheek"), self.VERTS)
+        mesh = MeshSpec(
+            mesh_id="cheek", vertices=self.VERTS,
+            triangles=[(0, 1, 2), (0, 2, 3)],
+            uvs=[(0.0, 0.0)] * 4,
+            keyform_axes=(("ParamCheek", (0.0, 1.0)),),
+            keyform_shapes=shapes)
+        spec = RigSpec(meshes=[mesh],
+                       parameters=[ParameterSpec("ParamCheek", 0.0, 1.0, 0.0)],
+                       canvas_width=120.0, canvas_height=120.0,
+                       pixels_per_unit=PPU)
+
+        doc = compile_static_rig(spec)
+
         assert doc is not None
         assert not lint_document(doc)
 

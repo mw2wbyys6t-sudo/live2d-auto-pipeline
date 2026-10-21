@@ -55,6 +55,9 @@ class LayerComposer:
         # 显形——实测眼睛被脸盖成几块碎片。
         "face_base",
         "face",
+        # 腮红：合成层，画在脸皮上、五官之下。静止时**不可见**（不透明度 0），
+        # 由 ParamCheek 淡入 —— 见 REST_INVISIBLE_PARTS。
+        "cheek",
         # 闭眼图：合成层（见 synthesize_face_geometry）。必须排在眼球**之前**
         # （列表越靠后 = 画得越靠前）—— 闭眼图是"眼皮落下后露出来的那张脸"，
         # 画在眼球下面，眼球向上收拢时才露出来。
@@ -65,6 +68,9 @@ class LayerComposer:
         "eyewhite_left", "eyewhite_right",
         "irides_left", "irides_right",
         "eyelash_left", "eyelash_right",
+        # 眼泪：合成层，画在眼睛之上。静止时**不可见**（不透明度 0），
+        # 由 ParamTears × ParamTearsL/R 淡入。
+        "tear_left", "tear_right",
         # 刘海：必须排在闭眼图之后（画在闭眼图前），否则闭眼图的补色会盖住刘海。
         "hair_front", "hair_bangs",
         "eyebrows", "eyebrow_L", "eyebrow_R",
@@ -150,6 +156,40 @@ class LayerComposer:
     #: 睫毛线：眼球层里"暗且各通道接近"的像素（描边/睫毛），虹膜是蓝的会被排除。
     EYELID_LASH_LUM = 110
     EYELID_LASH_SPREAD = 30
+
+    #: 腮红层：脸的颊部，由脸层原像素向暖粉偏。
+    CHEEK_LAYER = "cheek"
+    #: 腮红相对眼睛尺寸的几何。
+    #:
+    #: 必须**向外**偏：动漫脸两只眼睛本来就靠得近，若把椭圆正对眼睛中心放、
+    #: 半径又开到一整个眼宽，两块会连成一条横跨鼻梁的硬边色带（实测 86x30 的
+    #: 一条带子）。所以中心外移、半径收小，左右两块各自成团。
+    CHEEK_RADIUS_X = 0.58
+    CHEEK_RADIUS_Y = 0.42
+    CHEEK_OUTWARD = 0.45
+    CHEEK_CENTER_DY = 0.55
+    #: 腮红最大不透明度（0..255）。半透明才像腮红，实心会像贴了两块色块。
+    CHEEK_ALPHA = 120
+    #: 腮红颜色 = 肤色 + 这个偏移（R 抬、G/B 压 -> 暖粉）。
+    CHEEK_TINT = (18, -16, -12)
+
+    #: 眼泪层：左右各一，画在眼睛下缘。静止时**不可见**，由 ParamTears × 左右淡入。
+    #:
+    #: 只做"下眼睑蓄泪"这一条薄新月：泪珠之类的圆点在小画布上会被网格采样成
+    #: 方块（实测），反而比没有更难看。
+    TEAR_SIDES = (("tear_left", 0), ("tear_right", 1))
+    TEAR_RADIUS_X = 0.40
+    TEAR_RADIUS_Y = 0.20
+    TEAR_CENTER_DY = 0.02
+    TEAR_ALPHA = 150
+    TEAR_RGB = (196, 226, 255)
+
+    #: 静止时**不可见**的合成层（靠不透明度键形淡入）。
+    #:
+    #: 这三层与闭眼图不同：闭眼图静止时被眼球完全挡住，而腮红/眼泪静止时必须靠
+    #: **不透明度 0** 隐去。所以合成预览要跳过它们（否则静止画面凭空多出腮红），
+    #: 质量门也不能把它们当成"越界扩张"（它们静止时根本不画）。
+    REST_INVISIBLE_PARTS = (CHEEK_LAYER, "tear_left", "tear_right")
 
     #: 口内层：从嘴线层取形状与色调，合成"口腔内侧"。
     MOUTH_CAVITY_SOURCES = ("mouth", "mouth_outer", "mouth_line")
@@ -330,16 +370,17 @@ class LayerComposer:
         w: int,
         out: Optional[Path] = None,
     ) -> List[str]:
-        """合成「闭眼图」与「口内」两层，返回新增的层名。
+        """合成「闭眼图」「口内」「腮红」「眼泪」四类层，返回新增的层名。
 
-        立绘里没有这两种画稿：眼睛是睁开的、嘴是闭着的。缺了它们，眨眼只能把眼球
-        压扁，张嘴只能把墨线撑粗——参数确实动了，但表现不像"闭眼/张嘴"。
+        立绘里没有这些画稿：眼睛是睁开的、嘴是闭着的、没有腮红和眼泪。缺了它们，
+        眨眼只能把眼球压扁，张嘴只能把墨线撑粗，`ParamCheek` / `ParamTears*` 更是
+        改了也毫无反应。
 
-        静止姿态必须**逐像素不变**，所以两层都不是凭空画形状：
-        * 闭眼图 = 眼睛轮廓内填皮肤 + **原画自己的上睫毛线**（眼球层里"暗且各通道
-          接近"的像素）。整张图画在眼球**下面**，闭眼时眼球向上收拢进睫毛线，
-          露出来的就是它。
-        * 口内 = 嘴线层的形状，填成偏暖的口内色；静止时正好被嘴唇完全遮住。
+        两种截然不同的"静止不可见"策略：
+        * **被挡住**：闭眼图与口内靠更靠前的图层遮住（静止逐像素不变）。
+        * **不透明度 0**：腮红与眼泪静止时是透明的（``rest_opacity=0``），由参数
+          键形在运行时淡入。它们不参与"静止逐像素不变"的证明，而是靠
+          ``REST_INVISIBLE_PARTS`` 与预览端跳过。
 
         合成失败（缺脸层/缺眼睛层/层为空）一律**不产出**，不交半层。
         """
@@ -377,7 +418,147 @@ class LayerComposer:
                 if cavity is not None:
                     self._store_layer(layers, dest, self.MOUTH_CAVITY_NAME, cavity)
                     made.append(self.MOUTH_CAVITY_NAME)
+
+        # ---- 静止时不可见的两类表情层（靠不透明度键形淡入）----
+        # 它们**不**参与"静止逐像素不变"的证明：静止时由不透明度 0 隐去，
+        # 所以 `rest_opacity=0` 必须一路带到合成预览与导出端。
+        if self.CHEEK_LAYER not in layers:
+            cheek = self._synthesize_cheek(layers, h, w)
+            if cheek is not None:
+                self._store_layer(layers, dest, self.CHEEK_LAYER, cheek,
+                                  rest_opacity=0.0)
+                made.append(self.CHEEK_LAYER)
+
+        for name, index in self.TEAR_SIDES:
+            if name in layers:
+                continue
+            tear = self._synthesize_tear(layers, h, w, index)
+            if tear is not None:
+                self._store_layer(layers, dest, name, tear, rest_opacity=0.0)
+                made.append(name)
         return made
+
+    def _eye_anchor(self, layers: Dict[str, Dict], h: int, w: int,
+                    index: int) -> Optional[tuple]:
+        """该侧眼睛**不透明**像素的包围盒 ``(x0, y0, x1, y1)``；没有眼睛层则 None。"""
+        _name, sources = self.EYELID_SOURCES[index]
+        eye = self._alpha_over([self._layer_array(layers, n) for n in sources], h, w)
+        if eye is None:
+            return None
+        solid = eye[..., 3] == 255
+        if not solid.any():
+            return None
+        ys, xs = np.nonzero(solid)
+        return (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
+
+    def _skin_array(self, layers: Dict[str, Dict]) -> Optional[np.ndarray]:
+        face = self._layer_array(layers, "face")
+        if face is None:
+            face = self._layer_array(layers, "face_base")
+        return face
+
+    @staticmethod
+    def _radial_alpha(h: int, w: int, cx: float, cy: float,
+                      rx: float, ry: float, peak: float) -> np.ndarray:
+        """椭圆径向衰减的 alpha（0..peak），边缘平滑到 0。"""
+        if rx <= 0 or ry <= 0:
+            return np.zeros((h, w), dtype=np.float64)
+        ys = np.arange(h, dtype=np.float64)[:, None]
+        xs = np.arange(w, dtype=np.float64)[None, :]
+        norm = ((xs - cx) / rx) ** 2 + ((ys - cy) / ry) ** 2
+        falloff = np.clip(1.0 - norm, 0.0, 1.0) ** 1.5
+        return falloff * float(peak)
+
+    def _synthesize_cheek(self, layers: Dict[str, Dict], h: int,
+                          w: int) -> Optional[np.ndarray]:
+        """合成腮红层：颊部两块椭圆，颜色取自脸层肤色向暖粉偏。
+
+        静止时**不可见**（``rest_opacity=0``，由 ``ParamCheek`` 淡入），所以它不需要
+        像闭眼图那样"藏在别的层后面"——但也不能是凭空画的色块：颜色来自脸层
+        自己的像素，只做色偏，这样与皮肤的明暗关系保持一致。
+        """
+        face = self._skin_array(layers)
+        if face is None:
+            return None
+        anchors = [(i, a) for i, a in
+                   ((i, self._eye_anchor(layers, h, w, i))
+                    for i in range(len(self.EYELID_SOURCES))) if a]
+        if not anchors:
+            return None
+
+        skin = self._skin_color_below(face, max(a[3] for _i, a in anchors))
+        if skin is None:
+            return None
+        tint = np.asarray(self.CHEEK_TINT, dtype=np.int16)
+        colour = np.clip(skin.astype(np.int16) + tint, 0, 255).astype(np.uint8)
+
+        alpha = np.zeros((h, w), dtype=np.float64)
+        for index, (x0, y0, x1, y1) in anchors:
+            eye_w = max(1.0, float(x1 - x0))
+            eye_h = max(1.0, float(y1 - y0))
+            # 向外偏（左眼往左、右眼往右），两团不连成一条横带
+            sign = -1.0 if index == 0 else 1.0
+            if len(anchors) == 1:
+                sign = 0.0
+            alpha = np.maximum(alpha, self._radial_alpha(
+                h, w,
+                cx=(x0 + x1) / 2.0 + sign * self.CHEEK_OUTWARD * eye_w,
+                cy=y1 + self.CHEEK_CENTER_DY * eye_h,
+                rx=self.CHEEK_RADIUS_X * eye_w,
+                ry=self.CHEEK_RADIUS_Y * eye_h,
+                peak=self.CHEEK_ALPHA))
+
+        # 只画在脸的**实际皮肤**上：脸层在刘海/五官处是镂空的，越界会糊到头发上。
+        on_face = face[..., 3] > 0
+        alpha = np.where(on_face, alpha, 0.0)
+        if not (alpha > 0).any():
+            return None
+
+        cheek = np.zeros((h, w, 4), dtype=np.uint8)
+        cheek[..., :3] = colour
+        cheek[..., 3] = np.clip(alpha, 0, 255).astype(np.uint8)
+        return cheek
+
+    def _synthesize_tear(self, layers: Dict[str, Dict], h: int, w: int,
+                         index: int) -> Optional[np.ndarray]:
+        """合成单侧眼泪层：眼睛下缘的一小片高光，外加一颗泪珠。
+
+        静止时**不可见**（``rest_opacity=0``，由 ``ParamTears × ParamTearsL/R``
+        淡入）。画在眼睛**之上**（见 ``STANDARD_LAYER_ORDER``），所以只覆盖下眼睑
+        附近，不去遮瞳孔。
+        """
+        anchor = self._eye_anchor(layers, h, w, index)
+        if anchor is None:
+            return None
+        face = self._skin_array(layers)
+        x0, y0, x1, y1 = anchor
+        eye_w = max(1.0, float(x1 - x0))
+        eye_h = max(1.0, float(y1 - y0))
+        cx = (x0 + x1) / 2.0
+        cy = y1 + self.TEAR_CENTER_DY * eye_h
+
+        alpha = self._radial_alpha(
+            h, w, cx=cx, cy=cy,
+            rx=self.TEAR_RADIUS_X * eye_w,
+            ry=self.TEAR_RADIUS_Y * eye_h,
+            peak=self.TEAR_ALPHA)
+
+        if face is not None:
+            # 眼泪可以压在眼球上，但不能糊到脸外的头发/背景上
+            visible = face[..., 3] > 0
+            eye_own = self._alpha_over(
+                [self._layer_array(layers, n)
+                 for n in self.EYELID_SOURCES[index][1]], h, w)
+            if eye_own is not None:
+                visible = visible | (eye_own[..., 3] > 0)
+            alpha = np.where(visible, alpha, 0.0)
+        if not (alpha > 0).any():
+            return None
+
+        tear = np.zeros((h, w, 4), dtype=np.uint8)
+        tear[..., :3] = np.asarray(self.TEAR_RGB, dtype=np.uint8)
+        tear[..., 3] = np.clip(alpha, 0, 255).astype(np.uint8)
+        return tear
 
     def _synthesize_eyelid(self, name: str, sources: List[str],
                            layers: Dict[str, Dict], h: int,
@@ -522,8 +703,12 @@ class LayerComposer:
         return np.array(Image.open(path).convert("RGBA"))
 
     def _store_layer(self, layers: Dict[str, Dict], dest: Path, name: str,
-                     layer_arr: np.ndarray) -> Dict:
-        """落盘一张合成层并登记与普通层同构的元数据。"""
+                     layer_arr: np.ndarray, rest_opacity: float = 1.0) -> Dict:
+        """落盘一张合成层并登记与普通层同构的元数据。
+
+        ``rest_opacity`` 是**静止姿态下的不透明度**：腮红/眼泪这类"淡入"表情层
+        静止时为 0（不可见），由参数键形在运行时抬到 1。
+        """
         dest = Path(dest)
         dest.mkdir(parents=True, exist_ok=True)
         path = dest / f"{name}.png"
@@ -546,9 +731,10 @@ class LayerComposer:
             "occluded_by": [],
             "completed": False,
             "synthesized": True,
+            "rest_opacity": float(rest_opacity),
         }
         log.debug(f"  layer {name:14s} pixels={layers[name]['pixel_count']:>7d} "
-                  f"bbox={bbox} synthesized=True")
+                  f"bbox={bbox} synthesized=True rest_opacity={rest_opacity}")
         return layers[name]
 
     def reorder_layers(

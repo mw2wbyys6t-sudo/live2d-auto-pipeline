@@ -172,6 +172,43 @@ class TestSynthesizedOverlayIsNotAnOverExtension:
         assert bad, "闭眼图盖住嘴线这种真越界必须报出来"
 
 
+class TestRestInvisibleLayersAreExempt:
+    """腮红/眼泪静止时**不画**（rest_opacity=0），不能算越界扩张。
+
+    它们与眼睛/脸天然大面积重叠，但静止姿态下根本不存在；运行时的可见性由参数
+    键形控制。质量门若按"谁盖住谁"判缺陷，会把设计报成故障。
+    """
+
+    def test_cheek_overlapping_face_is_not_a_defect(self):
+        parts = clean_parts()
+        parts["cheek"] = rect(72, 60, 92, 78)      # 落在 face 里
+
+        bad, _notes = LQ.check_duplicates(parts)
+
+        assert bad == [], f"腮红被误报: {bad}"
+
+    def test_tear_overlapping_the_eye_is_not_a_defect(self):
+        parts = clean_parts()
+        parts["tear_left"] = rect(78, 52, 96, 62)  # 与 eyes_left 几乎重合
+
+        bad, _notes = LQ.check_duplicates(parts)
+        overlap = LQ.check_overlap(parts)
+
+        assert bad == [], f"眼泪被误报: {bad}"
+        assert overlap == [], f"眼泪被误报为两两重叠: {overlap}"
+
+    def test_other_layers_still_checked(self):
+        """豁免只针对这几个层；普通层的重叠照旧要报。"""
+        parts = clean_parts()
+        parts["cheek"] = rect(72, 60, 92, 78)
+        # arms 不是 amodal 层，吞掉 clothes_bottom 就是真缺陷
+        parts["arms"] = rect(60, 140, 140, 190)
+
+        bad, _notes = LQ.check_duplicates(parts)
+
+        assert bad, "普通层的越界扩张被豁免掉了"
+
+
 class TestSelftest:
     def test_module_selftest_reports_no_false_alarms(self):
         buf = io.StringIO()

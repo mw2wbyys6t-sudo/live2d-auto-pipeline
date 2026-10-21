@@ -815,6 +815,85 @@ def test_eye_collapses_upward_and_reveals_the_closed_eye_image(tmp_path):
             "说明是压扁而不是向上收拢")
 
 
+CHEEK_BOX = (30, 70, 50, 84)     # 腮红：脸皮上的一小块
+TEAR_L_BOX = (54, 40, 74, 60)    # 左眼泪
+TEAR_R_BOX = (80, 40, 100, 60)   # 右眼泪
+
+
+@requires_pixels
+def test_cheek_fades_in_only_when_the_parameter_moves(tmp_path):
+    """ParamCheek：静止时腮红**完全不出现**，到 1 才淡入。
+
+    腮红没有形状变化，只有不透明度变化，所以走网格键形的 opacity。判据用
+    ``opaque_pixels``：静止帧必须是 0（否则静止画面凭空多出腮红），末帧必须 > 0。
+    """
+    builder_result = _synthetic_rig(
+        {"cheek": _solid(CHEEK_BOX, (250, 170, 170, 255))},
+        {"cheek": CHEEK_BOX},
+        [],
+        [("ParamCheek", 0, 1, 0)])
+    _, export_result = _export(tmp_path, builder_result)
+    compiled = compile_export_moc3(
+        builder_result=builder_result,
+        atlas_uvs=export_result["atlas_uvs"],
+        output_dir=export_result["output_dir"], character_name="web_preview")
+    assert compiled["moc3_written"] is True, compiled["blocker"]
+    assert compiled["driven_parameters"].get("ParamCheek") == [0.0, 1.0], (
+        f"ParamCheek 没被算成可驱动: {compiled['driven_parameters']}")
+
+    rest = render_probe(export_result["model3_json"],
+                        params={"ParamCheek": 0.0}, width=128, height=128)
+    blush = render_probe(export_result["model3_json"],
+                         params={"ParamCheek": 1.0}, width=128, height=128)
+    assert rest["ok"] and blush["ok"], (rest["blocker"], blush["blocker"])
+    assert rest["opaque_pixels"] == 0, (
+        f"静止时腮红就可见了（{rest['opaque_pixels']} 像素）")
+    assert blush["opaque_pixels"] > 100, blush
+
+
+@requires_pixels
+def test_tears_open_from_the_master_or_a_single_side(tmp_path):
+    """ParamTears（总开关）× ParamTearsL/R（左右）——多轴不透明度键形。
+
+    ``ParamTears`` 单独打开 = 两侧都有（总开关）；``ParamTearsL`` 单独打开 = 只有
+    左侧。两个轴都必须能**各自**改变画面 —— 验收是逐参数从 min 扫到 max 的。
+    """
+    builder_result = _synthetic_rig(
+        {"tear_left": _solid(TEAR_L_BOX, (196, 226, 255, 255)),
+         "tear_right": _solid(TEAR_R_BOX, (196, 226, 255, 255))},
+        {"tear_left": TEAR_L_BOX, "tear_right": TEAR_R_BOX},
+        [],
+        [("ParamTears", 0, 1, 0), ("ParamTearsL", 0, 1, 0),
+         ("ParamTearsR", 0, 1, 0)])
+    _, export_result = _export(tmp_path, builder_result)
+    compiled = compile_export_moc3(
+        builder_result=builder_result,
+        atlas_uvs=export_result["atlas_uvs"],
+        output_dir=export_result["output_dir"], character_name="web_preview")
+    assert compiled["moc3_written"] is True, compiled["blocker"]
+    driven = compiled["driven_parameters"]
+    for pid in ("ParamTears", "ParamTearsL", "ParamTearsR"):
+        assert driven.get(pid) == [0.0, 1.0], f"{pid} 没被算成可驱动: {driven}"
+
+    def frame(**params):
+        probe = render_probe(export_result["model3_json"], params=params,
+                             width=128, height=128)
+        assert probe["ok"], probe["blocker"]
+        return probe["opaque_pixels"]
+
+    rest = frame(ParamTears=0.0, ParamTearsL=0.0, ParamTearsR=0.0)
+    master = frame(ParamTears=1.0, ParamTearsL=0.0, ParamTearsR=0.0)
+    left = frame(ParamTears=0.0, ParamTearsL=1.0, ParamTearsR=0.0)
+    right = frame(ParamTears=0.0, ParamTearsL=0.0, ParamTearsR=1.0)
+
+    assert rest == 0, f"静止时眼泪就可见了（{rest} 像素）"
+    assert master > 100, master
+    assert 0 < left < master, (
+        f"单侧应只露出一只眼睛（left={left}, master={master}）")
+    assert right == left, (left, right)
+    assert left + right == master, (left, right, master)
+
+
 @requires_pixels
 def test_mouth_cavity_shows_when_the_mouth_opens(tmp_path):
     """张嘴时口内从唇下露出来：不透明像素变多、下沿更低，且颜色偏暖。"""
