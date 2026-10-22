@@ -1156,32 +1156,52 @@ func stringField(values map[string]interface{}, key string) string {
 	return ""
 }
 
-// modelDirReadiness 从模型目录的 build_meta.json 读取官方内核验收结论。
+// modelDirReadiness 从模型目录的 build_meta.json 读取官方内核验收结论与层序结论。
 //
 // 打包下载路径可能拿不到 Python 的返回值（目录由前端直接指定），只能以落盘的
 // build_meta.json 为凭据。该文件由 live2d_builder/pipeline.py 在构建收尾时写出，
-// moc3.runtime_ready 即官方 Cubism Core 的实测结论。
+// moc3.runtime_ready 即官方 Cubism Core 的实测结论；layer_order 是 FF-2
+// 「18 层顺序契约」的测量结果（权威表 vs moc3 渲染层序）。
 //
 // 缺文件 / 缺字段一律按「未就绪」处理：宁可拒绝下载并说明原因，也不要发出一个
-// 用户装进 Cubism / VTube Studio 才发现加载不了的包。
+// 用户装进 Cubism / VTube Studio 才发现加载不了、或图层前后关系是错的包。
 func modelDirReadiness(modelDir string) (bool, string) {
 	raw, err := os.ReadFile(filepath.Join(modelDir, "build_meta.json"))
 	if err != nil {
 		return false, "模型目录缺少 build_meta.json，无法证明已通过官方内核验收"
 	}
 	var meta struct {
-		Moc3 map[string]interface{} `json:"moc3"`
+		Moc3       map[string]interface{} `json:"moc3"`
+		LayerOrder map[string]interface{} `json:"layer_order"`
 	}
 	if err := json.Unmarshal(raw, &meta); err != nil {
 		return false, "build_meta.json 解析失败: " + err.Error()
 	}
-	if ready, _ := meta.Moc3["runtime_ready"].(bool); ready {
-		return true, ""
+	if ready, _ := meta.Moc3["runtime_ready"].(bool); !ready {
+		if blocker := stringField(meta.Moc3, "moc3_blocker"); blocker != "" {
+			return false, blocker
+		}
+		return false, "产物未经官方 Cubism Core 验收，不能视为可部署"
 	}
-	if blocker := stringField(meta.Moc3, "moc3_blocker"); blocker != "" {
-		return false, blocker
+	// 内核接受只说明「能加载」，不说明「图层前后关系是对的」（FF-2）。
+	if issueCount, _ := meta.LayerOrder["issue_count"].(float64); issueCount > 0 {
+		return false, firstLayerOrderIssue(meta.LayerOrder)
 	}
-	return false, "产物未经官方 Cubism Core 验收，不能视为可部署"
+	return true, ""
+}
+
+// firstLayerOrderIssue 取出第一条层序错位的说明，取不到时给一句可读兜底。
+func firstLayerOrderIssue(layerOrder map[string]interface{}) string {
+	if issues, ok := layerOrder["issues"].([]interface{}); ok {
+		for _, raw := range issues {
+			if issue, ok := raw.(map[string]interface{}); ok {
+				if msg := stringField(issue, "message"); msg != "" {
+					return msg
+				}
+			}
+		}
+	}
+	return "图层顺序与 STANDARD_LAYER_ORDER 不一致（FF-2），产物层级关系不可信"
 }
 
 // resolveExportModelDir determines the on-disk model directory to zip.

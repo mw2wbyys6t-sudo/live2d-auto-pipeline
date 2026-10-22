@@ -65,3 +65,54 @@ def test_moc3_written_alone_does_not_make_it_deployable():
 
     assert status["deployment_ready"] is False
     assert status["deployment_blockers"] == ["官方内核拒绝: inconsistent"]
+
+
+# ---------- FF-2：层序错位同样计入阻塞 ----------
+
+def test_layer_order_issues_block_an_otherwise_ready_model():
+    """内核接受只说明「能加载」，不说明「图层前后关系对」。
+
+    FF-2 承诺「任何层错位 0 容忍，阻断导出并高亮错层」—— 这里锁住
+    「错层会真的让 deployment_ready 变 False」这一半。
+    """
+    issue = {
+        "code": "layer_order_mismatch",
+        "layer": "mouth_cavity",
+        "expected_index": 11,
+        "sources": {"render": 12},
+        "direction": "moved_forward",
+        "message": "Live2D 渲染层序 中 'mouth_cavity' 位于第 12 位，应为第 11 位",
+    }
+    status = derive_deployment_status(
+        _rigging(runtime_ready=True, moc3_blocker=None),
+        layer_order_issues=[issue],
+    )
+
+    assert status["deployment_ready"] is False, "层序错位却仍判为可部署"
+    assert status["runtime_verified"] is False
+    assert status["artifact_type"] == "preparation_bundle"
+    assert status["deployment_blockers"] == [issue["message"]]
+
+
+def test_no_layer_order_issues_keeps_ready_model_ready():
+    """成对断言：没问题时不得被误判为阻塞（否则闸门等于永远关闭）。"""
+    status = derive_deployment_status(
+        _rigging(runtime_ready=True, moc3_blocker=None),
+        layer_order_issues=[],
+    )
+    assert status["deployment_ready"] is True
+    assert status["deployment_blockers"] == []
+
+
+def test_moc3_rejection_and_layer_order_issues_are_both_reported():
+    """两类失败同时存在时都要报出来，不能只留一条。"""
+    issue = {"code": "layer_order_mismatch", "layer": "mouth",
+             "message": "层序错位: mouth"}
+    status = derive_deployment_status(
+        _rigging(runtime_ready=False, moc3_blocker="官方内核拒绝: inconsistent"),
+        layer_order_issues=[issue],
+    )
+
+    assert status["deployment_ready"] is False
+    assert status["deployment_blockers"] == [
+        "官方内核拒绝: inconsistent", "层序错位: mouth"]

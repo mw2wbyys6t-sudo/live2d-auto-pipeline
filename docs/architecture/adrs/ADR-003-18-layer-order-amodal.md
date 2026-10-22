@@ -102,7 +102,7 @@ AMODAL_PARTS = {"hair_back", "hair_mid", "clothes_top", "clothes_inner", "neck"}
 | 属性 | 度量 | 阈值 | 测量来源 | 频率 | 失败响应 |
 |------|------|------|----------|------|----------|
 | PSD 层数量正确性 | 导出 PSD 的图层数 | =18（空层计为占位透明层） | `core/psd/validator.py` | 每次生成 | Web UI 报错 + 打 `⚠️ PSD异常` |
-| 层顺序正确性 | PSD 自底向上层 ID 与 `STANDARD_LAYER_ORDER` 匹配度 | 100%（每个层名一致） | `core/psd/validator.py::check_layer_order` | 每次生成 | 阻断导出，提示哪几层错位 |
+| 层顺序正确性 | PSD 自底向上层 ID 与 `STANDARD_LAYER_ORDER` 匹配度（同时核对 moc3 渲染层序） | 100%（每个层名一致） | `core/psd/validator.py::check_layer_order`（已落地，Step 5b 每次生成调用） | 每次生成 | 进 `deployment_blockers` → `deployment_ready=False` → 下载闸门拒绝，并逐层点名错位方向 |
 | 颜色连续性（Amodal 补全后） | 补全边缘 ΔE（CIE Lab 色差） | p95 ≤ 15 | `core/qa/engine.py::score_color_continuity` | 每次生成 | 打 `⚠️ 建议手动修色` |
 | 典型动作撕裂（自动回归） | ParamAngleX=±30° 时，脸部/脖子混合 Alpha 空洞像素占比 | ≤ 0.5% | `tests/integration/test_tearing.py`（待补） | 每次合并核心代码 | 阻断 PR |
 | 单角色端到端生成耗时（CPU i7-12700） | 从 Prompt 到 model3.zip 完成 | ≤ 10 分钟 | CI 定时任务 | 每周 | 优化补全或移除某个 Amodal 层 |

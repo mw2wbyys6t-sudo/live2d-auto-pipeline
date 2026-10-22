@@ -858,6 +858,32 @@ if not layers:
 builder = Live2DBuilder(output_dir=out_dir, character_name=character_id)
 result = builder.build(layers)
 
+# FF-2：权威表 vs moc3 渲染层序。这条导出路径不产 PSD，故只比两份来源
+# （psd_order=None 表示该来源不可得，不当作通过）。层序错位要落盘，
+# 否则下载闸门看不到它 —— 内核接受只说明「能加载」，不说明「层级对」。
+from core.psd.validator import check_layer_order
+from core.segment_engine.composer import LayerComposer
+order_issues = check_layer_order(
+    LayerComposer.STANDARD_LAYER_ORDER,
+    psd_order=None,
+    render_order=list(layers),
+)
+meta_file = Path(out_dir) / "build_meta.json"
+if meta_file.is_file():
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    if isinstance(meta, dict):
+        meta["layer_order"] = {
+            "issue_count": len(order_issues),
+            "issues": order_issues,
+        }
+        meta_file.write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+for issue in order_issues:
+    sys.stderr.write("[warn] 层序错位: " + str(issue.get("message")) + "\n")
+
 # 只回传路径与状态；网格 / 骨骼等中间数据可达数 MB，不进 API 响应。
 keys = ("output_dir", "model3_json", "moc3_ref", "textures", "texture_files",
         "physics", "expressions", "mesh_data", "guide", "validation",
@@ -869,6 +895,7 @@ summary["mesh_count"] = len(result.get("meshes") or {})
 summary["layers_used"] = list(layers)
 summary["layer_order_source"] = "layer_guide" if draw_index else "filename"
 summary["layers_unknown"] = unknown
+summary["layer_order_issues"] = order_issues
 print(json.dumps(summary, ensure_ascii=False, default=str))
 `
 

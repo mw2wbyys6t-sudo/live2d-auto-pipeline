@@ -23,9 +23,18 @@ import (
 
 func writeBuildMeta(t *testing.T, dir string, moc3 map[string]interface{}) {
 	t.Helper()
+	writeBuildMetaFull(t, dir, moc3, nil)
+}
+
+// writeBuildMetaFull 可同时写入 FF-2 的 layer_order 结论。
+func writeBuildMetaFull(t *testing.T, dir string, moc3, layerOrder map[string]interface{}) {
+	t.Helper()
 	payload := map[string]interface{}{
 		"character_name": "gate",
 		"moc3":           moc3,
+	}
+	if layerOrder != nil {
+		payload["layer_order"] = layerOrder
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -94,6 +103,59 @@ func TestModelDirReadinessBlocksWhenRuntimeReadyIsNotBoolTrue(t *testing.T) {
 		if ready, _ := modelDirReadiness(dir); ready {
 			t.Errorf("case %d: 非布尔真值被当成就绪: %v", i, moc3)
 		}
+	}
+}
+
+// ---------- FF-2：层序错位也要挡住下载 ----------
+
+func TestModelDirReadinessBlocksLayerOrderMismatch(t *testing.T) {
+	dir := t.TempDir()
+	msg := "Live2D 渲染层序 中 'mouth_cavity' 位于第 12 位，按 STANDARD_LAYER_ORDER 应为第 11 位"
+	writeBuildMetaFull(t, dir,
+		map[string]interface{}{"moc3_written": true, "runtime_ready": true},
+		map[string]interface{}{
+			"issue_count": 1,
+			"issues": []interface{}{
+				map[string]interface{}{
+					"code": "layer_order_mismatch", "layer": "mouth_cavity",
+					"message": msg,
+				},
+			},
+		})
+
+	ready, blocker := modelDirReadiness(dir)
+	if ready {
+		t.Fatal("层序错位却被放行了 —— 内核接受不代表层级关系对")
+	}
+	if blocker != msg {
+		t.Errorf("blocker 必须逐字取自第一条错位说明\n got: %q\nwant: %q", blocker, msg)
+	}
+}
+
+func TestModelDirReadinessAllowsZeroLayerOrderIssues(t *testing.T) {
+	dir := t.TempDir()
+	writeBuildMetaFull(t, dir,
+		map[string]interface{}{"moc3_written": true, "runtime_ready": true},
+		map[string]interface{}{"issue_count": 0, "issues": []interface{}{}})
+
+	if ready, blocker := modelDirReadiness(dir); !ready {
+		t.Fatalf("层序无问题却未放行，blocker = %q", blocker)
+	}
+}
+
+func TestModelDirReadinessLayerOrderBlockerHasFallbackText(t *testing.T) {
+	dir := t.TempDir()
+	// issues 结构异常（不是数组）时也要给出可读原因，不能返回空串。
+	writeBuildMetaFull(t, dir,
+		map[string]interface{}{"moc3_written": true, "runtime_ready": true},
+		map[string]interface{}{"issue_count": 2, "issues": "oops"})
+
+	ready, blocker := modelDirReadiness(dir)
+	if ready {
+		t.Fatal("层序错位却被放行了")
+	}
+	if blocker == "" {
+		t.Error("未就绪却没有 blocker，调用方无从判断")
 	}
 }
 

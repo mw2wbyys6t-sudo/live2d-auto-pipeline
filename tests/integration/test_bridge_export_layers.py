@@ -146,3 +146,57 @@ def test_bridge_export_falls_back_to_filename_order_without_guide(tmp_path):
     assert "preview" not in used
     # 退化路径也必须如实报告顺序来源，不能静默假装用的是 guide。
     assert result["layers_unknown"] == sorted(_LAYERS)
+
+
+# ---------- FF-2：层序错位必须落盘，供下载闸门读取 ----------
+
+def _swap_guide_entries(layers_dir: Path, first: str, second: str) -> None:
+    """对调两层在 layer_guide.json 中的 draw_index，模拟层序错位。"""
+    guide_path = layers_dir / "layer_guide.json"
+    guide = json.loads(guide_path.read_text(encoding="utf-8"))
+    index = {entry["name"]: entry["draw_index"] for entry in guide["layers"]}
+    for entry in guide["layers"]:
+        if entry["name"] == first:
+            entry["draw_index"] = index[second]
+        elif entry["name"] == second:
+            entry["draw_index"] = index[first]
+    guide_path.write_text(json.dumps(guide, ensure_ascii=False), encoding="utf-8")
+
+
+def test_bridge_export_reports_layer_order_mismatch(tmp_path):
+    """内核接受只说明「能加载」，不说明「层级对」—— 错位必须被点名。"""
+    layers_dir = _build_layers_dir(tmp_path, with_guide=True)
+    _swap_guide_entries(layers_dir, "mouth_cavity", "mouth")
+
+    result = _run_bridge(tmp_path, layers_dir, script=_extract_bridge_script())
+
+    issues = result["layer_order_issues"]
+    named = {issue["layer"] for issue in issues}
+    assert {"mouth_cavity", "mouth"} <= named, f"必须点名错位的层，实际 {named}"
+    assert all(issue["code"] == "layer_order_mismatch" for issue in issues)
+    assert all(issue["message"] for issue in issues)
+
+
+def test_bridge_export_persists_layer_order_into_build_meta(tmp_path):
+    """错位结论必须落进 build_meta.json —— 否则下载闸门读不到它。"""
+    layers_dir = _build_layers_dir(tmp_path, with_guide=True)
+    _swap_guide_entries(layers_dir, "mouth_cavity", "mouth")
+
+    result = _run_bridge(tmp_path, layers_dir, script=_extract_bridge_script())
+
+    meta_path = Path(result["output_dir"]) / "build_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["layer_order"]["issue_count"] == len(result["layer_order_issues"])
+    assert meta["layer_order"]["issue_count"] > 0
+    assert meta["layer_order"]["issues"][0]["message"]
+
+
+def test_bridge_export_writes_zero_issues_for_consistent_order(tmp_path):
+    """成对断言：层序没问题时不得写入假阻塞（否则闸门等于永远关闭）。"""
+    layers_dir = _build_layers_dir(tmp_path, with_guide=True)
+    result = _run_bridge(tmp_path, layers_dir, script=_extract_bridge_script())
+
+    meta_path = Path(result["output_dir"]) / "build_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert result["layer_order_issues"] == []
+    assert meta["layer_order"]["issue_count"] == 0
