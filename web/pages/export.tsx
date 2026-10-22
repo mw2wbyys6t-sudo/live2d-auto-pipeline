@@ -153,7 +153,9 @@ const ExportPage: NextPage = () => {
             const result = await apiClient
               .exportModel(selectedId, format, layersDir || undefined);
             if (!result || !result.success) {
-              throw new Error(`Export failed for ${format}`);
+              // 后端把 success 与 runtime_ready 对齐了；未就绪时优先透出实测阻塞
+              // 原因（例如「官方内核拒绝: 未安装 live2d-py」），而不是一句泛化文案。
+              throw new Error(result?.blocker || `Export failed for ${format}`);
             }
             // 链路交接：记录模型 Web 地址（预览页自动加载同一份最新记录）
             const modelUrl = modelUrlFromRecord({

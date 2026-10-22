@@ -112,11 +112,17 @@ def test_export_download_zip_unique_named_and_cleaned_up(ws_client, tmp_path, mo
     layers.mkdir()
     Image.new("RGBA", (8, 8), (0, 255, 0, 255)).save(layers / "body.png")
     monkeypatch.setattr(srv, "OUTPUT_DIR", out)
-    # 跳过重构建：只验证打包/命名/清理链路
+    # 跳过重构建：只验证打包/命名/清理链路。
+    # 必须给出就绪标记 —— 打包闸门会（正确地）拒绝没有内核验收结论的产物，
+    # 那是另一条测试的责任，不该在这里顺带触发。
     monkeypatch.setattr(
         srv,
         "_build_live2d_model",
-        lambda layers_, output_dir, name: {"model3_json": "", "textures": []},
+        lambda layers_, output_dir, name: {
+            "model3_json": "",
+            "textures": [],
+            "moc3": {"moc3_written": True, "runtime_ready": True, "moc3_blocker": None},
+        },
     )
 
     r = ws_client.post(

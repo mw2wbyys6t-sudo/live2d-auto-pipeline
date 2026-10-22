@@ -201,11 +201,26 @@ class TestExportLive2DContract:
         assert r.status_code == 200
         body = r.json()
         data = body["data"]
-        assert data["success"] is True, f"导出失败: {data}"
         assert data["model3_json"], f"缺少 model3_json: {data}"
         assert data["model3_json"].startswith("/output/")
+        # success 必须与 runtime_ready 一致：同一个 payload 里出现
+        # success=true + runtime_ready=false 会骗过只读 success 的消费者。
+        assert data["success"] is data["runtime_ready"], (
+            f"success 与 runtime_ready 矛盾: {data.get('success')} vs "
+            f"{data.get('runtime_ready')}")
+        # 未就绪时 blocker 必须非空，调用方才有可读的原因。
+        if not data["runtime_ready"]:
+            assert data["blocker"], f"未就绪却没有 blocker: {data}"
 
-    def test_download_returns_zip(self, client, isolated_output, layer_dir):
+    def test_download_returns_zip_only_when_verified(
+            self, client, isolated_output, layer_dir):
+        """未就绪拒绝打包，已就绪才给 zip —— 不再无条件返回二进制。"""
+        probe = client.post(
+            "/api/export/live2d",
+            json={"character_id": "contract_test", "layers_dir": str(layer_dir)},
+        )
+        ready = probe.json()["data"]["runtime_ready"]
+
         r = client.post(
             "/api/export/live2d",
             json={
@@ -214,9 +229,14 @@ class TestExportLive2DContract:
                 "download": True,
             },
         )
-        assert r.status_code == 200
-        assert r.headers["content-type"] == "application/zip"
-        assert r.content[:2] == b"PK"
+        if ready:
+            assert r.status_code == 200
+            assert r.headers["content-type"] == "application/zip"
+            assert r.content[:2] == b"PK"
+        else:
+            assert r.status_code == 409, (
+                f"未就绪却返回 {r.status_code}，应当拒绝打包")
+            assert "zip" not in r.headers.get("content-type", "")
 
     def test_missing_layers_reports_failure_not_crash(self, client, isolated_output):
         r = client.post("/api/export/live2d", json={"character_id": "empty"})

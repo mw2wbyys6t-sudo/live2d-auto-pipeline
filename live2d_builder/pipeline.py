@@ -79,6 +79,9 @@ class Live2DBuilder:
 
         # Build state (populated during build())
         self._meshes: Dict[str, Dict] = {}
+        # moc3 验收结论（compile_export_moc3 的原始返回）。打包闸门读它，
+        # 避免「内核拒绝的产物照样进 zip」。
+        self._moc3_result: Dict[str, Any] = {}
         self._bone_positions: Dict[str, Any] = {}
         self._centroids: Dict[str, Tuple[float, float]] = {}
         self._uv_data: Dict[str, Dict] = {}
@@ -195,8 +198,17 @@ class Live2DBuilder:
             output_dir=str(self.output_dir),
             character_name=self.character_name,
         )
+        self._moc3_result = moc3_result
         if not moc3_result["moc3_written"]:
             log.error(f"moc3 编译失败: {moc3_result['blocker']}")
+        elif not moc3_result.get("runtime_ready"):
+            # moc3_written 只说明字节落盘了；runtime_ready 才是官方 Cubism Core 的
+            # 验收结论。以下四种情形 moc3_written 都为 True，但只有最后一种是成功：
+            # 内核一致性失败 / motion 不播 / physics 不通过 / 存在未编译变形器。
+            # 早先这里只看 moc3_written，于是 blocker 被静默丢弃，随后无条件打
+            # 「Built ...」——「被内核拒绝的产物 + 日志全是 OK」正是这样产生的。
+            log.error(
+                f"moc3 未通过官方内核验收: {moc3_result.get('blocker') or '未知原因'}")
         elif moc3_result["dropped"]:
             log.warning(f"moc3 已写出但存在未编译特性: {moc3_result['dropped']}")
 
@@ -211,7 +223,14 @@ class Live2DBuilder:
         nm = len(self._meshes)
         ne = len(expr_list)
         vv = validation["valid"]
-        log.success(f"Built '{cn}' in {elapsed:.1f}s — meshes: {nm}, expressions: {ne}, valid: {vv}")
+        if moc3_result.get("runtime_ready"):
+            log.success(f"Built '{cn}' in {elapsed:.1f}s — meshes: {nm}, expressions: {ne}, valid: {vv}")
+        else:
+            # 「禁止虚假成功」（stage_events.py 的诚实性规则）：未通过内核验收不得打
+            # success 行，否则日志里只剩 OK，故障现场无从追查。
+            log.error(
+                f"Built '{cn}' 但不可部署 —— meshes: {nm}, expressions: {ne}, "
+                f"valid: {vv}; blocker: {moc3_result.get('blocker') or '未知原因'}")
 
         # Save a build metadata file
         meta = {
@@ -471,7 +490,14 @@ class Live2DBuilder:
 
         Returns:
             Absolute path to the created .zip file.
+
+        Raises:
+            RuntimeError: 构建产物未通过官方 Cubism Core 验收。被内核拒绝的模型
+                不许进包 —— 否则用户拿到的 zip 里装着一个运行时加载不了的 moc3。
         """
+        if not (self._moc3_result or {}).get("runtime_ready"):
+            blocker = (self._moc3_result or {}).get("blocker") or "构建尚未产生通过验收的 moc3"
+            raise RuntimeError(f"拒绝打包未通过官方内核验收的产物: {blocker}")
         return self.exporter.package_model(
             output_dir=str(self.output_dir),
             character_name=self.character_name,

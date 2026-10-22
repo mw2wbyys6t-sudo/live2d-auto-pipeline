@@ -117,6 +117,11 @@ func TestExportResponseDataNotReadyCases(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			data := exportResponseData(tc.raw)
+			// success 不得与 runtime_ready 矛盾：只读 success 的消费者
+			// 会把被内核拒绝的产物当成可用。
+			if got, want := data["success"], data["runtime_ready"]; got != want {
+				t.Errorf("success 与 runtime_ready 矛盾: success=%v runtime_ready=%v", got, want)
+			}
 			if ready, _ := data["runtime_ready"].(bool); ready {
 				t.Fatalf("该情形绝不能报告就绪: %#v", data["moc3"])
 			}

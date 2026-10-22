@@ -42,6 +42,34 @@ from core.security import sanitize_prompt, validate_image_path
 log = get_logger("workflow")
 
 
+def derive_deployment_status(rigging: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """从 rigging 阶段结果推导部署结论（单一真相源）。
+
+    只认 ``moc3.runtime_ready`` —— 那是官方 Cubism Core 的实测验收结论。
+    「磁盘上有 .moc3」不算就绪：内核会在一致性 / motion 回放 / physics 回放
+    任一处拒绝，而被拒绝的产物文件仍然躺在磁盘上。
+
+    Args:
+        rigging: ``result["steps"]["rigging"]``，需带 ``moc3`` 摘要。
+
+    Returns:
+        ``runtime_verified`` / ``deployment_ready`` / ``artifact_type`` /
+        ``deployment_blockers``。未就绪时 blocker 逐字取自实测原因，
+        不再是那句与内核结论无关的静态文案。
+    """
+    moc3 = (rigging or {}).get("moc3") or {}
+    ready = bool(moc3.get("runtime_ready"))
+    return {
+        "runtime_verified": ready,
+        "deployment_ready": ready,
+        "artifact_type": "deployable_model" if ready else "preparation_bundle",
+        "deployment_blockers": [] if ready else [
+            moc3.get("moc3_blocker")
+            or "未产生 moc3 验收结论：构建未走到官方 Cubism Core 验收"
+        ],
+    }
+
+
 class WorkflowEngine:
     """JSON-state-machine-based workflow engine.
 
@@ -536,8 +564,16 @@ class WorkflowEngine:
                     "compatibility": {
                         k: v.get("compatible") for k, v in rig_result.get("compatibility", {}).items()
                     },
+                    # moc3 验收结论必须透传：早先这里复制了 8 个字段却独独丢掉 moc3，
+                    # 导致本层拿不到内核结论，只能在收尾处硬编码一句假 blocker。
+                    "moc3": rig_result.get("moc3") or {},
+                    "runtime_ready": bool((rig_result.get("moc3") or {}).get("runtime_ready")),
                 }
-                log.success(f"Rigging complete: {rig_result.get('model3_json', 'N/A')}")
+                if (rig_result.get("moc3") or {}).get("runtime_ready"):
+                    log.success(f"Rigging complete: {rig_result.get('model3_json', 'N/A')}")
+                else:
+                    block = (rig_result.get("moc3") or {}).get("moc3_blocker") or "未产生 moc3 验收结论"
+                    log.error(f"Rigging 完成但不可部署: {block}")
 
             # === Step 5: PSD export ===
             self._set_state("psd_export", "Creating PSD file", 75)
@@ -608,13 +644,12 @@ class WorkflowEngine:
                     log.warning(f"Failed to update character card: {e}")
 
             self._set_state("done", "Workflow complete!", 100)
+            # 部署结论必须由内核实测推导，不能硬编码：
+            # 早先这里恒为 False + 一句静态文案，于是「内核接受」与「内核拒绝」
+            # 得到同一个答案，信息量为零（真正的原因被丢在 steps.rigging.moc3 外面）。
             result["success"] = True
-            result["runtime_verified"] = False
-            result["deployment_ready"] = False
-            result["artifact_type"] = "preparation_bundle"
-            result["deployment_blockers"] = [
-                "Cubism moc3 compilation and actual runtime loading have not been verified"
-            ]
+            result.update(derive_deployment_status(
+                (result.get("steps") or {}).get("rigging")))
             result["character_image"] = character_path
             result["layers_dir"] = layers_output
             result["output_dir"] = str(self.output_dir)

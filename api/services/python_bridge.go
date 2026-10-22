@@ -813,10 +813,40 @@ out_dir = params["out_dir"]
 character_id = params["character_id"]
 Path(out_dir).mkdir(parents=True, exist_ok=True)
 
-layers = OrderedDict()
+# 分层产物目录里除了真实图层，还躺着供人工查看的整图预览
+# （preview.png / composite_preview.png）。它们与图层同目录、同后缀，若按 *.png
+# 全量收集，会把整张满画布不透明图当成一个网格烘进 moc3：该网格覆盖全部像素且
+# 不随任何参数形变，模型表现为「验收全绿但画面一动不动」。
+NON_LAYER_FILES = {"preview", "composite_preview"}
+
+# 绘制顺序以 layer_guide.json 的 draw_index 为权威（小 = 先画 = 在底层）。
+# 退回文件名字母序会让 mouth_cavity 排到 mouth 之前，口腔盖住嘴唇。
+draw_index = {}
+try:
+    with open(os.path.join(layers_dir, "layer_guide.json"), encoding="utf-8") as fh:
+        for entry in (json.load(fh).get("layers") or []):
+            name = entry.get("name")
+            idx = entry.get("draw_index")
+            if name is not None and isinstance(idx, (int, float)):
+                draw_index[name] = float(idx)
+except (OSError, ValueError):
+    draw_index = {}
+
+paths = {}
 for p in sorted(glob.glob(os.path.join(layers_dir, "*.png"))):
     name = os.path.splitext(os.path.basename(p))[0]
-    layers[name] = Image.open(p).convert("RGBA")
+    if name in NON_LAYER_FILES:
+        continue
+    paths[name] = p
+
+unknown = sorted(n for n in paths if n not in draw_index)
+if unknown:
+    sys.stderr.write("[warn] 图层不在 layer_guide.json 中，按字母序追加到最前: "
+                     + json.dumps(unknown, ensure_ascii=False) + "\n")
+tail = float(len(draw_index) + 1)
+layers = OrderedDict()
+for name in sorted(paths, key=lambda n: (draw_index.get(n, tail), n)):
+    layers[name] = Image.open(paths[name]).convert("RGBA")
 
 if not layers:
     print(json.dumps({"success": False, "message":
@@ -835,6 +865,10 @@ keys = ("output_dir", "model3_json", "moc3_ref", "textures", "texture_files",
 summary = {k: result.get(k) for k in keys if k in result}
 summary["success"] = True
 summary["mesh_count"] = len(result.get("meshes") or {})
+# 排障用：这次到底用了哪些层、顺序取自哪，以及被剔掉的整图预览。
+summary["layers_used"] = list(layers)
+summary["layer_order_source"] = "layer_guide" if draw_index else "filename"
+summary["layers_unknown"] = unknown
 print(json.dumps(summary, ensure_ascii=False, default=str))
 `
 

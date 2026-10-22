@@ -92,6 +92,9 @@ from pydantic import BaseModel, Field
 PROJECT_ROOT = Path(__file__).parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# 就绪判定住在领域层（决策点在 live2d_builder）；此处只 re-export。
+from live2d_builder.readiness import runtime_readiness as _runtime_readiness
+
 OUTPUT_DIR = PROJECT_ROOT / "output"
 ASSETS_DIR = PROJECT_ROOT / "assets"
 CHARACTERS_DIR = ASSETS_DIR / "characters"
@@ -1032,30 +1035,11 @@ def _build_live2d_model(layers: "Dict[str, Any]", output_dir: str, name: str) ->
 def runtime_readiness(result: Dict[str, Any]) -> Dict[str, Any]:
     """导出包能否被 Live2D 运行时直接加载。
 
-    唯一可信来源是构建期官方 Cubism Core 的验收结论（``result["moc3"]``）。
-    磁盘上存在 ``.moc3`` 文件不代表它通过了内核一致性检查 —— 早先版本按
-    「文件是否存在」判定，会把被内核拒绝的产物报成开箱即用。
+    实现已下沉到 ``live2d_builder.readiness``（领域层才是这条契约的决策点）。
+    这里保留同名 re-export，使 ``from api_server import runtime_readiness`` 的既有
+    调用方与测试无需改动。
     """
-    moc3 = result.get("moc3") or {}
-    ready = bool(moc3.get("runtime_ready"))
-    if not moc3:
-        blocker = "构建结果缺少 moc3 验收信息，不能视为可部署"
-    else:
-        blocker = moc3.get("moc3_blocker") or "moc3 未通过官方 Cubism Core 验收"
-    return {
-        "runtime_ready": ready,
-        "moc_reference": moc3.get("moc3_path") or "",
-        "official_core_consistent": bool(moc3.get("official_core_consistent")),
-        "moc3_dropped": moc3.get("moc3_dropped") or [],
-        "deformers_compiled": moc3.get("deformers_compiled") or [],
-        "deformers_uncompiled": moc3.get("deformers_uncompiled") or [],
-        # true = 官方内核真的在播放产物里的 motion；null = 没有可动参数，
-        # 不适用（不等于通过）；false = 写了 motion 但内核不播，属于阻塞
-        "motion_verified": moc3.get("motion_verified"),
-        # true = 官方内核里 physics 确实产生带滞后的运动；null = 无可验物理链
-        "physics_verified": moc3.get("physics_verified"),
-        "blocker": "" if ready else blocker,
-    }
+    return _runtime_readiness(result)
 
 
 # ---------- M6：导出产物的唯一命名与陈旧清理 ----------
@@ -1160,12 +1144,22 @@ async def export_live2d(req: ExportLive2DRequest, background_tasks: BackgroundTa
 
         model3 = result.get("model3_json", "") or ""
         textures = [t for t in (result.get("textures") or []) if t]
+        readiness = runtime_readiness(result)
+        ready = readiness["runtime_ready"]
 
         # Live2D 预览页需要直接下载 ZIP 包。
         # M6：zip 写在系统临时目录（不落在可被 /output/ 直接访问的输出根），
         # 用 mkstemp 拿到无碰撞路径；响应发送完成后立即删除，崩溃残留由
         # _cleanup_old_export_artifacts 按 TTL 兜底回收。
         if req.download:
+            # 打包闸门：被官方 Cubism Core 拒绝的产物不许进 zip。
+            # 早先这条分支只负责打包，全程不看验收结论 —— 用户拿到一个装进
+            # Cubism / VTube Studio 才发现加载不了的包，且不知道原因。
+            if not ready:
+                return err(
+                    f"模型未通过官方 Cubism Core 验收，拒绝打包：{readiness['blocker']}",
+                    409,
+                )
             fd, tmp_name = tempfile.mkstemp(prefix="live2d_", suffix=".zip")
             os.close(fd)
             zip_path = Path(tmp_name)
@@ -1183,8 +1177,11 @@ async def export_live2d(req: ExportLive2DRequest, background_tasks: BackgroundTa
                 str(zip_path), media_type="application/zip", filename=download_name
             )
 
+        # success 必须与 runtime_ready 一致：同一个 payload 里出现
+        # success=true 与 runtime_ready=false 会骗过只读 success 的消费者。
         return ok({
-            "success": True,
+            "success": ready,
+            "blocker": readiness["blocker"],
             "model3_json": to_output_url(model3),
             "model_path": to_output_url(model3),
             "texture": to_output_url(textures[0]) if textures else "",
@@ -1194,8 +1191,8 @@ async def export_live2d(req: ExportLive2DRequest, background_tasks: BackgroundTa
             "validation": result.get("validation", {}),
             "output_dir": str(export_dir),
             "elapsed_seconds": result.get("elapsed_seconds"),
-            **runtime_readiness(result),
-        }, "Live2D 模型导出成功")
+            **readiness,
+        }, "Live2D 模型导出成功" if ready else "模型已生成，但未通过官方内核验收，不可部署")
     except Exception as e:
         # 未预期构建错误：详情（含临时目录/路径）只进日志，前端拿固定文案。
         # 业务性失败（如「缺少图层」）在 try 内部已提前 return，不会走到这里。

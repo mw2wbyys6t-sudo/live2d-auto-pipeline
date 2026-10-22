@@ -1042,6 +1042,16 @@ func (h *Handler) ExportLive2D(c *gin.Context) {
 			}
 			return
 		}
+		// 打包闸门：被官方 Cubism Core 拒绝的产物不许进 zip。
+		// 早先这条路径只查「目录是否为空」，于是「内核拒绝但文件躺在磁盘上」的
+		// 模型照样被打包发出去，用户装进 Cubism / VTube Studio 才发现加载不了。
+		if ready, blocker := modelDirReadiness(modelDir); !ready {
+			c.JSON(http.StatusConflict, models.Response{
+				Success: false,
+				Error:   "模型未通过官方 Cubism Core 验收，拒绝打包: " + blocker,
+			})
+			return
+		}
 		zipBytes, err := zipDirectory(modelDir)
 		if err != nil {
 			h.serverError(c, "模型打包", err)
@@ -1117,6 +1127,10 @@ func exportResponseData(raw map[string]interface{}) map[string]interface{} {
 	moc3, _ := inner["moc3"].(map[string]interface{})
 	data["moc3"] = moc3
 	data["runtime_ready"], data["blocker"] = moc3Readiness(inner, moc3)
+	// success 必须与 runtime_ready 一致：Python 桥脚本里的 success 只表示「构建跑完了」，
+	// 直接透传会让同一个 payload 同时出现 success=true 与 runtime_ready=false，
+	// 任何只读 success 的消费者都会把被内核拒绝的产物当成可用。
+	data["success"] = data["runtime_ready"]
 	return data
 }
 
@@ -1140,6 +1154,34 @@ func stringField(values map[string]interface{}, key string) string {
 		return text
 	}
 	return ""
+}
+
+// modelDirReadiness 从模型目录的 build_meta.json 读取官方内核验收结论。
+//
+// 打包下载路径可能拿不到 Python 的返回值（目录由前端直接指定），只能以落盘的
+// build_meta.json 为凭据。该文件由 live2d_builder/pipeline.py 在构建收尾时写出，
+// moc3.runtime_ready 即官方 Cubism Core 的实测结论。
+//
+// 缺文件 / 缺字段一律按「未就绪」处理：宁可拒绝下载并说明原因，也不要发出一个
+// 用户装进 Cubism / VTube Studio 才发现加载不了的包。
+func modelDirReadiness(modelDir string) (bool, string) {
+	raw, err := os.ReadFile(filepath.Join(modelDir, "build_meta.json"))
+	if err != nil {
+		return false, "模型目录缺少 build_meta.json，无法证明已通过官方内核验收"
+	}
+	var meta struct {
+		Moc3 map[string]interface{} `json:"moc3"`
+	}
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return false, "build_meta.json 解析失败: " + err.Error()
+	}
+	if ready, _ := meta.Moc3["runtime_ready"].(bool); ready {
+		return true, ""
+	}
+	if blocker := stringField(meta.Moc3, "moc3_blocker"); blocker != "" {
+		return false, blocker
+	}
+	return false, "产物未经官方 Cubism Core 验收，不能视为可部署"
 }
 
 // resolveExportModelDir determines the on-disk model directory to zip.
