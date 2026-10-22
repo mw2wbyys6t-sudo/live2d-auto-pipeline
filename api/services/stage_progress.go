@@ -465,7 +465,7 @@ func (pb *PythonBridge) runInlinePythonStreaming(parent context.Context, code st
 // 之所以要独立一份：runInlinePythonTimeout 是阻塞的，塞不进逐行读取。
 func exportStagePythonCode(scriptsDir, layersDir, outputDir, characterID, jobID string) string {
 	return fmt.Sprintf(`
-import sys, json, os, glob
+import sys, json, os
 sys.path.insert(0, %q)
 from pathlib import Path
 from PIL import Image
@@ -479,10 +479,20 @@ layers_dir = %q
 out_dir = %q
 Path(out_dir).mkdir(parents=True, exist_ok=True)
 
-layers = OrderedDict()
-for p in sorted(glob.glob(os.path.join(layers_dir, "*.png"))):
-    name = os.path.splitext(os.path.basename(p))[0]
-    layers[name] = Image.open(p).convert("RGBA")
+# 选层与排序收敛为同一份代码：live2d_builder/layer_loader.py。
+# 此前这里内联 glob("*.png")：把整图预览（preview/composite_preview，满画布
+# 不透明）当成图层烘进 moc3，这份路径又是生产导出实际走的路，导致
+# 「验收全绿但画面是一张静止的平图」；且按文件名字母序喂层，口腔盖住嘴唇。
+from live2d_builder.layer_loader import load_export_inputs
+
+try:
+    inputs = load_export_inputs(layers_dir)
+except FileNotFoundError as exc:
+    print(json.dumps({"success": False, "message": str(exc)}, ensure_ascii=False))
+    raise SystemExit(0)
+
+layers = OrderedDict((name, Image.open(path).convert("RGBA"))
+                     for name, path in inputs.paths.items())
 
 if not layers:
     print(json.dumps({"success": False, "message":
@@ -494,6 +504,30 @@ if not layers:
 builder = Live2DBuilder(output_dir=out_dir, character_name=%q)
 result = builder.build(layers)
 
+# FF-2：权威表 vs moc3 渲染层序，落盘进 build_meta.json 供下载闸门读取。
+from core.psd.validator import check_layer_order
+from core.segment_engine.composer import LayerComposer
+order_issues = check_layer_order(
+    LayerComposer.STANDARD_LAYER_ORDER,
+    psd_order=None,
+    render_order=list(layers),
+)
+meta_file = Path(out_dir) / "build_meta.json"
+if meta_file.is_file():
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    if isinstance(meta, dict):
+        meta["layer_order"] = {
+            "issue_count": len(order_issues),
+            "issues": order_issues,
+        }
+        meta_file.write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+for issue in order_issues:
+    sys.stderr.write("[warn] 层序错位: " + str(issue.get("message")) + "\n")
+
 # build() 正常返回才算走完最后一步；异常路径由 Go 侧记为 failed。
 stage_events.close_open(stage_events.STATUS_ADVANCED)
 
@@ -504,6 +538,11 @@ keys = ("output_dir", "model3_json", "moc3_ref", "textures", "texture_files",
 summary = {k: result.get(k) for k in keys if k in result}
 summary["success"] = True
 summary["mesh_count"] = len(result.get("meshes") or {})
+# 与 bridgeExportLive2DScript 对齐：同样暴露选层清单与层序结论，便于排障。
+summary["layers_used"] = list(layers)
+summary["layer_order_source"] = inputs.order_source
+summary["layers_unknown"] = inputs.unknown
+summary["layer_order_issues"] = order_issues
 print(json.dumps(summary, ensure_ascii=False, default=str))
 `, scriptsDir, jobID, layersDir, outputDir, characterID)
 }

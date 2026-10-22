@@ -801,21 +801,11 @@ func (pb *PythonBridge) ExportLive2DModel(ctx context.Context, characterID, laye
 
 // bridgeExportLive2DScript 常量任务脚本：完整 Live2D 构建（网格 + moc3 + 官方内核验收）。
 const bridgeExportLive2DScript = `
-import sys, json, os, glob
+import sys, json, os
 from pathlib import Path
 from PIL import Image
 from collections import OrderedDict
 from live2d_builder.pipeline import Live2DBuilder
-
-params = json.loads(open(sys.argv[1], encoding="utf-8").read())
-layers_dir = params["layers_dir"]
-out_dir = params["out_dir"]
-character_id = params["character_id"]
-Path(out_dir).mkdir(parents=True, exist_ok=True)
-
-import sys, json, os
-from pathlib import Path
-from PIL import Image
 
 params = json.loads(open(sys.argv[1], encoding="utf-8").read())
 layers_dir = params["layers_dir"]
@@ -829,16 +819,16 @@ Path(out_dir).mkdir(parents=True, exist_ok=True)
 # mouth_cavity 排到 mouth 之前，口腔盖住嘴唇）。曾内联复制到 3 个调用点，只有
 # 1 处做了这两项 —— 另 2 处（含生产导出走的路）至今仍有缺陷。stage_progress
 # 与 api_server 走同一份，不再各自内联。
-from live2d_builder.layer_loader import load_export_layer_inputs
+from live2d_builder.layer_loader import load_export_inputs
 
 try:
-    inputs = load_export_layer_inputs(layers_dir)
+    inputs = load_export_inputs(layers_dir)
 except FileNotFoundError as exc:
     print(json.dumps({"success": False, "message": str(exc)}, ensure_ascii=False))
     raise SystemExit(0)
 
 layers = OrderedDict((name, Image.open(path).convert("RGBA"))
-                     for name, path in inputs.items())
+                     for name, path in inputs.paths.items())
 
 # 必须走完整构建：只有它生成网格、编译 .moc3 并用官方 Cubism Core 验收。
 # 早期版本直接调用 Model3Exporter.export(meshes={})，产物里根本没有 moc3。
@@ -878,10 +868,10 @@ keys = ("output_dir", "model3_json", "moc3_ref", "textures", "texture_files",
 summary = {k: result.get(k) for k in keys if k in result}
 summary["success"] = True
 summary["mesh_count"] = len(result.get("meshes") or {})
-# 排障用：这次到底用了哪些层、顺序取自哪，以及被剔掉的整图预览。
+# 排障用：这次到底用了哪些层、顺序取自哪，以及 FF-2 层序结论。
 summary["layers_used"] = list(layers)
-summary["layer_order_source"] = "layer_guide" if draw_index else "filename"
-summary["layers_unknown"] = unknown
+summary["layer_order_source"] = inputs.order_source
+summary["layers_unknown"] = inputs.unknown
 summary["layer_order_issues"] = order_issues
 print(json.dumps(summary, ensure_ascii=False, default=str))
 `

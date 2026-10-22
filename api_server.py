@@ -1011,17 +1011,16 @@ def _resolve_export_source(req: "ExportLive2DRequest") -> str:
 
 
 def _load_layers_for_export(layers_dir: str) -> "Dict[str, Any]":
-    """把目录下的 PNG 图层读成 {名称: PIL.Image}，供 Live2DBuilder 使用。"""
-    from PIL import Image
+    """把目录下的 PNG 图层读成 {名称: PIL.Image}，供 Live2DBuilder 使用。
 
-    layers: Dict[str, Any] = {}
-    base = Path(layers_dir)
-    for f in sorted(base.glob("*.png")):
-        try:
-            layers[f.stem] = Image.open(f).convert("RGBA")
-        except Exception:
-            continue
-    return layers
+    收敛说明：剔预览 + draw_index 排序的唯一实现住在
+    live2d_builder.layer_loader —— 早前这里内联 ``sorted(base.glob("*.png"))``，
+    会把整图预览（满画布不透明）当成图层烘进 moc3，并按字母序喂层
+    （口腔盖住嘴唇）。与本模块的 Go 导出桥共用同一份，不再各自内联。
+    """
+    from live2d_builder.layer_loader import load_layers_for_export
+
+    return dict(load_layers_for_export(layers_dir))
 
 
 def _build_live2d_model(layers: "Dict[str, Any]", output_dir: str, name: str) -> Dict[str, Any]:
