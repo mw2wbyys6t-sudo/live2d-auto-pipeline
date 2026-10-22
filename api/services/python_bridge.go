@@ -813,45 +813,32 @@ out_dir = params["out_dir"]
 character_id = params["character_id"]
 Path(out_dir).mkdir(parents=True, exist_ok=True)
 
-# 分层产物目录里除了真实图层，还躺着供人工查看的整图预览
-# （preview.png / composite_preview.png）。它们与图层同目录、同后缀，若按 *.png
-# 全量收集，会把整张满画布不透明图当成一个网格烘进 moc3：该网格覆盖全部像素且
-# 不随任何参数形变，模型表现为「验收全绿但画面一动不动」。
-NON_LAYER_FILES = {"preview", "composite_preview"}
+import sys, json, os
+from pathlib import Path
+from PIL import Image
 
-# 绘制顺序以 layer_guide.json 的 draw_index 为权威（小 = 先画 = 在底层）。
-# 退回文件名字母序会让 mouth_cavity 排到 mouth 之前，口腔盖住嘴唇。
-draw_index = {}
+params = json.loads(open(sys.argv[1], encoding="utf-8").read())
+layers_dir = params["layers_dir"]
+out_dir = params["out_dir"]
+character_id = params["character_id"]
+Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+# 选层与排序收敛为同一份代码：live2d_builder/layer_loader.py。
+# 它同时负责剔除整图预览（preview/composite_preview，满画布不透明，当成图层会
+# 把模型压成静止的图）与按 layer_guide.json 的 draw_index 排序（退回字母序会让
+# mouth_cavity 排到 mouth 之前，口腔盖住嘴唇）。曾内联复制到 3 个调用点，只有
+# 1 处做了这两项 —— 另 2 处（含生产导出走的路）至今仍有缺陷。stage_progress
+# 与 api_server 走同一份，不再各自内联。
+from live2d_builder.layer_loader import load_export_layer_inputs
+
 try:
-    with open(os.path.join(layers_dir, "layer_guide.json"), encoding="utf-8") as fh:
-        for entry in (json.load(fh).get("layers") or []):
-            name = entry.get("name")
-            idx = entry.get("draw_index")
-            if name is not None and isinstance(idx, (int, float)):
-                draw_index[name] = float(idx)
-except (OSError, ValueError):
-    draw_index = {}
-
-paths = {}
-for p in sorted(glob.glob(os.path.join(layers_dir, "*.png"))):
-    name = os.path.splitext(os.path.basename(p))[0]
-    if name in NON_LAYER_FILES:
-        continue
-    paths[name] = p
-
-unknown = sorted(n for n in paths if n not in draw_index)
-if unknown:
-    sys.stderr.write("[warn] 图层不在 layer_guide.json 中，按字母序追加到最前: "
-                     + json.dumps(unknown, ensure_ascii=False) + "\n")
-tail = float(len(draw_index) + 1)
-layers = OrderedDict()
-for name in sorted(paths, key=lambda n: (draw_index.get(n, tail), n)):
-    layers[name] = Image.open(paths[name]).convert("RGBA")
-
-if not layers:
-    print(json.dumps({"success": False, "message":
-                      "图层目录内没有可用 PNG: " + layers_dir}, ensure_ascii=False))
+    inputs = load_export_layer_inputs(layers_dir)
+except FileNotFoundError as exc:
+    print(json.dumps({"success": False, "message": str(exc)}, ensure_ascii=False))
     raise SystemExit(0)
+
+layers = OrderedDict((name, Image.open(path).convert("RGBA"))
+                     for name, path in inputs.items())
 
 # 必须走完整构建：只有它生成网格、编译 .moc3 并用官方 Cubism Core 验收。
 # 早期版本直接调用 Model3Exporter.export(meshes={})，产物里根本没有 moc3。
