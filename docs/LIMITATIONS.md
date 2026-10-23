@@ -350,7 +350,7 @@
 License Compliance / Security Analysis）由第三方 SaaS 回写 commit status。
 本节先记 2026-10-23 复核（FOSSA 后台重扫）的数字，再补上当日新增的
 **仓库侧全量许可清单**（`scripts/fossa_license_inventory.py`）——
-它让「那 65 条到底是什么」第一次有了可复现的答案。
+它让「那 65 条到底是什么」第一次有了可复现的答案（后续移除 torch 组后降到 64）。
 
 **FOSSA 后台重扫的真实数字**（PR #48，commit `6d9a075`，2026-10-23）：
 
@@ -363,18 +363,18 @@ License Compliance / Security Analysis）由第三方 SaaS 回写 commit status�
 本地用 OSV.dev 做的全量复扫（口径对齐 FOSSA：清单声明的下限 + 各生态锁文件的实装版本）
 得到**同样的 6 条**，两条路径交叉验证一致。
 
-### 那 65 条 License Compliance issue 到底是什么（2026-10-23 实算结论）
+### 那 64 条 License Compliance issue 到底是什么（2026-10-23 实算结论）
 
-**不是合规风险，是策略未配置。** 逐条实算 721 个依赖的许可后：
+**不是合规风险，是策略未配置。** 逐条实算 716 个依赖的许可后：
 
 | 档位 | 数量 | 含义 |
 |---|---|---|
-| 允许（ALLOW） | **698** | 宽松型，可自由再分发，不施加文件级传染条件 |
+| 允许（ALLOW） | **694** | 宽松型，可自由再分发，不施加文件级传染条件 |
 | 需审阅（REVIEW） | **22** | 弱 copyleft（LGPL / MPL），以库形式随附兼容，确认一次即可 |
 | 禁止（DENY） | **0** | **没有任何强 copyleft 或非商业条款依赖** |
-| 许可未声明 | **1** | `segment-anything`（PyPI 元数据缺 `license` 字段，上游实为 Apache-2.0）|
+| 许可未声明 | **0** | `segment-anything` 随 torch 组移出基础依赖树后归零 |
 
-也就是说：那 65 条只是「不在 FOSSA 默认允许清单里」的计数，**没有一条与 Apache-2.0
+也就是说：那 64 条只是「不在 FOSSA 默认允许清单里」的计数，**没有一条与 Apache-2.0
 分发冲突**。要让它们归零，得在 FOSSA 后台按策略放行，而不是改代码。
 完整的三档清单与后台操作步骤见 **[docs/license-policy.md](license-policy.md)**。
 
@@ -398,12 +398,14 @@ python scripts/fossa_license_inventory.py --policy   # 策略建议
   5 个 MPL-2.0 crate（`cssparser` / `cssparser-macros` / `dtoa-short` / `option-ext` /
   `selectors`，文件级 copyleft 且未修改上游文件）；
 - **`segment-anything` 在 PyPI 上没有声明许可证**（GitHub 上是 Apache-2.0，但包元数据缺
-  `license` 字段）→ FOSSA 报「未知许可」。它确实被 `core/segment_engine/semantic.py`
-  使用（`SamAutomaticMaskGenerator`），不能移除；这是上游元数据缺失，仓库侧无法修，
-  只能在 FOSSA 侧按依赖名单独放行。
+  `license` 字段）→ FOSSA 会报「未知许可」。它被 `core/segment_engine/semantic.py`
+  使用（`SamAutomaticMaskGenerator`），但已随 torch 组**移出基础依赖树**
+  （见 `requirements.desktop.txt`：SAM2 改为应用内按需下载），所以当前依赖树里的
+  「未声明许可」项为 **0**。若用户之后启用 SAM2 能力组把它装回来，需在 FOSSA 侧
+  按依赖名单独放行 —— 这是上游元数据缺失，仓库侧无法修。
 
 **FOSSA API key 需要账号持有人在后台手动创建**（Organization Settings → Integrations →
-API，**只显示一次**），仓库侧无法代劳；且要拿到那 65 条的逐条明细需要**企业版 API**。
+API，**只显示一次**），仓库侧无法代劳；且要拿到那 64 条的逐条明细需要**企业版 API**。
 策略本身也必须在**项目后台**切换 —— 官方明确：项目已存在后改 `.fossa.yml` 的 `policy:`
 字段**不会生效**（"will *not* change the policy"）。
 

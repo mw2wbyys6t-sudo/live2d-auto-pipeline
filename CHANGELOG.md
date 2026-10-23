@@ -55,9 +55,9 @@
 
 ### 🟢 许可证与合规（FF-15 首次真正落地）
 
-- **剩余的 65 条 License Compliance issue 不是合规风险，是策略未配置** —— 逐条实算
-  721 个依赖后确认：**698 允许 / 22 需审阅（弱 copyleft）/ 0 禁止 / 1 未声明**。
-  **没有任何强 copyleft 或非商业条款依赖**，那 65 条只是「不在 FOSSA 默认允许清单里」。
+- **剩余的 64 条 License Compliance issue 不是合规风险，是策略未配置** —— 逐条实算
+  716 个依赖后确认：**694 允许 / 22 需审阅（弱 copyleft）/ 0 禁止 / 0 未声明**（移除 torch 组后）。
+  **没有任何强 copyleft 或非商业条款依赖**，那 64 条只是「不在 FOSSA 默认允许清单里」。
   新增 `scripts/fossa_license_inventory.py`：枚举 PyPI / npm / crates.io / Go 四个生态的
   依赖树，逐个取 SPDX 标识（数据源是 PyPI JSON、锁文件自带许可、crates.io API、
   deps.dev —— 都是权威源，不是扫描器的结论），按 Apache-2.0 分发场景分三档，
@@ -205,6 +205,14 @@
   GC 元数据 1.97 MB —— **坐实 Go 内存基本全是 runtime 固定开销，无优化空间**。
 
 ### 🐛 顺手修掉的存量 bug
+
+- **`scripts/fossa_license_inventory.py` 在 CI 上会崩**（本轮引入、CI 首次暴露）：
+  crates.io 限流时 `resp.read()` 抛 `http.client.IncompleteRead`，它继承
+  `HTTPException` 而**不是** `OSError`，而 `_get_json` 的 except 只列了
+  `URLError/TimeoutError/ValueError/OSError` —— 异常逃出线程池，整个
+  「依赖许可清单」步骤 exit 1。本地网络稳定时完全测不出来。
+  已把 `http.client.HTTPException` 归入「可重试」分支，并补 3 条单测
+  （IncompleteRead / RemoteDisconnected / 正常解析）。
 
 - **`drivers/audio/capture.py` 的可选依赖保护写窄了**：`except ImportError` 没能兜住
   `sounddevice` 在「装了但系统缺 PortAudio」时抛的 **OSError**（它载入即 `dlopen libportaudio`）。

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import http.client
 import importlib.util
 from pathlib import Path
 
@@ -165,3 +166,51 @@ class TestPolicyBuckets:
         assert "MPL-2.0" in review
         # 关键：LGPL 绝不能混进「允许」档
         assert "LGPL-3.0-or-later" not in allow
+
+
+class TestGetJsonResilience:
+    """网络层异常必须被吞掉并返回 None，不能让线程池把整个脚本打挂。
+
+    回归背景：CI 上 crates.io 限流时 `resp.read()` 抛
+    `http.client.IncompleteRead`（继承 HTTPException，**不是** OSError），
+    而 `_get_json` 的 except 没覆盖它 —— 异常逃出线程池，整个
+    "依赖许可清单" 步骤 exit 1。本地网络稳定时完全测不出来。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self, monkeypatch):
+        # 退避重试会真睡 1.5s→3s，测试里跳过，否则一次用例要等 4.5 秒
+        monkeypatch.setattr(inv.time, "sleep", lambda _s: None)
+
+    def test_incomplete_read_returns_none_instead_of_raising(self, monkeypatch):
+        calls = {"n": 0}
+
+        def boom(*_a, **_k):
+            calls["n"] += 1
+            raise http.client.IncompleteRead(b"partial", 100)
+
+        monkeypatch.setattr(inv.urllib.request, "urlopen", boom)
+        assert inv._get_json("https://example.invalid/x") is None
+        # 三次都失败后才返回 None —— 说明它被当作可重试异常，而不是直接崩
+        assert calls["n"] == 3
+
+    def test_remote_disconnected_returns_none(self, monkeypatch):
+        def boom(*_a, **_k):
+            raise http.client.RemoteDisconnected("remote closed")
+
+        monkeypatch.setattr(inv.urllib.request, "urlopen", boom)
+        assert inv._get_json("https://example.invalid/x") is None
+
+    def test_successful_fetch_still_parses(self, monkeypatch):
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_a):
+                return False
+
+            def read(self):
+                return b'{"ok": true}'
+
+        monkeypatch.setattr(inv.urllib.request, "urlopen", lambda *_a, **_k: _Resp())
+        assert inv._get_json("https://example.invalid/x") == {"ok": True}

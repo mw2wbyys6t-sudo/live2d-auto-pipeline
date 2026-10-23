@@ -27,6 +27,7 @@ Apache-2.0 分发场景分类，直接给出「策略里该允许什么」的清
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -365,8 +366,14 @@ CACHE_PATH = Path(os.environ.get("FOSSA_LICENSE_CACHE", "/tmp/fossa-license-cach
 def _get_json(url: str, timeout: int = 45, retries: int = 3) -> Optional[dict]:
     """带退避重试的 JSON 抓取。
 
-    crates.io 对匿名请求限流很��（429），并发一高就会大面积失败 —— 失败会被
+    crates.io 对匿名请求限流很严（429），并发一高就会大面积失败 —— 失败会被
     误记成「许可未知」，让报告的数字失真。这里退避重试是必要的。
+
+    必须覆盖 ``http.client.HTTPException``：连接被中途截断时 ``resp.read()``
+    抛的是 ``IncompleteRead``，它继承自 ``HTTPException`` 而**不是** ``OSError``，
+    漏掉就会一路逃出线程池把整个脚本打挂（CI 上实测：
+    ``IncompleteRead(7339 bytes read, 50666 more expected)``）。本地网络稳定时
+    不会暴露，只有 registry 限流的 CI 环境才炸 —— 这类异常必须归到「可重试」。
     """
     delay = 1.5
     for attempt in range(retries):
@@ -386,7 +393,13 @@ def _get_json(url: str, timeout: int = 45, retries: int = 3) -> Optional[dict]:
                 delay *= 2
                 continue
             return None
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ValueError,
+            OSError,
+            http.client.HTTPException,  # IncompleteRead / RemoteDisconnected 等
+        ):
             if attempt < retries - 1:
                 time.sleep(delay)
                 delay *= 2
