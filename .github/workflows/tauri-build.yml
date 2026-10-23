@@ -99,7 +99,7 @@ jobs:
 
       - name: Build Go binary (with embedded frontend)
         working-directory: api
-        run: go build -trimpath -ldflags "-s -w -H windowsgui" -o live2d-api.exe .
+        run: go build -trimpath -tags nomsgpack -ldflags "-s -w -H windowsgui" -o live2d-api.exe .
 
       - name: Build Rust face_tracker (native face capture)
         working-directory: native/face_tracker

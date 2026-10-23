@@ -129,6 +129,31 @@
   强行拉平会直接破坏上游编译；真要减少体积，正确方向是升级 Tauri 大版本，
   成本与风险都远高于收益。
 
+### ⚙️ Go 构建精简：裁掉 gin 内置的 msgpack 编解码器
+
+- **所有产出 Go 二进制的构建入口统一加 `-tags nomsgpack`**（CI 两个 workflow +
+  `build_desktop.{bat,sh}` + `build_tauri_release.{bat,sh}` + `run_tauri_dev.{bat,sh}`
+  + `api/start.sh` + README 的手抄命令）。
+- **为什么**：gin 的 `binding` 默认内置 msgpack，会连带拉进 `ugorji/go/codec`、
+  `net/rpc`、`encoding/gob`、`encoding/base32`（依赖树 327 → 323 个包）。
+  本项目**零 msgpack 使用**，Go 代码与前端都查过。该包编译期内存占用尤其大 ——
+  在本仓库的构建环境里编译它时，`go build` 直接被 **OOM kill**（`signal: killed`），
+  加上该标签后构建成功（产物 15.4MB，`go tool nm` 里 `ugorji` 符号数为 **0**）。
+- **契约测试 `tests/unit/test_go_build_tags.py`（11 条）**锁住两件事：
+  ① Go 源码与前端不得出现 msgpack —— 否则源码看起来"支持 msgpack"，而带标签的
+  构建会在运行时拒绝，属于最难查的一类不一致；② 每个产出二进制的 `go build`
+  必须带该标签 —— 漏一处就会让开发构建与发布构建的编解码能力分叉。
+  已做反向验证：临时去掉 `api/start.sh` 的标签，测试立即失败并精确报出行号。
+
+### 🔍 前端依赖审计：没有可删的
+
+- `web/package.json` 的 5 个 `dependencies` + 7 个 `devDependencies` 全部必要。
+  静态扫描会把 `react-dom` / `@types/*` / `autoprefixer` / `postcss` /
+  `typescript` 误判成"未使用"（它们不经 `import` 使用：类型走 `tsconfig`、
+  PostCSS 插件走 `postcss.config.js` 的 `plugins` 字段、`tsc --noEmit` 走 CI 步骤），
+  逐个核实后保留。`npm` 侧 219 个包仅 2 个存在多版本（`glob-parent` / `picomatch`，
+  均为 dev 传递依赖），无优化空间。
+
 ### 🐛 顺手修掉的存量 bug
 
 - **`drivers/audio/capture.py` 的可选依赖保护写窄了**：`except ImportError` 没能兜住

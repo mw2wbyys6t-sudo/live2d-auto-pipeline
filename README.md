@@ -173,7 +173,7 @@ python -m core.cli
 
 # 1) 前端 + Go 后端 + Rust 面捕
 cd web && npm ci && npm run build && cd ..
-cd api && go build -trimpath -ldflags "-s -w -H windowsgui" -o live2d-api.exe . && cd ..
+cd api && go build -trimpath -tags nomsgpack -ldflags "-s -w -H windowsgui" -o live2d-api.exe . && cd ..
 cd native/face_tracker && cargo build --release && cd ../..
 
 # 2) 装配自带运行时（嵌入式 Python / 离线 wheel / 模型，约 0.9 GB site-packages，

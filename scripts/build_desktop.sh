@@ -95,10 +95,10 @@ if [[ "$GOOS" == "$(go env GOOS)" ]]; then
 fi
 
 pushd api >/dev/null
-go build -trimpath -ldflags "$GUI_LDFLAGS" -o "../dist/$EXE_NAME" .
+go build -trimpath -tags nomsgpack -ldflags "$GUI_LDFLAGS" -o "../dist/$EXE_NAME" .
 if [[ "$TARGET" == "windows" ]]; then
   # 调试版：带控制台，便于查看 Python 桥接日志
-  go build -trimpath -ldflags "$DBG_LDFLAGS" -o "../dist/${EXE_NAME%.exe}-console.exe" .
+  go build -trimpath -tags nomsgpack -ldflags "$DBG_LDFLAGS" -o "../dist/${EXE_NAME%.exe}-console.exe" .
 fi
 popd >/dev/null
 

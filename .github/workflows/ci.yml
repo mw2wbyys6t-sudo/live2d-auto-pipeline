@@ -146,7 +146,10 @@ jobs:
 
       - name: Go build
         working-directory: api
-        run: go build -o /tmp/live2d-api .
+        # -tags nomsgpack：裁掉 gin 内置的 msgpack 编解码器（ugorji/go/codec）。
+        # 本项目零 msgpack 使用（Go 与前端都查过），但它会连带拉进 net/rpc /
+        # encoding/gob / encoding/base32，且编译期内存占用很大。
+        run: go build -trimpath -tags nomsgpack -o /tmp/live2d-api .
 
       # HealthCheck 会真的探针 Python（`python --version` + `import PIL` / `import numpy`），
       # 这里把探针要求的依赖装上，好让下面 LIVE2D_TEST_PYTHON 打开的真实路径用例能跑。
@@ -362,7 +365,7 @@ jobs:
 
       - name: Build Go binary (with embedded frontend)
         working-directory: api
-        run: go build -trimpath -ldflags "-s -w -H windowsgui" -o live2d-api.exe .
+        run: go build -trimpath -tags nomsgpack -ldflags "-s -w -H windowsgui" -o live2d-api.exe .
 
       - name: Build Rust face_tracker
         working-directory: native/face_tracker

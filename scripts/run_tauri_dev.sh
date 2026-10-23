@@ -57,7 +57,7 @@ echo
 echo "[4/5] Building Go API binary (with embedded frontend)..."
 (
     cd api
-    go build -o live2d-api .
+    go build -trimpath -tags nomsgpack -o live2d-api .
 )
 echo "[OK] Go binary ready: api/live2d-api"
 echo

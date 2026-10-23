@@ -52,7 +52,12 @@ scripts\build_tauri_release.bat
 `tauri-nsis-installer`）。脚本流程：
 
 1. `NEXT_STATIC_EXPORT=1 next build` → 复制到 `api/webui/dist`（`go:embed` 源）
-2. `go build -H windowsgui -o live2d-api.exe`（内嵌 UI）
+2. `go build -tags nomsgpack -H windowsgui -o live2d-api.exe`（内嵌 UI）
+   > `-tags nomsgpack` 裁掉 gin 内置的 msgpack 编解码器（`ugorji/go/codec`）。
+   > 本项目零 msgpack 使用（Go 与前端都查过），但它会连带拉进 `net/rpc` /
+   > `encoding/gob` / `encoding/base32`，且编译期内存占用很大。所有构建入口
+   > 都已统一带该标签，`tests/unit/test_go_build_tags.py` 锁住这个契约 ——
+   > 若将来真的要用 msgpack，会先在该测试失败，而不是在运行时静默拒绝请求。
 3. `cargo build --release`（原生面捕）
 4. `python scripts\build_desktop_bundle.py` 装配 `desktop\bundle\`
 5. `cargo tauri build --bundles nsis`

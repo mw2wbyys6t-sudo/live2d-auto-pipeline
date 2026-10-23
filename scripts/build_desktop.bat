@@ -28,10 +28,10 @@ if errorlevel 8 (echo 静态产物复制失败 & exit /b 1)
 echo [4/5] 编译单文件桌面程序（内嵌 UI，windowsgui 无控制台）...
 taskkill /F /IM Live2DMasterAgent.exe >nul 2>&1
 pushd api
-go build -trimpath -ldflags "-s -w -H windowsgui" -o ..\dist\Live2DMasterAgent.exe .
+go build -trimpath -tags nomsgpack -ldflags "-s -w -H windowsgui" -o ..\dist\Live2DMasterAgent.exe .
 if errorlevel 1 (popd & echo Go 编译失败 & exit /b 1)
 rem 调试版：带控制台，便于查看 Python 桥接日志
-go build -trimpath -o ..\dist\Live2DMasterAgent-console.exe .
+go build -trimpath -tags nomsgpack -o ..\dist\Live2DMasterAgent-console.exe .
 if errorlevel 1 (popd & echo Go 编译失败(调试版) & exit /b 1)
 popd
 
