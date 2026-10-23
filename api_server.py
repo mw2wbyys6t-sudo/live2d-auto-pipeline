@@ -15,12 +15,16 @@ Live2D Master Agent - Python API Server (FastAPI)
 SUPPORTED_ENDPOINTS（降级模式下可用）：
     # 基础信息（只读）
     GET  /                       根信息
-    GET  /api/health             健康检查
-    GET  /api/status             系统状态（部分字段静态声明）
+    GET  /api/health             健康检查（含 python_ok）
+    GET  /api/status             系统状态（服务可用性为实测结果）
     GET  /api/info               API 元信息
-    GET  /api/models             可用模型列表（声明性）
+    GET  /api/models             可用模型列表（provider 实测可用性）
     GET  /api/expressions        表情列表（静态模板）
     GET  /api/scripts            scripts/ 目录脚本列表
+    GET  /api/diagnostics        环境自检（8 项 checks，与 Go 同构）
+    GET  /api/providers          图像生成上游 provider 状态
+    GET  /api/models/optional    可选重模型清单 + 就绪状态
+    GET  /api/generations/models output 下已导出的 Live2D 模型列表
 
     # 角色管理（完整 CRUD，落盘到 assets/characters/*.json）
     GET    /api/characters
@@ -28,6 +32,8 @@ SUPPORTED_ENDPOINTS（降级模式下可用）：
     GET    /api/characters/{char_id}
     PUT    /api/characters/{char_id}
     DELETE /api/characters/{char_id}
+    POST   /api/characters/{char_id}/references   登记参考图 + 提取 embedding
+    POST   /api/characters/{char_id}/embedding    重算视觉 embedding
 
     # 生成 / 分层 / 导出 / 桌宠（真实调用 core、live2d_builder、drivers）
     POST /api/generate
@@ -37,6 +43,8 @@ SUPPORTED_ENDPOINTS（降级模式下可用）：
     POST /api/psd-plan                       # 返回静态模板，已诚实标注 applied=False
     POST /api/export/live2d                  # 支持下载 ZIP（download=true）
     POST /api/deploy/desktop
+    POST /api/upload                         # 图片上传（multipart）
+    POST /api/import/psd                     # 外部 PSD 逐层导入（multipart）
 
     # LLM 对话（含降级路径，不会静默失败）
     POST /api/chat
@@ -47,6 +55,7 @@ SUPPORTED_ENDPOINTS（降级模式下可用）：
     GET  /api/preview/{filepath:path}
     POST /api/tracking/start
     POST /api/tracking/stop
+    GET  /api/tracking/status
     WS   /ws/tracking
     WS   /api/ws
     GET  /ws/progress                        # 仅返回指引，引导到 /api/ws
@@ -57,6 +66,8 @@ NOT_IMPLEMENTED（仅 Go API 实现，本服务回 501）：
     POST /api/export/psd
     GET  /api/cache/stats
     POST /api/cache/clear
+    POST /api/models/optional/download
+    POST /api/models/optional/cancel
 
 启动方式:
     python api_server.py            # 默认只监听 127.0.0.1:8080
@@ -71,8 +82,10 @@ import time
 import uuid
 import shutil
 import asyncio
+import importlib
 import ipaddress
 import logging
+import platform
 import tempfile
 import zipfile
 import re
@@ -83,7 +96,9 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -227,6 +242,7 @@ class ChatRequest(BaseModel):
 
 class ExportLive2DRequest(BaseModel):
     character_id: str = ""
+    # 预留字段：当前只有 Live2D 包一种真实格式，本字段不被读取。
     format: str = "live2d-package"
     layers_dir: str = ""
     # 兼容前端两种调用方式：
@@ -449,6 +465,22 @@ def err(error: str, code: int = 400) -> JSONResponse:
     )
 
 
+@app.exception_handler(RequestValidationError)
+async def _on_validation_error(request, exc: RequestValidationError):
+    """参数校验失败也走统一响应信封。
+
+    FastAPI 默认回 ``{"detail": [...]}``，与本项目（以及 Go 服务的
+    ``models.Response``）的 ``{success, error, data}`` 信封不一致 ——
+    前端解析不到 ``error`` 字段，只能显示一句
+    "Request failed: 422"，看不到具体哪个字段不对。
+    """
+    problems = []
+    for item in jsonable_encoder(exc.errors()):
+        loc = ".".join(str(p) for p in item.get("loc", ()) if p != "body")
+        problems.append(f"{loc}: {item.get('msg', '')}")
+    return err("参数错误: " + "；".join(problems), 422)
+
+
 def _server_error(where: str, e: Exception) -> JSONResponse:
     """未预期异常统一出口（P2-4）：完整堆栈只写服务端日志，响应体给固定
     中文文案，不把异常原文（可能含绝对路径、上游 URL/Key 片段）回传客户端。
@@ -558,6 +590,182 @@ def _record_generation(result: Dict[str, Any]) -> None:
         pass
 
 
+# ---------- 运行时探测 ----------
+# 契约原则：/api/status 与 /api/diagnostics 只报告**实测**结果。
+#
+# 早期实现把 image_generator / python_env / segment_engine / live2d_builder
+# 一律硬编码成 available=True，于是「装了但跑不动」在 UI 上完全看不出来；
+# /api/models 又把 seedream/sensenova 硬编码成 False，用户配了 Key 仍然
+# 显示不可用。两边都是谎报，一律改为真探测。
+#
+# 探测要 import 模块、扫文件系统；前端会轮询 /api/status，每次都重跑会把
+# 响应拖到几百毫秒。依赖在进程生命周期内不会变，缓存 30s 足够。
+
+
+class _ProbeCache:
+    """探测结果的 TTL 缓存（进程内，非线程安全但只存不可变快照）。"""
+
+    def __init__(self) -> None:
+        self._items: Dict[str, tuple] = {}
+
+    def get(self, key: str, ttl: float, producer):
+        now = time.monotonic()
+        hit = self._items.get(key)
+        if hit is not None and now - hit[0] < ttl:
+            return hit[1]
+        value = producer()
+        self._items[key] = (time.monotonic(), value)
+        return value
+
+
+_PROBES = _ProbeCache()
+_PROBE_TTL = 30.0
+
+
+def _probe_python_env() -> Dict[str, Any]:
+    """解释器与核心依赖的真实状态（对齐 Go CheckPythonEnvironment）。
+
+    降级模式本身就是 Python 服务，所以「解释器可用」恒真；有意义的是
+    核心依赖（PIL/numpy）是否齐备 —— 缺了任何一个，分层与网格都跑不动。
+    """
+    issues: List[str] = []
+    for mod in ("PIL", "numpy"):
+        try:
+            importlib.import_module(mod)
+        except Exception as exc:
+            issues.append(f"缺少依赖: {mod}（{type(exc).__name__}）")
+    return {
+        "ok": not issues,
+        "issues": issues,
+        "version": sys.version.split()[0],
+        "executable": sys.executable,
+    }
+
+
+def _probe_local_generator() -> Dict[str, Any]:
+    """本地生成器链路是否就位（对齐 Go CheckLocalGeneratorStatus）。"""
+    if not (PROJECT_ROOT / "local_image_generator.py").is_file():
+        return {"ok": False, "detail": "本地生成器脚本不存在"}
+    if not (PROJECT_ROOT / "core" / "workflow.py").is_file():
+        return {"ok": False, "detail": "core/workflow.py 缺失"}
+    return {"ok": True, "detail": "v0.10.0 工作流就绪"}
+
+
+def _probe_segment_engine() -> Dict[str, Any]:
+    """前景（抠图）模型是否就位。
+
+    找不到 ONNX 权重时分层会退化为颜色启发式 —— 那是**可用但精度低**，
+    不是不可用。因此 available 仍为 True，缺口写进 detail，避免把
+    「降级」说成「不可用」。
+    """
+    try:
+        from core.segment_engine import isnet_onnx
+    except Exception as exc:
+        return {
+            "ok": False,
+            "detail": f"分层引擎不可导入: {type(exc).__name__}",
+            "degraded": True,
+        }
+    try:
+        model = isnet_onnx.find_model()
+    except Exception as exc:
+        model = None
+        detail = f"前景模型探测失败: {type(exc).__name__}"
+        return {"ok": True, "detail": detail, "degraded": True}
+    if model is not None:
+        return {"ok": True, "detail": f"ONNX 前景模型就位: {model.name}", "degraded": False}
+    return {
+        "ok": True,
+        "detail": "未找到 ONNX 前景模型，分层退化为颜色启发式（精度低）",
+        "degraded": True,
+    }
+
+
+def _probe_live2d_builder() -> Dict[str, Any]:
+    """Live2D 构建链路是否就位（领域层可导入即可）。"""
+    try:
+        from live2d_builder import pipeline as _pipeline  # noqa: F401
+    except Exception as exc:
+        return {"ok": False, "detail": f"live2d_builder 不可导入: {type(exc).__name__}"}
+    return {"ok": True, "detail": "cubism4"}
+
+
+def _probe_providers() -> Dict[str, Any]:
+    """图像生成 provider 的真实可用性。
+
+    数据源与 Go 侧 /api/providers 完全一致（同一个 ProviderRouter），
+    只是省掉了 subprocess 往返。
+    """
+    try:
+        from core.image_gen.router import ProviderRouter
+
+        router = ProviderRouter()
+        info = router.get_provider_info()
+        available = router.get_available_providers()
+    except Exception as exc:
+        logging.getLogger("api_server").warning("provider 探测失败: %s", exc)
+        return {"available": [], "registered": [], "detail": [], "query_ok": False}
+    return {
+        "available": available,
+        "registered": [i.get("name") for i in info if i.get("name")],
+        "detail": info,
+        "query_ok": True,
+    }
+
+
+def _probe_tracker() -> Dict[str, Any]:
+    """面捕组件的真实状态。
+
+    降级模式走 Python mediapipe（不是 Go 的 Rust 原生子进程），但检查项
+    的 key 必须与 Go 侧一致（tracker_exe / tracker_model / tracker_dll），
+    否则前端自检页在两种后端下显示的项目数会跳变。
+    """
+    detail: Dict[str, Any] = {}
+    try:
+        import mediapipe  # noqa: F401
+
+        detail["exe_ok"] = True
+        detail["exe_detail"] = "mediapipe 面捕模块可用"
+    except Exception as exc:
+        detail["exe_ok"] = False
+        detail["exe_detail"] = f"mediapipe 不可导入: {type(exc).__name__}"
+
+    try:
+        from drivers.face_tracker.mediapipe_tracker import _find_face_landmarker_model
+
+        model_path = _find_face_landmarker_model()
+        detail["model_ok"] = model_path is not None
+        detail["model_detail"] = model_path or "未找到 face_landmarker.task（面捕不可用）"
+    except Exception as exc:
+        detail["model_ok"] = False
+        detail["model_detail"] = f"面捕模型探测失败: {type(exc).__name__}"
+
+    try:
+        importlib.import_module("onnxruntime")
+
+        detail["dll_ok"] = True
+        detail["dll_detail"] = "onnxruntime 可用"
+    except Exception as exc:
+        detail["dll_ok"] = False
+        detail["dll_detail"] = f"onnxruntime 不可导入: {type(exc).__name__}"
+    return detail
+
+
+def _probe_output_writable() -> Dict[str, Any]:
+    """产物目录可写性：建临时文件再删掉（对齐 Go 的 write-probe）。"""
+    issues: List[str] = []
+    ok = True
+    try:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        probe = OUTPUT_DIR / ".write-probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except Exception as exc:
+        ok = False
+        issues.append(str(exc))
+    return {"ok": ok, "issues": issues}
+
+
 # ---------- 基础端点 ----------
 @app.get("/")
 async def root():
@@ -566,20 +774,54 @@ async def root():
 
 @app.get("/api/health")
 async def health_check():
+    """健康检查。
+
+    python_ok 是**安装验收的硬判据**：scripts/windows/verify_desktop_install.ps1
+    与 tests/e2e/checklist.md 都读 data.python_ok，缺字段会被判成 FAIL。
+    缺依赖时回 503 + 明确原因，避免「前端看到正常、点生成立刻崩」。
+    """
     uptime = time.time() - START_TIME
+    py = _PROBES.get("python_env", _PROBE_TTL, _probe_python_env)
+    if not py["ok"]:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "error": "Python 环境不可用：" + "；".join(py["issues"]),
+                "data": {
+                    "version": VERSION,
+                    "uptime": f"{int(uptime)}s",
+                    "python_ok": False,
+                    "hint": "请确认已安装依赖（pip install -r requirements.txt）后重启服务",
+                },
+            },
+        )
     return ok({
         "version": VERSION,
         "uptime": f"{int(uptime)}s",
+        "python_ok": True,
     }, "Live2D API 服务正常运行")
 
 
 @app.get("/api/status")
 async def get_system_status():
+    """系统状态：每个 service 的 available 都来自实测探测。"""
+    now = datetime.now().isoformat()
+    py = _PROBES.get("python_env", _PROBE_TTL, _probe_python_env)
+    gen = _PROBES.get("local_generator", _PROBE_TTL, _probe_local_generator)
+    seg = _PROBES.get("segment_engine", _PROBE_TTL, _probe_segment_engine)
+    l2d = _PROBES.get("live2d_builder", _PROBE_TTL, _probe_live2d_builder)
+
+    py_version = py["version"] if py["ok"] else "异常: " + "；".join(py["issues"])
     services = [
-        {"name": "image_generator", "available": True, "version": "pollinations+core", "last_checked": datetime.now().isoformat()},
-        {"name": "python_env", "available": True, "version": sys.version.split()[0], "last_checked": datetime.now().isoformat()},
-        {"name": "segment_engine", "available": True, "version": "v0.10.8", "last_checked": datetime.now().isoformat()},
-        {"name": "live2d_builder", "available": True, "version": "cubism4", "last_checked": datetime.now().isoformat()},
+        {"name": "image_generator", "available": bool(gen["ok"]),
+         "version": gen["detail"], "last_checked": now},
+        {"name": "python_env", "available": bool(py["ok"]),
+         "version": py_version, "last_checked": now},
+        {"name": "segment_engine", "available": bool(seg["ok"]),
+         "version": seg["detail"], "last_checked": now},
+        {"name": "live2d_builder", "available": bool(l2d["ok"]),
+         "version": l2d["detail"], "last_checked": now},
     ]
     return ok({
         "version": VERSION,
@@ -590,6 +832,33 @@ async def get_system_status():
 
 @app.get("/api/info")
 async def get_api_info():
+    """API 元信息。
+
+    features 不再写死：每项能力按实测探测给出，语义分层降级时如实标成
+    「颜色启发式分层」而不是仍宣称「语义分层」—— 元信息页写支持、实际
+    跑的是另一条路，这就是又一处「假承诺」。
+    """
+    seg = _PROBES.get("segment_engine", _PROBE_TTL, _probe_segment_engine)
+    l2d = _PROBES.get("live2d_builder", _PROBE_TTL, _probe_live2d_builder)
+    providers = _PROBES.get("providers", _PROBE_TTL, _probe_providers)
+
+    features: List[str] = []
+    if providers["available"]:
+        features.append("AI 图像生成")
+    else:
+        features.append("AI 图像生成不可用：没有可用的生成 provider")
+    if seg["ok"] and not seg.get("degraded"):
+        features.append("语义分层")
+    elif seg["ok"]:
+        features.append(f"颜色启发式分层（已降级：{seg['detail']}）")
+    else:
+        features.append(f"分层不可用：{seg['detail']}")
+    if l2d["ok"]:
+        features.append("Live2D 自动绑定")
+    else:
+        features.append(f"Live2D 自动绑定不可用：{l2d['detail']}")
+    features.append("角色管理")
+
     return ok({
         "version": VERSION,
         "name": "Live2D Master Agent",
@@ -600,23 +869,606 @@ async def get_api_info():
             "generate": "POST /api/generate",
             "characters": "GET /api/characters",
         },
-        "features": [
-            "AI 图像生成",
-            "语义分层",
-            "Live2D 自动绑定",
-            "角色管理",
-            "LLM 对话",
-        ],
+        "features": features,
     })
 
 
 @app.get("/api/models")
 async def get_models():
-    return ok([
-        {"id": "pollinations", "name": "Pollinations (免费)", "type": "image", "available": True},
-        {"id": "seedream", "name": "Seedream 4.0", "type": "image", "available": False},
-        {"id": "sensenova", "name": "商汤日日新", "type": "image", "available": False},
-    ])
+    """可用图像模型列表。
+
+    available 取自 ProviderRouter 的实测结果（配了 Key 的 seedream /
+    sensenova 会如实变为 true），不再写死。requires_key 告诉调用方
+    「缺什么才能启用」。
+    """
+    providers = _PROBES.get("providers", _PROBE_TTL, _probe_providers)
+    detail = {d.get("name"): d for d in providers.get("detail", []) if d.get("name")}
+    display = {
+        "pollinations": "Pollinations (免费)",
+        "seedream": "Seedream 4.0",
+        "sensenova": "商汤日日新",
+        "openai": "OpenAI 兼容端点",
+        "local_placeholder": "本地占位图（离线兜底）",
+    }
+    out = []
+    for pid, pname in display.items():
+        info = detail.get(pid, {})
+        out.append({
+            "id": pid,
+            "name": pname,
+            "type": "image",
+            "available": bool(info.get("available")),
+            "requires_key": bool(info.get("requires_key")),
+        })
+    return ok(out)
+
+
+# ---------- 环境自检 / 上游 provider / 可选重模型 ----------
+def _data_root() -> Path:
+    """用户数据根（与 Go config/desktop.go、scripts/optional_components.py 同源）。"""
+    env = os.environ.get("LIVE2D_DATA_DIR", "").strip()
+    return Path(env) if env else (Path.home() / "Live2DMasterAgent")
+
+
+# 可选重模型清单：与 Go services/model_download.go 的 optionalRegistry 保持一致。
+# 清单不一致的话，同一台机器上换后端会让自检页的可下载项列表变样。
+_OPTIONAL_COMPONENTS = [
+    {
+        "name": "sam2-hiera-small",
+        "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2_hiera_small.pt",
+        "rel_path": "sam2/sam2_hiera_small.pt",
+        "size_hint_mb": 178,
+        "note": "SAM2 语义分割（高精度分层，需另装 torch/torchvision）",
+        "requires_pkg": "torch,torchvision,transformers",
+    },
+]
+
+
+def _optional_component_state(c: Dict[str, Any]) -> Dict[str, Any]:
+    """单个可选重模型的状态：文件在不在就是 ready，不在就如实说明为什么拿不到。"""
+    dest = _data_root() / "hf-cache" / c["rel_path"]
+    ready = dest.is_file() and dest.stat().st_size > 0
+    return {
+        "name": c["name"],
+        "url": c["url"],
+        "rel_path": c["rel_path"],
+        "size_hint_mb": c["size_hint_mb"],
+        "note": c["note"],
+        "requires_pkg": c["requires_pkg"],
+        "state": "ready" if ready else "error",
+        "progress": 100.0 if ready else 0.0,
+        "downloaded_mb": round(dest.stat().st_size / (1 << 20), 1) if ready else 0.0,
+        "total_mb": float(c["size_hint_mb"]),
+        "message": "" if ready else (
+            "当前是 Python 降级服务，不提供在线下载；"
+            "请启动 Go API（/api/models/optional/download）后下载此可选模型。"
+        ),
+    }
+
+
+@app.get("/api/diagnostics")
+async def diagnostics():
+    """环境自检：逐项返回运行时状态，全部只读，不触发任何生成。
+
+    检查项的 key 与 Go 侧完全一致（backend / python / scripts_dir / output_dir /
+    tracker_exe / tracker_model / tracker_dll / bind_loopback），否则前端自检页
+    在两种后端下显示的项目数会跳变。
+    """
+    py = _PROBES.get("python_env", _PROBE_TTL, _probe_python_env)
+    tracker = _PROBES.get("tracker", _PROBE_TTL, _probe_tracker)
+    out = _PROBES.get("output_writable", _PROBE_TTL, _probe_output_writable)
+
+    checks = [
+        {"key": "backend", "label": "后端服务", "ok": True, "detail": f"{VERSION}（Python 降级模式）"},
+        {"key": "python", "label": "Python 解释器", "ok": bool(py["ok"]),
+         "detail": py["executable"], "issues": py["issues"]},
+        {"key": "scripts_dir", "label": "工程脚本目录", "ok": PROJECT_ROOT.is_dir(),
+         "detail": str(PROJECT_ROOT)},
+        {"key": "output_dir", "label": "产物目录可写", "ok": bool(out["ok"]),
+         "detail": str(OUTPUT_DIR), "issues": out["issues"]},
+        {"key": "tracker_exe", "label": "面捕程序", "ok": bool(tracker["exe_ok"]),
+         "detail": tracker["exe_detail"]},
+        {"key": "tracker_model", "label": "人脸关键点模型", "ok": bool(tracker["model_ok"]),
+         "detail": tracker["model_detail"]},
+        {"key": "tracker_dll", "label": "ONNX Runtime 运行库", "ok": bool(tracker["dll_ok"]),
+         "detail": tracker["dll_detail"]},
+        {"key": "bind_loopback", "label": "仅本机回环监听", "ok": _is_loopback(SERVER_HOST),
+         "detail": SERVER_HOST},
+    ]
+    return ok({
+        "version": VERSION,
+        "os": platform.system().lower(),
+        "host": SERVER_HOST,
+        "port": SERVER_PORT,
+        "checks": checks,
+        "python_path": py["executable"],
+        "output_dir": str(OUTPUT_DIR),
+    })
+
+
+@app.get("/api/providers")
+async def list_image_providers():
+    """图像生成上游 provider 的真实可用性（与 Go /api/providers 同源同构）。"""
+    providers = _PROBES.get("providers", _PROBE_TTL, _probe_providers)
+    return ok({
+        "available": providers["available"],
+        "registered": providers["registered"],
+        "query_ok": providers["query_ok"],
+    })
+
+
+@app.get("/api/models/optional")
+async def list_optional_models():
+    """可选重模型清单 + 当前状态（对齐 Go /api/models/optional）。"""
+    return ok({"components": [_optional_component_state(c) for c in _OPTIONAL_COMPONENTS]})
+
+
+@app.post("/api/models/optional/download")
+async def start_optional_model(payload: Dict[str, Any] = Body(default={})):
+    """在线下载重模型：仅 Go API 有实现（后台任务 + 断点续传 + SHA256）。"""
+    return not_implemented("可选重模型在线下载", "/api/models/optional/download")
+
+
+@app.post("/api/models/optional/cancel")
+async def cancel_optional_model(payload: Dict[str, Any] = Body(default={})):
+    """取消下载：仅 Go API 有实现。"""
+    return not_implemented("可选重模型下载取消", "/api/models/optional/cancel")
+
+
+@app.get("/api/generations/models")
+async def list_exported_models():
+    """列出 output 下全部已导出的 Live2D 模型（新→旧）。"""
+    models = []
+    try:
+        for path in OUTPUT_DIR.rglob("*.model3.json"):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            models.append({
+                "model3_json": str(path),
+                "output_dir": str(path.parent),
+                "model3_url": to_output_url(str(path)),
+                "name": path.parent.name,
+                "mod_time": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(),
+            })
+    except Exception as exc:
+        logging.getLogger("api_server").warning("扫描已导出模型失败: %s", exc)
+    models.sort(key=lambda m: m.get("mod_time") or "", reverse=True)
+    return ok({"models": models, "count": len(models)})
+
+
+# ---------- 上传与外部素材导入 ----------
+# 上限与白名单与 Go api/services/upload_service.go 保持一致（25MB / 5 种图片格式）。
+_UPLOAD_MAX_BYTES = 25 << 20
+_UPLOAD_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+_PSD_MAX_BYTES = 500 << 20
+
+
+def _has_multipart() -> bool:
+    """python-multipart 是否可用（requirements.txt 已声明，但装漏了会让 FastAPI
+    在**路由注册阶段**直接抛 RuntimeError）。"""
+    try:
+        import python_multipart  # noqa: F401
+
+        return True
+    except ImportError:
+        pass
+    try:
+        import multipart  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+def _register_multipart_route(path: str, handler: Any) -> None:
+    """注册需要 multipart 解析的路由。
+
+    python-multipart 缺失时，FastAPI 注册带 File/Form 参数的路由会抛
+    RuntimeError —— 那是**导入期**异常，会让整个服务起不来，一个可选功能
+    变成全站故障。缺依赖时改为注册明确报 503 的桩，其余端点照常可用。
+    """
+    if _has_multipart():
+        app.add_api_route(path, handler, methods=["POST"])
+        return
+
+    async def _multipart_unavailable() -> JSONResponse:
+        return err(
+            "该接口需要 python-multipart 依赖，请执行 pip install -r requirements.txt",
+            503,
+        )
+
+    app.add_api_route(path, _multipart_unavailable, methods=["POST"])
+
+
+def _sanitize_upload_name(name: str) -> str:
+    """只保留文件名中的安全字符，其余折叠为下划线（对齐 Go sanitizeUploadName）。"""
+    base = Path(name or "").stem.strip()
+    if not base:
+        base = "image"
+    out = "".join(
+        c if (c.isascii() and (c.isalnum() or c in "-_")) else "_" for c in base
+    )
+    return out[-64:] or "image"
+
+
+async def upload_image(file: UploadFile = File(...)):
+    """上传一张图片到 output/uploads/，返回服务器路径与 Web URL。"""
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in _UPLOAD_EXTS:
+        return err(f"不支持的图片格式 {ext!r}（允许: png/jpg/jpeg/webp/bmp）", 400)
+    data = await file.read()
+    if not data:
+        return err("缺少上传文件字段 file", 400)
+    if len(data) > _UPLOAD_MAX_BYTES:
+        return err(f"文件大小超出限制（最多 {_UPLOAD_MAX_BYTES >> 20} MB）", 400)
+
+    dest_dir = OUTPUT_DIR / "uploads"
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        return _server_error("创建上传目录", exc)
+    dest = dest_dir / (
+        f"upload_{int(time.time() * 1000)}_{_sanitize_upload_name(file.filename or '')}{ext}"
+    )
+    try:
+        dest.write_bytes(data)
+    except Exception as exc:
+        return _server_error("保存上传文件", exc)
+    return ok({"path": str(dest), "url": to_output_url(str(dest))}, "上传成功")
+
+
+_register_multipart_route("/api/upload", upload_image)
+
+
+def _import_psd_layers(psd_path: str, out_dir: str, preset: str) -> Dict[str, Any]:
+    """外部 PSD 逐层导出为整幅画布 PNG，并按图层名识别语义部件。
+
+    与 Go api/services/python_bridge.go 的 bridgeImportPSDScript 同逻辑：
+    底层在前、前景最后绘制；画布尺寸越界直接拒绝（Live2D 网格要求各层
+    共享同一画布，异尺寸会被 moc3 构建器以「画布尺寸不一致」拒绝）。
+    """
+    import re
+
+    from psd_tools import PSDImage
+
+    from core.psd.part_naming import preset_allows, recognize_part
+
+    psd = PSDImage.open(psd_path)
+    width, height = psd.width, psd.height
+    if width < 64 or height < 64 or width > 8192 or height > 8192:
+        raise ValueError(f"画布尺寸异常: {width}x{height}，需在 64~8192 之间")
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    leaves: List[Any] = []
+
+    def walk(group: Any) -> None:
+        for child in group:
+            if child.is_group():
+                walk(child)
+            else:
+                leaves.append(child)
+
+    walk(psd)
+
+    def group_path(node: Any) -> str:
+        names: List[str] = []
+        parent = node.parent
+        while parent is not None and parent is not psd and getattr(parent, "is_group", lambda: False)():
+            if parent.name:
+                names.append(parent.name)
+            parent = parent.parent
+        return "/".join(reversed(names))
+
+    layers: List[Dict[str, Any]] = []
+    for idx, child in enumerate(reversed(leaves)):  # 底层在前，前景最后绘制
+        if idx >= 500:
+            break
+        try:
+            comp = child.composite(viewport=psd.viewbox)
+        except Exception:
+            continue
+        if comp is None:
+            continue
+        comp = comp.convert("RGBA")
+        if not comp.getbbox():
+            continue
+        raw_name = child.name or "layer"
+        safe = re.sub(r"[^0-9A-Za-z_-]+", "_", raw_name)[:40] or "layer"
+        layer_path = out / f"{len(layers):03d}_{safe}.png"
+        comp.save(str(layer_path))
+        alpha_hist = comp.getchannel("A").histogram()
+        opaque = sum(alpha_hist[1:])
+        # 中/英/日图层名 -> 语义部件 + 左右侧向，为下游参数绑定提供稳定目标
+        named = recognize_part(raw_name)
+        layers.append({
+            "name": raw_name,
+            "part_name": named.get("part") or safe,
+            "part": named.get("part"),
+            "side": named.get("side"),
+            "mouth_vowel": named.get("mouth_vowel"),
+            "path": str(layer_path),
+            "pixel_count": opaque,
+            "group": getattr(child.parent, "name", "") or "",
+            "group_path": group_path(child),
+        })
+
+    kept = [layer for layer in layers if preset_allows(preset, layer["part"])]
+    return {
+        "ok": True,
+        "canvas": [width, height],
+        "layers_dir": str(out),
+        "layer_count": len(kept),
+        "layers": kept,
+        "preset": preset,
+        "total_found": len(leaves),
+        "filtered_count": len(layers) - len(kept),
+        "recognized_count": sum(1 for layer in kept if layer["part"]),
+    }
+
+
+async def import_psd(file: UploadFile = File(...), preset: str = Form("default")):
+    """导入外部 PSD：提取全部像素图层为整幅画布 PNG，供分层工作台与导出直接使用。"""
+    if not (file.filename or "").lower().endswith(".psd"):
+        return err("仅支持 .psd 文件", 400)
+    preset = (preset or "default").strip().lower()
+    if preset not in ("minimal", "default", "full"):
+        preset = "default"
+    data = await file.read()
+    if not data:
+        return err("缺少上传文件字段 file", 400)
+    if len(data) > _PSD_MAX_BYTES:
+        return err("PSD 文件超过 500MB 限制", 400)
+
+    upload_dir = OUTPUT_DIR / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    psd_path = upload_dir / f"psd_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}.psd"
+    psd_path.write_bytes(data)
+
+    out_dir = OUTPUT_DIR / f"psd_import_{uuid.uuid4().hex[:8]}"
+    try:
+        # psd-tools 逐层导出在超大 PSD 上可能较慢，放到线程池执行并给足超时。
+        result = await _to_thread_bounded(
+            _import_psd_layers, 600, str(psd_path), str(out_dir), preset
+        )
+    except ValueError as exc:
+        return err(str(exc), 400)
+    except ImportError:
+        return err("PSD 解析依赖缺失（psd-tools），请先安装依赖", 503)
+    except Exception as exc:
+        return _server_error("PSD 导入", exc)
+    return ok(result, "PSD 导入成功")
+
+
+_register_multipart_route("/api/import/psd", import_psd)
+
+
+_PNG_IMPORT_MAX_FILES = 200
+_PNG_IMPORT_EXTS = {".png", ".jpg", ".jpeg"}
+
+
+def _import_png_set(payloads: List[bytes], names: List[str]) -> Dict[str, Any]:
+    """把多张 PNG 组装成一个图层集目录。
+
+    与 Go api/services/upload_service.go 的 ImportPNGSet 同语义：所有图层统一
+    规范到**最大画布尺寸**（左上对齐）—— Live2D 网格要求各层共享同一画布，
+    异尺寸直接导出会被 moc3 构建器以「画布尺寸不一致」拒绝。
+
+    两遍扫描防内存放大：第一遍只读文件头拿最大画布（PIL 惰性打开，不解码
+    像素），第二遍逐张解码→贴到同尺寸画布→写盘→释放，任一时刻内存中只有
+    一张解码图。
+    """
+    import io
+
+    from PIL import Image
+
+    # ---- 第一遍：只读 header，取最大画布尺寸与安全文件名 ----
+    metas: List[tuple] = []
+    max_w = 0
+    max_h = 0
+    for payload, filename in zip(payloads, names):
+        try:
+            with Image.open(io.BytesIO(payload)) as img:
+                width, height = img.size
+        except Exception as exc:
+            raise ValueError(f"文件 {filename} 无法导入: {exc}") from exc
+        max_w = max(max_w, width)
+        max_h = max(max_h, height)
+        metas.append((Path(filename).stem, _sanitize_upload_name(filename)))
+
+    out_dir = OUTPUT_DIR / f"png_import_{uuid.uuid4().hex[:8]}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- 第二遍：逐张解码 → 贴到统一画布 → 写盘 ----
+    layers: List[Dict[str, Any]] = []
+    for index, ((stem, base), payload) in enumerate(zip(metas, payloads)):
+        with Image.open(io.BytesIO(payload)) as img:
+            canvas = Image.new("RGBA", (max_w, max_h), (0, 0, 0, 0))
+            canvas.paste(img.convert("RGBA"), (0, 0))
+            dest = out_dir / f"{index:03d}_{base}.png"
+            canvas.save(str(dest))
+            opaque = sum(canvas.getchannel("A").histogram()[1:])
+        layers.append({
+            "name": stem,
+            "path": str(dest),
+            "url": to_output_url(str(dest)),
+            "order": index,
+            "pixel_count": int(opaque),
+        })
+
+    return {
+        "layers_dir": str(out_dir),
+        "layers": layers,
+        "layer_count": len(layers),
+        "canvas": [max_w, max_h],
+    }
+
+
+async def import_pngs(files: List[UploadFile] = File(...)):
+    """导入多张 PNG（按提交顺序作为图层集）。
+
+    与 Go api/handlers/handlers.go 的 ImportPNGs 同契约：字段名是 ``files``，
+    可多文件；所有图层规范到同一画布尺寸。
+    """
+    if not files:
+        return err("缺少上传文件字段 files", 400)
+    if len(files) > _PNG_IMPORT_MAX_FILES:
+        return err(f"单次最多导入 {_PNG_IMPORT_MAX_FILES} 张 PNG", 400)
+
+    payloads: List[bytes] = []
+    names: List[str] = []
+    total = 0
+    for f in files:
+        ext = Path(f.filename or "").suffix.lower()
+        if ext not in _PNG_IMPORT_EXTS:
+            return err(f"不支持的图片格式 {ext!r}（图层导入允许: png/jpg/jpeg）", 400)
+        data = await f.read()
+        if not data or len(data) > _UPLOAD_MAX_BYTES:
+            return err(
+                f"文件 {f.filename} 大小超出限制（最多 {_UPLOAD_MAX_BYTES >> 20} MB）", 400
+            )
+        total += len(data)
+        payloads.append(data)
+        names.append(f.filename or "layer")
+    # 单文件虽 ≤25MB，但 200 个文件的 multipart 信封可达数 GB，必须封顶。
+    if total > _PSD_MAX_BYTES:
+        return err(
+            f"批量导入总量超出限制（累计最多 500MB，当前约 {total >> 20}MB）", 400
+        )
+
+    try:
+        result = await _to_thread_bounded(_import_png_set, 600, payloads, names)
+    except ValueError as exc:
+        return err(str(exc), 400)
+    except Exception as exc:
+        return _server_error("PNG 导入", exc)
+    return ok(result, "PNG 导入完成")
+
+
+_register_multipart_route("/api/import/pngs", import_pngs)
+
+
+def _extract_visual_embedding(image_path: Path) -> List[float]:
+    """提取视觉 embedding（CLIP 可用时用 CLIP，否则退化为直方图）。"""
+    from PIL import Image
+
+    from core.character.embedding import EmbeddingExtractor
+
+    with Image.open(image_path) as img:
+        return EmbeddingExtractor().extract(img.convert("RGB"))
+
+
+def _resolve_uploaded_image(image_path: str) -> Optional[Path]:
+    """把参考图路径解析到 uploads 目录内（对齐 Go ValidateUploadedImagePath）。"""
+    if not image_path:
+        return None
+    uploads_dir = (OUTPUT_DIR / "uploads").resolve()
+    candidate = Path(image_path)
+    if not candidate.is_absolute():
+        candidate = OUTPUT_DIR / candidate
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(uploads_dir)
+    except (ValueError, OSError, RuntimeError):
+        return None
+    return resolved if resolved.is_file() else None
+
+
+@app.post("/api/characters/{char_id}/references")
+async def add_character_reference(char_id: str, req: Dict[str, Any]):
+    """为角色登记某个视角的参考图，并尽力提取视觉 embedding。
+
+    参考图路径必须位于 uploads 目录内（与 Go ValidateUploadedImagePath 同约束），
+    否则调用方可以借这个端点读取本机任意文件。
+    """
+    try:
+        path = _safe_char_path(char_id)
+    except ValueError:
+        return err("非法角色 ID", 400)
+    if not path.exists():
+        return err(f"角色 {char_id} 不存在", 404)
+    view = str(req.get("view") or "front").strip().lower()
+    if view not in ("front", "side", "back"):
+        return err(f"未知参考图视角: {view}（允许 front/side/back）", 400)
+    resolved = _resolve_uploaded_image(str(req.get("image_path") or ""))
+    if resolved is None:
+        return err("图片不存在或不在 uploads 目录内，请先通过 /api/upload 上传", 400)
+
+    with open(path, "r", encoding="utf-8") as f:
+        char = json.load(f)
+    references = char.get("references")
+    if not isinstance(references, dict):
+        references = {}
+    references[view] = str(resolved)
+    char["references"] = references
+    char["updated_at"] = datetime.now().isoformat()
+
+    # embedding 提取尽力而为：失败时参考图路径已在卡上，前端可稍后重算。
+    embedding_extracted = False
+    note = ""
+    try:
+        embedding = await _to_thread_bounded(_extract_visual_embedding, 120, resolved)
+        char["visual_embedding"] = embedding
+        embedding_extracted = True
+    except Exception as exc:
+        logging.getLogger("api_server").warning("参考图 embedding 提取失败: %s", exc)
+        note = "参考图已登记，但 embedding 提取失败（可稍后重算）"
+
+    _save_character(char)
+    data: Dict[str, Any] = {"card": char, "embedding_extracted": embedding_extracted}
+    if note:
+        data["embedding_note"] = note
+    return ok(data, "参考图已登记")
+
+
+@app.post("/api/characters/{char_id}/embedding")
+async def recompute_character_embedding(char_id: str):
+    """为角色重新提取视觉 embedding，返回 {has_embedding, dim, reason?}。"""
+    try:
+        path = _safe_char_path(char_id)
+    except ValueError:
+        return err("非法角色 ID", 400)
+    if not path.exists():
+        return err(f"角色 {char_id} 不存在", 404)
+    with open(path, "r", encoding="utf-8") as f:
+        char = json.load(f)
+
+    references = char.get("references") or {}
+    image_path = ""
+    for view in ("front", "side", "back"):
+        if references.get(view):
+            image_path = references[view]
+            break
+    if not image_path and char.get("image_url"):
+        candidate = _resolve_uploaded_image(str(char["image_url"]))
+        if candidate is not None:
+            image_path = str(candidate)
+    if not image_path:
+        return ok({
+            "has_embedding": False,
+            "dim": 0,
+            "reason": "角色没有任何参考图，无法提取视觉 embedding",
+        })
+
+    try:
+        embedding = await _to_thread_bounded(_extract_visual_embedding, 120, Path(image_path))
+    except FileNotFoundError:
+        return ok({
+            "has_embedding": False,
+            "dim": 0,
+            "reason": "参考图文件不存在，请重新上传",
+        })
+    except Exception as exc:
+        logging.getLogger("api_server").warning("embedding 重算失败: %s", exc)
+        return err("embedding 提取失败，请稍后重试", 500)
+
+    char["visual_embedding"] = embedding
+    char["updated_at"] = datetime.now().isoformat()
+    _save_character(char)
+    return ok({"has_embedding": True, "dim": len(embedding)}, "embedding 已更新")
 
 
 @app.get("/api/expressions")
@@ -1412,6 +2264,8 @@ class _TrackerState:
     running = False
     lock = None  # threading.Lock，延迟初始化
     params: Dict[str, float] = {}
+    blendshapes: Dict[str, float] = {}
+    head_rotation: Dict[str, float] = {}
     error: str = ""
 
     # 面捕 WS 连接计数：面捕参数是本机摄像头的高频推流，必须限制并发连接数，
@@ -1439,6 +2293,8 @@ class _TrackerState:
         cls.thread = None
         cls.running = False
         cls.params = {}
+        cls.blendshapes = {}
+        cls.head_rotation = {}
         cls.error = ""
 
 
@@ -1462,10 +2318,33 @@ def _tracking_loop() -> None:
             if _TrackerState.lock:
                 with _TrackerState.lock:
                     _TrackerState.params = params
+                    # 原始 blendshapes / 头旋转一并留存：Go 侧 native_bridge
+                    # 推的 tracking_frame 里也带这两项，前端按同一协议解析。
+                    _TrackerState.blendshapes = dict(blends)
+                    _TrackerState.head_rotation = dict(rot)
             time.sleep(1 / 30)
         except Exception as e:
             _TrackerState.error = str(e)
             time.sleep(0.5)
+
+
+@app.get("/api/tracking/status")
+async def tracking_status():
+    """面捕运行状态（对齐 Go /api/tracking/status）。
+
+    降级模式没有 Rust 原生子进程，source 标为 mediapipe；smoothing 取
+    BlendShapeMapper 的默认平滑系数，deadzone 恒为 0（Python 侧未实现死区）。
+    """
+    tracker = _PROBES.get("tracker", _PROBE_TTL, _probe_tracker)
+    return ok({
+        "running": bool(_TrackerState.running),
+        "available": bool(tracker["exe_ok"] and tracker["model_ok"]),
+        "enabled": True,
+        "source": "mediapipe",
+        "camera_id": 0,
+        "smoothing": 0.5,
+        "deadzone": 0,
+    })
 
 
 @app.post("/api/tracking/start")
@@ -1611,6 +2490,76 @@ class _GenericWSState:
             cls.clients = max(0, cls.clients - 1)
 
 
+async def _ws_receive_loop(websocket: WebSocket) -> None:
+    """通用 WS 通道的接收循环：ping/pong + ack。"""
+    while True:
+        data = await websocket.receive_text()
+        try:
+            msg = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        msg_type = msg.get("type", "")
+        if msg_type == "ping":
+            await websocket.send_json({
+                "type": "pong",
+                "timestamp": datetime.now().isoformat(),
+            })
+        else:
+            await websocket.send_json({
+                "type": "ack",
+                "data": {"received": msg_type},
+                "timestamp": datetime.now().isoformat(),
+            })
+
+
+async def _ws_tracking_pusher(websocket: WebSocket) -> None:
+    """在通用 WS 通道上推送原生面捕帧。
+
+    协议与 Go 侧 native_bridge 推的 tracking_frame 一致
+    （web/lib/native-tracker.ts 只认 /api/ws 上的 tracking_frame）：
+        {"type": "tracking_frame", "data": {live2d_params, ...}, "time": <ms>}
+
+    早先本端点只有一个阻塞的 receive 循环，推帧无处可去 —— 前端连上了
+    却永远收不到帧，降级模式下表现为「连着但模型不动」。
+    """
+    last_sent = 0.0
+    while True:
+        if not _TrackerState.running:
+            await asyncio.sleep(1 / 30)
+            continue
+        params: Dict[str, float] = {}
+        blendshapes: Dict[str, float] = {}
+        head_rotation: Dict[str, float] = {}
+        if _TrackerState.lock:
+            with _TrackerState.lock:
+                params = dict(_TrackerState.params)
+                blendshapes = dict(_TrackerState.blendshapes)
+                head_rotation = dict(_TrackerState.head_rotation)
+        if not params:
+            await asyncio.sleep(1 / 30)
+            continue
+        now = time.monotonic()
+        fps = round(1.0 / max(now - last_sent, 1e-6), 1) if last_sent else 0.0
+        last_sent = now
+        stamp = int(time.time() * 1000)
+        data: Dict[str, Any] = {
+            "source": "mediapipe",
+            "timestamp": stamp,
+            "fps": fps,
+            "live2d_params": params,
+        }
+        if blendshapes:
+            data["blendshapes"] = blendshapes
+        if head_rotation:
+            data["head_rotation"] = head_rotation
+        await websocket.send_json({
+            "type": "tracking_frame",
+            "data": data,
+            "time": stamp,
+        })
+        await asyncio.sleep(1 / 30)
+
+
 @app.websocket("/api/ws")
 async def websocket_endpoint(websocket: WebSocket):
     # 与 /ws/tracking 同一道 Origin 闸门：跨站页面不得建立 WS 连接。
@@ -1623,32 +2572,30 @@ async def websocket_endpoint(websocket: WebSocket):
         return
     try:
         await websocket.accept()
+        await websocket.send_json({
+            "type": "connected",
+            "data": {"version": VERSION},
+            "timestamp": datetime.now().isoformat(),
+        })
+        # 接收与推帧并发：接收循环负责 ping/pong，推帧循环负责 tracking_frame。
+        receiver = asyncio.create_task(_ws_receive_loop(websocket))
+        pusher = asyncio.create_task(_ws_tracking_pusher(websocket))
         try:
-            await websocket.send_json({
-                "type": "connected",
-                "data": {"version": VERSION},
-                "timestamp": datetime.now().isoformat(),
-            })
-            while True:
-                data = await websocket.receive_text()
-                try:
-                    msg = json.loads(data)
-                    msg_type = msg.get("type", "")
-                    if msg_type == "ping":
-                        await websocket.send_json({
-                            "type": "pong",
-                            "timestamp": datetime.now().isoformat(),
-                        })
-                    else:
-                        await websocket.send_json({
-                            "type": "ack",
-                            "data": {"received": msg_type},
-                            "timestamp": datetime.now().isoformat(),
-                        })
-                except json.JSONDecodeError:
-                    pass
-        except WebSocketDisconnect:
-            pass
+            done, _pending = await asyncio.wait(
+                {receiver, pusher}, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                if task.cancelled():
+                    continue
+                exc = task.exception()
+                if exc is not None and not isinstance(exc, WebSocketDisconnect):
+                    raise exc
+        finally:
+            for task in (receiver, pusher):
+                if not task.done():
+                    task.cancel()
+    except WebSocketDisconnect:
+        pass
     finally:
         _GenericWSState.release()
 

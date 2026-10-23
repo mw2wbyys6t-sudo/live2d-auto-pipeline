@@ -136,6 +136,18 @@
   `tools/probe_multiband_axis_order.py` 与评审 F-06），网格键形与 warp 变形器都在用。
   剩下的是**语义**判断：把「头部转动 × 身体转动」合成一条多轴带会让脖子同时受两级
   转动影响，是否符合美术预期需要确认，因此暂不生成。
+- **绑定输入的层名 = 语义部件名**：绑定（骨骼绑定 / 变形器 / 参数键形）完全按**层名**解析 ——
+  `live2d_builder` 的 `LAYER_BONE_MAP` 认 `hair_back`/`eye_left`，`DeformerHierarchy` 的
+  targets 认 `hair_front`/`eyeball_l`。语义分层路径的层名本来就是这些名字，绑定成立；
+  但 **K-means 回退路径**的层名是 `layer_000` 这类通用序号名，语义识别算出来的部件名
+  （`part_name_en`）此前**没有被回写到正式绑定输入** —— 头发不绑 `Hair_Back`、眼睛不绑 `Eye_L`，
+  参数键形整片失效，骨骼解析只能退到默认值或几何猜测。
+  现在 `core/workflow.py` 的 `_rigging_layer_key()` 会把**已识别出的**语义部件名用作层键
+  （识别不出时保持原名，绝不凭空编造；重名加 `N_` 前缀，因为 `live2d_builder` 的
+  `_normalise` 会剥掉前导数字前缀，语义不丢）。见 `tests/unit/test_rigging_layer_key.py`。
+  **仍存的边界**：K-means 回退路径的部件识别本身只是颜色/位置启发式（`core/segment_engine/
+  part_identifier.py`），识别精度有限 —— 语义回写让「识别到的语义」不再丢失，但不会让
+  识别变得更准；真正准的语义只有语义分层路径能给。
 - **表情形变走 warp 变形器，同一个部件的多个参数合成一条「多轴带」**：内核里一个网格只能挂
   一个参数带（眼睛已被双眼球键形、嘴与眉已被头部三轴键形占满），一个变形器也只能挂一个带，
   所以口的「开合 × 口型 × 大小」、眉的「上下 × 角度 × 形状」必须压成一条多轴带
@@ -286,14 +298,35 @@
   （Windows 下摄像头设备不可共享，浏览器拿不到画面）。前端 `web/lib/native-tracker.ts` 连接
   `/api/ws` 订阅 `tracking_frame`；`POST /api/tracking/start|stop`、`GET /api/tracking/status`
   为控制与状态接口。浏览器内 MediaPipe 面捕（`web/lib/face-tracker.ts`）已移除。
-  降级实现 `api_server.py` 仍保留 `/api/tracking/*` 与 `/ws/tracking`（Python + MediaPipe），
-  与 Go 的原生子进程是两条独立路径。
+  降级实现 `api_server.py` 保留 `/api/tracking/*` 与 `/ws/tracking`（Python + MediaPipe），
+  与 Go 的原生子进程是两条独立采集路径，但**对前端的协议已经统一**：
+  降级模式同样在 `/api/ws` 上广播 `tracking_frame`（`data.live2d_params` + `blendshapes` +
+  `head_rotation`，与 Go 的 `native_bridge` 同构）。此前降级模式的 `/api/ws` 只有一个阻塞的
+  接收循环，前端能连上却永远收不到帧 —— 表现为「连着但模型不动」。
 - 「Launch Desktop Pet」按钮已接通（`POST /api/deploy/desktop`）：真实可用的前提仍是
   Windows + `live2d-py` + 已通过官方内核验收的模型目录。
 
 ## 6. API 层
 
-- `api_server.py` 是 Go 服务的降级替代实现，其多数 POST 处理器为**桩**（仅回 202）。
+- `api_server.py` 是 Go 服务的降级替代实现。**它不是「多数 POST 都是桩」**：实测 21 个 POST
+  端点里 16 个是真实实现，剩下 5 个（`/api/see-through`、`/api/export/psd`、`/api/cache/clear`、
+  `/api/models/optional/download`、`/api/models/optional/cancel`）统一回 **501 + `go_endpoint` 指引**，
+  不回 202 假成功。降级模式的边界是「这些能力只有 Go API 有真实实现」，不是「大部分接口没写」。
+- 降级模式现已与 Go 侧**对齐前端实际调用的全部端点**（此前 8 个返回 404，导致健康页误报
+  「无法连接后端」）：`GET /api/diagnostics`、`GET /api/providers`、`GET /api/models/optional`、
+  `GET /api/generations/models`、`GET /api/tracking/status`、`POST /api/upload`、
+  `POST /api/import/psd`、`POST /api/import/pngs`、`POST /api/characters/:id/references`、
+  `POST /api/characters/:id/embedding`。端点对齐由「前端路径字面量 × 后端路由表」的全量对账
+  核过（不是逐个端点手查）。
+- 参数校验失败（422）现在也走统一响应信封 `{success, error, data}`。FastAPI 默认回
+  `{"detail": [...]}`，前端解析不到 `error` 字段，只能显示一句 "Request failed: 422"；
+  Go 侧一直是走 `models.Response` 的 —— 这是又一处 Go/Python 信封不一致。
+- `/api/health` 现在带 `data.python_ok`（安装验收脚本与 e2e checklist 的硬判据，缺字段会被判 FAIL）；
+  依赖缺失时回 503 而不是「一切正常」。
+- `/api/status` 与 `/api/models` 的 `available` 改为**实测探测**（不再硬编码 true/false）：
+  服务可用性看真实探测结果，模型可用性看 `ProviderRouter` 的 provider 状态（配了 Key 就变 true）。
+  `/api/info` 的 `features` 同样改为按探测给出：语义分层降级时如实标成
+  「颜色启发式分层（已降级：…）」，不再一边写着「语义分层」一边跑的是另一条路。
 - 聊天会话存储为内存实现，**无 TTL/淘汰**。
 - v0.10.1 新增（Go）：`GET /api/generations/latest`、`POST /api/segment`、`POST /api/upload`、
   `POST /api/characters/:id/references`、`POST /api/characters/:id/embedding`；`/output/*filepath`

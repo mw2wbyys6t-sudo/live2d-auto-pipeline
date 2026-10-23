@@ -90,6 +90,33 @@ def derive_deployment_status(
     }
 
 
+#: 语义识别给出的「无法判定」标记。落到层名上等于没有语义。
+_UNKNOWN_PART_NAMES = frozenset({"unknown", "unclassified", "未分类", ""})
+
+
+def _rigging_layer_key(info: Dict[str, Any]) -> str:
+    """绑定用的层键：优先语义部件名。
+
+    绑定（骨骼绑定 / 变形器 / 参数键形）完全按**层名**解析：
+    ``live2d_builder`` 的 ``LAYER_BONE_MAP`` 认 ``hair_back`` / ``eye_left``，
+    ``DeformerHierarchy`` 的 targets 认 ``hair_front`` / ``eyeball_l``。
+
+    语义分层路径的层名本来就是这些名字，所以绑定本来就是对的；
+    但 **K-means 回退路径**的层名是 ``layer_000`` 这类通用序号名 ——
+    语义识别算出来的部件名（``part_name_en``）没被回写到正式绑定输入，
+    于是头发不绑 Hair_Back、眼睛不绑 Eye_L，参数键形整片失效，
+    骨骼解析只能退到默认值或几何猜测。
+
+    这里只做一件事：把**已识别出的语义部件名**用作层键；识别不出时保持
+    原名（质心推断仍可兜底），绝不凭空编造名字。
+    """
+    name = str(info.get("name") or "").strip()
+    semantic = str(info.get("part_name_en") or "").strip()
+    if semantic and semantic.lower() not in _UNKNOWN_PART_NAMES:
+        return semantic
+    return name
+
+
 class WorkflowEngine:
     """JSON-state-machine-based workflow engine.
 
@@ -586,7 +613,19 @@ class WorkflowEngine:
                 layer_opacity: Dict[str, float] = {}
                 for info in layer_result["layers"]:
                     path = info["path"]
-                    name = info.get("name") or Path(path).stem
+                    name = _rigging_layer_key(info)
+                    if not name:
+                        name = Path(path).stem
+                    # 重名保护：同一个语义部件可能对应多个层（K-means 里两簇头发）。
+                    # 直接用同一个键会静默覆盖、丢掉先来的层。加序号前缀即可 ——
+                    # live2d_builder 的 _normalise 会剥掉前导数字前缀
+                    # （"2_hair" -> "hair"），语义不丢，这也正是图层 PNG 现有的
+                    # 命名约定（000_hair_back.png）。
+                    if name in layers_for_rig:
+                        suffix = 2
+                        while f"{suffix}_{name}" in layers_for_rig:
+                            suffix += 1
+                        name = f"{suffix}_{name}"
                     try:
                         layers_for_rig[name] = Image.open(path).convert("RGBA")
                     except Exception as exc:
