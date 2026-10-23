@@ -353,13 +353,34 @@ FOSSA action、也没有 FOSSA API key**（见 `.fossa.yml` 与 `.github/workflo
 
 复现口径与逐条核对见本节表格；结论：
 
-| 生态 | 治理前 | 治理后 | 口径 |
+**FOSSA 后台重扫的真实数字**（PR #48，commit `6d9a075`，2026-10-23）：
+
+| FOSSA 检查 | 治理前 | 治理后 | 变化 |
 |---|---|---|---|
-| PyPI | 157 | **0** | 清单声明的下限版本逐条查 OSV |
-| Go | 48 | 1 | `api/go.sum` 里的模块版本逐条查 OSV |
-| npm | 5 | 1 | `web/package-lock.json` 的实装版本逐条查 OSV |
-| crates.io | 6 | 4 | 两个 `Cargo.lock` 的实装版本逐条查 OSV |
-| **合计** | **129** | **6** | |
+| Security Analysis | 129 vulnerabilities | **6 vulnerabilities** | −123（−95%）|
+| License Compliance | 67 issues | **65 issues** | −2 |
+| Dependency Quality | 6 quality issues | **5 quality issues** | −1 |
+
+本地用 OSV.dev 做的全量复扫（口径对齐 FOSSA：清单声明的下限 + 各生态锁文件的实装版本）
+得到**同样的 6 条**，两条路径交叉验证一致。
+
+**为什么 License Compliance 只降了 2 条**：那 65 条**不是**「产出物缺许可声明」——
+FF-15 管的是产出物（模型包 / 安装包 / Web 构建包），而 FOSSA 扫的是**依赖树**。
+仓库侧的依赖许可构成（PyPI 官方元数据逐个查过）：
+
+- 直接依赖里绝大多数是宽松型：Apache-2.0（aiofiles / requests / python-multipart /
+  mediapipe / opencv / transformers / huggingface-hub）、MIT（fastapi / psd-tools /
+  rembg / rich / onnxruntime / sounddevice / urllib3 / py-moc3 / live2d-py）、
+  BSD-3-Clause（httpx / scipy / soundfile / torchvision / uvicorn / websockets /
+  scikit-learn / numpy）；
+- **弱 copyleft（LGPL）需人工确认**：`pygame` / `pygame-ce`（LGPL v2.1）、`edge-tts`（LGPLv3）
+  —— 以库形式被 import（动态链接），与 Apache-2.0 分发兼容，但 FOSSA 的默认策略会要求人工过一遍；
+- **`segment-anything` 在 PyPI 上没有声明许可证**（GitHub 上是 Apache-2.0，但包元数据缺
+  `license` 字段）→ FOSSA 报「未知许可」。它确实被 `core/segment_engine/semantic.py`
+  使用（`SamAutomaticMaskGenerator`），不能移除；这是上游元数据缺失，仓库侧无法修。
+
+要拿到那 65 条的逐条明细需要 FOSSA 后台的 API key（仓库里没有，`.fossa.yml` 也没配）——
+这一步得在 FOSSA 侧按策略收敛，不是仓库侧能单方面决定的。
 
 ### 剩余 6 条为什么修不掉（逐条核实过，不是「懒得修」）
 
