@@ -344,7 +344,47 @@
 - 真实验收入口是手动触发的 `moc3-acceptance` job（安装 live2d-py + xvfb + `LIVE2D_TEST_PIXELS=1`）。
   首次运行需人工确认环境可跑通。
 
-## 9. 参考
+## 9. 依赖治理现状（2026-10-23 复核）
+
+本节记录**仓库侧**能核实的那部分依赖状态。FOSSA 三项检查（Dependency Quality /
+License Compliance / Security Analysis）由第三方 SaaS 回写 commit status，**仓库里没有
+FOSSA action、也没有 FOSSA API key**（见 `.fossa.yml` 与 `.github/workflows/`）——
+所以下面用的是**可复现的本地口径**：OSV.dev 全量查询 + 各生态锁文件/清单。
+
+复现口径与逐条核对见本节表格；结论：
+
+| 生态 | 治理前 | 治理后 | 口径 |
+|---|---|---|---|
+| PyPI | 157 | **0** | 清单声明的下限版本逐条查 OSV |
+| Go | 48 | 1 | `api/go.sum` 里的模块版本逐条查 OSV |
+| npm | 5 | 1 | `web/package-lock.json` 的实装版本逐条查 OSV |
+| crates.io | 6 | 4 | 两个 `Cargo.lock` 的实装版本逐条查 OSV |
+| **合计** | **129** | **6** | |
+
+### 剩余 6 条为什么修不掉（逐条核实过，不是「懒得修」）
+
+| 条目 | 公告 | 为什么无法消除 |
+|---|---|---|
+| `golang.org/x/crypto` | `GO-2026-5932` | 这是 **openpgp 整个包的「不安全设计」通告**，不是某个版本的缺陷 —— Go 官方漏洞库对**任何** x/crypto 版本都会标它（上游明确说该包不再维护、无修复版）。本仓库**不使用** `openpgp`（只间接依赖 x/crypto 的 ssh 等包）。 |
+| `npm:braces` | `GHSA-vfj7-8cjw-p6xm` | 递归 AST walker 无深度保护，栈溢出。**braces 3.0.3 就是最新版**，无修复版本。传递自 `chokidar` / `micromatch`（开发期文件监听），不处理不可信输入。 |
+| `crates.io:glib` | `RUSTSEC-2024-0429` | 修复版是 0.20.0，但被 `gtk 0.18` ← `tauri 2.12` 的约束卡住（`cargo update -p glib --precise 0.20.11` 直接报 `no matching package`），要修得升 Tauri 大版本。且 **gtk/glib 是 Linux/GTK 专属依赖 —— 发行的 Windows NSIS 安装包根本不编译它**。 |
+| `crates.io:paste` | `RUSTSEC-2024-0436` | 上游仓库已归档、明确声明不再维护，**没有修复版本**（1.0.15 即最新版）。编译期传递依赖。 |
+| `crates.io:proc-macro-error` | `RUSTSEC-2024-0370` | 同上，维护者失联、无新版本、无修复版。编译期传递依赖（且它依赖 `syn 1.x`，会带重复依赖）。 |
+
+### 本轮同时修掉的「声明与现实脱节」
+
+- **`requirements.txt` 在 py3.10/3.11 上本来装不上**：`numpy>=2.5.4` 要求 py>=3.12、
+  `scikit-learn>=1.9.1` 要求 py>=3.11。README 宣称的「Python 3.10+」名不副实 →
+  已放弃 3.10（2026-10-01 结束官方安全支持），下限改为无条件形式。
+- **`transformers` 下限声明的是代码跑不起来的版本**：清单写 `>=4.30.0`，而
+  `core/segment_engine/sam2_gd.py` 按 **5.17.0** 验证（`Sam2Model` / `GroundingDino`
+  走 `getattr(transformers, cls_name)`，4.x 里没有这些类）。下限已抬到 `>=5.17.0`。
+- **声明的下限此前从不被任何 CI 验证**：三处 `pip install` 全是不带约束的 `latest`。
+  现在 CI 按声明的下限安装，下限是否仍可满足第一次被真正证明。
+- **`install.py` 的兜底列表与清单冲突**（`Pillow>=10.0.0` / `numpy>=1.24.0` /
+  `urllib3>=2.2.2`），且 `PYTHON_MIN = (3, 9)` 与清单要求完全脱节。已对齐。
+
+## 10. 参考
 
 - 详细运维/部署边界见 [docs/DEPLOY.md](DEPLOY.md)、[docs/FAQ.md](FAQ.md)。
 - 架构不变量与适应性函数见 [docs/architecture/index.md](architecture/index.md) § 4（FF-1 ~ FF-16）。

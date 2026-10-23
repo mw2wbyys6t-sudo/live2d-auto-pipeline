@@ -13,8 +13,8 @@
   <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.8-ff69b4?style=flat-square" alt="version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="license"></a>
 <a href="https://app.fossa.com/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline?ref=badge_shield" alt="FOSSA Status"><img 
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10+-blue?style=flat-square" alt="python"></a>
-  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square" alt="go"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11+-blue?style=flat-square" alt="python"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat-square" alt="go"></a>
   <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16-black?style=flat-square" alt="nextjs"></a>
 </p>
 
@@ -185,7 +185,7 @@ cd desktop && cargo tauri build --bundles nsis
 # 产物：desktop/target/release/bundle/nsis/Live2D Master Agent_<version>_x64-setup.exe
 ```
 
-**只想要一个轻量 exe 调试**（不含运行时，需本机 Python 3.10+）：
+**只想要一个轻量 exe 调试**（不含运行时，需本机 Python 3.11+）：
 
 ```bash
 ./scripts/build_desktop.sh

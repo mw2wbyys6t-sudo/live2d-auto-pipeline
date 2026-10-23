@@ -4,6 +4,97 @@
 
 ---
 
+## [Unreleased] — 2026-10-23 — 代号「Dependency Truth」
+
+> **本版目标**：把 FOSSA 三项告警（Security Analysis / License Compliance / Dependency
+> Quality）从「第三方后台报的数」变成**仓库侧可核实、可复现的状态**。所有版本下限的取舍都
+> 逐条查过权威源（OSV.dev / PyPI / Go module proxy / crates.io），不做无依据的越级抬升。
+
+### 🔴 修复（会直接坑到用户）
+
+- **Next.js 未授权 RCE（CVE 级，CRITICAL）**：锁定的 `next@16.4.0` 命中 3 条 2026-10-22
+  公布的公告 —— `GHSA-673q-mjm6-r5xr`（`use cache` 函数返回 typed array 时的未授权远程代码执行，
+  CVSS v4 `VC:H/VI:H/VA:H/SC:H/SI:H`）、`GHSA-2464-fhr4-w9xw`（Image Optimization 未授权 RCE）、
+  `GHSA-p3m5-59mp-jv5r`（App Router + Server Actions 拒绝服务）。**全部在 16.4.1 修复**
+  （16.4.1 / 16.4.2 经 OSV.dev 复核均为 0 条）。已升到 `next@16.4.1`，锁文件同步更新
+  （含 `libc` 字段，保留 glibc/musl 区分，避免 musl 系统误装 glibc 二进制）。
+- **Python 依赖下限的 CVE 面**：Pillow 12.3.0 命中 **39 条**（堆溢出 / 越界读 / 解码炸弹 DoS）、
+  cryptography 42.0.0 命中 **15 条**、python-multipart 0.0.18 命中 **14 条**、
+  rembg 2.0.0 命中 **7 条**、requests 2.32.3 命中 **4 条**、torch 2.0.0 命中 **28 条**、
+  transformers 4.30.0 命中 **50 条**。下限全部抬到修复版本（逐条见 `requirements.txt` 注释）。
+- **`transformers` 下限声明的是一个代码跑不起来的版本**：清单写 `transformers>=4.30.0`，
+  而 `core/segment_engine/sam2_gd.py` 明确按 **transformers 5.17.0** 验证
+  （`Sam2Model` / `GroundingDino` 走 `getattr(transformers, cls_name)`，4.x 里根本没有这些类）。
+  下限抬到 `>=5.17.0` 后既消掉 50 条 CVE，也让声明与代码实际要求一致。
+
+### 🟡 支撑版本下限（已声明但从未被任何 CI 验证）
+
+- `requirements.txt` 声明的下限此前**在 CI 里零验证** —— 三处 `pip install` 全是不带约束的
+  `latest`。现在 CI 按**声明的下限**安装（`"Pillow>=13.0.0"` 这种形式），下限是否仍可满足/
+  仍可安装，第一次被 CI 真正证明一次。
+- `install.py` 的兜底安装列表仍写着 `Pillow>=10.0.0` / `numpy>=1.24.0` / `urllib3>=2.2.2` 等旧值，
+  与清单直接冲突（单独装会拉到带 CVE 的版本）；已对齐。其 `PYTHON_MIN` 原本是 `(3, 9)`，
+  与清单实际要求完全脱节（3.9 走到装依赖那步必然失败）。
+- **Go 侧 48 条 advisory 清零到 1 条**：`golang.org/x/crypto` / `net` / `sys` / `text` 与
+  `quic-go` 升到修复版本。x/net 的三条都是 **HTTP/2 服务端 DoS**（Trailer 内存放大 /
+  畸形帧头转发 / 大量流耗 CPU），本服务支持 `LIVE2D_API_HOST=0.0.0.0` 暴露到局域网，值得修。
+  为此把 Go 工具链下限从 1.25 抬到 **1.26**（x/crypto 0.56+ / x/net 0.60+ 要求 go>=1.26），
+  CI 三个工作流的 `setup-go` 同步升级。
+- **Rust 侧**：两个 `Cargo.lock` 全量 `cargo update`（`ort` 2.0.0-rc.14 → rc.15、
+  `webpki-root-certs` 1.0.9 → 1.0.10 等）。
+
+### 🟡 支持版本收敛（两条，都是「保不住就别假装」）
+
+- **放弃 Python 3.10**：Python 3.10 已于 **2026-10-01** 结束官方安全支持；而 Pillow 13.0.0 /
+  rembg 2.0.86 / scikit-learn 1.9 官方均要求 `>=3.11` —— 保留 3.10 就只能钉在带 CVE 的版本上。
+  改动的连带面：README 徽章、`install.py` 的 `PYTHON_MIN`、CI 矩阵（3.10 / 3.11 / 3.12 → 3.11 / 3.12）。
+  顺带修掉一个**存量硬伤**：`requirements.txt` 声明的 `numpy>=2.5.4` 要求 py>=3.12，
+  `scikit-learn>=1.9.1` 要求 py>=3.11 —— 也就是说**这份清单在 py3.10/3.11 上本来就装不上**，
+  README 宣称的「Python 3.10+」早已名不副实。
+- **Go 最低版本 1.21 → 1.26**（同上，为修 x/net 的 HTTP/2 DoS）。
+
+### 🟢 许可证与合规（FF-15 首次真正落地）
+
+- **FF-15 此前是纸面承诺**：`docs/architecture/index.md` 写着「Release 打包前钩子：
+  `scripts/check-license-bundle.sh`（待补）」，而该脚本**从不存在**。现已实现：
+  校验产出物内的许可全文是否与仓库根 `LICENSE` **逐字节一致**（根目录若有 `NOTICE` 一并校验），
+  不合规即**退出码 1 阻断发布**。
+- **产出物真的带上许可了**：此前导出的模型包、安装包、Web 构建包**都不含任何许可声明** ——
+  用户把模型包再分发出去时没有许可文本。现在：
+  - 新增 `core/license_bundle.py` 作为**唯一真源**，Python 降级服务与 Go 导出桥共用；
+  - 导出模型包写入 `LICENSE`（`tests/unit/test_license_bundle.py` 锁住）；
+  - `web/package.json` 加 `prebuild` 钩子，从仓库根复制许可进 `web/public/`（不提交副本，避免漂移）；
+  - `scripts/build_desktop_bundle.py` 把许可写进 `desktop/bundle/` 根（安装后的 `$RESOURCE` 根）；
+  - `deploy/installer/desktop.iss` 的 `[Files]` 安装许可全文；
+  - CI 加 FF-15 校验（PR 级查 `web/public`，发布级查 `web/out` + `desktop/bundle` + `api/webui/dist`）。
+- **两个 crate 补 SPDX 标识**：`desktop/Cargo.toml` 与 `native/face_tracker/Cargo.toml` 此前
+  **没有 license 字段**（`cargo metadata` 里是 `null`），crates.io 与许可扫描都拿不到本 crate
+  的许可信息 —— 已补 `license = "Apache-2.0"`。
+- **文档残留修正**：`docs/index.html` 的徽章仍写着「Open Source MIT」（ADR-001 自 2026-09-22
+  起已是 Rev.4 / Apache-2.0）→ 改为 Apache-2.0。
+
+### 🐛 顺手修掉的存量 bug
+
+- **`drivers/audio/capture.py` 的可选依赖保护写窄了**：`except ImportError` 没能兜住
+  `sounddevice` 在「装了但系统缺 PortAudio」时抛的 **OSError**（它载入即 `dlopen libportaudio`）。
+  这个 OSError 会逃出导入链，把**整条导入链打挂** —— 表现为「只是没装麦克风依赖，
+  结果所有测试都收集失败」。已改为 `except (ImportError, OSError)`。
+  （`sounddevice` 0.4.6 与 0.5.6 行为相同，是存量问题，与本次版本抬升无关。）
+
+### 📊 治理结果（OSV.dev 全量复扫，口径对齐 FOSSA）
+
+| 生态 | 治理前 | 治理后 |
+|---|---|---|
+| PyPI | 157 条 | **0 条** |
+| Go | 48 条 | 1 条 |
+| npm | 5 条 | 1 条 |
+| crates.io | 6 条 | 4 条 |
+| **合计** | **129 条** | **6 条** |
+
+剩余 6 条**全部没有修复版本**，逐条原因见 `docs/LIMITATIONS.md` §10。
+
+---
+
 ## [v0.10.8] — 2026-10-17 — 代号「Honest Desktop」
 
 > **本版目标**：让安装包"装完真的能用"，并把"看起来能用、实际没有"的东西清掉。

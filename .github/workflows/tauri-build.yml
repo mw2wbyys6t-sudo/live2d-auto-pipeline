@@ -42,7 +42,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           # 模块在 api/ 子目录：内置缓存默认只认根目录 go.sum，会刷告警；
           # 缓存由后面的 Cache Go modules 步骤按 api/go.sum 处理。
           cache: false
@@ -160,6 +160,16 @@ jobs:
       - name: Show Tauri config
         run: Get-Content desktop/tauri.conf.json
         shell: pwsh
+
+      # FF-15「License 与署名完整性」发布闸门：对外分发的产出物必须内含与
+      # 仓库根逐字节一致的 Apache-2.0 许可全文（ADR-001 Rev.4）。
+      # 三个落点：Web 静态站（进 Go 二进制内嵌）、桌面资源根（安装后 $RESOURCE）、
+      # 桌面 exe 同目录（Go 后端按同目录找 onnxruntime.dll 的惯例）。
+      # 任一落点缺失或内容漂移 → 阻断构建，不产出不可合规分发的安装包。
+      - name: FF-15 license bundle check (release gate)
+        run: |
+          bash scripts/check-license-bundle.sh web/out desktop/bundle api/webui/dist
+        shell: bash
 
       - name: List assembled bundle (top level)
         run: Get-ChildItem -Force desktop/bundle | Select-Object Name, Length

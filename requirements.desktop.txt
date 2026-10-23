@@ -17,28 +17,32 @@
 # 无 cp312 轮子的风险；live2d-py 按 ADR-007 钉死 0.8.1（1.0.0 移除 live2d.v3，
 # 与验收链不兼容）。
 #
+# 下限抬升与 CVE 的对应关系见 requirements.txt 同名注释（逐条经 OSV.dev 核实，
+# 2026-10-23）。Pillow 13.0.0 / rembg 2.0.86 / scikit-learn 1.9 均要求
+# Python>=3.11 —— 与本清单的目标 Python 3.12 相容。
+#
 # 版本号单一真源见 core/version.py。
 
 # ===== 核心 =====
-Pillow>=12.3.0
-numpy>=2.5.4
-requests>=2.32.3
+Pillow>=13.0.0
+numpy>=2.4.6
+requests>=2.34.2
 urllib3>=2.8.0
 httpx>=0.28.1
 aiohttp>=3.14.5
-aiofiles>=23.0
-websockets>=12.0
+aiofiles>=25.1.0
+websockets>=17.2
 psd-tools>=1.24.0
-scipy>=1.10.0
+scipy>=1.15.3
 scikit-learn>=1.9.1
-cryptography>=42.0.0
+cryptography>=50.0.2
 rich>=13.0.0
 
 # ===== 图像处理 / 分割 / PSD =====
 # headless 版：无需 GUI 依赖，桌面版 UI 由 Tauri 承载。
 opencv-python-headless>=4.9.0.80
 onnxruntime>=1.14.0
-rembg[cpu]>=2.0.0
+rembg[cpu]>=2.0.86
 
 # ===== Live2D moc3 编译与官方内核验收 =====
 py-moc3>=0.1.0
@@ -47,9 +51,9 @@ live2d-py==0.8.1
 # ===== 桌宠 / 音频 / TTS / 面捕 =====
 pygame>=2.5.0; python_version < "3.14"
 pygame-ce>=2.5.0; python_version >= "3.14"
-sounddevice>=0.4.6
-soundfile>=0.12.0
-edge-tts>=7.2.8
+sounddevice>=0.5.6
+soundfile>=0.14.0
+edge-tts>=7.3.1
 
 # mediapipe（Python 版面捕：drivers/face_tracker + 桌宠跟随）：
 #   下限 >=0.10.30 是硬要求 —— 从该版本起 mediapipe 改为 py3-none-win_amd64
@@ -63,8 +67,14 @@ edge-tts>=7.2.8
 mediapipe>=0.10.30,<0.10.32
 
 # ===== AI：SAM2 语义分割 / 文本与视觉 embedding（CPU torch） =====
-torch>=2.0.0
+# torch>=2.14.1: 2.0.0 命中 28 条 CVE（含 torch.load 任意代码执行一类），
+#                  2.13.0 起全部修复；2.14.1 是当前修复版本
+# transformers>=5.17.0: 4.30.0 命中 50 条 CVE；且 core/segment_engine/sam2_gd.py
+#                  本就按 transformers 5.17.0 验证（Sam2Model / GroundingDino
+#                  走 getattr(transformers, cls_name)），4.x 根本没有这些类 ——
+#                  旧下限声明的是一个代码跑不起来的版本。
+torch>=2.14.1
 torchvision>=0.15.0
-transformers>=4.30.0
+transformers>=5.17.0
 segment-anything>=1.0
 huggingface-hub>=0.17.0

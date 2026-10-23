@@ -1,1 +1,10 @@
 .next-dev
+
+# 构建期从仓库根复制的许可证副本（真源是仓库根的 LICENSE）。
+# 不提交副本：提交了就会漂移 —— 改了根目录那份而忘了副本，分发出去的
+# 许可文本就是旧的。prebuild 每次构建都会重新复制，保持逐字节一致。
+public/LICENSE
+public/LICENSE.txt
+public/COPYING
+public/NOTICE
+public/NOTICE.txt

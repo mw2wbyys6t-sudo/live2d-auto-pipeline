@@ -173,7 +173,7 @@
 | **FF-12** | **桌宠启动时间** | `python -m core.cli pet` 到窗口出现 | ≤ 2.5s（SSD）/ ≤ 4s（HDD）| 本地脚本计时 | 每发版 | 最小化导入子集 | ADR-006 |
 | **FF-13** | **三栈构建总时长** | GitHub Actions 三 job 总墙钟 | ≤ 20 分钟 | Actions UI | 每次 PR | 优化缓存 / 并行度 | ADR-002 |
 | **FF-14** | **端到端生成耗时（CPU）** | Prompt → model3.zip 全流程（i7-12700）| ≤ 10 分钟 | 每周定时任务 | 每周 | 评估是否移除某个 Amodal 层 | ADR-003 |
-| **FF-15** | **License 与署名完整性** | 产出物（桌宠安装包、导出模型包、Web 构建包）内是否含 ADR-001 (Rev.4) 要求的 Apache-2.0 许可全文 | 100% 包含，且文本与根目录 `LICENSE` 文件的 **Apache-2.0 License** 原文逐字节一致（义务：保留版权+许可声明；若根目录存在 `NOTICE` 则一并保留）| Release 打包前钩子：`scripts/check-license-bundle.sh`（待补）| 每次发版 | 阻断发布 | ADR-001 |
+| **FF-15** | **License 与署名完整性** | 产出物（桌宠安装包、导出模型包、Web 构建包）内是否含 ADR-001 (Rev.4) 要求的 Apache-2.0 许可全文 | 100% 包含，且文本与根目录 `LICENSE` 文件的 **Apache-2.0 License** 原文逐字节一致（义务：保留版权+许可声明；若根目录存在 `NOTICE` 则一并保留）| Release 打包前钩子：`scripts/check-license-bundle.sh`（**已落地**，PR 级查 `web/public`，发布级查 `web/out` + `desktop/bundle` + `api/webui/dist`；不合规退出码 1 阻断发布）| 每次发版 | 阻断发布 | ADR-001 |
 | **FF-16** | **Go→Python 命令注入安全** | `validatePath` 通过 / 失败比例 + shell meta 字符逃逸检测 | 0 失败（任何失败即高危） | `api/services/python_bridge_test.go` + `python_bridge_inject_test.go`（**已落地**，由 CI `go-build` job 的 `go test -v ./...` 覆盖 `./services` 注入红线用例）| 每次 PR | 阻断合并 + 人工审查 | ADR-002 |
 
 ---
