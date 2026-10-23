@@ -187,7 +187,18 @@
   只占 2.3%（0.069 s，降级仅省 0.032 s）。函数名 `_export_preview_layers` 有误导性 ——
   它写的就是用户拿去 PS 编辑的 `layers/*.png`。全局降级会让每张层图体积 +20%，
   代价大于收益，故**不做**，转而优化了上面的 `generate_occlusion_map`。
-- **生成管线端到端 11.92 s → 9.61 s**（中位，3 次，累计 −19%）。
+- **`synthesize_face_geometry` 复用眼睛层合成结果**（`core/segment_engine/composer.py::_eye_solid`）：
+  同一侧眼睛在一次合成里被算 **3 遍** —— `_synthesize_tear` 调一次 `_eye_anchor`、
+  `_synthesize_cheek` 又调一次、`_synthesize_eyelid` 自己再合成一遍，每遍都是
+  66 万像素的浮点 alpha 合成。改为按 `tuple(sources)` 缓存（**不能按 index**：
+  两个调用方传的层顺序相反，见下条）：`synthesize_face_geometry` **0.932 → 0.791 s**，
+  `_synthesize_tear` **0.303 → 0.165 s**。产物逐字节一致（130 个产物 SHA256 对比）。
+- **记录一处既存不一致（未修）**：`_eye_anchor` 用原始 `EYELID_SOURCES` 顺序
+  （`irides → eyewhite → eyes`，虹膜在底层），`_synthesize_eyelid` 用 `_draw_order`
+  排序后（`eyes → eyewhite → irides`，虹膜在顶层）—— 两者合成的其实是**不同的图**；
+  且 `eye_left`/`eye_right` 不在 `STANDARD_LAYER_ORDER` 里。修它会改变产物像素，
+  属产品决策，故本轮只记录（见性能报告 §0.1）。
+- **生成管线端到端 11.92 s → 9.41 s**（中位，3 次，累计 −21%）。
 - **Go 侧补上 pprof（默认关闭，双重闸门）**：必须 `LIVE2D_PPROF=1` **且**监听回环
   才挂载；设了变量却监听 `0.0.0.0` 只打警告不挂载。此前 `grep pprof api/` 无结果，
   只能测 RSS。现在可拿到堆分解：`HeapAlloc` 仅 2.29 MB，`Sys` 12.7 MB 里

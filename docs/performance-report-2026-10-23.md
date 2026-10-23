@@ -39,7 +39,9 @@
 | `check_overlap` | 0.705 s | **0.159 s** | 4.4× |
 | `numpy.ufunc.reduce` 调用 | 19,750 次 / 1.875 s | 15,456 次 / **0.787 s** | 2.4× |
 | `compose`（图层合成） | 2.822 s | **1.563 s** | 1.8× |
-| **生成管线端到端** | **11.92 s** | **9.61 s** | **−2.31 s（−19%）** |
+| `synthesize_face_geometry` | 0.932 s | **0.791 s** | 1.2× |
+| `_synthesize_tear` | 0.303 s | **0.165 s** | 1.8× |
+| **生成管线端到端** | **11.92 s** | **9.41 s** | **−2.51 s（−21%）** |
 
 ### PNG 压缩级别：评估后**否决**（原估算有误）
 
@@ -101,6 +103,31 @@
 4. **`generate_occlusion_map` 预计算包围盒**（`core/segment_engine/composer.py`）。
    把「两两循环里对每对重算 `np.where`」改成「每层算一次、循环里只比 4 个整数」，
    `compose` 2.822 s → 1.563 s。产物逐字节一致（见上节验证口径）。
+5. **`synthesize_face_geometry` 复用眼睛层合成结果**（同文件 `_eye_solid`）。
+   同一侧眼睛在一次合成里被算 **3 遍**：`_synthesize_tear` 调一次 `_eye_anchor`、
+   `_synthesize_cheek` 又调一次、`_synthesize_eyelid` 自己再合成一遍 ——
+   每遍都是 66 万像素的浮点 alpha 合成。改为按 `tuple(sources)` 缓存后：
+   `synthesize_face_geometry` 0.932 → 0.791 s，`_synthesize_tear` 0.303 → 0.165 s。
+   **缓存键刻意用 `tuple(sources)` 而不是 index**，原因见下节。
+
+### 顺带发现的一处既存不一致（**未修**，会改变产物）
+
+`_eye_anchor` 与 `_synthesize_eyelid` 传给 `_alpha_over` 的层顺序**是相反的**：
+
+| 调用方 | 顺序 | 含义 |
+|---|---|---|
+| `_eye_anchor`（原始 `EYELID_SOURCES`） | `irides → eyewhite → eyes` | 虹膜在**底**层 |
+| `_synthesize_eyelid`（`_draw_order` 排序后） | `eyes → eyewhite → irides` | 虹膜在**顶**层 |
+
+alpha 叠加顺序不同会改变像素结果。所以「找眼睛包围盒」和「画闭眼图」用的是两张
+**不同的合成图**。包围盒（不透明区域）不受影响，但闭眼图的睫毛线判定依赖颜色，
+理论上会受影响。
+
+另外 `eye_left` / `eye_right` 不在 `STANDARD_LAYER_ORDER` 里，会被 `_draw_order`
+排到最后 —— 也就是说两个路径对这层的处理也不一致。
+
+**本轮不修**：修它会改变产物像素，属于产品决策而非性能优化，且当前产物的
+视觉质量已通过验收。记录在此供后续单独评估。
 
 ### pprof 给出的堆内部分解（此前只能测 RSS）
 

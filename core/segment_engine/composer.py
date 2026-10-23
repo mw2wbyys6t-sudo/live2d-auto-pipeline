@@ -390,10 +390,14 @@ class LayerComposer:
         dest = Path(out) if out is not None else Path(
             next(iter(layers.values()))["path"]).parent
         self._array_cache: Dict[str, Optional[np.ndarray]] = {}
+        # 眼睛层合成缓存（见 _eye_solid）：同一侧眼睛在一次合成里被三个
+        # 调用方各合成一遍，缓存后只算一次。生命周期与 _array_cache 一致。
+        self._eye_cache: Dict[tuple, tuple] = {}
         try:
             return self._synthesize_layers(layers, h, w, dest, made)
         finally:
             self._array_cache = None
+            self._eye_cache = None
 
     def _synthesize_layers(self, layers: Dict[str, Dict], h: int, w: int,
                            dest: Path, made: List[str]) -> List[str]:
@@ -438,15 +442,43 @@ class LayerComposer:
                 made.append(name)
         return made
 
+    def _eye_solid(self, layers: Dict[str, Dict], h: int, w: int,
+                   sources) -> tuple:
+        """按给定层名列表合成该侧眼睛层，返回 ``(eye, solid)``，**带缓存**。
+
+        为什么要缓存：同一次 ``synthesize_face_geometry`` 里，同一侧眼睛会被合成
+        三遍 —— ``_synthesize_tear`` 调一次 ``_eye_anchor``、``_synthesize_cheek``
+        又调一次，``_synthesize_eyelid`` 自己再合成一遍。每次都是 66 万像素的
+        浮点 alpha 合成，实测三次合计约 0.2 s。
+
+        缓存键取 ``tuple(sources)`` 而不是 index：**不同调用方传的顺序不同** ——
+        ``_eye_anchor`` 用 ``EYELID_SOURCES`` 的原始顺序，``_synthesize_eyelid``
+        用 ``_draw_order`` 排序后的顺序，两者是**相反**的（原始是
+        ``irides → eyewhite → eyes``，排序后是 ``eyes → eyewhite → irides``）。
+        alpha 叠加顺序会改变结果，所以只能各缓存各的，不能混用。
+
+        ``eye`` 与 ``solid`` 在调用方都是只读（唯一一处 ``eye[...]`` 取值），
+        共享安全。
+        """
+        key = tuple(sources)
+        cache = getattr(self, "_eye_cache", None)
+        if cache is not None and key in cache:
+            return cache[key]
+
+        eye = self._alpha_over(
+            [self._layer_array(layers, n) for n in sources], h, w)
+        solid = None if eye is None else (eye[..., 3] == 255)
+        result = (eye, solid)
+        if cache is not None:
+            cache[key] = result
+        return result
+
     def _eye_anchor(self, layers: Dict[str, Dict], h: int, w: int,
                     index: int) -> Optional[tuple]:
         """该侧眼睛**不透明**像素的包围盒 ``(x0, y0, x1, y1)``；没有眼睛层则 None。"""
         _name, sources = self.EYELID_SOURCES[index]
-        eye = self._alpha_over([self._layer_array(layers, n) for n in sources], h, w)
-        if eye is None:
-            return None
-        solid = eye[..., 3] == 255
-        if not solid.any():
+        eye, solid = self._eye_solid(layers, h, w, sources)
+        if eye is None or solid is None or not solid.any():
             return None
         ys, xs = np.nonzero(solid)
         return (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
@@ -579,11 +611,8 @@ class LayerComposer:
         * 皮肤部分 = 脸层自己的像素（该区域已被 inpaint 成肤色）；
         * 睫毛部分 = 眼球层自己的像素，叠在眼球层上完全一样。
         """
-        eye = self._alpha_over([self._layer_array(layers, n) for n in sources], h, w)
-        if eye is None:
-            return None
-        solid = eye[..., 3] == 255
-        if not solid.any():
+        eye, solid = self._eye_solid(layers, h, w, sources)
+        if eye is None or solid is None or not solid.any():
             return None
 
         face = self._layer_array(layers, "face")
