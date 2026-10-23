@@ -94,6 +94,41 @@
 - **文档残留修正**：`docs/index.html` 的徽章仍写着「Open Source MIT」（ADR-001 自 2026-09-22
   起已是 Rev.4 / Apache-2.0）→ 改为 Apache-2.0。
 
+### 📦 安装包体积：把误打进去的 torch 组移出（约 −500MB）
+
+- **`requirements.desktop.txt` 把 torch 组全量打进了安装包，与项目自己的设计契约矛盾。**
+  `core/capabilities.py` 的模块文档明确写着「基础包只带零前提主链路所需的轻依赖；
+  SAM2/torch、rembg、mediapipe…等重能力**不进包**，由应用内按需下载」，
+  `api/services/capability_manager.go` 的 `capabilityPlans` 也已实现 `sam2_gd`
+  组的一键 pip 安装 —— 但清单里同时写着 `torch>=2.14.1`、`torchvision`、
+  `transformers`、`segment-anything`、`huggingface-hub`，等于**两条路都走了一遍**。
+- **而且装了也用不上**：`core/segment_engine/semantic.py::_resolve_backend` 的 `auto`
+  要满足「`HAS_TORCH` **且**找到 SAM 权重」才选 `sam`，而装配脚本只内置 ISNet 权重
+  （`models/rembg/isnet-anime.onnx`），桌面端的 `auto` **恒走 `isnet`**。
+  实测在无 torch 环境下 `_resolve_backend("auto") == "isnet"`，与有 torch 时行为一致。
+- **代价**：torch 的 win_amd64 wheel 约 119MB（PyPI 实测），解压进 site-packages
+  约 400–500MB —— 占 1.4GB 安装包的三分之一左右，换不到任何默认功能。
+- **处置**：把这 5 个包移出 `requirements.desktop.txt`（清单 29 → 24 条），
+  改为应用内「能力」页按需下载。**桌面端默认链路零变化**（本来就是 isnet）。
+  同步修正三处互相打架的文档，并把 e2e 验收从「要求 torch 存在」改成
+  「断言 torch **不**在包内」（`TORCH_ABSENT_OK`）—— 有它反而说明装配回退了。
+
+### 🔍 Rust 依赖多版本：查清了，结论是不收敛
+
+- `desktop/Cargo.lock` 有 **20 个包存在多版本并存**（`syn` 三个大版本
+  1.0.109 / 2.0.119 / 3.0.9、`base64` 三个、`schemars` 三个、`toml_edit` 三个等）。
+  用 `cargo tree -d` 反查后确认：**这些几乎全部来自 Tauri 的传递依赖**，
+  版本分裂由上游 `Cargo.toml` 的 `^x` 约束决定，仓库侧没有杠杆 ——
+  例如 `toml_edit` 的三个版本分别被 `proc-macro-crate` 的 1.3.1 / 2.0.2 / 3.5.0
+  锁定，而这三个又分别被 `glib-macros` / `gtk3-macros` / `num_enum_derive` 要求。
+- **其中一大半在 Windows 构建里根本不参与编译**：全量锁文件 407 个包，
+  指定 `--target x86_64-pc-windows-msvc` 后只剩 **280 个**，
+  且 GTK 系（`glib` / `gtk` / `cairo` / `webkit2gtk` / `soup3`）为 **0 处**。
+  Linux / macOS / Android 专属依赖共 127 个，占全量的 31%。
+- **结论**：不做 `cargo update -p` 强行统一。proc-macro 生态按大版本分裂是常态，
+  强行拉平会直接破坏上游编译；真要减少体积，正确方向是升级 Tauri 大版本，
+  成本与风险都远高于收益。
+
 ### 🐛 顺手修掉的存量 bug
 
 - **`drivers/audio/capture.py` 的可选依赖保护写窄了**：`except ImportError` 没能兜住

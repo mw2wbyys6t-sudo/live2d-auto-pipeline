@@ -144,7 +144,11 @@ if os.path.isdir(_app) and _app not in sys.path:
 # 冒烟校验：required 缺失即失败；optional 缺失只告警（按需下载/机型相关）。
 SMOKE_REQUIRED = ["PIL", "numpy", "scipy", "sklearn", "cv2", "psd_tools",
                   "onnxruntime", "core.version", "live2d_builder.pipeline"]
-SMOKE_OPTIONAL = ["torch", "mediapipe", "mediapipe.tasks.python.vision", "rembg",
+# 注意：torch / torchvision / transformers 刻意**不在**这两个列表里。
+# 它们不随包分发（见 requirements.desktop.txt 与 core/capabilities.py 的设计
+# 契约），由应用内按需下载，缺失是**预期状态** —— 留在 optional 里只会让每次
+# 装配日志刷出一条无意义的 [warn]。
+SMOKE_OPTIONAL = ["mediapipe", "mediapipe.tasks.python.vision", "rembg",
                   "edge_tts", "sounddevice", "soundfile", "pygame", "live2d"]
 
 

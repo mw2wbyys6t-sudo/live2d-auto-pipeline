@@ -66,15 +66,28 @@ edge-tts>=7.3.1
 #   模型 face_landmarker.task 由装配脚本下载到 <res>/models/。
 mediapipe>=0.10.30,<0.10.32
 
-# ===== AI：SAM2 语义分割 / 文本与视觉 embedding（CPU torch） =====
-# torch>=2.14.1: 2.0.0 命中 28 条 CVE（含 torch.load 任意代码执行一类），
-#                  2.13.0 起全部修复；2.14.1 是当前修复版本
-# transformers>=5.17.0: 4.30.0 命中 50 条 CVE；且 core/segment_engine/sam2_gd.py
-#                  本就按 transformers 5.17.0 验证（Sam2Model / GroundingDino
-#                  走 getattr(transformers, cls_name)），4.x 根本没有这些类 ——
-#                  旧下限声明的是一个代码跑不起来的版本。
-torch>=2.14.1
-torchvision>=0.15.0
-transformers>=5.17.0
-segment-anything>=1.0
-huggingface-hub>=0.17.0
+# ===== AI：SAM2 语义分割 —— 刻意**不**内置（由应用内按需下载） =====
+#
+# torch / torchvision / transformers / segment-anything / huggingface-hub 这一组
+# **不随安装包分发**。三条证据都指向「不该打包」：
+#
+# 1) 设计契约本来就不含它们：core/capabilities.py 的模块文档写着
+#    「基础包（requirements.desktop.txt）只带零前提主链路所需的轻依赖；
+#      SAM2/torch、rembg、mediapipe、ASR、TTS、diffusers 等重能力不进包，
+#      由应用内按需下载器落 site-packages / 用户缓存」；
+#    api/services/capability_manager.go 的 capabilityPlans 也已接线
+#    sam2_gd 组的一键安装。此前清单把整组打进安装包，与自己的设计文档直接矛盾。
+#
+# 2) 装了也用不上：Segmenter 的 auto 后端要「HAS_TORCH **且**找到 SAM 权重」
+#    才选 sam（core/segment_engine/semantic.py::_resolve_backend），而装配脚本
+#    只内置 ISNet 权重（models/rembg/isnet-anime.onnx），桌面端的 auto 恒走
+#    isnet。torch 在默认链路上完全不参与。
+#
+# 3) 体积代价大：torch 的 win_amd64 wheel 约 119MB（PyPI 实测），解压进
+#    site-packages 约 400–500MB —— 占 1.4GB 安装包的三分之一左右，
+#    却换不来任何默认功能。
+#
+# 需要 SAM2 时：应用内点「下载」即可（Go 侧 capabilityPlans 实测可装），
+# 或手动 pip install。版本下限仍以 requirements.txt 为准：
+#   torch>=2.14.1（2.0.0 命中 28 条 CVE，2.13.0 起修复）
+#   transformers>=5.17.0（sam2_gd.py 按 5.17.0 验证；4.x 没有 Sam2Model 等类）

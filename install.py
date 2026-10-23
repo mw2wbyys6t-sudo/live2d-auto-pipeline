@@ -428,9 +428,15 @@ def install_ai_models(state=None):
     print(f"{C.YELLOW}⚠ This downloads PyTorch and other large packages (2-5 GB){C.RESET}")
 
     pkgs = [
-        "torch>=2.0.0",
+        # 下限必须与 requirements.txt 对齐。原值是 torch>=2.0.0 /
+        # transformers>=4.30.0 —— 前者命中 28 条 CVE（含 torch.load 任意代码
+        # 执行，2.13.0 起修复），后者命中 50 条，且 core/segment_engine/sam2_gd.py
+        # 是按 transformers 5.17.0 验证的（Sam2Model / GroundingDino 走
+        # getattr(transformers, cls_name)，4.x 里根本没有这些类）—— 旧下限
+        # 声明的是一个**代码跑不起来**的版本。
+        "torch>=2.14.1",
         "torchvision>=0.15.0",
-        "transformers>=4.30.0",
+        "transformers>=5.17.0",
         "segment-anything>=1.0",
         "huggingface-hub>=0.17.0",
     ]
