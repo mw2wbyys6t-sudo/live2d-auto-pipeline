@@ -142,6 +142,20 @@ def _iou(a: np.ndarray, b: np.ndarray) -> float:
     return float((a & b).sum() / union) if union else 0.0
 
 
+def _iou_from_counts(inter: int, sa: int, sb: int) -> float:
+    """用已知的 |A|、|B|、|A∩B| 直接算 IoU，不再扫全数组。
+
+    数学恒等：``|A∪B| = |A| + |B| - |A∩B|``。掩码是布尔/整数数组，
+    这三项都是精确整数，所以结果与 ``_iou`` 逐位一致（不存在浮点漂移）。
+
+    为什么单独开一个函数：两两配对的检查里，调用方**本来就已经算过**
+    ``sa``、``sb``、``inter``，再调 ``_iou`` 会把 60 万像素的掩码多扫两遍。
+    实测 35 层时两两配对共 1091 次 ``_iou``，这一项占质量评分近三成 CPU。
+    """
+    union = sa + sb - inter
+    return float(inter / union) if union else 0.0
+
+
 def _canonical(name: str) -> Tuple[str, Optional[str]]:
     """把层名归一到 ``layer_manifest`` 的规范部件名（含侧别）。"""
     from core.segment_engine.layer_manifest import resolve_part
@@ -266,18 +280,21 @@ def check_duplicates(masks: Dict[str, np.ndarray]) -> Tuple[List[str], List[str]
     overlays = _synthesized_overlay_sources()
     hidden = _rest_invisible_parts()
     names = sorted(masks)
+    # 每层面积只算一次。原先在双重循环里对每对都做 ma.sum()/mb.sum()，
+    # 35 层就是 ~1190 次 60 万像素的全数组归约；预计算后只需 35 次。
+    areas = {n: int(m.sum()) for n, m in masks.items()}
     bad: List[str] = []
     notes: List[str] = []
     for i, a in enumerate(names):
         for b in names[i + 1:]:
             ma, mb = masks[a], masks[b]
-            sa, sb = int(ma.sum()), int(mb.sum())
+            sa, sb = areas[a], areas[b]
             if not sa or not sb:
                 continue
             small, large = (a, b) if sa <= sb else (b, a)
             inter = int((ma & mb).sum())
             dup = inter / min(sa, sb)
-            iou = _iou(ma, mb)
+            iou = _iou_from_counts(inter, sa, sb)
             if dup <= DUP_CONTAINMENT or iou <= IOU_MAX:
                 continue
             if small in hidden or large in hidden:
@@ -304,6 +321,8 @@ def check_overlap(masks: Dict[str, np.ndarray]) -> List[str]:
     """Pairwise IoU that is high but not a duplicate (partial collisions)."""
     hidden = _rest_invisible_parts()
     names = sorted(masks)
+    # 同上：面积预计算，避免 O(n²) 次全数组归约。
+    areas = {n: int(m.sum()) for n, m in masks.items()}
     bad = []
     for i, a in enumerate(names):
         for b in names[i + 1:]:
@@ -311,11 +330,13 @@ def check_overlap(masks: Dict[str, np.ndarray]) -> List[str]:
                 # 静止时不画的层不参与两两重叠判定（见 _rest_invisible_parts）
                 continue
             ma, mb = masks[a], masks[b]
-            smaller = min(int(ma.sum()), int(mb.sum()))
+            sa, sb = areas[a], areas[b]
+            smaller = min(sa, sb)
             if not smaller:
                 continue
-            iou = _iou(ma, mb)
-            dup = (ma & mb).sum() / smaller
+            inter = int((ma & mb).sum())
+            iou = _iou_from_counts(inter, sa, sb)
+            dup = inter / smaller
             if iou > IOU_MAX and dup <= DUP_CONTAINMENT:
                 bad.append(f"{a} ∩ {b} IoU {iou:.2f} 超过上限 {IOU_MAX}")
     return bad

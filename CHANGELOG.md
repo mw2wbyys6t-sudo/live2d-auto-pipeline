@@ -154,6 +154,32 @@
   逐个核实后保留。`npm` 侧 219 个包仅 2 个存在多版本（`glob-parent` / `picomatch`，
   均为 dev 传递依赖），无优化空间。
 
+### ⚡ 运行时性能：健康检查从「每次 fork 3 个 Python」改成缓存 + 单次探测
+
+实测报告见 [`docs/performance-report-2026-10-23.md`](docs/performance-report-2026-10-23.md)。三处改动全部有前后对比：
+
+- **`/api/health` 原来每次请求拉起 3 个 Python 子进程**（`python --version` +
+  `import PIL` + `import numpy`），单次 1.53 s、**零缓存**。而前端连接指示器与
+  桌面壳会按秒级轮询它 —— 32 并发下实测 **200 次请求只成功 9 次，耗时 115 s，RPS=2**。
+  改为：**合并成 1 次 exec**（一个内联脚本同时拿版本与缺失依赖）+ **30 s TTL 缓存**。
+  结果：`/api/health` 命中缓存 **0.0004 s**，并发 200 次 **200/200 成功、1.53 s、RPS=130**
+  （吞吐 **65×**，耗时 **75×**）。缓存可用 `?force=1` 绕过；诊断页永远强制实时。
+  合并后仍能逐项报出缺失依赖，且**输出无法解析时退回「退出码 0 即可用」**，
+  与合并前判据一致（否则会把健康状态平白判成 503）。
+- **分层质量评分从 2.27 s 降到约 1.0 s**（`core/segment_engine/layer_quality.py`）：
+  两两配对检查里 `ma.sum()/mb.sum()` 原本**每对都算一次**，35 层就是约 1190 次
+  60 万像素的全数组归约 —— 改为每层预计算一次（35 次）。新增
+  `_iou_from_counts(inter, sa, sb)`，用恒等式 `|A∪B| = |A|+|B|−|A∩B|` 替代
+  `(a|b).sum()`，把「调用方已经算过 inter、却还要再扫两遍全图」的浪费去掉。
+  实测 `check_duplicates` 0.834 s → 0.189 s、`check_overlap` 0.705 s → 0.159 s（各 4.4×）。
+  **正确性**：旧版 vs 新版对同一输入端到端对比，`steps.layering.quality`
+  **逐字段完全一致**（`defect_count 0→0`、`explained_fraction 0.9898→0.9898`）。
+- **生成管线端到端 11.92 s → 10.62 s**（中位，3 次）。
+- **Go 侧补上 pprof（默认关闭，双重闸门）**：必须 `LIVE2D_PPROF=1` **且**监听回环
+  才挂载；设了变量却监听 `0.0.0.0` 只打警告不挂载。此前 `grep pprof api/` 无结果，
+  只能测 RSS。现在可拿到堆分解：`HeapAlloc` 仅 2.29 MB，`Sys` 12.7 MB 里
+  GC 元数据 1.97 MB —— **坐实 Go 内存基本全是 runtime 固定开销，无优化空间**。
+
 ### 🐛 顺手修掉的存量 bug
 
 - **`drivers/audio/capture.py` 的可选依赖保护写窄了**：`except ImportError` 没能兜住

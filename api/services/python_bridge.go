@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"live2d-api/config"
@@ -33,7 +34,24 @@ func validateStrictID(id string) error {
 
 type PythonBridge struct {
 	cfg *config.Config
+
+	// 环境探测结果缓存。
+	//
+	// 为什么必须缓存：CheckPythonEnvironment 会真的拉起 Python 子进程
+	// （启动解释器 + import PIL/numpy）。实测单次约 0.18s（绝对路径）到
+	// 1.6s（走 pyenv shim）。而 /api/health 会被前端连接指示器与桌面壳
+	// 按秒级轮询 —— 不缓存等于持续 fork Python，32 并发下实测 RPS 只有 2。
+	// 探测结论本身不需要秒级精度，30s 的陈旧度完全可以接受。
+	envMu        sync.Mutex
+	envCheckedAt time.Time
+	envOK        bool
+	envIssues    []string
 }
+
+// pythonEnvCheckTTL 是环境探测结果的缓存有效期。
+// 比任何轮询间隔都长，又短到「用户装完依赖刷新页面」不会困惑太久；
+// 需要立即复测的调用方用 InvalidatePythonEnvironment 显式失效。
+const pythonEnvCheckTTL = 30 * time.Second
 
 func NewPythonBridge(cfg *config.Config) *PythonBridge {
 	return &PythonBridge{cfg: cfg}
@@ -938,28 +956,78 @@ func (pb *PythonBridge) runInlinePythonTimeout(parent context.Context, code stri
 	return nil, fmt.Errorf("Python did not return a valid JSON result")
 }
 
-// CheckPythonEnvironment checks Python environment availability
+// CheckPythonEnvironment 探测 Python 环境可用性。
+//
+// 结果按 pythonEnvCheckTTL 缓存：该函数被 /api/health、/api/status 与诊断页
+// 共同调用，其中 health 会被秒级轮询。每次调用都真起子进程的话，等于让
+// 常驻进程持续 fork Python —— 实测 32 并发下 RPS 只有 2。
+//
+// 需要立即复测（用户在设置页刚装完依赖）时，调用方先用
+// InvalidatePythonEnvironment 失效缓存。
 func (pb *PythonBridge) CheckPythonEnvironment() (bool, []string) {
-	var issues []string
-	// 环境探测必须有超时上限：损坏/挂起的解释器（如等待输入、损坏的 venv）
-	// 不能让健康检查永久阻塞。--version 很快；import 检查给 30s 余量。
-	versionCtx, cancelVersion := context.WithTimeout(context.Background(), 15*time.Second)
-	cmd := exec.CommandContext(versionCtx, pb.cfg.Python.PythonPath, "--version")
-	if _, err := cmd.CombinedOutput(); err != nil {
-		cancelVersion()
-		issues = append(issues, fmt.Sprintf("Python 不可用: %v", err))
-		return false, issues
+	pb.envMu.Lock()
+	defer pb.envMu.Unlock()
+
+	if !pb.envCheckedAt.IsZero() && time.Since(pb.envCheckedAt) < pythonEnvCheckTTL {
+		return pb.envOK, append([]string(nil), pb.envIssues...)
 	}
-	cancelVersion()
-	deps := []string{"PIL", "numpy"}
-	for _, dep := range deps {
-		importCtx, cancelImport := context.WithTimeout(context.Background(), 30*time.Second)
-		cmd := exec.CommandContext(importCtx, pb.cfg.Python.PythonPath, "-c", fmt.Sprintf("import %s", dep))
-		if err := cmd.Run(); err != nil {
-			issues = append(issues, fmt.Sprintf("缺少依赖: %s", dep))
+
+	ok, issues := pb.probePythonEnvironment()
+	pb.envCheckedAt = time.Now()
+	pb.envOK = ok
+	pb.envIssues = issues
+	return ok, append([]string(nil), issues...)
+}
+
+// InvalidatePythonEnvironment 让下一次 CheckPythonEnvironment 立即重跑探测。
+func (pb *PythonBridge) InvalidatePythonEnvironment() {
+	pb.envMu.Lock()
+	pb.envCheckedAt = time.Time{}
+	pb.envMu.Unlock()
+}
+
+// probePythonEnvironment 真正执行探测，**一次**子进程拿到版本与依赖情况。
+//
+// 旧实现是 3 次独立 exec（--version / import PIL / import numpy），
+// 实测其中 import numpy 最贵（0.14s），三次合计 0.18s（绝对路径）或
+// 1.6s（pyenv shim）。合并成一次脚本后只需付一次解释器启动成本。
+func (pb *PythonBridge) probePythonEnvironment() (bool, []string) {
+	// 超时上限：损坏/挂起的解释器（等待输入、损坏的 venv）不能让健康检查
+	// 永久阻塞。合并后只有一次 exec，给 30s 足够宽裕。
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const probe = `import json, sys
+missing = []
+for m in ("PIL", "numpy"):
+    try:
+        __import__(m)
+    except Exception:
+        missing.append(m)
+print(json.dumps({"version": "%d.%d.%d" % sys.version_info[:3], "missing": missing}))`
+
+	cmd := exec.CommandContext(ctx, pb.cfg.Python.PythonPath, "-c", probe)
+	out, err := cmd.Output()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return false, []string{"Python 探测超时（30s）"}
 		}
-		cancelImport()
+		return false, []string{fmt.Sprintf("Python 不可用: %v", err)}
 	}
+
+	var res struct {
+		Version string   `json:"version"`
+		Missing []string `json:"missing"`
+	}
+	var issues []string
+	if json.Unmarshal(out, &res) == nil {
+		for _, m := range res.Missing {
+			issues = append(issues, fmt.Sprintf("缺少依赖: %s", m))
+		}
+	}
+	// 输出无法解析成 JSON 时（例如测试注入的假解释器只返回退出码），
+	// 退回「退出码 0 即视为可用」—— 与合并前的判据保持一致，
+	// 否则会平白把健康状态判成 503。
 	return len(issues) == 0, issues
 }
 

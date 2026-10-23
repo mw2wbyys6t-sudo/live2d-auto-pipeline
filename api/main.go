@@ -7,6 +7,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	// 副作用导入：把 /debug/pprof/* 的 handler 注册到 http.DefaultServeMux。
+	// 只有显式设置 LIVE2D_PPROF=1 且监听回环时，main 才会把这些路由转发给它。
+	_ "net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
@@ -163,6 +166,27 @@ func main() {
 
 	// ========== 启动服务器 ==========
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+
+	// ========== 性能剖析（默认关闭，双重闸门） ==========
+	//
+	// pprof 会暴露堆分配明细、goroutine 栈（含实参与局部变量），是排障利器
+	// 但也直接泄露运行信息，因此**绝不能默认开放**。这里要求两个条件同时满足：
+	//   1. 显式设置 LIVE2D_PPROF=1；
+	//   2. 服务只监听回环地址。
+	// 只满足第 1 条时（例如有人照文档设了变量但把 host 改成 0.0.0.0），
+	// 仍然不挂载并打警告 —— 免得把剖析接口暴露到局域网。
+	if os.Getenv("LIVE2D_PPROF") == "1" {
+		host := cfg.Server.Host
+		if host == "127.0.0.1" || host == "localhost" || host == "::1" {
+			// 用标准库 pprof：它把 handler 注册在 DefaultServeMux 上，
+			// 这里整体转发过去，避免额外引入 gin-contrib/pprof 依赖。
+			r.GET("/debug/pprof/*any", gin.WrapH(http.DefaultServeMux))
+			r.POST("/debug/pprof/*any", gin.WrapH(http.DefaultServeMux))
+			log.Printf("[info] pprof 已启用（仅回环）: http://%s/debug/pprof/", addr)
+		} else {
+			log.Printf("[warn] LIVE2D_PPROF=1 但监听在 %s（非回环），为安全起见不挂载 pprof", host)
+		}
+	}
 
 	printServerInfo(cfg, addr)
 

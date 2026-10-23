@@ -73,7 +73,14 @@ func NewHandler(cfg *config.Config, imageGenerator *services.ImageGenerator, cac
 //
 // v0.10.3: 不再永远返回 200 —— 启动后跑一次 Python 解释器探针，不可用时
 // 返回 503 + 中文说明，避免「前端看到正常、点生成立刻崩」的误导体验。
+//
+// 探针结果有 30s 缓存（见 services.CheckPythonEnvironment）：该端点会被前端
+// 连接指示器与桌面壳秒级轮询，不缓存等于持续 fork Python。需要立即复测时
+// 带 `?force=1`（例如用户在设置页刚装完依赖）。
 func (h *Handler) HealthCheck(c *gin.Context) {
+	if f := c.Query("force"); f == "1" || f == "true" {
+		h.pythonBridge.InvalidatePythonEnvironment()
+	}
 	pyOK, pyIssues := h.pythonBridge.CheckPythonEnvironment()
 	if !pyOK {
 		c.JSON(http.StatusServiceUnavailable, models.Response{
