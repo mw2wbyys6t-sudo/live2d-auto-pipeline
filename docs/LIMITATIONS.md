@@ -347,11 +347,10 @@
 ## 9. 依赖治理现状（2026-10-23 复核）
 
 本节记录**仓库侧**能核实的那部分依赖状态。FOSSA 三项检查（Dependency Quality /
-License Compliance / Security Analysis）由第三方 SaaS 回写 commit status，**仓库里没有
-FOSSA action、也没有 FOSSA API key**（见 `.fossa.yml` 与 `.github/workflows/`）——
-所以下面用的是**可复现的本地口径**：OSV.dev 全量查询 + 各生态锁文件/清单。
-
-复现口径与逐条核对见本节表格；结论：
+License Compliance / Security Analysis）由第三方 SaaS 回写 commit status。
+本节先记 2026-10-23 复核（FOSSA 后台重扫）的数字，再补上当日新增的
+**仓库侧全量许可清单**（`scripts/fossa_license_inventory.py`）——
+它让「那 65 条到底是什么」第一次有了可复现的答案。
 
 **FOSSA 后台重扫的真实数字**（PR #48，commit `6d9a075`，2026-10-23）：
 
@@ -364,23 +363,49 @@ FOSSA action、也没有 FOSSA API key**（见 `.fossa.yml` 与 `.github/workflo
 本地用 OSV.dev 做的全量复扫（口径对齐 FOSSA：清单声明的下限 + 各生态锁文件的实装版本）
 得到**同样的 6 条**，两条路径交叉验证一致。
 
-**为什么 License Compliance 只降了 2 条**：那 65 条**不是**「产出物缺许可声明」——
-FF-15 管的是产出物（模型包 / 安装包 / Web 构建包），而 FOSSA 扫的是**依赖树**。
-仓库侧的依赖许可构成（PyPI 官方元数据逐个查过）：
+### 那 65 条 License Compliance issue 到底是什么（2026-10-23 实算结论）
+
+**不是合规风险，是策略未配置。** 逐条实算 721 个依赖的许可后：
+
+| 档位 | 数量 | 含义 |
+|---|---|---|
+| 允许（ALLOW） | **698** | 宽松型，可自由再分发，不施加文件级传染条件 |
+| 需审阅（REVIEW） | **22** | 弱 copyleft（LGPL / MPL），以库形式随附兼容，确认一次即可 |
+| 禁止（DENY） | **0** | **没有任何强 copyleft 或非商业条款依赖** |
+| 许可未声明 | **1** | `segment-anything`（PyPI 元数据缺 `license` 字段，上游实为 Apache-2.0）|
+
+也就是说：那 65 条只是「不在 FOSSA 默认允许清单里」的计数，**没有一条与 Apache-2.0
+分发冲突**。要让它们归零，得在 FOSSA 后台按策略放行，而不是改代码。
+完整的三档清单与后台操作步骤见 **[docs/license-policy.md](license-policy.md)**。
+
+复现：
+
+```bash
+python scripts/fossa_license_inventory.py            # 报告
+python scripts/fossa_license_inventory.py --policy   # 策略建议
+```
+
+**仓库侧的依赖许可构成**（PyPI / npm / crates.io / deps.dev 官方元数据逐个查过）：
 
 - 直接依赖里绝大多数是宽松型：Apache-2.0（aiofiles / requests / python-multipart /
   mediapipe / opencv / transformers / huggingface-hub）、MIT（fastapi / psd-tools /
   rembg / rich / onnxruntime / sounddevice / urllib3 / py-moc3 / live2d-py）、
   BSD-3-Clause（httpx / scipy / soundfile / torchvision / uvicorn / websockets /
   scikit-learn / numpy）；
-- **弱 copyleft（LGPL）需人工确认**：`pygame` / `pygame-ce`（LGPL v2.1）、`edge-tts`（LGPLv3）
-  —— 以库形式被 import（动态链接），与 Apache-2.0 分发兼容，但 FOSSA 的默认策略会要求人工过一遍；
+- **弱 copyleft（22 条）需人工确认**：`pygame` / `pygame-ce`（LGPL）、`edge-tts`（LGPLv3）
+  —— 以库形式被 import（动态链接），与 Apache-2.0 分发兼容，但 FOSSA 的默认策略会要求
+  人工过一遍；`@img/sharp-libvips-*`（LGPL-3.0-or-later，Next.js `sharp` 的平台专属可选依赖）；
+  5 个 MPL-2.0 crate（`cssparser` / `cssparser-macros` / `dtoa-short` / `option-ext` /
+  `selectors`，文件级 copyleft 且未修改上游文件）；
 - **`segment-anything` 在 PyPI 上没有声明许可证**（GitHub 上是 Apache-2.0，但包元数据缺
   `license` 字段）→ FOSSA 报「未知许可」。它确实被 `core/segment_engine/semantic.py`
-  使用（`SamAutomaticMaskGenerator`），不能移除；这是上游元数据缺失，仓库侧无法修。
+  使用（`SamAutomaticMaskGenerator`），不能移除；这是上游元数据缺失，仓库侧无法修，
+  只能在 FOSSA 侧按依赖名单独放行。
 
-要拿到那 65 条的逐条明细需要 FOSSA 后台的 API key（仓库里没有，`.fossa.yml` 也没配）——
-这一步得在 FOSSA 侧按策略收敛，不是仓库侧能单方面决定的。
+**FOSSA API key 需要账号持有人在后台手动创建**（Organization Settings → Integrations →
+API，**只显示一次**），仓库侧无法代劳；且要拿到那 65 条的逐条明细需要**企业版 API**。
+策略本身也必须在**项目后台**切换 —— 官方明确：项目已存在后改 `.fossa.yml` 的 `policy:`
+字段**不会生效**（"will *not* change the policy"）。
 
 ### 剩余 6 条为什么修不掉（逐条核实过，不是「懒得修」）
 

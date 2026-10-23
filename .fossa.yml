@@ -11,14 +11,24 @@
 version: 3
 
 # 关闭 CLI 遥测（仅声明，不影响扫描结果）
+# 注意：scope 必须是**字符串**（"off" / "full"）。写成布尔 true/false 会让
+# FOSSA CLI 解析 .fossa.yml 直接失败（"parsing ConfigTelemetryScope failed,
+# expected String, but encountered Boolean"）—— 整个扫描都跑不起来。
 telemetry:
-  scope: off
+  scope: "off"
 
 project:
   # 固定项目定位符，确保与本仓库既有的 FOSSA 项目对应，避免误建重复项目
   # （该值取自现有项目徽章地址：git+github.com/<owner>/<repo>）
   locator: git+github.com/mw2wbyys6t-sudo/live2d-auto-pipeline
   name: live2d-auto-pipeline
+  # 许可策略名（必须先在 FOSSA 后台创建，名字必须完全一致）。
+  #
+  # ⚠️ 官方明确：项目已存在后，改 .fossa.yml 的 policy 字段**不会生效**
+  #    （"changing the policy: field ... will not change the policy"）。
+  #    正确做法：FOSSA 后台 → 该项目 → Settings → Issues Policies → 选中策略。
+  #    这里保留声明，是为了让 CLI 新建项目 / 新克隆副本时用上同一套策略。
+  policy: Apache-2.0 Distribution
 
 # 分析目标路径过滤：排除归档与文档，仅扫生产相关路径
 paths:

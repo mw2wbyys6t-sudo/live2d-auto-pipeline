@@ -55,6 +55,27 @@
 
 ### 🟢 许可证与合规（FF-15 首次真正落地）
 
+- **剩余的 65 条 License Compliance issue 不是合规风险，是策略未配置** —— 逐条实算
+  721 个依赖后确认：**698 允许 / 22 需审阅（弱 copyleft）/ 0 禁止 / 1 未声明**。
+  **没有任何强 copyleft 或非商业条款依赖**，那 65 条只是「不在 FOSSA 默认允许清单里」。
+  新增 `scripts/fossa_license_inventory.py`：枚举 PyPI / npm / crates.io / Go 四个生态的
+  依赖树，逐个取 SPDX 标识（数据源是 PyPI JSON、锁文件自带许可、crates.io API、
+  deps.dev —— 都是权威源，不是扫描器的结论），按 Apache-2.0 分发场景分三档，
+  直接产出「策略该允许什么」的清单。
+- **`.fossa.yml` 的 `telemetry.scope` 写成了布尔值**：FOSSA CLI 解析配置时直接报
+  `parsing ConfigTelemetryScope failed, expected String, but encountered Boolean` ——
+  **整个扫描跑不起来**（用官方 CLI 3.20.7 实测复现）。已改为 `scope: "off"`。
+- **新增 `.github/workflows/fossa.yml`**：FOSSA 扫描 CI job。**无 `FOSSA_API_KEY` 时自动跳过**
+  而非失败 —— 本仓库是公开仓库，外部贡献者的 fork PR 拿不到组织 secret，
+  直接跑会把所有外部 PR 标红（那是"没权限"不是"有问题"）。
+  同时该 job 无条件跑离线许可清单并上传 artifact，让「策略该允许什么」在仓库侧可复现、可评审。
+- **新增 `docs/license-policy.md`**：FOSSA API Key 的创建步骤（后台手动、只显示一次、
+  必须选 Push Only 而非 Full API Token —— 后者会把组织读写权限暴露给所有能提 PR 的人）、
+  后台三档规则的完整填写清单、以及「仓库侧能改什么 / 不能改什么」的对照表。
+- **一个必须知道的 FOSSA 限制**：项目已存在后，改 `.fossa.yml` 的 `policy:` 字段
+  **不会生效**（官方明确："changing the `policy:` field ... will *not* change the policy"）。
+  切换策略必须在**项目后台** Settings → Issues Policies 里做 —— 这是纯后台操作，
+  仓库侧无法替代。
 - **FF-15 此前是纸面承诺**：`docs/architecture/index.md` 写着「Release 打包前钩子：
   `scripts/check-license-bundle.sh`（待补）」，而该脚本**从不存在**。现已实现：
   校验产出物内的许可全文是否与仓库根 `LICENSE` **逐字节一致**（根目录若有 `NOTICE` 一并校验），
