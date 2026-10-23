@@ -59,6 +59,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
 ; 桌面程序（scripts/build_desktop.bat 产物）
 Source: "{#ProjectRoot}\dist\Live2DMasterAgent.exe"; DestDir: "{app}"; \
   Flags: ignoreversion
+; 许可证全文（FF-15：对外分发的安装包必须内含与仓库根逐字节一致的
+; Apache-2.0 许可全文；仓库根若有 NOTICE 也一并安装）
+Source: "{#ProjectRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 ; 便携 Python 与权重
 Source: "{#RuntimeDir}\python\*";  DestDir: "{app}\runtime\python";   \
   Flags: ignoreversion recursesubdirs createallsubdirs

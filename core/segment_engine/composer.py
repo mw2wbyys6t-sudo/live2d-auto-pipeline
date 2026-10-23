@@ -390,10 +390,14 @@ class LayerComposer:
         dest = Path(out) if out is not None else Path(
             next(iter(layers.values()))["path"]).parent
         self._array_cache: Dict[str, Optional[np.ndarray]] = {}
+        # 眼睛层合成缓存（见 _eye_solid）：同一侧眼睛在一次合成里被三个
+        # 调用方各合成一遍，缓存后只算一次。生命周期与 _array_cache 一致。
+        self._eye_cache: Dict[tuple, tuple] = {}
         try:
             return self._synthesize_layers(layers, h, w, dest, made)
         finally:
             self._array_cache = None
+            self._eye_cache = None
 
     def _synthesize_layers(self, layers: Dict[str, Dict], h: int, w: int,
                            dest: Path, made: List[str]) -> List[str]:
@@ -438,15 +442,43 @@ class LayerComposer:
                 made.append(name)
         return made
 
+    def _eye_solid(self, layers: Dict[str, Dict], h: int, w: int,
+                   sources) -> tuple:
+        """按给定层名列表合成该侧眼睛层，返回 ``(eye, solid)``，**带缓存**。
+
+        为什么要缓存：同一次 ``synthesize_face_geometry`` 里，同一侧眼睛会被合成
+        三遍 —— ``_synthesize_tear`` 调一次 ``_eye_anchor``、``_synthesize_cheek``
+        又调一次，``_synthesize_eyelid`` 自己再合成一遍。每次都是 66 万像素的
+        浮点 alpha 合成，实测三次合计约 0.2 s。
+
+        缓存键取 ``tuple(sources)`` 而不是 index：**不同调用方传的顺序不同** ——
+        ``_eye_anchor`` 用 ``EYELID_SOURCES`` 的原始顺序，``_synthesize_eyelid``
+        用 ``_draw_order`` 排序后的顺序，两者是**相反**的（原始是
+        ``irides → eyewhite → eyes``，排序后是 ``eyes → eyewhite → irides``）。
+        alpha 叠加顺序会改变结果，所以只能各缓存各的，不能混用。
+
+        ``eye`` 与 ``solid`` 在调用方都是只读（唯一一处 ``eye[...]`` 取值），
+        共享安全。
+        """
+        key = tuple(sources)
+        cache = getattr(self, "_eye_cache", None)
+        if cache is not None and key in cache:
+            return cache[key]
+
+        eye = self._alpha_over(
+            [self._layer_array(layers, n) for n in sources], h, w)
+        solid = None if eye is None else (eye[..., 3] == 255)
+        result = (eye, solid)
+        if cache is not None:
+            cache[key] = result
+        return result
+
     def _eye_anchor(self, layers: Dict[str, Dict], h: int, w: int,
                     index: int) -> Optional[tuple]:
         """该侧眼睛**不透明**像素的包围盒 ``(x0, y0, x1, y1)``；没有眼睛层则 None。"""
         _name, sources = self.EYELID_SOURCES[index]
-        eye = self._alpha_over([self._layer_array(layers, n) for n in sources], h, w)
-        if eye is None:
-            return None
-        solid = eye[..., 3] == 255
-        if not solid.any():
+        eye, solid = self._eye_solid(layers, h, w, sources)
+        if eye is None or solid is None or not solid.any():
             return None
         ys, xs = np.nonzero(solid)
         return (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
@@ -579,11 +611,8 @@ class LayerComposer:
         * 皮肤部分 = 脸层自己的像素（该区域已被 inpaint 成肤色）；
         * 睫毛部分 = 眼球层自己的像素，叠在眼球层上完全一样。
         """
-        eye = self._alpha_over([self._layer_array(layers, n) for n in sources], h, w)
-        if eye is None:
-            return None
-        solid = eye[..., 3] == 255
-        if not solid.any():
+        eye, solid = self._eye_solid(layers, h, w, sources)
+        if eye is None or solid is None or not solid.any():
             return None
 
         face = self._layer_array(layers, "face")
@@ -833,22 +862,41 @@ class LayerComposer:
         # Pre-bool all masks
         masks = {n: np.asarray(part_masks[n], dtype=bool) for n in names}
 
+        # 每层的「非空」与「包围盒」只算一次。
+        #
+        # 原实现在两两循环里对每一对都调 _bbox_overlap，而它内部是
+        # np.where(mask) —— 一次全画布（本例 667×1000 ≈ 66 万像素）扫描。
+        # 35 层共 ~595 对、每对 2 次，等于 ~1190 次全图扫描；而包围盒
+        # 与层内容无关、只跟掩码本身有关，算 35 次就够了。
+        # 实测这一项占了 occlusion map 生成时间的大头（1.10s）。
+        nonempty: Dict[str, bool] = {}
+        bboxes: Dict[str, Tuple[int, int, int, int]] = {}
+        for n in names:
+            ys, xs = np.nonzero(masks[n])
+            nonempty[n] = len(xs) > 0
+            if nonempty[n]:
+                bboxes[n] = (int(xs.min()), int(ys.min()),
+                             int(xs.max()), int(ys.max()))
+            else:
+                bboxes[n] = (0, 0, 0, 0)
+
         result: Dict[str, Dict[str, List[str]]] = {}
         for name in names:
             result[name] = {"occludes": [], "occluded_by": []}
 
         for i, a in enumerate(draw_seq):
-            ma = masks[a]
-            if not ma.any():
+            if not nonempty[a]:
                 continue
+            ma = masks[a]
+            ax0, ay0, ax1, ay1 = bboxes[a]
             for b in draw_seq[i + 1:]:
-                mb = masks[b]
-                if not mb.any():
+                if not nonempty[b]:
                     continue
-                # Fast pre-check via bounding boxes
-                if not self._bbox_overlap(ma, mb):
+                bx0, by0, bx1, by1 = bboxes[b]
+                # Fast pre-check via precomputed bounding boxes
+                if ax0 > bx1 or bx0 > ax1 or ay0 > by1 or by0 > ay1:
                     continue
-                if np.any(ma & mb):
+                if np.any(ma & masks[b]):
                     # b is drawn in front of a -> b occludes a
                     result[a]["occluded_by"].append(b)
                     result[b]["occludes"].append(a)

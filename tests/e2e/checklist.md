@@ -32,7 +32,8 @@ $res = if ($exe) { Split-Path $exe.FullName } else { "" }
 
 - [ ] 双击能正常进入安装向导（中/英文语言选择可用）。
 - [ ] 安装过程不要求管理员提权（currentUser 安装）。
-- [ ] 安装包体积在预期区间（内置 CPU torch 等全量依赖，通常 0.5–0.9 GB；显著偏小说明装配不完整）。
+- [ ] 安装包体积在预期区间（约 **0.9 GB**；**不含** torch 组 —— 那组由应用内按需下载）。
+      显著偏小说明装配不完整；**超过 1.2 GB 说明 torch 组被误打回了包内**。
 - [ ] 安装完成后开始菜单/桌面快捷方式存在，目标指向 `{res}\Live2D Master Agent.exe`。
 - [ ] 杀毒软件未隔离安装目录下的 `live2d-api.exe` / `python\python.exe`（检查杀软隔离区）。
 
@@ -52,7 +53,6 @@ $need = @(
   "python\Lib\site-packages\sitecustomize.py",
   "python\Lib\site-packages\PIL",
   "python\Lib\site-packages\numpy",
-  "python\Lib\site-packages\torch",
   "python\Lib\site-packages\mediapipe",
   "python\Lib\site-packages\live2d\v3",
   "app\core\workflow.py",
@@ -79,14 +79,17 @@ foreach ($n in $need) {
 & "$res\python\python.exe" --version
 & "$res\python\python.exe" -c "import PIL, numpy, cv2, scipy, sklearn, psd_tools, onnxruntime, mediapipe; print('IMPORTS_OK')"
 & "$res\python\python.exe" -c "import core.version, live2d_builder.pipeline; print('APP_IMPORTS_OK')"
-& "$res\python\python.exe" -c "import torch; print('TORCH_OK', torch.__version__)"
+# torch 组不随包分发（见 requirements.desktop.txt 与 core/capabilities.py），
+# 这里只确认它**不该**在包内 —— 有则是装配回退。
+& "$res\python\python.exe" -c "import importlib.util as u; print('TORCH_IN_BUNDLE' if u.find_spec('torch') else 'TORCH_ABSENT_OK')"
 ```
 
 - [ ] `--version` 输出 **Python 3.12.x**。
 - [ ] `IMPORTS_OK`（核心依赖全部可导入）。
 - [ ] `APP_IMPORTS_OK` —— 这一条同时验证了 `._pth` isolated 模式下
       `sitecustomize.py` 已把 `{res}\app` 注入 `sys.path`。
-- [ ] `TORCH_OK`（可接受较慢，首次导入可能 5–30 秒）。
+- [ ] `TORCH_ABSENT_OK` —— torch 组**不应**出现在包内（出现即装配回退到旧清单）。
+      需要 SAM2 时走应用内「能力」页下载，见 §9。
 
 ## 4. 启动与后端（A）
 
@@ -177,7 +180,10 @@ Get-Process live2d-api, face_tracker, python, pythonw -ErrorAction SilentlyConti
 
 - 安装包**未签名**：SmartScreen 告警属预期。
 - 预览页是 Web 侧近似渲染（非官方 Cubism 内核画面）。
-- `CUDA` 版 torch 不内置（仅 CPU）；需要 GPU 加速的用户自行替换。
+- **torch 组不随包分发**（torch / torchvision / transformers / segment-anything /
+  huggingface-hub）：安装包因此少约 500MB。默认分层走 `isnet`（rembg 的 ISNet
+  权重已内置），不受影响；桌面端 `auto` 后端要「有 torch **且**有 SAM 权重」才
+  会选 `sam`，而包内本来就不带 SAM 权重。
 - SAM2 / 其他重型能力走应用内按需下载（`/api/capabilities`）。
 - 官方内核逐像素验收依赖运行环境 GL 上下文；某些机器上会如实标记
   `runtime_ready=false`，不代表导出文件不可用。

@@ -144,7 +144,11 @@ if os.path.isdir(_app) and _app not in sys.path:
 # 冒烟校验：required 缺失即失败；optional 缺失只告警（按需下载/机型相关）。
 SMOKE_REQUIRED = ["PIL", "numpy", "scipy", "sklearn", "cv2", "psd_tools",
                   "onnxruntime", "core.version", "live2d_builder.pipeline"]
-SMOKE_OPTIONAL = ["torch", "mediapipe", "mediapipe.tasks.python.vision", "rembg",
+# 注意：torch / torchvision / transformers 刻意**不在**这两个列表里。
+# 它们不随包分发（见 requirements.desktop.txt 与 core/capabilities.py 的设计
+# 契约），由应用内按需下载，缺失是**预期状态** —— 留在 optional 里只会让每次
+# 装配日志刷出一条无意义的 [warn]。
+SMOKE_OPTIONAL = ["mediapipe", "mediapipe.tasks.python.vision", "rembg",
                   "edge_tts", "sounddevice", "soundfile", "pygame", "live2d"]
 
 
@@ -341,6 +345,25 @@ def copy_app_tree(app_dir: Path) -> None:
     print(f"    [app ] {', '.join(APP_DIRS)} + {', '.join(APP_FILES)}")
 
 
+def copy_license_bundle(dest: Path) -> None:
+    """把许可证文件复制到安装包资源根（FF-15）。
+
+    ADR-001 Rev.4：对外分发的安装包必须内含与仓库根逐字节一致的 Apache-2.0
+    许可全文；根目录若存在 NOTICE 则一并保留。放在 bundle/ 根 = 安装后的
+    $RESOURCE 根，用户能在安装目录里直接看到许可文本。
+    """
+    sys.path.insert(0, str(ROOT))
+    try:
+        from core.license_bundle import install_license_bundle
+
+        written = install_license_bundle(dest)
+    except Exception as exc:
+        sys.exit(f"❌ 许可文件写入失败（FF-15 要求产出物内含许可全文）：{exc}")
+    if not written:
+        sys.exit("❌ 仓库根找不到 LICENSE —— 无法产出合规的安装包（FF-15）")
+    print(f"    [许可] {', '.join(written)} → {dest}")
+
+
 def copy_binary(src: Path, dest: Path, label: str) -> None:
     if not src.exists():
         sys.exit(f"❌ 缺少 {label}：{src}\n   请先构建（见脚本 docstring 的 --go-exe / "
@@ -484,6 +507,10 @@ def main() -> int:
         print("  [跳过] --skip-app")
     else:
         copy_app_tree(dest / "app")
+
+    # ---- 3b) 许可证全文（FF-15：安装包必须内含许可声明）----
+    print("[3b/5] 许可证全文 → bundle 根")
+    copy_license_bundle(dest)
 
     # ---- 4) 原生二进制 / DLL / 模型 ----
     print("[4/5] 原生二进制、ONNX Runtime、YuNet 模型")

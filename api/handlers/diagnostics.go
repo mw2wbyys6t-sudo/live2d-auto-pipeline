@@ -39,6 +39,9 @@ func (h *Handler) GetDiagnostics(c *gin.Context) {
 	trackerExe := trackerPath != ""
 	trackerModel, trackerDll := checkTrackerAssets(trackerPath)
 
+	// 诊断页是用户排查环境的入口，结论必须是**当下**的，不能吃 /api/health
+	// 那 30s 缓存 —— 用户刚装完依赖点开诊断，看到旧结论会以为没装上。
+	h.pythonBridge.InvalidatePythonEnvironment()
 	pyOK, pyIssues := h.pythonBridge.CheckPythonEnvironment()
 
 	checks := []models.DiagnosticCheck{

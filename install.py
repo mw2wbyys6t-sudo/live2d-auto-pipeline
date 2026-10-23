@@ -24,7 +24,10 @@ from importlib.metadata import version as _pkg_version, PackageNotFoundError
 PROJECT_ROOT = Path(__file__).parent.resolve()
 PYTHON = sys.executable or "python3"
 
-PYTHON_MIN = (3, 9)
+# Python 3.10 已于 2026-10-01 结束官方安全支持；requirements.txt 的下限
+# （Pillow 13 / rembg 2.0.86 / scikit-learn 1.9）官方均要求 >= 3.11。
+# 这里原来写 (3, 9)，与清单实际要求完全脱节 —— 3.9 走到装依赖那一步必然失败。
+PYTHON_MIN = (3, 11)
 NODE_MIN = (18, 0)
 GO_MIN = (1, 21)
 
@@ -372,12 +375,14 @@ def install_core(state=None):
             return False
         print(f"{C.YELLOW}  尝试逐个安装核心包...{C.RESET}")
         core_pkgs = [
-            "Pillow>=10.0.0", "numpy>=1.24.0", "requests>=2.32.3",
-            "urllib3>=2.2.2", "httpx>=0.24.0", "aiohttp>=3.10.11",
-            "psd-tools>=1.9.0", "scipy>=1.10.0", "scikit-learn>=1.3.0",
-            "cryptography>=42.0.0", "rich>=13.0.0",
+            # 下限与 requirements.txt 保持一致（此前是 10.0.0/1.24.0/2.2.2 等旧值，
+            # 与清单冲突：单独装会拉到带 CVE 的版本）。
+            "Pillow>=13.0.0", "numpy>=2.4.6", "requests>=2.34.2",
+            "urllib3>=2.8.0", "httpx>=0.28.1", "aiohttp>=3.14.5",
+            "psd-tools>=1.24.0", "scipy>=1.15.3", "scikit-learn>=1.9.1",
+            "cryptography>=50.0.2", "rich>=13.0.0",
             "opencv-python-headless>=4.9.0.80", "onnxruntime>=1.14.0",
-            "aiofiles>=23.0", "websockets>=12.0",
+            "aiofiles>=25.1.0", "websockets>=17.2",
         ]
         if run_pip(core_pkgs, "Installing individual packages...", state):
             state.mark_success(step_name + " (individual)")
@@ -398,10 +403,12 @@ def install_desktop_pet(state=None):
     else:
         pkgs = ["pygame>=2.5.0"]
 
-    pkgs.append("mediapipe>=0.10.0")
-    pkgs.extend(["sounddevice>=0.4.6", "soundfile>=0.12.0"])
-    pkgs.append("edge-tts>=6.1.0")
-    pkgs.append("rembg[cpu]>=2.0.0")
+    # 下限与 requirements.txt / requirements.desktop.txt 对齐
+    # （mediapipe 的 <0.10.32 上限是硬约束，见 requirements.desktop.txt 注释）。
+    pkgs.append("mediapipe>=0.10.30,<0.10.32")
+    pkgs.extend(["sounddevice>=0.5.6", "soundfile>=0.14.0"])
+    pkgs.append("edge-tts>=7.3.1")
+    pkgs.append("rembg[cpu]>=2.0.86")
 
     if run_pip(pkgs, "Installing desktop pet, tracking, and TTS packages...", state):
         if not state.dry_run:
@@ -421,9 +428,15 @@ def install_ai_models(state=None):
     print(f"{C.YELLOW}⚠ This downloads PyTorch and other large packages (2-5 GB){C.RESET}")
 
     pkgs = [
-        "torch>=2.0.0",
+        # 下限必须与 requirements.txt 对齐。原值是 torch>=2.0.0 /
+        # transformers>=4.30.0 —— 前者命中 28 条 CVE（含 torch.load 任意代码
+        # 执行，2.13.0 起修复），后者命中 50 条，且 core/segment_engine/sam2_gd.py
+        # 是按 transformers 5.17.0 验证的（Sam2Model / GroundingDino 走
+        # getattr(transformers, cls_name)，4.x 里根本没有这些类）—— 旧下限
+        # 声明的是一个**代码跑不起来**的版本。
+        "torch>=2.14.1",
         "torchvision>=0.15.0",
-        "transformers>=4.30.0",
+        "transformers>=5.17.0",
         "segment-anything>=1.0",
         "huggingface-hub>=0.17.0",
     ]

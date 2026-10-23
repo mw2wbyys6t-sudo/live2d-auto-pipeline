@@ -28,7 +28,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        # Python 3.10 已于 2026-10-01 结束官方安全支持；且 requirements.txt 的
+        # 下限（Pillow 13 / rembg 2.0.86 / scikit-learn 1.9）官方均要求 >= 3.11。
+        python-version: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -52,12 +54,18 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          # Install core deps first (always needed)
-          pip install Pillow numpy requests urllib3 httpx aiohttp aiofiles websockets psd-tools scipy scikit-learn cryptography rich opencv-python onnxruntime
+          # 按 requirements.txt 声明的**下限**安装（不是不带约束的 latest）：
+          # 这样「下限是否仍可满足 / 仍可安装」才会被 CI 真正证明一次。
+          # 此前这里装的是无约束 latest，等于下限声明从未被任何 CI 验证过。
+          pip install "Pillow>=13.0.0" "numpy>=2.4.6" "requests>=2.34.2" \
+                    "urllib3>=2.8.0" "httpx>=0.28.1" "aiohttp>=3.14.5" \
+                    "aiofiles>=25.1.0" "websockets>=17.2" "psd-tools>=1.24.0" \
+                    "scipy>=1.15.3" "scikit-learn>=1.9.1" "cryptography>=50.0.2" \
+                    "rich>=13.0.0" "opencv-python>=4.9.0.80" "onnxruntime>=1.14.0"
           # Python API server (api_server.py) deps. tests/integration/test_api_contract.py
           # and tests/unit/test_runtime_readiness.py import api_server at module scope,
           # so these must be present or pytest fails collection.
-          pip install fastapi uvicorn python-multipart
+          pip install "fastapi>=0.110.0" "uvicorn>=0.27.0" "python-multipart>=0.0.32"
           # Install test deps
           pip install pytest pytest-asyncio pytest-cov
           # Install optional deps with --no-deps to avoid pulling large model packages
@@ -110,7 +118,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25"
+          go-version: "1.26"
           # 模块位于 api/ 子目录，setup-go 内置缓存默认只认仓库根的 go.sum
           # 会刷 "Dependencies file is not found: go.sum" 告警；缓存交给
           # 下面显式按 api/go.sum 建 key 的 Cache Go modules 步骤统一处理。
@@ -138,7 +146,10 @@ jobs:
 
       - name: Go build
         working-directory: api
-        run: go build -o /tmp/live2d-api .
+        # -tags nomsgpack：裁掉 gin 内置的 msgpack 编解码器（ugorji/go/codec）。
+        # 本项目零 msgpack 使用（Go 与前端都查过），但它会连带拉进 net/rpc /
+        # encoding/gob / encoding/base32，且编译期内存占用很大。
+        run: go build -trimpath -tags nomsgpack -o /tmp/live2d-api .
 
       # HealthCheck 会真的探针 Python（`python --version` + `import PIL` / `import numpy`），
       # 这里把探针要求的依赖装上，好让下面 LIVE2D_TEST_PYTHON 打开的真实路径用例能跑。
@@ -187,6 +198,16 @@ jobs:
       - name: Build
         working-directory: web
         run: npm run build
+
+      # FF-15：Web 构建包必须内含与仓库根逐字节一致的许可全文。
+      # prebuild 把根目录 LICENSE 复制进 web/public/；桌面静态导出（NEXT_STATIC_EXPORT=1）
+      # 会把它带进 web/out/ → api/webui/dist/ → 内嵌进 Go 二进制。
+      # 这里校验复制源本身正确且逐字节一致 —— 许可缺席/漂移都是合规问题，
+      # 不能只靠约定。真实产物（web/out、desktop/bundle）的检查在发布 job 里做。
+      - name: FF-15 license bundle check (Web build)
+        run: |
+          ls -l web/public/LICENSE
+          scripts/check-license-bundle.sh web/public
 
   # ===== moc3 Acceptance (官方内核 + 逐像素形变) =====
   # 默认 job 不装 live2d-py（加载/渲染需要 GL 上下文），所以一致性/加载/像素判据
@@ -313,7 +334,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache: false
 
       - name: Set up Rust
@@ -344,7 +365,7 @@ jobs:
 
       - name: Build Go binary (with embedded frontend)
         working-directory: api
-        run: go build -trimpath -ldflags "-s -w -H windowsgui" -o live2d-api.exe .
+        run: go build -trimpath -tags nomsgpack -ldflags "-s -w -H windowsgui" -o live2d-api.exe .
 
       - name: Build Rust face_tracker
         working-directory: native/face_tracker

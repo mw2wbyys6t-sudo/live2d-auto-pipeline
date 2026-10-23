@@ -74,7 +74,10 @@ scripts\build_tauri_release.bat
 - 拷贝源码树、Go/面捕 exe、`onnxruntime.dll` 与两个模型
 - 用随包解释器做导入冒烟，生成 `BUILD-INFO.json`
 
-依赖清单见 `requirements.desktop.txt`（全量内置，CPU 版 torch）。
+依赖清单见 `requirements.desktop.txt`。主链路依赖全量内置；**torch 组
+（torch / torchvision / transformers / segment-anything / huggingface-hub）
+刻意不内置**，由应用内按需下载（`/api/capabilities` → Go 侧 `capabilityPlans`），
+理由见 `docs/DESKTOP.md` 的「已知边界」。
 
 > 装配必须在 **Windows** 上执行：pip 的 `--platform` 只约束 wheel 标签，
 > 不改变 `platform_system` / `python_version` 等环境标记的评估。

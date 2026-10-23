@@ -5,34 +5,49 @@
 # 版本号单一真源见 core/version.py
 
 # ====== Core Dependencies (Required) ======
-# 依赖下限治理（v0.10.7 复核）：抬高的下限同时消除对应 CVE 面，并减少
+# 依赖下限治理：抬高的下限同时消除对应 CVE 面，并减少
 # FOSSA「Security Analysis / Dependency Quality」告警。取值对齐 dependabot
 # 已通过 CI 的升级目标，不做无依据的越级抬升。
-# - requests>=2.32.3: CVE-2024-35195(Session verify=False 粘连，2.32.0 修复)
-# - urllib3>=2.8.0:   原 2.2.2 已含 CVE-2024-37891 修复，本次抬到 2.8.0
-# - aiohttp>=3.14.5:  CVE-2024-23334/30251/52304 修复后继续抬到 3.14.5
-# - cryptography>=42.0.0: CVE-2023-49083(PKCS#7 空指针 DoS，41.0.6 修复)
-# - Pillow>=12.3.0:   原 10.0.0 → 12.3.0
-# - numpy>=2.5.4:     原 1.24.0 → 2.x（全仓已确认无 numpy 2 移除 API 依赖）
-Pillow>=12.3.0
-numpy>=2.5.4
-requests>=2.32.3
+#
+# 支持的 Python 版本：>= 3.11（Python 3.10 已于 2026-10-01 结束官方安全支持；
+# 且 Pillow 13 / rembg 2.0.86 / scikit-learn 1.9 官方均要求 >= 3.11 ——
+# 保留 3.10 就只能钉在带 CVE 的版本上）。
+#
+# 下限与 CVE 的对应关系（逐条经 OSV.dev 核实，2026-10-23）：
+# - Pillow>=13.0.0:      12.3.0 命中 39 条（多为堆溢出/越界读/解码炸弹 DoS），
+#                        全部在 13.0.0 修复；13.0.0 要求 Python>=3.11
+# - cryptography>=50.0.2: 42.0.0 命中 15 条（PKCS#7 解析、RSA/SSH 侧信道等），
+#                        50.0.2 为当前修复版本
+# - python-multipart>=0.0.32: 0.0.18 命中 14 条（Content-Type ReDoS 序列），
+#                        0.0.31 起全部修复
+# - requests>=2.34.2:    2.32.3 命中 4 条；2.33.0 起修复（对齐 dependabot 目标）
+# - rembg[cpu]>=2.0.86:  2.0.0 命中 7 条（onnxruntime/Pillow 传递依赖链），
+#                        2.0.75 起修复；2.0.86 要求 Python>=3.11
+# - numpy>=2.4.6:       2.5.4 要求 Python>=3.12，3.11 上最高只能到 2.4.6；
+#                        2.4.6 与 2.5.4 均为 0 CVE。地板是**最低**版本 ——
+#                        3.12 上 pip 仍会装到 2.5.4
+# - urllib3>=2.8.0 / aiohttp>=3.14.5: 已含 CVE-2024-37891 / 23334 / 30251 / 52304 修复
+#
+# 其余下限的抬升对齐 dependabot 已提出的升级目标（均经本地全量测试验证）：
+# - scipy>=1.15.3 / aiofiles>=25.1.0 / sounddevice>=0.5.6 / soundfile>=0.14.0
+# - edge-tts>=7.3.1 / websockets>=17.2
+Pillow>=13.0.0
+numpy>=2.4.6
+requests>=2.34.2
 urllib3>=2.8.0
 httpx>=0.28.1
 aiohttp>=3.14.5
-aiofiles>=23.0
-websockets>=12.0
+aiofiles>=25.1.0
+websockets>=17.2
 psd-tools>=1.24.0
-scipy>=1.10.0
+scipy>=1.15.3
 scikit-learn>=1.9.1
-cryptography>=42.0.0
+cryptography>=50.0.2
 
 # ====== Optional: API server (api_server.py, 与 Go API 并行的 Python 实现) ======
-# python-multipart>=0.0.18: CVE-2024-24762(Content-Type ReDoS，0.0.7 修复)
-# 及后续 multipart 解析 ReDoS 公告（0.0.18 修复）
 fastapi>=0.110.0
 uvicorn>=0.27.0
-python-multipart>=0.0.18
+python-multipart>=0.0.32
 
 # ====== CLI Enhancement ======
 rich>=13.0.0
@@ -45,17 +60,19 @@ pygame-ce>=2.5.0; python_version >= "3.14"
 # opencv-python>=4.9.0.80: 捆绑的 libwebp 已含 CVE-2023-4863(堆缓冲区溢出)修复
 opencv-python>=4.9.0.80
 onnxruntime>=1.14.0
-rembg[cpu]>=2.0.0
+rembg[cpu]>=2.0.86
 
 # ====== Face Tracking (drivers/face_tracker) ======
-mediapipe>=0.10.0
+# 与 requirements.desktop.txt 保持同一条约束（此前两边不一致）：
+# 0.10.32 是本仓库实测通过的版本，1.x 换了 API。
+mediapipe>=0.10.30,<0.10.32
 
 # ====== Audio Capture (drivers/audio) ======
-sounddevice>=0.4.6
-soundfile>=0.12.0
+sounddevice>=0.5.6
+soundfile>=0.14.0
 
 # ====== TTS (llm_bridge/tts) - free Edge TTS ======
-edge-tts>=7.2.8
+edge-tts>=7.3.1
 
 # ====== Async / Web (for Go API bridge + web frontend) ======
 # aiohttp>=3.9.0        # already required above
@@ -65,9 +82,9 @@ edge-tts>=7.2.8
 
 # ====== Optional: CLIP embedding (for character visual embeddings) ======
 # Install with: pip install torch transformers
-# torch>=2.0.0
+# torch>=2.14.1
 # torchvision>=0.15.0
-# transformers>=4.30.0
+# transformers>=5.17.0
 
 # ====== Live2D moc3 compile & verification (P0) ======
 # py-moc3: 结构参考与交叉校验（读写 .moc3）；编译器本体自研，不依赖其运行时
@@ -83,9 +100,9 @@ py-moc3>=0.1.0
 # sam2_gd 后端（core/segment_engine/sam2_gd.py）需要下面三件，缺任一改抛 ModelUnavailable：
 # 实测 Sam2ImageProcessor 在没有 torchvision 时报 "requires the Torchvision library"。
 # segment-anything>=1.0
-# torch>=2.0.0
+# torch>=2.14.1
 # torchvision>=0.15.0
-# transformers>=4.30.0
+# transformers>=5.17.0
 # diffusers>=0.20.0
 # accelerate>=0.20.0
 # open-clip-torch>=2.20.0

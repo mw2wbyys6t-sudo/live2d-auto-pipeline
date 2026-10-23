@@ -52,7 +52,12 @@ scripts\build_tauri_release.bat
 `tauri-nsis-installer`）。脚本流程：
 
 1. `NEXT_STATIC_EXPORT=1 next build` → 复制到 `api/webui/dist`（`go:embed` 源）
-2. `go build -H windowsgui -o live2d-api.exe`（内嵌 UI）
+2. `go build -tags nomsgpack -H windowsgui -o live2d-api.exe`（内嵌 UI）
+   > `-tags nomsgpack` 裁掉 gin 内置的 msgpack 编解码器（`ugorji/go/codec`）。
+   > 本项目零 msgpack 使用（Go 与前端都查过），但它会连带拉进 `net/rpc` /
+   > `encoding/gob` / `encoding/base32`，且编译期内存占用很大。所有构建入口
+   > 都已统一带该标签，`tests/unit/test_go_build_tags.py` 锁住这个契约 ——
+   > 若将来真的要用 msgpack，会先在该测试失败，而不是在运行时静默拒绝请求。
 3. `cargo build --release`（原生面捕）
 4. `python scripts\build_desktop_bundle.py` 装配 `desktop\bundle\`
 5. `cargo tauri build --bundles nsis`
@@ -67,7 +72,7 @@ scripts\build_tauri_release.bat
   （锁定表：`scripts/windows/hashes.json`）
 - `pip download --only-binary=:all:` 拉 win_amd64 + cp312 轮子，再
   `pip install --no-index --target` 离线装进 `python/Lib/site-packages`
-  （清单：`requirements.desktop.txt`，含 CPU 版 torch）
+  （清单：`requirements.desktop.txt`；**torch 组刻意不在清单内**，见下方「已知边界」）
 - 修 `python312._pth`（放开 `import site`）并写 `sitecustomize.py`
 - 拷源码树与原生二进制，生成 `BUILD-INFO.json`，最后用随包解释器做导入冒烟
 
@@ -103,7 +108,12 @@ scripts\build_tauri_release.bat
 ## 已知边界
 
 - 内嵌 UI 是**构建时刻**的快照；改前端后必须重新构建安装包。
-- 安装包体积较大（内置 CPU torch 等全量依赖）；CUDA 版 torch 不内置。
+- **torch 组不随包分发**（torch / torchvision / transformers / segment-anything /
+  huggingface-hub）。三条依据：① `core/capabilities.py` 的设计契约本就写明重能力
+  不进包、由应用内按需下载，`api/services/capability_manager.go` 已实现一键安装；
+  ② 桌面端 `auto` 后端要求「有 torch **且**有 SAM 权重」才选 `sam`，而包里只内置
+  ISNet 权重，所以预装的 torch 在默认链路上不参与；③ 这组解压后约 400–500MB，
+  占原 1.4GB 安装包的三分之一。需要 SAM2 时在应用内「能力」页下载。
 - Python 依赖走 `numpy 2.x` 线：`mediapipe` 必须 `>=0.10.30,<0.10.32` ——
   更低版本强制 `numpy<2`，与 scipy / scikit-learn / rembg 的 numpy 2 ABI 轮子冲突；
   `0.10.32+` 又会引入 `opencv-contrib-python` 与 `opencv-python-headless` 争抢 `cv2`。

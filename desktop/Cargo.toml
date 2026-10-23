@@ -4,6 +4,9 @@ version = "0.10.8"
 description = "Live2D Master Agent - Desktop Application (Pygmalion)"
 authors = ["Pygmalion"]
 edition = "2021"
+# SPDX 许可证标识：此前缺失，导致 crates.io / FOSSA 的许可扫描拿不到本 crate 的
+# 许可信息（`cargo metadata` 里 license 为 null）。与根目录 LICENSE 一致。
+license = "Apache-2.0"
 
 [lib]
 name = "live2d_master_agent_lib"

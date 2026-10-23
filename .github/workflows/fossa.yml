@@ -1,0 +1,68 @@
+name: FOSSA Dependency Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # 手动入口：配置好 FOSSA_API_KEY 后可随时重跑一次扫描
+  workflow_dispatch:
+
+# 最小权限：只需要读代码
+permissions:
+  contents: read
+
+jobs:
+  fossa-scan:
+    name: FOSSA Scan (license + security + quality)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # 没有 FOSSA_API_KEY 就整份跳过，而不是失败。
+      #
+      # 原因：本仓库是公开仓库，外部贡献者的 fork PR 里拿不到组织 secret。
+      # 若此时直接跑 fossa-action，它会因为拿不到 key 而失败，把所有外部 PR
+      # 都标成红色 —— 那不是"发现了问题"，而是"没权限"。所以先判存，
+      # 再决定跑不跑。
+      - name: 检查 FOSSA_API_KEY 是否已配置
+        id: check-key
+        env:
+          FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
+        run: |
+          if [ -n "$FOSSA_API_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "FOSSA_API_KEY 已配置，执行扫描。"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::未配置 FOSSA_API_KEY，跳过 FOSSA 扫描。配置方法见 docs/license-policy.md §2。"
+          fi
+
+      - name: FOSSA Analyze
+        if: steps.check-key.outputs.configured == 'true'
+        uses: fossas/fossa-action@29693cc50323968e039056be419b32989fc5880c # v2.0.0
+        with:
+          api-key: ${{ secrets.FOSSA_API_KEY }}
+          # PR 上跑 fossa test：校验「相对 base 分支没有引入新的 issue」。
+          # 仅在 PR 上开启，push 上跑 test 会因为没有 diff 基准而无意义。
+          run-tests: ${{ github.event_name == 'pull_request' }}
+          test-diff-revision: ${{ github.event.pull_request.base.sha }}
+
+      # 依赖许可清单（无需 API key，纯本地计算）。
+      # 它的作用是：让「策略该允许哪些许可」在仓库侧可复现、可评审，
+      # 而不是只能信 FOSSA 后台的扫描结论。
+      # 依赖树变了但清单没变 → 说明清单没重跑；数字对不上 → 策略该同步更新。
+      - name: 依赖许可清单（离线可复现）
+        if: always()
+        run: |
+          python3 scripts/fossa_license_inventory.py --policy > fossa-license-policy.txt
+          cat fossa-license-policy.txt
+
+      - name: 上传许可清单
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fossa-license-policy
+          retention-days: 14
+          path: fossa-license-policy.txt

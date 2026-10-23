@@ -16,6 +16,13 @@ from live2d_builder.physics.config import PhysicsBuilder
 from live2d_builder.exporter.model3_exporter import Model3Exporter
 from live2d_builder.exporter.texture_atlas import TextureAtlas
 from live2d_builder.validator.model_validator import ModelValidator
+from live2d_builder.layer_loader import (
+    ExportLayerInputs,
+    load_export_inputs,
+    load_export_layer_inputs,
+    load_layers_for_export,
+    NON_LAYER_FILES,
+)
 
 __all__ = [
     "Live2DBuilder",
@@ -30,4 +37,9 @@ __all__ = [
     "Model3Exporter",
     "TextureAtlas",
     "ModelValidator",
+    "NON_LAYER_FILES",
+    "ExportLayerInputs",
+    "load_export_inputs",
+    "load_export_layer_inputs",
+    "load_layers_for_export",
 ]

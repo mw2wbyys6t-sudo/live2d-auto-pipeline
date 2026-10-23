@@ -19,7 +19,7 @@ import time
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, Union
+from typing import Optional, Dict, Any, Callable, List, Union
 
 from PIL import Image, ImageFilter
 import numpy as np
@@ -34,12 +34,87 @@ from core.segment_engine.composer import LayerComposer
 from core.segment_engine.layers52 import Layer52Generator
 from core.segment_engine.part_identifier import PartIdentifier
 from core.psd.creator import PSDCreator
-from core.psd.validator import PSDValidator
+from core.psd.validator import (
+    PSDValidator,
+    check_layer_order,
+    read_psd_layer_order,
+)
 from drivers.desktop_pet.animator import DesktopPetAnimator
 from core.qa.engine import QAEngine
 from core.security import sanitize_prompt, validate_image_path
 
 log = get_logger("workflow")
+
+
+def derive_deployment_status(
+    rigging: Optional[Dict[str, Any]],
+    layer_order_issues: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """从 rigging 阶段结果推导部署结论（单一真相源）。
+
+    只认 ``moc3.runtime_ready`` —— 那是官方 Cubism Core 的实测验收结论。
+    「磁盘上有 .moc3」不算就绪：内核会在一致性 / motion 回放 / physics 回放
+    任一处拒绝，而被拒绝的产物文件仍然躺在磁盘上。
+
+    层序错位（FF-2）同样计入阻塞：内核接受只说明「能加载」，不说明「图层
+    前后关系是对的」。层序错了，模型能用但画面层级是错的。
+
+    Args:
+        rigging: ``result["steps"]["rigging"]``，需带 ``moc3`` 摘要。
+        layer_order_issues: ``check_layer_order`` 的返回；``None`` 表示未测量。
+
+    Returns:
+        ``runtime_verified`` / ``deployment_ready`` / ``artifact_type`` /
+        ``deployment_blockers``。未就绪时 blocker 逐字取自实测原因，
+        不再是那句与内核结论无关的静态文案。
+    """
+    moc3 = (rigging or {}).get("moc3") or {}
+    core_ready = bool(moc3.get("runtime_ready"))
+
+    blockers: List[str] = []
+    if not core_ready:
+        blockers.append(
+            moc3.get("moc3_blocker")
+            or "未产生 moc3 验收结论：构建未走到官方 Cubism Core 验收"
+        )
+    for issue in (layer_order_issues or []):
+        blockers.append(
+            issue.get("message") or f"层序错位: {issue.get('layer')}")
+
+    ready = core_ready and not blockers
+    return {
+        "runtime_verified": ready,
+        "deployment_ready": ready,
+        "artifact_type": "deployable_model" if ready else "preparation_bundle",
+        "deployment_blockers": blockers,
+    }
+
+
+#: 语义识别给出的「无法判定」标记。落到层名上等于没有语义。
+_UNKNOWN_PART_NAMES = frozenset({"unknown", "unclassified", "未分类", ""})
+
+
+def _rigging_layer_key(info: Dict[str, Any]) -> str:
+    """绑定用的层键：优先语义部件名。
+
+    绑定（骨骼绑定 / 变形器 / 参数键形）完全按**层名**解析：
+    ``live2d_builder`` 的 ``LAYER_BONE_MAP`` 认 ``hair_back`` / ``eye_left``，
+    ``DeformerHierarchy`` 的 targets 认 ``hair_front`` / ``eyeball_l``。
+
+    语义分层路径的层名本来就是这些名字，所以绑定本来就是对的；
+    但 **K-means 回退路径**的层名是 ``layer_000`` 这类通用序号名 ——
+    语义识别算出来的部件名（``part_name_en``）没被回写到正式绑定输入，
+    于是头发不绑 Hair_Back、眼睛不绑 Eye_L，参数键形整片失效，
+    骨骼解析只能退到默认值或几何猜测。
+
+    这里只做一件事：把**已识别出的语义部件名**用作层键；识别不出时保持
+    原名（质心推断仍可兜底），绝不凭空编造名字。
+    """
+    name = str(info.get("name") or "").strip()
+    semantic = str(info.get("part_name_en") or "").strip()
+    if semantic and semantic.lower() not in _UNKNOWN_PART_NAMES:
+        return semantic
+    return name
 
 
 class WorkflowEngine:
@@ -169,6 +244,36 @@ class WorkflowEngine:
     def _track_temp(self, filepath: str) -> None:
         """P1-2: Track a temporary file for cleanup."""
         self._temp_files.append(filepath)
+
+    def _check_layer_order(
+        self,
+        rig_result: Optional[Dict[str, Any]],
+        psd_result: Optional[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """FF-2：核对权威表 / PSD 实际层序 / moc3 渲染层序三者是否 1:1 一致。
+
+        三份来源的下标基数不同（权威表 65 项，产物只含实际产出的层），
+        所以比较的是投影后的**相对顺序**，判据在 ``check_layer_order`` 里。
+
+        任一份不可得时传 ``None`` 跳过比对 —— 不把「测不到」当成「通过」，
+        也不据此把整个产物判失败（可选依赖缺失不该误报错层）。
+        """
+        psd_order: Optional[List[str]] = None
+        psd_path = (psd_result or {}).get("psd_path") or ""
+        if psd_path and Path(psd_path).is_file():
+            psd_order = read_psd_layer_order(psd_path) or None
+
+        render_order: Optional[List[str]] = None
+        meshes = (rig_result or {}).get("meshes")
+        if isinstance(meshes, dict) and meshes:
+            # 字典插入顺序就是 moc3 的 draw_order（build() 里按喂入顺序枚举）。
+            render_order = list(meshes.keys())
+
+        return check_layer_order(
+            LayerComposer.STANDARD_LAYER_ORDER,
+            psd_order=psd_order,
+            render_order=render_order,
+        )
 
     def _cleanup_temp(self) -> None:
         """P1-2: Remove temporary files after workflow completion or failure."""
@@ -508,7 +613,19 @@ class WorkflowEngine:
                 layer_opacity: Dict[str, float] = {}
                 for info in layer_result["layers"]:
                     path = info["path"]
-                    name = info.get("name") or Path(path).stem
+                    name = _rigging_layer_key(info)
+                    if not name:
+                        name = Path(path).stem
+                    # 重名保护：同一个语义部件可能对应多个层（K-means 里两簇头发）。
+                    # 直接用同一个键会静默覆盖、丢掉先来的层。加序号前缀即可 ——
+                    # live2d_builder 的 _normalise 会剥掉前导数字前缀
+                    # （"2_hair" -> "hair"），语义不丢，这也正是图层 PNG 现有的
+                    # 命名约定（000_hair_back.png）。
+                    if name in layers_for_rig:
+                        suffix = 2
+                        while f"{suffix}_{name}" in layers_for_rig:
+                            suffix += 1
+                        name = f"{suffix}_{name}"
                     try:
                         layers_for_rig[name] = Image.open(path).convert("RGBA")
                     except Exception as exc:
@@ -536,8 +653,16 @@ class WorkflowEngine:
                     "compatibility": {
                         k: v.get("compatible") for k, v in rig_result.get("compatibility", {}).items()
                     },
+                    # moc3 验收结论必须透传：早先这里复制了 8 个字段却独独丢掉 moc3，
+                    # 导致本层拿不到内核结论，只能在收尾处硬编码一句假 blocker。
+                    "moc3": rig_result.get("moc3") or {},
+                    "runtime_ready": bool((rig_result.get("moc3") or {}).get("runtime_ready")),
                 }
-                log.success(f"Rigging complete: {rig_result.get('model3_json', 'N/A')}")
+                if (rig_result.get("moc3") or {}).get("runtime_ready"):
+                    log.success(f"Rigging complete: {rig_result.get('model3_json', 'N/A')}")
+                else:
+                    block = (rig_result.get("moc3") or {}).get("moc3_blocker") or "未产生 moc3 验收结论"
+                    log.error(f"Rigging 完成但不可部署: {block}")
 
             # === Step 5: PSD export ===
             self._set_state("psd_export", "Creating PSD file", 75)
@@ -565,6 +690,21 @@ class WorkflowEngine:
             elif not Path(psd_result.get("psd_path", "")).is_file():
                 raise RuntimeError("PSD export did not produce a file")
             log.success(f"PSD created: {psd_result.get('psd_path', 'N/A')}")
+
+            # === Step 5b: FF-2 层序一致性（架构文档承诺的测量钩子）===
+            # 三份权威必须 1:1 一致：STANDARD_LAYER_ORDER（权威表）、PSD 实际层序、
+            # moc3 渲染层序。任何一处错位都意味着「用户看到的 PS 图层顺序」与
+            # 「模型实际绘制顺序」不同 —— 产物能用，但图层次序是错的。
+            order_issues = self._check_layer_order(rig_result, psd_result)
+            result["steps"]["layer_order"] = {
+                "issues": order_issues,
+                "issue_count": len(order_issues),
+            }
+            if order_issues:
+                for issue in order_issues:
+                    log.warning(f"层序错位: {issue.get('message')}")
+            else:
+                log.success("层序一致性检查通过（FF-2）")
 
             # === Step 6: 52-layer mapping (DEF-004) ===
             if generate_52_config:
@@ -608,13 +748,14 @@ class WorkflowEngine:
                     log.warning(f"Failed to update character card: {e}")
 
             self._set_state("done", "Workflow complete!", 100)
+            # 部署结论必须由内核实测推导，不能硬编码：
+            # 早先这里恒为 False + 一句静态文案，于是「内核接受」与「内核拒绝」
+            # 得到同一个答案，信息量为零（真正的原因被丢在 steps.rigging.moc3 外面）。
             result["success"] = True
-            result["runtime_verified"] = False
-            result["deployment_ready"] = False
-            result["artifact_type"] = "preparation_bundle"
-            result["deployment_blockers"] = [
-                "Cubism moc3 compilation and actual runtime loading have not been verified"
-            ]
+            result.update(derive_deployment_status(
+                (result.get("steps") or {}).get("rigging"),
+                ((result.get("steps") or {}).get("layer_order") or {}).get("issues"),
+            ))
             result["character_image"] = character_path
             result["layers_dir"] = layers_output
             result["output_dir"] = str(self.output_dir)

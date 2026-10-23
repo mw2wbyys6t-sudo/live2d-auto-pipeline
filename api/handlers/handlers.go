@@ -73,7 +73,14 @@ func NewHandler(cfg *config.Config, imageGenerator *services.ImageGenerator, cac
 //
 // v0.10.3: 不再永远返回 200 —— 启动后跑一次 Python 解释器探针，不可用时
 // 返回 503 + 中文说明，避免「前端看到正常、点生成立刻崩」的误导体验。
+//
+// 探针结果有 30s 缓存（见 services.CheckPythonEnvironment）：该端点会被前端
+// 连接指示器与桌面壳秒级轮询，不缓存等于持续 fork Python。需要立即复测时
+// 带 `?force=1`（例如用户在设置页刚装完依赖）。
 func (h *Handler) HealthCheck(c *gin.Context) {
+	if f := c.Query("force"); f == "1" || f == "true" {
+		h.pythonBridge.InvalidatePythonEnvironment()
+	}
 	pyOK, pyIssues := h.pythonBridge.CheckPythonEnvironment()
 	if !pyOK {
 		c.JSON(http.StatusServiceUnavailable, models.Response{
@@ -1042,6 +1049,16 @@ func (h *Handler) ExportLive2D(c *gin.Context) {
 			}
 			return
 		}
+		// 打包闸门：被官方 Cubism Core 拒绝的产物不许进 zip。
+		// 早先这条路径只查「目录是否为空」，于是「内核拒绝但文件躺在磁盘上」的
+		// 模型照样被打包发出去，用户装进 Cubism / VTube Studio 才发现加载不了。
+		if ready, blocker := modelDirReadiness(modelDir); !ready {
+			c.JSON(http.StatusConflict, models.Response{
+				Success: false,
+				Error:   "模型未通过官方 Cubism Core 验收，拒绝打包: " + blocker,
+			})
+			return
+		}
 		zipBytes, err := zipDirectory(modelDir)
 		if err != nil {
 			h.serverError(c, "模型打包", err)
@@ -1117,6 +1134,10 @@ func exportResponseData(raw map[string]interface{}) map[string]interface{} {
 	moc3, _ := inner["moc3"].(map[string]interface{})
 	data["moc3"] = moc3
 	data["runtime_ready"], data["blocker"] = moc3Readiness(inner, moc3)
+	// success 必须与 runtime_ready 一致：Python 桥脚本里的 success 只表示「构建跑完了」，
+	// 直接透传会让同一个 payload 同时出现 success=true 与 runtime_ready=false，
+	// 任何只读 success 的消费者都会把被内核拒绝的产物当成可用。
+	data["success"] = data["runtime_ready"]
 	return data
 }
 
@@ -1140,6 +1161,54 @@ func stringField(values map[string]interface{}, key string) string {
 		return text
 	}
 	return ""
+}
+
+// modelDirReadiness 从模型目录的 build_meta.json 读取官方内核验收结论与层序结论。
+//
+// 打包下载路径可能拿不到 Python 的返回值（目录由前端直接指定），只能以落盘的
+// build_meta.json 为凭据。该文件由 live2d_builder/pipeline.py 在构建收尾时写出，
+// moc3.runtime_ready 即官方 Cubism Core 的实测结论；layer_order 是 FF-2
+// 「18 层顺序契约」的测量结果（权威表 vs moc3 渲染层序）。
+//
+// 缺文件 / 缺字段一律按「未就绪」处理：宁可拒绝下载并说明原因，也不要发出一个
+// 用户装进 Cubism / VTube Studio 才发现加载不了、或图层前后关系是错的包。
+func modelDirReadiness(modelDir string) (bool, string) {
+	raw, err := os.ReadFile(filepath.Join(modelDir, "build_meta.json"))
+	if err != nil {
+		return false, "模型目录缺少 build_meta.json，无法证明已通过官方内核验收"
+	}
+	var meta struct {
+		Moc3       map[string]interface{} `json:"moc3"`
+		LayerOrder map[string]interface{} `json:"layer_order"`
+	}
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return false, "build_meta.json 解析失败: " + err.Error()
+	}
+	if ready, _ := meta.Moc3["runtime_ready"].(bool); !ready {
+		if blocker := stringField(meta.Moc3, "moc3_blocker"); blocker != "" {
+			return false, blocker
+		}
+		return false, "产物未经官方 Cubism Core 验收，不能视为可部署"
+	}
+	// 内核接受只说明「能加载」，不说明「图层前后关系是对的」（FF-2）。
+	if issueCount, _ := meta.LayerOrder["issue_count"].(float64); issueCount > 0 {
+		return false, firstLayerOrderIssue(meta.LayerOrder)
+	}
+	return true, ""
+}
+
+// firstLayerOrderIssue 取出第一条层序错位的说明，取不到时给一句可读兜底。
+func firstLayerOrderIssue(layerOrder map[string]interface{}) string {
+	if issues, ok := layerOrder["issues"].([]interface{}); ok {
+		for _, raw := range issues {
+			if issue, ok := raw.(map[string]interface{}); ok {
+				if msg := stringField(issue, "message"); msg != "" {
+					return msg
+				}
+			}
+		}
+	}
+	return "图层顺序与 STANDARD_LAYER_ORDER 不一致（FF-2），产物层级关系不可信"
 }
 
 // resolveExportModelDir determines the on-disk model directory to zip.

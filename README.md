@@ -12,9 +12,9 @@
 <p align="center">
   <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.8-ff69b4?style=flat-square" alt="version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="license"></a>
-<a href="https://app.fossa.com/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline?ref=badge_shield" alt="FOSSA Status"><img 
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10+-blue?style=flat-square" alt="python"></a>
-  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square" alt="go"></a>
+<a href="https://app.fossa.com/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline"><img src="https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline.svg?type=shield" alt="FOSSA Status"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11+-blue?style=flat-square" alt="python"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat-square" alt="go"></a>
   <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16-black?style=flat-square" alt="nextjs"></a>
 </p>
 
@@ -38,7 +38,7 @@
 | 面部捕捉驱动 | ✅ 安装包内置 | 桌面版用 Rust 原生面捕（YuNet + `onnxruntime.dll`），**不需要装 Python / MediaPipe**；从源码运行才走 MediaPipe。CI 已验证 exe / 模型 / dll 齐备，未接摄像头实测驱动效果 |
 | 桌宠运行 | ⚠️ 未实机验证 | pygame 已随包分发，但多窗口 / 置顶行为尚未在真机验收 |
 | LLM 对话 + 语音 | ⚠️ 需 Key | 对话需要 OpenAI/Anthropic API Key 或本地 Ollama |
-| 离线依赖 | ✅ 安装包自带 | 嵌入式 CPython 3.12 + 92 个离线包（site-packages 约 1.4 GB），装完即可跑，无需预装 Python |
+| 离线依赖 | ✅ 安装包自带 | 嵌入式 CPython 3.12 + 离线包（site-packages 约 0.9 GB），装完即可跑，无需预装 Python。torch 组（SAM2 用）按需下载 |
 
 > 一句话总结：**「生成 → 分层 → 导出」核心链路完全可用，安装包装完即带运行时**；高级交互（LLM 对话）需自备 Key，面捕 / 桌宠尚待真机验证。
 
@@ -141,7 +141,7 @@ Invoke-RestMethod http://127.0.0.1:8080/api/diagnostics | ConvertTo-Json -Depth 
 
 ### v0.10.8 更新内容（先看这 5 条）
 
-1. **安装包自带运行时（461.62 MiB）**：内含嵌入式 CPython 3.12 + 92 个离线包（site-packages 约 1.4 GB）+ `app/` 源码树 + 原生面捕 + YuNet 模型，**不用再装 Python**。旧版 8 MB 包只含两个 exe，这正是「后端未找到」的根因。
+1. **安装包自带运行时（461.62 MiB）**：内含嵌入式 CPython 3.12 + 92 个离线包（site-packages 约 1.4 GB）+ `app/` 源码树 + 原生面捕 + YuNet 模型，**不用再装 Python**。旧版 8 MB 包只含两个 exe，这正是「后端未找到」的根因。（后续版本把 torch 组移出安装包，site-packages 约 0.9 GB，见 CHANGELOG `[Unreleased]`）
 2. **修复导出页 PSD 100% 失败**：前端此前只读内层 `data.success`，而该字段本就不存在；现在改为合并外层 envelope 判断。
 3. **界面少了几个控件**：生成页 Provider / 风格 / Steps / CFG，导出页 Include physics / expressions / motions 与 Compression，Live2D 页模型结构树 / Physics 面板 / Wireframe —— 后端从未消费，属「改了也没效果」的假开关，本版移除。
 4. **不再有假成功**：导出 PSD、角色保存/删除、See-through、LLM 兜底回复、Python 面捕，以前失败也可能显示成功；现在失败会明确报错（See-through 无抠图能力直接返回 **501**，面捕启动失败返回 **503**）。
@@ -173,10 +173,11 @@ python -m core.cli
 
 # 1) 前端 + Go 后端 + Rust 面捕
 cd web && npm ci && npm run build && cd ..
-cd api && go build -trimpath -ldflags "-s -w -H windowsgui" -o live2d-api.exe . && cd ..
+cd api && go build -trimpath -tags nomsgpack -ldflags "-s -w -H windowsgui" -o live2d-api.exe . && cd ..
 cd native/face_tracker && cargo build --release && cd ../..
 
-# 2) 装配自带运行时（嵌入式 Python / 离线 wheel / 模型，约 1.4 GB site-packages）
+# 2) 装配自带运行时（嵌入式 Python / 离线 wheel / 模型，约 0.9 GB site-packages，
+#    不含 torch 组 —— 那组由应用内按需下载）
 python scripts/build_desktop_bundle.py --go-exe api/live2d-api.exe \
   --face-tracker-exe native/face_tracker/target/release/face_tracker.exe
 
@@ -185,7 +186,7 @@ cd desktop && cargo tauri build --bundles nsis
 # 产物：desktop/target/release/bundle/nsis/Live2D Master Agent_<version>_x64-setup.exe
 ```
 
-**只想要一个轻量 exe 调试**（不含运行时，需本机 Python 3.10+）：
+**只想要一个轻量 exe 调试**（不含运行时，需本机 Python 3.11+）：
 
 ```bash
 ./scripts/build_desktop.sh

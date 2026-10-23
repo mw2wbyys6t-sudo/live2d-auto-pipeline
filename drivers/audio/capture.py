@@ -30,7 +30,11 @@ except ImportError:
 try:
     import sounddevice as sd
     _SD_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError):
+    # sounddevice 在「装了但系统缺 PortAudio」时抛的是 OSError 而不是 ImportError
+    # （sounddevice.py 载入即 dlopen libportaudio）。只 catch ImportError 时这个
+    # OSError 会逃出去，把整条导入链打挂 —— 表现为「只是没装麦克风依赖，
+    # 结果所有测试都收集失败」。这里按可选依赖的本意兜住。
     _SD_AVAILABLE = False
     sd = None  # type: ignore
 

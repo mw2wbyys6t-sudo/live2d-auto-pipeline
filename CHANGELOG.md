@@ -4,6 +4,236 @@
 
 ---
 
+## [Unreleased] — 2026-10-23 — 代号「Dependency Truth」
+
+> **本版目标**：把 FOSSA 三项告警（Security Analysis / License Compliance / Dependency
+> Quality）从「第三方后台报的数」变成**仓库侧可核实、可复现的状态**。所有版本下限的取舍都
+> 逐条查过权威源（OSV.dev / PyPI / Go module proxy / crates.io），不做无依据的越级抬升。
+
+### 🔴 修复（会直接坑到用户）
+
+- **Next.js 未授权 RCE（CVE 级，CRITICAL）**：锁定的 `next@16.4.0` 命中 3 条 2026-10-22
+  公布的公告 —— `GHSA-673q-mjm6-r5xr`（`use cache` 函数返回 typed array 时的未授权远程代码执行，
+  CVSS v4 `VC:H/VI:H/VA:H/SC:H/SI:H`）、`GHSA-2464-fhr4-w9xw`（Image Optimization 未授权 RCE）、
+  `GHSA-p3m5-59mp-jv5r`（App Router + Server Actions 拒绝服务）。**全部在 16.4.1 修复**
+  （16.4.1 / 16.4.2 经 OSV.dev 复核均为 0 条）。已升到 `next@16.4.1`，锁文件同步更新
+  （含 `libc` 字段，保留 glibc/musl 区分，避免 musl 系统误装 glibc 二进制）。
+- **Python 依赖下限的 CVE 面**：Pillow 12.3.0 命中 **39 条**（堆溢出 / 越界读 / 解码炸弹 DoS）、
+  cryptography 42.0.0 命中 **15 条**、python-multipart 0.0.18 命中 **14 条**、
+  rembg 2.0.0 命中 **7 条**、requests 2.32.3 命中 **4 条**、torch 2.0.0 命中 **28 条**、
+  transformers 4.30.0 命中 **50 条**。下限全部抬到修复版本（逐条见 `requirements.txt` 注释）。
+- **`transformers` 下限声明的是一个代码跑不起来的版本**：清单写 `transformers>=4.30.0`，
+  而 `core/segment_engine/sam2_gd.py` 明确按 **transformers 5.17.0** 验证
+  （`Sam2Model` / `GroundingDino` 走 `getattr(transformers, cls_name)`，4.x 里根本没有这些类）。
+  下限抬到 `>=5.17.0` 后既消掉 50 条 CVE，也让声明与代码实际要求一致。
+
+### 🟡 支撑版本下限（已声明但从未被任何 CI 验证）
+
+- `requirements.txt` 声明的下限此前**在 CI 里零验证** —— 三处 `pip install` 全是不带约束的
+  `latest`。现在 CI 按**声明的下限**安装（`"Pillow>=13.0.0"` 这种形式），下限是否仍可满足/
+  仍可安装，第一次被 CI 真正证明一次。
+- `install.py` 的兜底安装列表仍写着 `Pillow>=10.0.0` / `numpy>=1.24.0` / `urllib3>=2.2.2` 等旧值，
+  与清单直接冲突（单独装会拉到带 CVE 的版本）；已对齐。其 `PYTHON_MIN` 原本是 `(3, 9)`，
+  与清单实际要求完全脱节（3.9 走到装依赖那步必然失败）。
+- **Go 侧 48 条 advisory 清零到 1 条**：`golang.org/x/crypto` / `net` / `sys` / `text` 与
+  `quic-go` 升到修复版本。x/net 的三条都是 **HTTP/2 服务端 DoS**（Trailer 内存放大 /
+  畸形帧头转发 / 大量流耗 CPU），本服务支持 `LIVE2D_API_HOST=0.0.0.0` 暴露到局域网，值得修。
+  为此把 Go 工具链下限从 1.25 抬到 **1.26**（x/crypto 0.56+ / x/net 0.60+ 要求 go>=1.26），
+  CI 三个工作流的 `setup-go` 同步升级。
+- **Rust 侧**：两个 `Cargo.lock` 全量 `cargo update`（`ort` 2.0.0-rc.14 → rc.15、
+  `webpki-root-certs` 1.0.9 → 1.0.10 等）。
+
+### 🟡 支持版本收敛（两条，都是「保不住就别假装」）
+
+- **放弃 Python 3.10**：Python 3.10 已于 **2026-10-01** 结束官方安全支持；而 Pillow 13.0.0 /
+  rembg 2.0.86 / scikit-learn 1.9 官方均要求 `>=3.11` —— 保留 3.10 就只能钉在带 CVE 的版本上。
+  改动的连带面：README 徽章、`install.py` 的 `PYTHON_MIN`、CI 矩阵（3.10 / 3.11 / 3.12 → 3.11 / 3.12）。
+  顺带修掉一个**存量硬伤**：`requirements.txt` 声明的 `numpy>=2.5.4` 要求 py>=3.12，
+  `scikit-learn>=1.9.1` 要求 py>=3.11 —— 也就是说**这份清单在 py3.10/3.11 上本来就装不上**，
+  README 宣称的「Python 3.10+」早已名不副实。
+- **Go 最低版本 1.21 → 1.26**（同上，为修 x/net 的 HTTP/2 DoS）。
+
+### 🟢 许可证与合规（FF-15 首次真正落地）
+
+- **剩余的 64 条 License Compliance issue 不是合规风险，是策略未配置** —— 逐条实算
+  716 个依赖后确认：**694 允许 / 22 需审阅（弱 copyleft）/ 0 禁止 / 0 未声明**（移除 torch 组后）。
+  **没有任何强 copyleft 或非商业条款依赖**，那 64 条只是「不在 FOSSA 默认允许清单里」。
+  新增 `scripts/fossa_license_inventory.py`：枚举 PyPI / npm / crates.io / Go 四个生态的
+  依赖树，逐个取 SPDX 标识（数据源是 PyPI JSON、锁文件自带许可、crates.io API、
+  deps.dev —— 都是权威源，不是扫描器的结论），按 Apache-2.0 分发场景分三档，
+  直接产出「策略该允许什么」的清单。
+- **`.fossa.yml` 的 `telemetry.scope` 写成了布尔值**：FOSSA CLI 解析配置时直接报
+  `parsing ConfigTelemetryScope failed, expected String, but encountered Boolean` ——
+  **整个扫描跑不起来**（用官方 CLI 3.20.7 实测复现）。已改为 `scope: "off"`。
+- **新增 `.github/workflows/fossa.yml`**：FOSSA 扫描 CI job。**无 `FOSSA_API_KEY` 时自动跳过**
+  而非失败 —— 本仓库是公开仓库，外部贡献者的 fork PR 拿不到组织 secret，
+  直接跑会把所有外部 PR 标红（那是"没权限"不是"有问题"）。
+  同时该 job 无条件跑离线许可清单并上传 artifact，让「策略该允许什么」在仓库侧可复现、可评审。
+- **新增 `docs/license-policy.md`**：FOSSA API Key 的创建步骤（后台手动、只显示一次、
+  必须选 Push Only 而非 Full API Token —— 后者会把组织读写权限暴露给所有能提 PR 的人）、
+  后台三档规则的完整填写清单、以及「仓库侧能改什么 / 不能改什么」的对照表。
+- **一个必须知道的 FOSSA 限制**：项目已存在后，改 `.fossa.yml` 的 `policy:` 字段
+  **不会生效**（官方明确："changing the `policy:` field ... will *not* change the policy"）。
+  切换策略必须在**项目后台** Settings → Issues Policies 里做 —— 这是纯后台操作，
+  仓库侧无法替代。
+- **FF-15 此前是纸面承诺**：`docs/architecture/index.md` 写着「Release 打包前钩子：
+  `scripts/check-license-bundle.sh`（待补）」，而该脚本**从不存在**。现已实现：
+  校验产出物内的许可全文是否与仓库根 `LICENSE` **逐字节一致**（根目录若有 `NOTICE` 一并校验），
+  不合规即**退出码 1 阻断发布**。
+- **产出物真的带上许可了**：此前导出的模型包、安装包、Web 构建包**都不含任何许可声明** ——
+  用户把模型包再分发出去时没有许可文本。现在：
+  - 新增 `core/license_bundle.py` 作为**唯一真源**，Python 降级服务与 Go 导出桥共用；
+  - 导出模型包写入 `LICENSE`（`tests/unit/test_license_bundle.py` 锁住）；
+  - `web/package.json` 加 `prebuild` 钩子，从仓库根复制许可进 `web/public/`（不提交副本，避免漂移）；
+  - `scripts/build_desktop_bundle.py` 把许可写进 `desktop/bundle/` 根（安装后的 `$RESOURCE` 根）；
+  - `deploy/installer/desktop.iss` 的 `[Files]` 安装许可全文；
+  - CI 加 FF-15 校验（PR 级查 `web/public`，发布级查 `web/out` + `desktop/bundle` + `api/webui/dist`）。
+- **两个 crate 补 SPDX 标识**：`desktop/Cargo.toml` 与 `native/face_tracker/Cargo.toml` 此前
+  **没有 license 字段**（`cargo metadata` 里是 `null`），crates.io 与许可扫描都拿不到本 crate
+  的许可信息 —— 已补 `license = "Apache-2.0"`。
+- **文档残留修正**：`docs/index.html` 的徽章仍写着「Open Source MIT」（ADR-001 自 2026-09-22
+  起已是 Rev.4 / Apache-2.0）→ 改为 Apache-2.0。
+
+### 📦 安装包体积：把误打进去的 torch 组移出（约 −500MB）
+
+- **`requirements.desktop.txt` 把 torch 组全量打进了安装包，与项目自己的设计契约矛盾。**
+  `core/capabilities.py` 的模块文档明确写着「基础包只带零前提主链路所需的轻依赖；
+  SAM2/torch、rembg、mediapipe…等重能力**不进包**，由应用内按需下载」，
+  `api/services/capability_manager.go` 的 `capabilityPlans` 也已实现 `sam2_gd`
+  组的一键 pip 安装 —— 但清单里同时写着 `torch>=2.14.1`、`torchvision`、
+  `transformers`、`segment-anything`、`huggingface-hub`，等于**两条路都走了一遍**。
+- **而且装了也用不上**：`core/segment_engine/semantic.py::_resolve_backend` 的 `auto`
+  要满足「`HAS_TORCH` **且**找到 SAM 权重」才选 `sam`，而装配脚本只内置 ISNet 权重
+  （`models/rembg/isnet-anime.onnx`），桌面端的 `auto` **恒走 `isnet`**。
+  实测在无 torch 环境下 `_resolve_backend("auto") == "isnet"`，与有 torch 时行为一致。
+- **代价**：torch 的 win_amd64 wheel 约 119MB（PyPI 实测），解压进 site-packages
+  约 400–500MB —— 占 1.4GB 安装包的三分之一左右，换不到任何默认功能。
+- **处置**：把这 5 个包移出 `requirements.desktop.txt`（清单 29 → 24 条），
+  改为应用内「能力」页按需下载。**桌面端默认链路零变化**（本来就是 isnet）。
+  同步修正三处互相打架的文档，并把 e2e 验收从「要求 torch 存在」改成
+  「断言 torch **不**在包内」（`TORCH_ABSENT_OK`）—— 有它反而说明装配回退了。
+
+### 🔍 Rust 依赖多版本：查清了，结论是不收敛
+
+- `desktop/Cargo.lock` 有 **20 个包存在多版本并存**（`syn` 三个大版本
+  1.0.109 / 2.0.119 / 3.0.9、`base64` 三个、`schemars` 三个、`toml_edit` 三个等）。
+  用 `cargo tree -d` 反查后确认：**这些几乎全部来自 Tauri 的传递依赖**，
+  版本分裂由上游 `Cargo.toml` 的 `^x` 约束决定，仓库侧没有杠杆 ——
+  例如 `toml_edit` 的三个版本分别被 `proc-macro-crate` 的 1.3.1 / 2.0.2 / 3.5.0
+  锁定，而这三个又分别被 `glib-macros` / `gtk3-macros` / `num_enum_derive` 要求。
+- **其中一大半在 Windows 构建里根本不参与编译**：全量锁文件 407 个包，
+  指定 `--target x86_64-pc-windows-msvc` 后只剩 **280 个**，
+  且 GTK 系（`glib` / `gtk` / `cairo` / `webkit2gtk` / `soup3`）为 **0 处**。
+  Linux / macOS / Android 专属依赖共 127 个，占全量的 31%。
+- **结论**：不做 `cargo update -p` 强行统一。proc-macro 生态按大版本分裂是常态，
+  强行拉平会直接破坏上游编译；真要减少体积，正确方向是升级 Tauri 大版本，
+  成本与风险都远高于收益。
+
+### ⚙️ Go 构建精简：裁掉 gin 内置的 msgpack 编解码器
+
+- **所有产出 Go 二进制的构建入口统一加 `-tags nomsgpack`**（CI 两个 workflow +
+  `build_desktop.{bat,sh}` + `build_tauri_release.{bat,sh}` + `run_tauri_dev.{bat,sh}`
+  + `api/start.sh` + README 的手抄命令）。
+- **为什么**：gin 的 `binding` 默认内置 msgpack，会连带拉进 `ugorji/go/codec`、
+  `net/rpc`、`encoding/gob`、`encoding/base32`（依赖树 327 → 323 个包）。
+  本项目**零 msgpack 使用**，Go 代码与前端都查过。该包编译期内存占用尤其大 ——
+  在本仓库的构建环境里编译它时，`go build` 直接被 **OOM kill**（`signal: killed`），
+  加上该标签后构建成功（产物 15.4MB，`go tool nm` 里 `ugorji` 符号数为 **0**）。
+- **契约测试 `tests/unit/test_go_build_tags.py`（11 条）**锁住两件事：
+  ① Go 源码与前端不得出现 msgpack —— 否则源码看起来"支持 msgpack"，而带标签的
+  构建会在运行时拒绝，属于最难查的一类不一致；② 每个产出二进制的 `go build`
+  必须带该标签 —— 漏一处就会让开发构建与发布构建的编解码能力分叉。
+  已做反向验证：临时去掉 `api/start.sh` 的标签，测试立即失败并精确报出行号。
+
+### 🔍 前端依赖审计：没有可删的
+
+- `web/package.json` 的 5 个 `dependencies` + 7 个 `devDependencies` 全部必要。
+  静态扫描会把 `react-dom` / `@types/*` / `autoprefixer` / `postcss` /
+  `typescript` 误判成"未使用"（它们不经 `import` 使用：类型走 `tsconfig`、
+  PostCSS 插件走 `postcss.config.js` 的 `plugins` 字段、`tsc --noEmit` 走 CI 步骤），
+  逐个核实后保留。`npm` 侧 219 个包仅 2 个存在多版本（`glob-parent` / `picomatch`，
+  均为 dev 传递依赖），无优化空间。
+
+### ⚡ 运行时性能：健康检查从「每次 fork 3 个 Python」改成缓存 + 单次探测
+
+实测报告见 [`docs/performance-report-2026-10-23.md`](docs/performance-report-2026-10-23.md)。三处改动全部有前后对比：
+
+- **`/api/health` 原来每次请求拉起 3 个 Python 子进程**（`python --version` +
+  `import PIL` + `import numpy`），单次 1.53 s、**零缓存**。而前端连接指示器与
+  桌面壳会按秒级轮询它 —— 32 并发下实测 **200 次请求只成功 9 次，耗时 115 s，RPS=2**。
+  改为：**合并成 1 次 exec**（一个内联脚本同时拿版本与缺失依赖）+ **30 s TTL 缓存**。
+  结果：`/api/health` 命中缓存 **0.0004 s**，并发 200 次 **200/200 成功、1.53 s、RPS=130**
+  （吞吐 **65×**，耗时 **75×**）。缓存可用 `?force=1` 绕过；诊断页永远强制实时。
+  合并后仍能逐项报出缺失依赖，且**输出无法解析时退回「退出码 0 即可用」**，
+  与合并前判据一致（否则会把健康状态平白判成 503）。
+- **分层质量评分从 2.27 s 降到约 1.0 s**（`core/segment_engine/layer_quality.py`）：
+  两两配对检查里 `ma.sum()/mb.sum()` 原本**每对都算一次**，35 层就是约 1190 次
+  60 万像素的全数组归约 —— 改为每层预计算一次（35 次）。新增
+  `_iou_from_counts(inter, sa, sb)`，用恒等式 `|A∪B| = |A|+|B|−|A∩B|` 替代
+  `(a|b).sum()`，把「调用方已经算过 inter、却还要再扫两遍全图」的浪费去掉。
+  实测 `check_duplicates` 0.834 s → 0.189 s、`check_overlap` 0.705 s → 0.159 s（各 4.4×）。
+  **正确性**：旧版 vs 新版对同一输入端到端对比，`steps.layering.quality`
+  **逐字段完全一致**（`defect_count 0→0`、`explained_fraction 0.9898→0.9898`）。
+- **`generate_occlusion_map` 去掉 O(n²) 次全图扫描**（`core/segment_engine/composer.py`）：
+  它是 35 层两两遮拦检测（595 对），原实现对**每一对**都调 `_bbox_overlap`，
+  而它内部是 `np.where(mask)` —— 一次 66 万像素的全画布扫描，合计约 **1190 次**。
+  包围盒只与掩码本身有关，改为每层预计算一次（35 次），循环里只比 4 个整数。
+  实测 `compose` **2.822 s → 1.563 s**（1.8×），`generate_occlusion_map` 跌出热点列表。
+  **正确性用最强口径验证**：旧版 vs 新版各跑一次完整管线，对比 **130 个产物的 SHA256** ——
+  所有 PNG / moc3 / texture / `exp3.json` / `motion3.json` **逐字节一致**，
+  仅 4 个元数据文件不同且差异全是时间戳与输出目录路径。
+- **PNG 压缩级别（6→1）经评估后否决**：初版报告估「可省 1.4 s」，但拆开 88 次
+  `Image.save` 后发现 **98% 是交付物**（层图 / 纹理 / 优化图），可安全降级的中间预览
+  只占 2.3%（0.069 s，降级仅省 0.032 s）。函数名 `_export_preview_layers` 有误导性 ——
+  它写的就是用户拿去 PS 编辑的 `layers/*.png`。全局降级会让每张层图体积 +20%，
+  代价大于收益，故**不做**，转而优化了上面的 `generate_occlusion_map`。
+- **`synthesize_face_geometry` 复用眼睛层合成结果**（`core/segment_engine/composer.py::_eye_solid`）：
+  同一侧眼睛在一次合成里被算 **3 遍** —— `_synthesize_tear` 调一次 `_eye_anchor`、
+  `_synthesize_cheek` 又调一次、`_synthesize_eyelid` 自己再合成一遍，每遍都是
+  66 万像素的浮点 alpha 合成。改为按 `tuple(sources)` 缓存（**不能按 index**：
+  两个调用方传的层顺序相反，见下条）：`synthesize_face_geometry` **0.932 → 0.791 s**，
+  `_synthesize_tear` **0.303 → 0.165 s**。产物逐字节一致（130 个产物 SHA256 对比）。
+- **记录一处既存不一致（未修）**：`_eye_anchor` 用原始 `EYELID_SOURCES` 顺序
+  （`irides → eyewhite → eyes`，虹膜在底层），`_synthesize_eyelid` 用 `_draw_order`
+  排序后（`eyes → eyewhite → irides`，虹膜在顶层）—— 两者合成的其实是**不同的图**；
+  且 `eye_left`/`eye_right` 不在 `STANDARD_LAYER_ORDER` 里。修它会改变产物像素，
+  属产品决策，故本轮只记录（见性能报告 §0.1）。
+- **生成管线端到端 11.92 s → 9.41 s**（中位，3 次，累计 −21%）。
+- **Go 侧补上 pprof（默认关闭，双重闸门）**：必须 `LIVE2D_PPROF=1` **且**监听回环
+  才挂载；设了变量却监听 `0.0.0.0` 只打警告不挂载。此前 `grep pprof api/` 无结果，
+  只能测 RSS。现在可拿到堆分解：`HeapAlloc` 仅 2.29 MB，`Sys` 12.7 MB 里
+  GC 元数据 1.97 MB —— **坐实 Go 内存基本全是 runtime 固定开销，无优化空间**。
+
+### 🐛 顺手修掉的存量 bug
+
+- **`scripts/fossa_license_inventory.py` 在 CI 上会崩**（本轮引入、CI 首次暴露）：
+  crates.io 限流时 `resp.read()` 抛 `http.client.IncompleteRead`，它继承
+  `HTTPException` 而**不是** `OSError`，而 `_get_json` 的 except 只列了
+  `URLError/TimeoutError/ValueError/OSError` —— 异常逃出线程池，整个
+  「依赖许可清单」步骤 exit 1。本地网络稳定时完全测不出来。
+  已把 `http.client.HTTPException` 归入「可重试」分支，并补 3 条单测
+  （IncompleteRead / RemoteDisconnected / 正常解析）。
+
+- **`drivers/audio/capture.py` 的可选依赖保护写窄了**：`except ImportError` 没能兜住
+  `sounddevice` 在「装了但系统缺 PortAudio」时抛的 **OSError**（它载入即 `dlopen libportaudio`）。
+  这个 OSError 会逃出导入链，把**整条导入链打挂** —— 表现为「只是没装麦克风依赖，
+  结果所有测试都收集失败」。已改为 `except (ImportError, OSError)`。
+  （`sounddevice` 0.4.6 与 0.5.6 行为相同，是存量问题，与本次版本抬升无关。）
+
+### 📊 治理结果（OSV.dev 全量复扫，口径对齐 FOSSA）
+
+| 生态 | 治理前 | 治理后 |
+|---|---|---|
+| PyPI | 157 条 | **0 条** |
+| Go | 48 条 | 1 条 |
+| npm | 5 条 | 1 条 |
+| crates.io | 6 条 | 4 条 |
+| **合计** | **129 条** | **6 条** |
+
+剩余 6 条**全部没有修复版本**，逐条原因见 `docs/LIMITATIONS.md` §10。
+
+---
+
 ## [v0.10.8] — 2026-10-17 — 代号「Honest Desktop」
 
 > **本版目标**：让安装包"装完真的能用"，并把"看起来能用、实际没有"的东西清掉。

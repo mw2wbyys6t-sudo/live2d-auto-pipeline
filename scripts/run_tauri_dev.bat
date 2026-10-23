@@ -75,7 +75,7 @@ echo.
 REM ---- 第 4 步：编译 Go 二进制 ----
 echo [4/5] 编译 Go API 二进制（内嵌前端）...
 pushd api
-go build -o live2d-api.exe .
+go build -trimpath -tags nomsgpack -o live2d-api.exe .
 if errorlevel 1 (popd & echo [X] Go 编译失败 & exit /b 1)
 popd
 echo [OK] Go 二进制已生成 api\live2d-api.exe

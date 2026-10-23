@@ -124,13 +124,19 @@ def test_warp_package_loads_in_official_core(tmp_path):
 
 @requires_live2d
 def test_empty_additional_section_with_warp_is_rejected(tmp_path):
-    """负对照：删掉 additional 段，内核必须拒绝 —— 钉住我们实测到的那条约束。"""
+    """负对照：删掉 additional 段，产物必须被内核拒绝 —— 钉住实测到的那条约束。
+
+    判据落在「完整清单能否加载」而不是「一致性检查」：实测（CubismNativeSDK 5-r.5 /
+    live2d-py 0.8.1）``HasMocConsistencyFromFile`` 对这份文档返回 **true**，
+    真正拒绝它的是 ``LoadModelJson``。加载才是用户装进 Cubism / VTube Studio 的
+    真实路径，所以负对照必须打在这道门上 —— 打在一致性检查上会得到假绿。
+    """
     doc = compile_static_rig(_rig((0.0,)))
     doc.set("additional.quad_transforms", [])
-    moc3 = tmp_path / "no_additional.moc3"
-    moc3.write_bytes(doc.to_bytes())
-    result = verify_moc3_consistency(str(moc3))
-    assert result["ok"] is False, "additional 段为空却被内核接受了，该规则已不成立"
+    result = verify_moc3_load(str(_package(tmp_path, doc, "no_additional")))
+    assert result["ok"] is False, (
+        f"additional 段为空却被内核加载成功，该规则已不成立\n"
+        f"stdout={result['stdout']}")
 
 
 @requires_live2d

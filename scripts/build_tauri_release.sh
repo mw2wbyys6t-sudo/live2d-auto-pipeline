@@ -49,7 +49,7 @@ echo
 
 # ---- Step 4: Go binary ----
 echo "[4/6] Building Go binary (with embedded frontend)..."
-(cd api && go build -trimpath -ldflags "-s -w" -o live2d-api .)
+(cd api && go build -trimpath -tags nomsgpack -ldflags "-s -w" -o live2d-api .)
 echo "[OK] api/live2d-api"
 echo
 

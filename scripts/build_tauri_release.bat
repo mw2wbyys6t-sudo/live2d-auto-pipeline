@@ -80,7 +80,7 @@ REM ---- 第 4 步 ----
 echo [4/6] 编译 Go 二进制（内嵌前端，windowsgui 无控制台）...
 taskkill /F /IM live2d-api.exe >nul 2>&1
 pushd api
-go build -trimpath -ldflags "-s -w -H windowsgui" -o live2d-api.exe .
+go build -trimpath -tags nomsgpack -ldflags "-s -w -H windowsgui" -o live2d-api.exe .
 if errorlevel 1 (popd & echo [X] Go 编译失败 & goto :FAILED)
 popd
 echo [OK] api\live2d-api.exe

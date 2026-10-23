@@ -12,6 +12,7 @@ export default function HealthPage() {
   const [models, setModels] = useState<OptionalModel[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [actionError, setActionError] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -38,12 +39,24 @@ export default function HealthPage() {
     void load();
   }, []);
 
+  // 后端拒绝（例如降级模式不支持在线下载）时必须把原因显示出来：
+  // 早先这里把异常吞掉，用户点了「下载」却毫无反应。
   const startModel = async (name: string) => {
-    await apiClient.startOptionalModel(name).catch(() => undefined);
+    setActionError('');
+    try {
+      await apiClient.startOptionalModel(name);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : '下载失败');
+    }
     setModels(await apiClient.listOptionalModels());
   };
   const cancelModel = async (name: string) => {
-    await apiClient.cancelOptionalModel(name).catch(() => undefined);
+    setActionError('');
+    try {
+      await apiClient.cancelOptionalModel(name);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : '取消失败');
+    }
     setModels(await apiClient.listOptionalModels());
   };
 
@@ -158,6 +171,10 @@ export default function HealthPage() {
                     >
                       <Ban className="w-3.5 h-3.5" /> 取消
                     </button>
+                  ) : m.state === 'error' ? (
+                    // 后端已明确说明拿不到这个模型（如降级模式不支持在线下载）：
+                    // 再摆一个「下载」按钮只会让用户点了没反应。
+                    <span className="text-xs text-red-300 shrink-0">不可用</span>
                   ) : (
                     <button
                       onClick={() => startModel(m.name)}
@@ -185,6 +202,9 @@ export default function HealthPage() {
                 )}
               </div>
             ))}
+            {actionError && (
+              <p className="text-xs text-red-300">操作失败：{actionError}</p>
+            )}
           </div>
         )}
 

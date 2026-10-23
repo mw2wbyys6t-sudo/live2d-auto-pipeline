@@ -296,7 +296,7 @@ type ExportModelRequest struct {
 	OutputDir   string `json:"output_dir,omitempty"`
 	ModelDir    string `json:"model_dir,omitempty"` // 已存在的模型目录（预览页直接打包下载）
 	Download    bool   `json:"download,omitempty"`  // true 时直接返回 zip 二进制流
-	Format      string `json:"format,omitempty"`    // "model3", "runtime"
+	Format      string `json:"format,omitempty"`    // 预留字段：当前只有 Live2D 包一种真实格式，本字段不被读取
 }
 
 // 导出响应没有固定结构体：Handler 直接把 Python 构建结果（含摊平后的

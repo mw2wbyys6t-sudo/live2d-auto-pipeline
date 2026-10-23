@@ -41,7 +41,7 @@ echo -e "${GREEN}✅ 依赖下载完成${NC}"
 
 # 编译
 echo -e "${YELLOW}[3/5] 编译...${NC}"
-go build -o live2d-api .
+go build -trimpath -tags nomsgpack -o live2d-api .
 echo -e "${GREEN}✅ 编译完成${NC}"
 
 # 检查可执行文件

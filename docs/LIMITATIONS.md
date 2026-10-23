@@ -136,6 +136,18 @@
   `tools/probe_multiband_axis_order.py` 与评审 F-06），网格键形与 warp 变形器都在用。
   剩下的是**语义**判断：把「头部转动 × 身体转动」合成一条多轴带会让脖子同时受两级
   转动影响，是否符合美术预期需要确认，因此暂不生成。
+- **绑定输入的层名 = 语义部件名**：绑定（骨骼绑定 / 变形器 / 参数键形）完全按**层名**解析 ——
+  `live2d_builder` 的 `LAYER_BONE_MAP` 认 `hair_back`/`eye_left`，`DeformerHierarchy` 的
+  targets 认 `hair_front`/`eyeball_l`。语义分层路径的层名本来就是这些名字，绑定成立；
+  但 **K-means 回退路径**的层名是 `layer_000` 这类通用序号名，语义识别算出来的部件名
+  （`part_name_en`）此前**没有被回写到正式绑定输入** —— 头发不绑 `Hair_Back`、眼睛不绑 `Eye_L`，
+  参数键形整片失效，骨骼解析只能退到默认值或几何猜测。
+  现在 `core/workflow.py` 的 `_rigging_layer_key()` 会把**已识别出的**语义部件名用作层键
+  （识别不出时保持原名，绝不凭空编造；重名加 `N_` 前缀，因为 `live2d_builder` 的
+  `_normalise` 会剥掉前导数字前缀，语义不丢）。见 `tests/unit/test_rigging_layer_key.py`。
+  **仍存的边界**：K-means 回退路径的部件识别本身只是颜色/位置启发式（`core/segment_engine/
+  part_identifier.py`），识别精度有限 —— 语义回写让「识别到的语义」不再丢失，但不会让
+  识别变得更准；真正准的语义只有语义分层路径能给。
 - **表情形变走 warp 变形器，同一个部件的多个参数合成一条「多轴带」**：内核里一个网格只能挂
   一个参数带（眼睛已被双眼球键形、嘴与眉已被头部三轴键形占满），一个变形器也只能挂一个带，
   所以口的「开合 × 口型 × 大小」、眉的「上下 × 角度 × 形状」必须压成一条多轴带
@@ -286,14 +298,35 @@
   （Windows 下摄像头设备不可共享，浏览器拿不到画面）。前端 `web/lib/native-tracker.ts` 连接
   `/api/ws` 订阅 `tracking_frame`；`POST /api/tracking/start|stop`、`GET /api/tracking/status`
   为控制与状态接口。浏览器内 MediaPipe 面捕（`web/lib/face-tracker.ts`）已移除。
-  降级实现 `api_server.py` 仍保留 `/api/tracking/*` 与 `/ws/tracking`（Python + MediaPipe），
-  与 Go 的原生子进程是两条独立路径。
+  降级实现 `api_server.py` 保留 `/api/tracking/*` 与 `/ws/tracking`（Python + MediaPipe），
+  与 Go 的原生子进程是两条独立采集路径，但**对前端的协议已经统一**：
+  降级模式同样在 `/api/ws` 上广播 `tracking_frame`（`data.live2d_params` + `blendshapes` +
+  `head_rotation`，与 Go 的 `native_bridge` 同构）。此前降级模式的 `/api/ws` 只有一个阻塞的
+  接收循环，前端能连上却永远收不到帧 —— 表现为「连着但模型不动」。
 - 「Launch Desktop Pet」按钮已接通（`POST /api/deploy/desktop`）：真实可用的前提仍是
   Windows + `live2d-py` + 已通过官方内核验收的模型目录。
 
 ## 6. API 层
 
-- `api_server.py` 是 Go 服务的降级替代实现，其多数 POST 处理器为**桩**（仅回 202）。
+- `api_server.py` 是 Go 服务的降级替代实现。**它不是「多数 POST 都是桩」**：实测 21 个 POST
+  端点里 16 个是真实实现，剩下 5 个（`/api/see-through`、`/api/export/psd`、`/api/cache/clear`、
+  `/api/models/optional/download`、`/api/models/optional/cancel`）统一回 **501 + `go_endpoint` 指引**，
+  不回 202 假成功。降级模式的边界是「这些能力只有 Go API 有真实实现」，不是「大部分接口没写」。
+- 降级模式现已与 Go 侧**对齐前端实际调用的全部端点**（此前 8 个返回 404，导致健康页误报
+  「无法连接后端」）：`GET /api/diagnostics`、`GET /api/providers`、`GET /api/models/optional`、
+  `GET /api/generations/models`、`GET /api/tracking/status`、`POST /api/upload`、
+  `POST /api/import/psd`、`POST /api/import/pngs`、`POST /api/characters/:id/references`、
+  `POST /api/characters/:id/embedding`。端点对齐由「前端路径字面量 × 后端路由表」的全量对账
+  核过（不是逐个端点手查）。
+- 参数校验失败（422）现在也走统一响应信封 `{success, error, data}`。FastAPI 默认回
+  `{"detail": [...]}`，前端解析不到 `error` 字段，只能显示一句 "Request failed: 422"；
+  Go 侧一直是走 `models.Response` 的 —— 这是又一处 Go/Python 信封不一致。
+- `/api/health` 现在带 `data.python_ok`（安装验收脚本与 e2e checklist 的硬判据，缺字段会被判 FAIL）；
+  依赖缺失时回 503 而不是「一切正常」。
+- `/api/status` 与 `/api/models` 的 `available` 改为**实测探测**（不再硬编码 true/false）：
+  服务可用性看真实探测结果，模型可用性看 `ProviderRouter` 的 provider 状态（配了 Key 就变 true）。
+  `/api/info` 的 `features` 同样改为按探测给出：语义分层降级时如实标成
+  「颜色启发式分层（已降级：…）」，不再一边写着「语义分层」一边跑的是另一条路。
 - 聊天会话存储为内存实现，**无 TTL/淘汰**。
 - v0.10.1 新增（Go）：`GET /api/generations/latest`、`POST /api/segment`、`POST /api/upload`、
   `POST /api/characters/:id/references`、`POST /api/characters/:id/embedding`；`/output/*filepath`
@@ -311,7 +344,95 @@
 - 真实验收入口是手动触发的 `moc3-acceptance` job（安装 live2d-py + xvfb + `LIVE2D_TEST_PIXELS=1`）。
   首次运行需人工确认环境可跑通。
 
-## 9. 参考
+## 9. 依赖治理现状（2026-10-23 复核）
+
+本节记录**仓库侧**能核实的那部分依赖状态。FOSSA 三项检查（Dependency Quality /
+License Compliance / Security Analysis）由第三方 SaaS 回写 commit status。
+本节先记 2026-10-23 复核（FOSSA 后台重扫）的数字，再补上当日新增的
+**仓库侧全量许可清单**（`scripts/fossa_license_inventory.py`）——
+它让「那 65 条到底是什么」第一次有了可复现的答案（后续移除 torch 组后降到 64）。
+
+**FOSSA 后台重扫的真实数字**（PR #48，commit `6d9a075`，2026-10-23）：
+
+| FOSSA 检查 | 治理前 | 治理后 | 变化 |
+|---|---|---|---|
+| Security Analysis | 129 vulnerabilities | **6 vulnerabilities** | −123（−95%）|
+| License Compliance | 67 issues | **65 issues** | −2 |
+| Dependency Quality | 6 quality issues | **5 quality issues** | −1 |
+
+本地用 OSV.dev 做的全量复扫（口径对齐 FOSSA：清单声明的下限 + 各生态锁文件的实装版本）
+得到**同样的 6 条**，两条路径交叉验证一致。
+
+### 那 64 条 License Compliance issue 到底是什么（2026-10-23 实算结论）
+
+**不是合规风险，是策略未配置。** 逐条实算 716 个依赖的许可后：
+
+| 档位 | 数量 | 含义 |
+|---|---|---|
+| 允许（ALLOW） | **694** | 宽松型，可自由再分发，不施加文件级传染条件 |
+| 需审阅（REVIEW） | **22** | 弱 copyleft（LGPL / MPL），以库形式随附兼容，确认一次即可 |
+| 禁止（DENY） | **0** | **没有任何强 copyleft 或非商业条款依赖** |
+| 许可未声明 | **0** | `segment-anything` 随 torch 组移出基础依赖树后归零 |
+
+也就是说：那 64 条只是「不在 FOSSA 默认允许清单里」的计数，**没有一条与 Apache-2.0
+分发冲突**。要让它们归零，得在 FOSSA 后台按策略放行，而不是改代码。
+完整的三档清单与后台操作步骤见 **[docs/license-policy.md](license-policy.md)**。
+
+复现：
+
+```bash
+python scripts/fossa_license_inventory.py            # 报告
+python scripts/fossa_license_inventory.py --policy   # 策略建议
+```
+
+**仓库侧的依赖许可构成**（PyPI / npm / crates.io / deps.dev 官方元数据逐个查过）：
+
+- 直接依赖里绝大多数是宽松型：Apache-2.0（aiofiles / requests / python-multipart /
+  mediapipe / opencv / transformers / huggingface-hub）、MIT（fastapi / psd-tools /
+  rembg / rich / onnxruntime / sounddevice / urllib3 / py-moc3 / live2d-py）、
+  BSD-3-Clause（httpx / scipy / soundfile / torchvision / uvicorn / websockets /
+  scikit-learn / numpy）；
+- **弱 copyleft（22 条）需人工确认**：`pygame` / `pygame-ce`（LGPL）、`edge-tts`（LGPLv3）
+  —— 以库形式被 import（动态链接），与 Apache-2.0 分发兼容，但 FOSSA 的默认策略会要求
+  人工过一遍；`@img/sharp-libvips-*`（LGPL-3.0-or-later，Next.js `sharp` 的平台专属可选依赖）；
+  5 个 MPL-2.0 crate（`cssparser` / `cssparser-macros` / `dtoa-short` / `option-ext` /
+  `selectors`，文件级 copyleft 且未修改上游文件）；
+- **`segment-anything` 在 PyPI 上没有声明许可证**（GitHub 上是 Apache-2.0，但包元数据缺
+  `license` 字段）→ FOSSA 会报「未知许可」。它被 `core/segment_engine/semantic.py`
+  使用（`SamAutomaticMaskGenerator`），但已随 torch 组**移出基础依赖树**
+  （见 `requirements.desktop.txt`：SAM2 改为应用内按需下载），所以当前依赖树里的
+  「未声明许可」项为 **0**。若用户之后启用 SAM2 能力组把它装回来，需在 FOSSA 侧
+  按依赖名单独放行 —— 这是上游元数据缺失，仓库侧无法修。
+
+**FOSSA API key 需要账号持有人在后台手动创建**（Organization Settings → Integrations →
+API，**只显示一次**），仓库侧无法代劳；且要拿到那 64 条的逐条明细需要**企业版 API**。
+策略本身也必须在**项目后台**切换 —— 官方明确：项目已存在后改 `.fossa.yml` 的 `policy:`
+字段**不会生效**（"will *not* change the policy"）。
+
+### 剩余 6 条为什么修不掉（逐条核实过，不是「懒得修」）
+
+| 条目 | 公告 | 为什么无法消除 |
+|---|---|---|
+| `golang.org/x/crypto` | `GO-2026-5932` | 这是 **openpgp 整个包的「不安全设计」通告**，不是某个版本的缺陷 —— Go 官方漏洞库对**任何** x/crypto 版本都会标它（上游明确说该包不再维护、无修复版）。本仓库**不使用** `openpgp`（只间接依赖 x/crypto 的 ssh 等包）。 |
+| `npm:braces` | `GHSA-vfj7-8cjw-p6xm` | 递归 AST walker 无深度保护，栈溢出。**braces 3.0.3 就是最新版**，无修复版本。传递自 `chokidar` / `micromatch`（开发期文件监听），不处理不可信输入。 |
+| `crates.io:glib` | `RUSTSEC-2024-0429` | 修复版是 0.20.0，但被 `gtk 0.18` ← `tauri 2.12` 的约束卡住（`cargo update -p glib --precise 0.20.11` 直接报 `no matching package`），要修得升 Tauri 大版本。且 **gtk/glib 是 Linux/GTK 专属依赖 —— 发行的 Windows NSIS 安装包根本不编译它**。 |
+| `crates.io:paste` | `RUSTSEC-2024-0436` | 上游仓库已归档、明确声明不再维护，**没有修复版本**（1.0.15 即最新版）。编译期传递依赖。 |
+| `crates.io:proc-macro-error` | `RUSTSEC-2024-0370` | 同上，维护者失联、无新版本、无修复版。编译期传递依赖（且它依赖 `syn 1.x`，会带重复依赖）。 |
+
+### 本轮同时修掉的「声明与现实脱节」
+
+- **`requirements.txt` 在 py3.10/3.11 上本来装不上**：`numpy>=2.5.4` 要求 py>=3.12、
+  `scikit-learn>=1.9.1` 要求 py>=3.11。README 宣称的「Python 3.10+」名不副实 →
+  已放弃 3.10（2026-10-01 结束官方安全支持），下限改为无条件形式。
+- **`transformers` 下限声明的是代码跑不起来的版本**：清单写 `>=4.30.0`，而
+  `core/segment_engine/sam2_gd.py` 按 **5.17.0** 验证（`Sam2Model` / `GroundingDino`
+  走 `getattr(transformers, cls_name)`，4.x 里没有这些类）。下限已抬到 `>=5.17.0`。
+- **声明的下限此前从不被任何 CI 验证**：三处 `pip install` 全是不带约束的 `latest`。
+  现在 CI 按声明的下限安装，下限是否仍可满足第一次被真正证明。
+- **`install.py` 的兜底列表与清单冲突**（`Pillow>=10.0.0` / `numpy>=1.24.0` /
+  `urllib3>=2.2.2`），且 `PYTHON_MIN = (3, 9)` 与清单要求完全脱节。已对齐。
+
+## 10. 参考
 
 - 详细运维/部署边界见 [docs/DEPLOY.md](DEPLOY.md)、[docs/FAQ.md](FAQ.md)。
 - 架构不变量与适应性函数见 [docs/architecture/index.md](architecture/index.md) § 4（FF-1 ~ FF-16）。

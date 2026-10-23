@@ -17,28 +17,32 @@
 # 无 cp312 轮子的风险；live2d-py 按 ADR-007 钉死 0.8.1（1.0.0 移除 live2d.v3，
 # 与验收链不兼容）。
 #
+# 下限抬升与 CVE 的对应关系见 requirements.txt 同名注释（逐条经 OSV.dev 核实，
+# 2026-10-23）。Pillow 13.0.0 / rembg 2.0.86 / scikit-learn 1.9 均要求
+# Python>=3.11 —— 与本清单的目标 Python 3.12 相容。
+#
 # 版本号单一真源见 core/version.py。
 
 # ===== 核心 =====
-Pillow>=12.3.0
-numpy>=2.5.4
-requests>=2.32.3
+Pillow>=13.0.0
+numpy>=2.4.6
+requests>=2.34.2
 urllib3>=2.8.0
 httpx>=0.28.1
 aiohttp>=3.14.5
-aiofiles>=23.0
-websockets>=12.0
+aiofiles>=25.1.0
+websockets>=17.2
 psd-tools>=1.24.0
-scipy>=1.10.0
+scipy>=1.15.3
 scikit-learn>=1.9.1
-cryptography>=42.0.0
+cryptography>=50.0.2
 rich>=13.0.0
 
 # ===== 图像处理 / 分割 / PSD =====
 # headless 版：无需 GUI 依赖，桌面版 UI 由 Tauri 承载。
 opencv-python-headless>=4.9.0.80
 onnxruntime>=1.14.0
-rembg[cpu]>=2.0.0
+rembg[cpu]>=2.0.86
 
 # ===== Live2D moc3 编译与官方内核验收 =====
 py-moc3>=0.1.0
@@ -47,9 +51,9 @@ live2d-py==0.8.1
 # ===== 桌宠 / 音频 / TTS / 面捕 =====
 pygame>=2.5.0; python_version < "3.14"
 pygame-ce>=2.5.0; python_version >= "3.14"
-sounddevice>=0.4.6
-soundfile>=0.12.0
-edge-tts>=7.2.8
+sounddevice>=0.5.6
+soundfile>=0.14.0
+edge-tts>=7.3.1
 
 # mediapipe（Python 版面捕：drivers/face_tracker + 桌宠跟随）：
 #   下限 >=0.10.30 是硬要求 —— 从该版本起 mediapipe 改为 py3-none-win_amd64
@@ -62,9 +66,28 @@ edge-tts>=7.2.8
 #   模型 face_landmarker.task 由装配脚本下载到 <res>/models/。
 mediapipe>=0.10.30,<0.10.32
 
-# ===== AI：SAM2 语义分割 / 文本与视觉 embedding（CPU torch） =====
-torch>=2.0.0
-torchvision>=0.15.0
-transformers>=4.30.0
-segment-anything>=1.0
-huggingface-hub>=0.17.0
+# ===== AI：SAM2 语义分割 —— 刻意**不**内置（由应用内按需下载） =====
+#
+# torch / torchvision / transformers / segment-anything / huggingface-hub 这一组
+# **不随安装包分发**。三条证据都指向「不该打包」：
+#
+# 1) 设计契约本来就不含它们：core/capabilities.py 的模块文档写着
+#    「基础包（requirements.desktop.txt）只带零前提主链路所需的轻依赖；
+#      SAM2/torch、rembg、mediapipe、ASR、TTS、diffusers 等重能力不进包，
+#      由应用内按需下载器落 site-packages / 用户缓存」；
+#    api/services/capability_manager.go 的 capabilityPlans 也已接线
+#    sam2_gd 组的一键安装。此前清单把整组打进安装包，与自己的设计文档直接矛盾。
+#
+# 2) 装了也用不上：Segmenter 的 auto 后端要「HAS_TORCH **且**找到 SAM 权重」
+#    才选 sam（core/segment_engine/semantic.py::_resolve_backend），而装配脚本
+#    只内置 ISNet 权重（models/rembg/isnet-anime.onnx），桌面端的 auto 恒走
+#    isnet。torch 在默认链路上完全不参与。
+#
+# 3) 体积代价大：torch 的 win_amd64 wheel 约 119MB（PyPI 实测），解压进
+#    site-packages 约 400–500MB —— 占 1.4GB 安装包的三分之一左右，
+#    却换不来任何默认功能。
+#
+# 需要 SAM2 时：应用内点「下载」即可（Go 侧 capabilityPlans 实测可装），
+# 或手动 pip install。版本下限仍以 requirements.txt 为准：
+#   torch>=2.14.1（2.0.0 命中 28 条 CVE，2.13.0 起修复）
+#   transformers>=5.17.0（sam2_gd.py 按 5.17.0 验证；4.x 没有 Sam2Model 等类）

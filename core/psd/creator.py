@@ -81,8 +81,12 @@ class PSDCreator:
         if not layer_files:
             layer_files = sorted(layers_path.glob("layer_*.png"))
         if not layer_files:
-            # Try all PNG files
-            layer_files = sorted([f for f in layers_path.glob("*.png") if f.name != "preview.png"])
+            # Try all PNG files. 整图预览（preview / composite_preview）不是图层：
+            # 它们满画布 100% 不透明，进了 PSD 就是一层盖住所有内容的白板。
+            layer_files = sorted([
+                f for f in layers_path.glob("*.png")
+                if f.stem not in ("preview", "composite_preview")
+            ])
 
         if not layer_files:
             return {"success": False, "error": f"No layer PNGs found in {layers_dir}"}
