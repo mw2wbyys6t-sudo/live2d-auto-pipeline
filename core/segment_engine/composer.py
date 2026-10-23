@@ -833,22 +833,41 @@ class LayerComposer:
         # Pre-bool all masks
         masks = {n: np.asarray(part_masks[n], dtype=bool) for n in names}
 
+        # 每层的「非空」与「包围盒」只算一次。
+        #
+        # 原实现在两两循环里对每一对都调 _bbox_overlap，而它内部是
+        # np.where(mask) —— 一次全画布（本例 667×1000 ≈ 66 万像素）扫描。
+        # 35 层共 ~595 对、每对 2 次，等于 ~1190 次全图扫描；而包围盒
+        # 与层内容无关、只跟掩码本身有关，算 35 次就够了。
+        # 实测这一项占了 occlusion map 生成时间的大头（1.10s）。
+        nonempty: Dict[str, bool] = {}
+        bboxes: Dict[str, Tuple[int, int, int, int]] = {}
+        for n in names:
+            ys, xs = np.nonzero(masks[n])
+            nonempty[n] = len(xs) > 0
+            if nonempty[n]:
+                bboxes[n] = (int(xs.min()), int(ys.min()),
+                             int(xs.max()), int(ys.max()))
+            else:
+                bboxes[n] = (0, 0, 0, 0)
+
         result: Dict[str, Dict[str, List[str]]] = {}
         for name in names:
             result[name] = {"occludes": [], "occluded_by": []}
 
         for i, a in enumerate(draw_seq):
-            ma = masks[a]
-            if not ma.any():
+            if not nonempty[a]:
                 continue
+            ma = masks[a]
+            ax0, ay0, ax1, ay1 = bboxes[a]
             for b in draw_seq[i + 1:]:
-                mb = masks[b]
-                if not mb.any():
+                if not nonempty[b]:
                     continue
-                # Fast pre-check via bounding boxes
-                if not self._bbox_overlap(ma, mb):
+                bx0, by0, bx1, by1 = bboxes[b]
+                # Fast pre-check via precomputed bounding boxes
+                if ax0 > bx1 or bx0 > ax1 or ay0 > by1 or by0 > ay1:
                     continue
-                if np.any(ma & mb):
+                if np.any(ma & masks[b]):
                     # b is drawn in front of a -> b occludes a
                     result[a]["occluded_by"].append(b)
                     result[b]["occludes"].append(a)

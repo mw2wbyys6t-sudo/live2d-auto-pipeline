@@ -174,7 +174,20 @@
   实测 `check_duplicates` 0.834 s → 0.189 s、`check_overlap` 0.705 s → 0.159 s（各 4.4×）。
   **正确性**：旧版 vs 新版对同一输入端到端对比，`steps.layering.quality`
   **逐字段完全一致**（`defect_count 0→0`、`explained_fraction 0.9898→0.9898`）。
-- **生成管线端到端 11.92 s → 10.62 s**（中位，3 次）。
+- **`generate_occlusion_map` 去掉 O(n²) 次全图扫描**（`core/segment_engine/composer.py`）：
+  它是 35 层两两遮拦检测（595 对），原实现对**每一对**都调 `_bbox_overlap`，
+  而它内部是 `np.where(mask)` —— 一次 66 万像素的全画布扫描，合计约 **1190 次**。
+  包围盒只与掩码本身有关，改为每层预计算一次（35 次），循环里只比 4 个整数。
+  实测 `compose` **2.822 s → 1.563 s**（1.8×），`generate_occlusion_map` 跌出热点列表。
+  **正确性用最强口径验证**：旧版 vs 新版各跑一次完整管线，对比 **130 个产物的 SHA256** ——
+  所有 PNG / moc3 / texture / `exp3.json` / `motion3.json` **逐字节一致**，
+  仅 4 个元数据文件不同且差异全是时间戳与输出目录路径。
+- **PNG 压缩级别（6→1）经评估后否决**：初版报告估「可省 1.4 s」，但拆开 88 次
+  `Image.save` 后发现 **98% 是交付物**（层图 / 纹理 / 优化图），可安全降级的中间预览
+  只占 2.3%（0.069 s，降级仅省 0.032 s）。函数名 `_export_preview_layers` 有误导性 ——
+  它写的就是用户拿去 PS 编辑的 `layers/*.png`。全局降级会让每张层图体积 +20%，
+  代价大于收益，故**不做**，转而优化了上面的 `generate_occlusion_map`。
+- **生成管线端到端 11.92 s → 9.61 s**（中位，3 次，累计 −19%）。
 - **Go 侧补上 pprof（默认关闭，双重闸门）**：必须 `LIVE2D_PPROF=1` **且**监听回环
   才挂载；设了变量却监听 `0.0.0.0` 只打警告不挂载。此前 `grep pprof api/` 无结果，
   只能测 RSS。现在可拿到堆分解：`HeapAlloc` 仅 2.29 MB，`Sys` 12.7 MB 里

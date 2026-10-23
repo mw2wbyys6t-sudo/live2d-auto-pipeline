@@ -38,7 +38,46 @@
 | `check_duplicates` | 0.834 s | **0.189 s** | 4.4× |
 | `check_overlap` | 0.705 s | **0.159 s** | 4.4× |
 | `numpy.ufunc.reduce` 调用 | 19,750 次 / 1.875 s | 15,456 次 / **0.787 s** | 2.4× |
-| **生成管线端到端** | **11.92 s** | **10.62 s** | **−1.30 s（−11%）** |
+| `compose`（图层合成） | 2.822 s | **1.563 s** | 1.8× |
+| **生成管线端到端** | **11.92 s** | **9.61 s** | **−2.31 s（−19%）** |
+
+### PNG 压缩级别：评估后**否决**（原估算有误）
+
+初版报告建议「`compress_level` 6→1 可省约 1.4 s」。按调用方拆开 88 次 `Image.save` 后，这个估算**被证伪**：
+
+| 调用方 | 次数 | 耗时 | 性质 |
+|---|---|---|---|
+| `texture_atlas.bake_atlas` | 9 | 0.713 s | 交付物（运行时纹理） |
+| `model3_exporter._export_textures` | 9 | 0.693 s | 交付物（纹理） |
+| `model3_exporter._export_preview_layers` | 32 | 0.451 s | **交付物**（就是 `layers/*.png`，用户拿去 PS 编辑的层） |
+| `composer.compose` | 29 | 0.406 s | 交付物（层图） |
+| `semantic.layer` / `workflow.run` | 2 | 0.606 s | 交付物（优化图 / 层输出） |
+| `composer._store_layer` | 6 | 0.077 s | 交付物 |
+| **`semantic._write_composite_preview`** | **1** | **0.069 s** | **唯一真正的中间预览** |
+
+**98% 的保存都是交付物**，可安全降级的只有 2.3%（0.069 s，降级后仅省 0.032 s）。
+函数名 `_export_preview_layers` 有误导性 —— 它写的是 `layers/*.png`，是交付层。
+
+**结论：不做。** 全局降级会让用户每一张层图体积 +20%（35 层累计可观），只换来 1.4 s；只降那 1 张预览则毫无意义。
+
+### 转而在真正的瓶颈上优化：`generate_occlusion_map`
+
+同一个 profile 显示 `compose` 的 2.82 s 里只有 0.41 s 是保存，**2.16 s 是合成计算**，其中：
+
+- `generate_occlusion_map` **1.103 s**
+- `synthesize_face_geometry` 0.932 s
+
+`generate_occlusion_map` 是 O(n²) 两两遮拦检测（35 层 → 595 对），原实现对每一对调用
+`_bbox_overlap`，而它内部是 `np.where(mask)` —— **一次全画布（66 万像素）扫描**。
+595 对 × 每对 2 次 = **约 1190 次全图扫描**；而包围盒只跟掩码本身有关，算 **35 次**就够。
+
+改为预计算「非空 + 包围盒」后：`compose` **2.822 s → 1.563 s**（1.8×），
+`generate_occlusion_map` 已跌出热点列表（< 0.1 s）。
+
+**正确性验证（最强口径）**：旧版 vs 新版各跑一次完整管线，对比 **130 个产物的 SHA256**——
+所有 PNG / moc3 / texture / `exp3.json` / `motion3.json` **逐字节一致**；
+仅 4 个元数据文件（`build_meta.json` / `layer_guide.json` / `layer_mapping.json` /
+`52_LAYER_GUIDE.txt`）不同，而差异**全部是时间戳与输出目录路径**。
 
 ### 具体改了什么
 
@@ -59,6 +98,9 @@
    必须同时满足 `LIVE2D_PPROF=1` **且**监听回环才挂载；
    设了变量但监听 `0.0.0.0` 时只打警告、不挂载。
    实测三条路径：默认 404 / `0.0.0.0` 404+警告 / 回环 200。
+4. **`generate_occlusion_map` 预计算包围盒**（`core/segment_engine/composer.py`）。
+   把「两两循环里对每对重算 `np.where`」改成「每层算一次、循环里只比 4 个整数」，
+   `compose` 2.822 s → 1.563 s。产物逐字节一致（见上节验证口径）。
 
 ### pprof 给出的堆内部分解（此前只能测 RSS）
 
