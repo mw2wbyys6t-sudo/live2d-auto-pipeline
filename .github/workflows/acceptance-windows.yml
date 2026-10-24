@@ -127,12 +127,19 @@ jobs:
       - name: Run the repository acceptance script
         shell: pwsh
         run: |
+          # 不要依赖 pwsh 隐式继承的 $LASTEXITCODE：脚本内部有多个「预期失败」的
+          # 探测（import torch 在按需下载包上必然失败、Get-Process 找不到进程等），
+          # 旧写法会把这些的退出码当成步骤失败（run 40118523128：报告 RESULT: PASS
+          # 但步骤 exit 1）。这里显式取脚本自己的退出码，并以报告结论为准。
           $out = & ./scripts/windows/verify_desktop_install.ps1 -InstallDir $env:INSTALL_DIR *>&1 | Out-String
+          $code = $LASTEXITCODE
           Write-Host $out
-          if ($out -match 'RESULT: FAIL') {
-            Write-Host "::error::acceptance script reported FAIL"
+          if ($code -ne 0 -or $out -match 'RESULT: FAIL') {
+            Write-Host "::error::acceptance script reported FAIL (exit=$code)"
             exit 1
           }
+          Write-Host "acceptance script reported PASS (exit=$code)"
+          exit 0
 
       - name: Stop backend and report leftovers
         if: always()

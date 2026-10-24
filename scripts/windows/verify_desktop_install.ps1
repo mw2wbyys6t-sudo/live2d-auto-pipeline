@@ -290,3 +290,13 @@ $script:Report | Out-File -FilePath $reportPath -Encoding UTF8
 Add-Line ''
 Add-Line ("Report saved to: " + $reportPath)
 Add-Line 'Paste this report back if you need help diagnosing a failure.'
+
+# Explicit exit code. Without this, the process inherits whatever $LASTEXITCODE
+# was left at by the last native probe -- and several probes are EXPECTED to
+# fail (e.g. "import torch" on a bundle that intentionally ships no torch, or
+# Get-Process on a process that is not running). GitHub Actions' pwsh wrapper
+# does `exit $LASTEXITCODE`, so those expected failures turned a PASS report
+# into a failed step (run 40118523128).
+# Verdict is driven ONLY by the checks above: failures fail, warnings pass.
+if ($script:Fail -gt 0) { exit 1 }
+exit 0
