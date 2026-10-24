@@ -405,7 +405,7 @@ func (g *ImageGenerator) CheckLocalGeneratorStatus() (bool, string) {
 	// 检查新工作流
 	workflowPath := filepath.Join(g.cfg.Python.ScriptsDir, "core", "workflow.py")
 	if _, err := os.Stat(workflowPath); err == nil {
-		return true, "v0.10.0 工作流就绪"
+		return true, "工作流就绪"
 	}
 
 	// import torch/diffusers 冷启动较慢，给 60s 上限；挂起的解释器不能

@@ -648,7 +648,7 @@ def _probe_local_generator() -> Dict[str, Any]:
         return {"ok": False, "detail": "本地生成器脚本不存在"}
     if not (PROJECT_ROOT / "core" / "workflow.py").is_file():
         return {"ok": False, "detail": "core/workflow.py 缺失"}
-    return {"ok": True, "detail": "v0.10.0 工作流就绪"}
+    return {"ok": True, "detail": "工作流就绪"}
 
 
 def _probe_segment_engine() -> Dict[str, Any]:
