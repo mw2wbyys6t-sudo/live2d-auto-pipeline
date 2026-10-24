@@ -312,15 +312,52 @@ def pip_common_args() -> list:
     return args
 
 
+def _requirements_digest(requirements: Path) -> str:
+    """清单内容指纹：wheel 缓存是否仍然对应当前依赖清单。"""
+    return hashlib.sha256(requirements.read_bytes()).hexdigest()
+
+
 def download_wheels(requirements: Path, wheels_dir: Path, offline: bool) -> None:
-    if any(wheels_dir.glob("*.whl")):
-        print(f"  [复用] wheel 缓存 {wheels_dir}（{len(list(wheels_dir.glob('*.whl')))} 个）")
-        return
+    """下载 wheel 到缓存目录。
+
+    缓存不能只看「有没有 .whl」：CI 的 actions/cache 用 ``restore-keys`` 前缀
+    匹配，清单改了仍会把**旧版本**的 wheel 目录恢复出来，而 ``pip install
+    --no-index --find-links`` 在离线目录里找不到新下限（实测：Pillow 下限抬到
+    13.0.0 后，缓存里只有 12.3.0，装配直接失败）。因此用清单指纹做标记，
+    指纹不一致就丢弃旧 wheel 重新下载。
+    """
+    marker = wheels_dir / ".requirements.sha256"
+    want = _requirements_digest(requirements)
+    have = ""
+    if marker.is_file():
+        try:
+            have = marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            have = ""
+
+    cached = list(wheels_dir.glob("*.whl"))
+    if cached:
+        if have == want:
+            print(f"  [复用] wheel 缓存 {wheels_dir}（{len(cached)} 个）")
+            return
+        print(f"  [重建] 依赖清单已变更（缓存标记 {have[:12] or '缺失'} ≠ "
+              f"{want[:12]}），丢弃 {len(cached)} 个旧 wheel 重新下载")
+        for whl in cached:
+            try:
+                whl.unlink()
+            except OSError:
+                pass
+        try:
+            marker.unlink()
+        except OSError:
+            pass
+
     if offline:
         sys.exit(f"❌ 离线模式但 wheel 缓存为空：{wheels_dir}")
     wheels_dir.mkdir(parents=True, exist_ok=True)
     run([sys.executable, "-m", "pip", "download", *pip_common_args(),
          "--no-cache-dir", "-d", wheels_dir, "-r", requirements])
+    marker.write_text(want + "\n", encoding="utf-8")
 
 
 def install_wheels(requirements: Path, wheels_dir: Path, site_packages: Path) -> None:
