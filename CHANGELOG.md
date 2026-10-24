@@ -265,7 +265,7 @@
 | 源码修订 | `e620762` |
 | 安装包产物 | `Live2D.Master.Agent_0.10.9_x64-setup.exe` — **359,250,342 B（342.63 MiB）** |
 | 构建运行 | [CI/CD Pipeline on v0.10.9 · run 40115248808](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/40115248808) |
-| SHA256 | **尚未回填** —— 产物在 GitHub runner 侧直接发布，未下载到构建机，仓库侧无可核实的本地哈希。请以 Release 页面为准；需要可复现校验时请下载后自行计算并与下一版回填值比对 |
+| SHA256 | `1b371d525aca630e854d8e91cd0801c7237095fbca9fc6590b5083e4106c3d47`（由 `Windows Installer Acceptance` 在已发布产物上实测，已回填为验收闸门的默认校验值） |
 | 回滚目标 | 卸载后重装上一版 `v0.10.8`；用户数据在 `%APPDATA%` 与「文档」保留，卸载不清空 |
 
 > **本版不臆造产物哈希。** 体积是 Release 附件的真实字节数；上一版 v0.10.8 实测

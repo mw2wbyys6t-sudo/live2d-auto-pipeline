@@ -103,7 +103,6 @@ $need = @(
     'python\Lib\site-packages\sitecustomize.py',
     'python\Lib\site-packages\PIL',
     'python\Lib\site-packages\numpy',
-    'python\Lib\site-packages\torch',
     'python\Lib\site-packages\mediapipe',
     'python\Lib\site-packages\live2d\v3',
     'app\core\workflow.py',
@@ -172,10 +171,22 @@ if (-not $py -or -not (Test-Path $py)) {
     }
 
     if (-not $SkipTorch) {
+        # torch is NOT shipped inside the installer (see core/capabilities.py and
+        # the in-app "capabilities" page): heavy backends are downloaded on demand.
+        # Absence is therefore the EXPECTED state and must not be reported as a
+        # warning -- that was a false alarm in run 40117632817, where the previous
+        # version of this script still demanded python\Lib\site-packages\torch.
+        # A torch that IS present but fails to import is a real defect: keep WARN.
+        $torchDir = Join-Path $InstallDir 'python\Lib\site-packages\torch'
         $torch = (& $py -c "import torch; print('TORCH_OK', torch.__version__)" 2>&1)
         $torchTail = ($torch | Select-Object -Last 1)
-        if ("$torchTail" -like 'TORCH_OK*') { Check 'torch' 'OK' "$torchTail" }
-        else { Check 'torch' 'WARN' (($torch | Out-String).Trim()) }
+        if ("$torchTail" -like 'TORCH_OK*') {
+            Check 'torch' 'OK' "$torchTail"
+        } elseif (Test-Path $torchDir) {
+            Check 'torch' 'WARN' (($torch | Out-String).Trim())
+        } else {
+            Check 'torch' 'INFO' 'not bundled (on-demand capability, by design)'
+        }
     }
 }
 

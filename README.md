@@ -138,7 +138,8 @@ Invoke-RestMethod http://127.0.0.1:8080/api/diagnostics | ConvertTo-Json -Depth 
 >
 > ```powershell
 > (Get-FileHash ".\Live2D.Master.Agent_0.10.9_x64-setup.exe" -Algorithm SHA256).Hash
-> # 期望值以 Release 说明 / CHANGELOG「发布凭据」为准（构建产物定稿后填入）
+> # 期望值（实测，359,250,342 字节）：
+> # 1b371d525aca630e854d8e91cd0801c7237095fbca9fc6590b5083e4106c3d47
 > ```
 >
 > 签名管线已就绪（[scripts/windows/sign_artifacts.ps1](scripts/windows/sign_artifacts.ps1)，支持自定义签名命令 / PFX / 证书指纹）。获得受信任证书后，设置仓库变量 `L2D_SIGN_MODE=required` 并配置对应密钥，构建即自动签名并在签名无效时**阻断发布**。

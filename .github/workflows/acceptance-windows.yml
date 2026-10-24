@@ -36,9 +36,9 @@ jobs:
     env:
       # push 触发时 inputs 为空，这里给出与 workflow_dispatch 默认值一致的兜底。
       TAG: ${{ inputs.tag || 'v0.10.9' }}
-      # 首次运行时产物哈希尚未回填，留空即跳过完整性校验（步骤仍会打印实测哈希）；
-      # 拿到实测值后填到这里，让 push 触发的验收重新具备完整性校验。
-      EXPECTED_SHA: ${{ inputs.expected_sha256 || '' }}
+      # v0.10.9 产物已构建并发布，实测哈希已回填 —— push 触发的验收现在同时
+      # 校验完整性。tag 不可变，所以这个值对 v0.10.9 是稳定的。
+      EXPECTED_SHA: ${{ inputs.expected_sha256 || '1b371d525aca630e854d8e91cd0801c7237095fbca9fc6590b5083e4106c3d47' }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
