@@ -142,7 +142,7 @@ class InstallState:
 def print_header():
     print(f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
-║       🎭 Live2D Master Agent v0.10.8.1 - Installer         ║
+║       🎭 Live2D Master Agent v0.10.8.1 - Installer       ║
 ║       AI Character → Live2D Model → Desktop Pet          ║
 ╚══════════════════════════════════════════════════════════╝{C.RESET}
 """)

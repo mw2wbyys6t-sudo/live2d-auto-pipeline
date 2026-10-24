@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.8-ff69b4?style=flat-square" alt="version"></a>
+  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.8.1-ff69b4?style=flat-square" alt="version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="license"></a>
 <a href="https://app.fossa.com/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline"><img src="https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline.svg?type=shield" alt="FOSSA Status"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11+-blue?style=flat-square" alt="python"></a>
@@ -25,7 +25,7 @@
 
 ## 先说清楚：现在能干什么
 
-我不想给你画饼。这个项目有些部分已经很稳，有些还在路上。下面是**截至 v0.10.8 的真实状态**：
+我不想给你画饼。这个项目有些部分已经很稳，有些还在路上。下面是**截至 v0.10.8.1 的真实状态**：
 
 | 能力 | 状态 | 说明 |
 |------|------|------|
@@ -99,18 +99,19 @@
 
 **下载安装包**（Windows，双击安装）：
 
-👉 [最新 Release v0.10.8](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.8)
+👉 [最新 Release v0.10.8.1](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.8.1)
 
 | 下载文件 | 说明 |
 |----------|------|
-| `Live2D.Master.Agent_0.10.8_x64-setup.exe` | **Windows 安装包（NSIS，约 484 MB）** — 双击安装，装完即可用 |
+| `Live2D.Master.Agent_0.10.8.1_x64-setup.exe` | **Windows 安装包（NSIS）** — 双击安装，装完即可用 |
 
-> ✅ 本版安装包**自带完整运行时**：嵌入式 CPython 3.12 + 全量离线依赖（含 CPU 版 torch、mediapipe、rembg）+ `app/` 源码树 + 原生面捕（YuNet + `onnxruntime.dll`）。**无需预装 Python**。
->
-> ⚠️ 体积从旧版约 8 MB 变为约 484 MB 是正常的：旧包只含两个 exe，这正是「后端未找到」的原因。若你下载到的 setup 只有 ~8 MB，说明拿到的是旧 v0.10.7，请改用 v0.10.8。
+> 体积以 Release 页面显示为准：本版把误打进包的 torch 组移了出去（`requirements.desktop.txt`
+> 29 → 24 条），安装包应明显小于上一版的 484 MB，**具体数字以构建产物为准**。
+
+> ✅ 安装包**自带完整运行时**：嵌入式 CPython 3.12 + 离线依赖 + `app/` 源码树 + 原生面捕（YuNet + `onnxruntime.dll`）。**无需预装 Python**。
 
 **使用方式**：
-1. 从 Release 下载 `Live2D.Master.Agent_0.10.8_x64-setup.exe`（确认约 484 MB）
+1. 从 Release 下载 `Live2D.Master.Agent_0.10.8.1_x64-setup.exe`
 2. 若之前装过旧版，先运行旧安装目录里的 `uninstall.exe`
 3. 双击安装（NSIS 安装向导）；装完先确认安装目录含 `live2d-api.exe`、`python\`、`app\`、`models\`
 4. 从开始菜单或桌面快捷方式启动，应用会自动拉起本地后端并打开工作台 `http://localhost:8080`
@@ -128,26 +129,30 @@ Invoke-RestMethod http://127.0.0.1:8080/api/diagnostics | ConvertTo-Json -Depth 
 
 仓库还带一键验收脚本：`powershell -ExecutionPolicy Bypass -File .\scripts\windows\verify_desktop_install.ps1 -Launch`
 
-> ✅ 这套验收已在 GitHub 的 Windows runner 上对 v0.10.8 **发布包本身**实跑过，结果 `RESULT: PASS`（[run #39046077810](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39046077810)）：安装器退出码 `0`、17 项文件齐全、随包 Python `3.12.10`、`torch` / `mediapipe` 可导入、`/api/health` 返回 `python_ok=true`。
+> ✅ 上一版 v0.10.8 已在 GitHub 的 Windows runner 上对**发布包本身**实跑过验收，结果 `RESULT: PASS`（[run #39046077810](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39046077810)）：安装器退出码 `0`、17 项文件齐全、随包 Python `3.12.10`、`/api/health` 返回 `python_ok=true`。
+>
+> ⏳ **v0.10.8.1 的安装包尚未构建**。构建完成后会对产物本身再跑一次同样的验收，结果补到本节与 CHANGELOG「发布凭据」。
 
-> 🔏 **关于代码签名**：当前安装包**尚未签名**，Windows 首次运行会提示 SmartScreen「未知发布者」——点「更多信息 → 仍要运行」即可。请用 SHA256 确认文件完整：
+> 🔏 **关于代码签名**：当前安装包**尚未签名**，Windows 首次运行会提示 SmartScreen「未知发布者」——点「更多信息 → 仍要运行」即可。安装后请用 SHA256 确认文件完整：
 >
 > ```powershell
-> (Get-FileHash ".\Live2D.Master.Agent_0.10.8_x64-setup.exe" -Algorithm SHA256).Hash
-> # 期望：01862574322E45410ECAD57587BCDCE7413E968387B267FE1FDF8A4D605B71B5
+> (Get-FileHash ".\Live2D.Master.Agent_0.10.8.1_x64-setup.exe" -Algorithm SHA256).Hash
+> # 期望值以 Release 说明 / CHANGELOG「发布凭据」为准（构建产物定稿后填入）
 > ```
 >
 > 签名管线已就绪（[scripts/windows/sign_artifacts.ps1](scripts/windows/sign_artifacts.ps1)，支持自定义签名命令 / PFX / 证书指纹）。获得受信任证书后，设置仓库变量 `L2D_SIGN_MODE=required` 并配置对应密钥，构建即自动签名并在签名无效时**阻断发布**。
 
-### v0.10.8 更新内容（先看这 5 条）
+### v0.10.8.1 更新内容（先看这 5 条）
 
-1. **安装包自带运行时（461.62 MiB）**：内含嵌入式 CPython 3.12 + 92 个离线包（site-packages 约 1.4 GB）+ `app/` 源码树 + 原生面捕 + YuNet 模型，**不用再装 Python**。旧版 8 MB 包只含两个 exe，这正是「后端未找到」的根因。（后续版本把 torch 组移出安装包，site-packages 约 0.9 GB，见 CHANGELOG `[Unreleased]`）
-2. **修复导出页 PSD 100% 失败**：前端此前只读内层 `data.success`，而该字段本就不存在；现在改为合并外层 envelope 判断。
-3. **界面少了几个控件**：生成页 Provider / 风格 / Steps / CFG，导出页 Include physics / expressions / motions 与 Compression，Live2D 页模型结构树 / Physics 面板 / Wireframe —— 后端从未消费，属「改了也没效果」的假开关，本版移除。
-4. **不再有假成功**：导出 PSD、角色保存/删除、See-through、LLM 兜底回复、Python 面捕，以前失败也可能显示成功；现在失败会明确报错（See-through 无抠图能力直接返回 **501**，面捕启动失败返回 **503**）。
-5. **可自检了**：新增 `/api/diagnostics`（逐项报告解释器、依赖、模型、输出目录）与一键验收脚本 `scripts/windows/verify_desktop_install.ps1`。
+> 本版是**工作流与代码层面的补丁发布**，不引入新功能模块。
 
-> 完整变更、**尚未验证项**与发布证据（源码提交 / 构建运行 / 哈希 / 回滚目标）见 [CHANGELOG v0.10.8](CHANGELOG.md)。旧版 v0.10.7 的 8 MB 安装包已从 Release 撤下。
+1. **修掉一个 CVE 级远程代码执行**：`next@16.4.0` 命中 3 条 2026-10-22 公布的告警（含 `use cache` 未授权 RCE），全部在 `16.4.1` 修复；已升级并同步锁文件。
+2. **Python 依赖的 CVE 面清零**：Pillow / cryptography / python-multipart / rembg / requests / torch / transformers 的下限全部抬到修复版本（OSV.dev 复扫 PyPI **157 → 0 条**）；顺带修掉 `transformers>=4.30.0` 与代码实际按 5.17 编写的声明矛盾。
+3. **安装包瘦身（约 −500 MB）**：`requirements.desktop.txt` 把 torch 组移出（29 → 24 条）—— 它既与 `core/capabilities.py` 的「重能力按需下载」契约矛盾，装了也用不上（桌面端 `auto` 恒走 isnet）。改为应用内「能力」页按需安装，**默认链路零变化**。
+4. **运行变快**：`/api/health` 从「每次 fork 3 个 Python」改成合并 exec + 30s 缓存，并发 200 次从 9/200 成功 → **200/200**（RPS 2 → 130）；分层质量评分 **2.27 s → 1.0 s**、`compose` **2.82 s → 1.56 s**、生成管线端到端 **11.92 s → 9.41 s**（−21%），产物逐字节一致。
+5. **许可与 CI 真正落地**：FF-15 打包闸门从「文档里的待补」变成实装（产物内许可与仓库逐字节一致，不合规以退出码 1 阻断发布）；新增 FOSSA 扫描 job（无 key 自动跳过，不误伤外部 PR）；CI 改为按**声明下限**安装依赖，第一次真正验证下限可用。
+
+> 完整变更、**尚未验证项**与发布凭据（源码提交 / 构建运行 / 哈希 / 回滚目标）见 [CHANGELOG v0.10.8.1](CHANGELOG.md)。
 
 ### 命令行快速体验（30 秒核心能力）
 
@@ -350,6 +355,7 @@ cd web && npm run build
 
 | 版本 | 日期 | 重点 |
 |------|------|------|
+| **v0.10.8.1** | 2026-10-24 | **Dependency Truth**：依赖 CVE 面清零（PyPI 157→0）、修 Next.js 未授权 RCE、安装包移出 torch 组（约 −500 MB）、`/api/health` 吞吐 65×、分层评分与 compose 提速、FF-15 许可闸门实装（工作流与代码补丁，不含新功能） |
 | **v0.10.8** | 2026-10-17 | **Honest Desktop**：安装包自带运行时（461.62 MiB / 92 个离线包，无需装 Python）、修复「后端未找到」与导出页 PSD 失败、移除无效控件与假成功、新增 `/api/diagnostics` 与一键验收脚本（未签名） |
 | **v0.10.7** | 2026-10-16 | **依赖治理 + 发布修复**：抬高 Python/npm 依赖下限消除 CVE 面、修复 Release 无资产回归、清零版本号漂移（⚠️ 该版 8 MB 安装包缺运行时，已撤下） |
 | **v0.10.6** | 2026-10-15 | **CI 修复 + 版本统一**：关闭 pixi.js v8 破坏性升级 PR、dependabot 忽略 major、全栈版本号对齐到 0.10.6 |
