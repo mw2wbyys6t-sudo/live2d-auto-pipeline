@@ -689,7 +689,7 @@ export class APIClient {
         apiConnected: true,
         latencyMs,
         // 本版本没有 GPU 探测能力：不设置 gpuAvailable，UI 显示「未探测」而不是谎报 false。
-        version: (data.version as string) ?? 'v0.10.8',
+        version: (data.version as string) ?? 'v0.10.8.1',
         modelsLoaded: services.map((s) => s.name),
         providers: services.map((s) => ({
           id: s.name as never,

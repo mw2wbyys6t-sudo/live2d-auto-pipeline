@@ -4,11 +4,47 @@
 
 ---
 
-## [Unreleased] — 2026-10-23 — 代号「Dependency Truth」
+## [v0.10.8.1] — 2026-10-24 — 代号「Dependency Truth」
 
-> **本版目标**：把 FOSSA 三项告警（Security Analysis / License Compliance / Dependency
-> Quality）从「第三方后台报的数」变成**仓库侧可核实、可复现的状态**。所有版本下限的取舍都
-> 逐条查过权威源（OSV.dev / PyPI / Go module proxy / crates.io），不做无依据的越级抬升。
+> **本版目标**：两件事。① 把 FOSSA 三项告警（Security Analysis / License Compliance /
+> Dependency Quality）从「第三方后台报的数」变成**仓库侧可核实、可复现的状态**，所有版本
+> 下限的取舍都逐条查过权威源（OSV.dev / PyPI / Go module proxy / crates.io），不做无依据的
+> 越级抬升。② 交付一套**从零训练部位分层模型**的独立工具链（`training/`），让「自研模型」
+> 从想法变成可执行、可验证的一条链路。
+
+### 🧠 新增：从零训练部位分层模型（`training/`）
+
+- **为什么单独开一条链路**：主项目的 `requirements.txt` 默认**不装 torch**（它是可选依赖），
+  而训练必须要有。把训练代码收进 `training/`、只依赖 `torch / numpy / Pillow`，
+  既不污染主链路依赖，也不会让桌面包重新背上 torch（本版刚把它移出去，见下文）。
+- **只做 9 类，不做 35 类**：`training/labels.py` 的 `CORE_PARTS` 正好等于
+  `core/segment_engine/layer_quality.py` 的 `REQUIRED_PARTS`（8 个核心部位 + 背景）。
+  模型只要把这 8 类分对，就能过管线**现成的**分层质量门禁。35 类里一多半是
+  Live2D 细部位（`irides_left` / `clothes_inner` 等），从零训练的标注量要求高一个量级，
+  先跑通 9 类再加类是返工成本最低的路径。
+- **模型**：`training/model.py` 的紧凑 U-Net，`base=32` 时 **1,942,713 参数**，单卡可训。
+  另带 `ArgmaxExport` 包装 —— `core/custom_model/runner.py` 的 `label_map` 模式是拿输出
+  **和整数标签直接比对**的，ONNX 里必须已经 argmax，吐 logits 会得到全错的掩码。
+- **数据格式**：`dataset/images/<name>.png` 配 `dataset/masks/<name>.png`，mask 为单通道
+  PNG，像素值即类别索引；读取时 mask 用 `NEAREST` 缩放，避免插值产生不存在的类别。
+- **评估接的是业务门禁，不是纯 IoU**：`training/eval.py` 除 per-class IoU 外，直接调
+  `layer_quality.score_masks` 输出 `gate_pass_rate` —— 回答「这个模型产出的分层，管线认不认」。
+- **导出直接对上现有契约**：`training/export.py` 产出 ONNX + `model.json`，并用
+  `core.custom_model.manifest.validate_manifest` 自检，不合规不落盘。
+- **端到端已验证**：`training/smoke_test.py` 用合成数据跑「生成数据 → 训练 → 导出 →
+  清单加载 → 推理掩码」，实测输出 `[OK] 端到端链路打通`；U-Net 自检
+  `logits=(2, 9, 128, 128)`、`params=1,942,713`、反向传播正常。
+  既有契约测试 `tests/unit/test_custom_model.py` **12 项全过**，架构 lint **零新增违规**。
+
+**已知限制（如实标注）**
+
+- **512×512 训练在 5GB 内存机器上会被 OOM 杀掉**（exit 137，实测）。小尺寸
+  （`--size 128 --base 16`）验证结构没问题；正式训练需要更多内存或降分辨率。
+- **导出的模型暂时不会自动生效**：`core/custom_model` 这套机制写好了但**没接进
+  `semantic.py` / `workflow.py`**，模型放进 `models/custom/` 主流程仍读不到。
+  接线步骤写在 `training/README.md` 第 7 节。
+- **没有真实数据，因此没有质量结论**：冒烟测试的 mIoU 只证明链路通，不代表可用性。
+  从零训练 9 类的可用起点约需 300～800 张标注图。
 
 ### 🔴 修复（会直接坑到用户）
 
@@ -232,7 +268,18 @@
 
 剩余 6 条**全部没有修复版本**，逐条原因见 `docs/LIMITATIONS.md` §10。
 
----
+### 🧾 发布凭据（release receipt）
+
+| 项 | 值 |
+|---|---|
+| 版本 / 标签 | `v0.10.8.1` |
+| 源码修订 | 待打 tag 后回填（以实际发布提交为准） |
+| 安装包产物 | **尚未构建** —— 体积与 SHA256 须由 CI 在 `v0.10.8.1` tag 上构建后回填 |
+| CI 哈希校验 | `acceptance-windows.yml` 的默认 `expected_sha256` 已置空（哈希未知时跳过校验），构建后回填 |
+| 回滚目标 | 卸载后重装上一版 `v0.10.8`；用户数据在 `%APPDATA%` 与「文档」保留，卸载不清空 |
+
+> **本版不臆造产物哈希与体积。** 上一版 v0.10.8 的实测数据（461.62 MiB /
+> sha256 `0186257…71b5`）见下方 v0.10.8 章节；本版对应数字以构建产物为准。
 
 ## [v0.10.8] — 2026-10-17 — 代号「Honest Desktop」
 
