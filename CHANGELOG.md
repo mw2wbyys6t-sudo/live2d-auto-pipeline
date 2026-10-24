@@ -245,6 +245,22 @@
   这意味着**该版本号下安装包永远编不出来**。已收敛为严格三段式 `0.10.9`
   （0.10.8 的补丁版），Python / Web / Go / 桌面 / CI 标签全部统一，无版本漂移。
 
+- **验收闸门把「产品其实通过」判成了失败**（本轮引入、CI 首次暴露，两处叠加）：
+  1. `verify_desktop_install.ps1` 的必装清单仍要求
+     `python\Lib\site-packages\torch`，而本版已按 `core/capabilities.py` 的契约把
+     torch 移出安装包、改为应用内按需下载 —— 于是正确状态被判 `[FAIL]`（run 40117632817）。
+     已从必装清单移除，torch 检查改为三态：导入成功 `OK`；目录存在但导入失败 `WARN`
+     （真问题）；目录不存在 `INFO: not bundled (on-demand capability, by design)`。
+  2. 脚本没有显式 `exit`，而内部有多个**本就该失败**的探测（`import torch`、
+     `Get-Process` 找不到进程）把 `$LASTEXITCODE` 留成非 0；GitHub Actions 的 pwsh
+     包装器以它为步骤退出码 → 报告写着 `RESULT: PASS`、步骤却是 `exit 1`（run 40118523128）。
+     已让脚本按自身结论显式 `exit`，workflow 步骤也改为显式取脚本退出码，
+     不再依赖隐式继承。
+
+  修完后对**已发布产物**复跑：`RESULT: PASS`，0 失败 0 警告（run 40119429913）。
+  这个 bug 的危险性在于方向 —— 它会让「产品没问题」的版本被闸门拦下，
+  反过来削弱大家对闸门的信任。
+
 ### 📊 治理结果（OSV.dev 全量复扫，口径对齐 FOSSA）
 
 | 生态 | 治理前 | 治理后 |
@@ -265,6 +281,7 @@
 | 源码修订 | `e620762` |
 | 安装包产物 | `Live2D.Master.Agent_0.10.9_x64-setup.exe` — **359,250,342 B（342.63 MiB）** |
 | 构建运行 | [CI/CD Pipeline on v0.10.9 · run 40115248808](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/40115248808) |
+| 产物级验收 | `RESULT: PASS`，**0 失败 0 警告** —— [run 40119429913](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/40119429913)：SHA256 校验通过、静默安装退出码 0、16 项随包文件齐全、`/api/health` python_ok=true、诊断 8 项全 OK；安装后占用 947.5 MB |
 | SHA256 | `1b371d525aca630e854d8e91cd0801c7237095fbca9fc6590b5083e4106c3d47`（由 `Windows Installer Acceptance` 在已发布产物上实测，已回填为验收闸门的默认校验值） |
 | 回滚目标 | 卸载后重装上一版 `v0.10.8`；用户数据在 `%APPDATA%` 与「文档」保留，卸载不清空 |
 

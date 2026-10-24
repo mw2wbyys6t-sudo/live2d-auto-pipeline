@@ -132,7 +132,7 @@ Invoke-RestMethod http://127.0.0.1:8080/api/diagnostics | ConvertTo-Json -Depth 
 
 > ✅ 上一版 v0.10.8 已在 GitHub 的 Windows runner 上对**发布包本身**实跑过验收，结果 `RESULT: PASS`（[run #39046077810](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39046077810)）：安装器退出码 `0`、17 项文件齐全、随包 Python `3.12.10`、`/api/health` 返回 `python_ok=true`。
 >
-> ✅ **v0.10.9 的安装包已于 2026-10-24 由 CI 构建并发布**（[run #40115248808](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/40115248808)），产物 `359,250,342 B / 342.63 MiB`。产物级验收由 `Windows Installer Acceptance` 对已发布文件执行，结果见该 workflow 的运行记录。
+> ✅ **v0.10.9 已构建、发布，并在 Windows runner 上对发布包本身实跑验收通过** —— `RESULT: PASS`，0 失败 0 警告（[run #40119429913](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/40119429913)，构建见 [run #40115248808](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/40115248808)）。实测：产物 `359,250,342 B（342.63 MiB）`、SHA256 校验通过、静默安装退出码 `0`、16 项随包文件齐全、随包 Python `3.12.10`、`core` 导入 7 个模块、mediapipe `0.10.31`、`/api/health` 返回 `python_ok=true`、诊断 8 项（后端 / 解释器 / 源码目录 / 产物目录 / 面捕程序 / YuNet 模型 / ONNX Runtime / 仅回环监听）全部 OK。安装后占用 `947.5 MB`。
 
 > 🔏 **关于代码签名**：当前安装包**尚未签名**，Windows 首次运行会提示 SmartScreen「未知发布者」——点「更多信息 → 仍要运行」即可。安装后请用 SHA256 确认文件完整：
 >
