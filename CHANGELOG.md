@@ -4,7 +4,7 @@
 
 ---
 
-## [v0.10.8.1] — 2026-10-24 — 代号「Dependency Truth」
+## [v0.10.9] — 2026-10-24 — 代号「Dependency Truth」
 
 > **本版目标**：把 FOSSA 三项告警（Security Analysis / License Compliance / Dependency
 > Quality）从「第三方后台报的数」变成**仓库侧可核实、可复现的状态**。所有版本下限的取舍都
@@ -223,6 +223,28 @@
   结果所有测试都收集失败」。已改为 `except (ImportError, OSError)`。
   （`sounddevice` 0.4.6 与 0.5.6 行为相同，是存量问题，与本次版本抬升无关。）
 
+- **wheel 陈旧缓存让安装包装配直接中断**（本轮引入、CI 首次暴露）：`actions/cache` 用
+  `restore-keys` 前缀匹配，`requirements.desktop.txt` 改了仍会把**旧版本**的 wheel 目录恢复出来；
+  而 `download_wheels()` 只要看到 `*.whl` 就判定「复用」，跳过重新下载 —— 随后
+  `pip install --no-index --find-links` 在离线目录里找不到抬高后的下限，装配以
+  `ERROR: Could not find a version that satisfies the requirement Pillow>=13.0.0
+  (from versions: 12.3.0)` 失败（run 40107364798）。已改为在 wheel 目录写入
+  `.requirements.sha256` 指纹标记，指纹不一致就丢弃旧 wheel 重新下载。
+  已用真实 PyPI 对 `win_amd64/cp312` 做全量解析预检，76 个包全部可解。
+
+- **`npx next build` 绕过了 `prebuild`，产出物漏掉许可全文**（本轮引入、CI 首次暴露）：
+  许可复制挂在 `web/package.json` 的 `prebuild`（`scripts/copy-license.mjs`），
+  而 `tauri-build.yml` / `ci.yml` 的桌面静态导出步骤、`build_tauri_release.sh`、
+  `run_tauri_dev.sh` 四处写的是 `npx next build` —— **npm 生命周期钩子不会执行**，
+  于是 `web/out` 与内嵌的 `api/webui/dist` 里没有 `LICENSE`，FF-15 发布闸门
+  「2 项不合规，阻断发布」（run 40108785626）。四处已统一改为 `npm run build`。
+
+- **四段式版本号 `0.10.8.1` 违反 Cargo / Tauri 的 semver 约束**（本轮引入）：
+  `desktop/Cargo.toml` 写成 `version = "0.10.8.1"` 后，任何 cargo 操作直接失败 ——
+  `error: unexpected character '.' after patch version number`。
+  这意味着**该版本号下安装包永远编不出来**。已收敛为严格三段式 `0.10.9`
+  （0.10.8 的补丁版），Python / Web / Go / 桌面 / CI 标签全部统一，无版本漂移。
+
 ### 📊 治理结果（OSV.dev 全量复扫，口径对齐 FOSSA）
 
 | 生态 | 治理前 | 治理后 |
@@ -239,9 +261,9 @@
 
 | 项 | 值 |
 |---|---|
-| 版本 / 标签 | `v0.10.8.1` |
+| 版本 / 标签 | `v0.10.9` |
 | 源码修订 | 待打 tag 后回填（以实际发布提交为准） |
-| 安装包产物 | **尚未构建** —— 体积与 SHA256 须由 CI 在 `v0.10.8.1` tag 上构建后回填 |
+| 安装包产物 | **尚未构建** —— 体积与 SHA256 须由 CI 在 `v0.10.9` tag 上构建后回填 |
 | CI 哈希校验 | `acceptance-windows.yml` 的默认 `expected_sha256` 已置空（哈希未知时跳过校验），构建后回填 |
 | 回滚目标 | 卸载后重装上一版 `v0.10.8`；用户数据在 `%APPDATA%` 与「文档」保留，卸载不清空 |
 

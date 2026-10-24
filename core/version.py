@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Live2D Master Agent - Version information (single source of truth)"""
 
-__version__ = "0.10.8.1"
-__version_info__ = (0, 10, 8, 1)
+__version__ = "0.10.9"
+__version_info__ = (0, 10, 9)
 __release_date__ = "2026-10-24"
 __codename__ = "Dependency Truth"
 

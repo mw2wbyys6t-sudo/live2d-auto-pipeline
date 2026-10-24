@@ -29,7 +29,7 @@ echo
 
 # ---- Step 1: Frontend ----
 echo "[1/6] Building frontend static export..."
-(cd web && NEXT_STATIC_EXPORT=1 npx next build)
+(cd web && NEXT_STATIC_EXPORT=1 npm run build)
 echo "[OK] web/out/"
 echo
 

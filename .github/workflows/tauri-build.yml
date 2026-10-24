@@ -83,7 +83,7 @@ jobs:
 
       - name: Build frontend static export
         working-directory: web
-        run: npx next build
+        run: npm run build
         env:
           NEXT_STATIC_EXPORT: '1'
 

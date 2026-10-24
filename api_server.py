@@ -116,7 +116,7 @@ CHARACTERS_DIR = ASSETS_DIR / "characters"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 CHARACTERS_DIR.mkdir(parents=True, exist_ok=True)
 
-VERSION = "v0.10.8.1-py"
+VERSION = "v0.10.9-py"
 SERVER_PORT = 8080  # v0.10.3: 与 Go 后端及前端代理目标一致
 # 安全默认：只监听本机回环（与 Go 服务同一策略），避免同 WiFi/局域网设备
 # 无鉴权调用（耗 API 额度、读 output 产物、驱动摄像头）。确需局域网访问时

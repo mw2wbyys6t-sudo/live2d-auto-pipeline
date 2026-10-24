@@ -34,7 +34,7 @@ echo
 echo "[1/5] Building frontend static export..."
 (
     cd web
-    NEXT_STATIC_EXPORT=1 npx next build
+    NEXT_STATIC_EXPORT=1 npm run build
 )
 echo "[OK] Frontend built -> web/out/"
 echo

@@ -11,7 +11,7 @@ on:
       tag:
         description: 'Release tag to install'
         required: true
-        default: 'v0.10.8.1'
+        default: 'v0.10.9'
       expected_sha256:
         description: 'Expected SHA256 of the installer (empty = skip the check)'
         required: false
@@ -32,8 +32,8 @@ jobs:
     timeout-minutes: 30
     env:
       # push 触发时 inputs 为空，这里给出与 workflow_dispatch 默认值一致的兜底。
-      TAG: ${{ inputs.tag || 'v0.10.8.1' }}
-      # v0.10.8.1 产物尚未构建，哈希未知时保持为空即跳过校验；
+      TAG: ${{ inputs.tag || 'v0.10.9' }}
+      # v0.10.9 产物尚未构建，哈希未知时保持为空即跳过校验；
       # 构建完成后把新产物的 SHA256 填到这里，让验收重新具备完整性校验。
       EXPECTED_SHA: ${{ inputs.expected_sha256 || '' }}
 
