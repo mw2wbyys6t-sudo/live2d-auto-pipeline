@@ -15,7 +15,10 @@ on:
       expected_sha256:
         description: 'Expected SHA256 of the installer (empty = skip the check)'
         required: false
-        default: '01862574322e45410ecad57587bcdce7413e968387b267fe1fdf8a4d605b71b5'
+        # 留空而不是沿用上一版哈希：带着旧哈希跑默认值，会拿 0.10.8 的哈希去校验
+        # 0.10.9 的产物，必然 mismatch —— 那是「假失败」，比跳过校验更糟。
+        # 新产物首次构建后，把实测哈希填到下方 EXPECTED_SHA 的兜底值里。
+        default: ''
   # 该文件或验收脚本变更时自动跑一次，用于验证验收管线本身可用。
   push:
     paths:
@@ -33,8 +36,8 @@ jobs:
     env:
       # push 触发时 inputs 为空，这里给出与 workflow_dispatch 默认值一致的兜底。
       TAG: ${{ inputs.tag || 'v0.10.9' }}
-      # v0.10.9 产物尚未构建，哈希未知时保持为空即跳过校验；
-      # 构建完成后把新产物的 SHA256 填到这里，让验收重新具备完整性校验。
+      # 首次运行时产物哈希尚未回填，留空即跳过完整性校验（步骤仍会打印实测哈希）；
+      # 拿到实测值后填到这里，让 push 触发的验收重新具备完整性校验。
       EXPECTED_SHA: ${{ inputs.expected_sha256 || '' }}
 
     steps:
