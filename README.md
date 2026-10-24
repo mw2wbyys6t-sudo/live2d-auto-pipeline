@@ -105,8 +105,9 @@
 |----------|------|
 | `Live2D.Master.Agent_0.10.9_x64-setup.exe` | **Windows 安装包（NSIS）** — 双击安装，装完即可用 |
 
-> 体积以 Release 页面显示为准：本版把误打进包的 torch 组移了出去（`requirements.desktop.txt`
-> 29 → 24 条），安装包应明显小于上一版的 484 MB，**具体数字以构建产物为准**。
+> 实测体积 **342.63 MiB**（上一版 461.62 MiB，净减 **119 MiB / −26%**）。本版把误打进包的
+> torch 组移了出去（`requirements.desktop.txt` 29 → 24 条）；注意「−500 MB」指的是 torch 组
+> 本身体积，不是安装包净减少量 —— rembg 的传递依赖（scikit-image / numba / llvmlite）抵消了一部分。
 
 > ✅ 安装包**自带完整运行时**：嵌入式 CPython 3.12 + 离线依赖 + `app/` 源码树 + 原生面捕（YuNet + `onnxruntime.dll`）。**无需预装 Python**。
 
@@ -131,7 +132,7 @@ Invoke-RestMethod http://127.0.0.1:8080/api/diagnostics | ConvertTo-Json -Depth 
 
 > ✅ 上一版 v0.10.8 已在 GitHub 的 Windows runner 上对**发布包本身**实跑过验收，结果 `RESULT: PASS`（[run #39046077810](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39046077810)）：安装器退出码 `0`、17 项文件齐全、随包 Python `3.12.10`、`/api/health` 返回 `python_ok=true`。
 >
-> ⏳ **v0.10.9 的安装包尚未构建**。构建完成后会对产物本身再跑一次同样的验收，结果补到本节与 CHANGELOG「发布凭据」。
+> ✅ **v0.10.9 的安装包已于 2026-10-24 由 CI 构建并发布**（[run #40115248808](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/40115248808)），产物 `359,250,342 B / 342.63 MiB`。产物级验收由 `Windows Installer Acceptance` 对已发布文件执行，结果见该 workflow 的运行记录。
 
 > 🔏 **关于代码签名**：当前安装包**尚未签名**，Windows 首次运行会提示 SmartScreen「未知发布者」——点「更多信息 → 仍要运行」即可。安装后请用 SHA256 确认文件完整：
 >
@@ -148,10 +149,10 @@ Invoke-RestMethod http://127.0.0.1:8080/api/diagnostics | ConvertTo-Json -Depth 
 
 1. **修掉一个 CVE 级远程代码执行**：`next@16.4.0` 命中 3 条 2026-10-22 公布的告警（含 `use cache` 未授权 RCE），全部在 `16.4.1` 修复；已升级并同步锁文件。
 2. **Python 依赖的 CVE 面清零**：Pillow / cryptography / python-multipart / rembg / requests / torch / transformers 的下限全部抬到修复版本（OSV.dev 复扫 PyPI **157 → 0 条**）；顺带修掉 `transformers>=4.30.0` 与代码实际按 5.17 编写的声明矛盾。
-3. **安装包瘦身（约 −500 MB）**：`requirements.desktop.txt` 把 torch 组移出（29 → 24 条）—— 它既与 `core/capabilities.py` 的「重能力按需下载」契约矛盾，装了也用不上（桌面端 `auto` 恒走 isnet）。改为应用内「能力」页按需安装，**默认链路零变化**。
+3. **安装包瘦身**：`requirements.desktop.txt` 把 torch 组移出（29 → 24 条）—— 它既与 `core/capabilities.py` 的「重能力按需下载」契约矛盾，装了也用不上（桌面端 `auto` 恒走 isnet）。改为应用内「能力」页按需安装，**默认链路零变化**。实测安装包 **461.62 MiB → 342.63 MiB（净减 119 MiB / −26%）**；注意「−500 MB」是 torch 组本身体积，不是净减少量。
 4. **运行变快**：`/api/health` 从「每次 fork 3 个 Python」改成合并 exec + 30s 缓存，并发 200 次从 9/200 成功 → **200/200**（RPS 2 → 130）；分层质量评分 **2.27 s → 1.0 s**、`compose` **2.82 s → 1.56 s**、生成管线端到端 **11.92 s → 9.41 s**（−21%），产物逐字节一致。
 5. **许可与 CI 真正落地**：FF-15 打包闸门从「文档里的待补」变成实装（产物内许可与仓库逐字节一致，不合规以退出码 1 阻断发布）；新增 FOSSA 扫描 job（无 key 自动跳过，不误伤外部 PR）；CI 改为按**声明下限**安装依赖，第一次真正验证下限可用。
-6. **安装包终于真的能构建出来了**：CI 首次跑到发布步骤，连续暴露三处**只有真构建才会显形**的缺陷 —— 陈旧 wheel 缓存让离线装配失败、`npx next build` 绕过 `prebuild` 导致产物漏许可被 FF-15 拦下、四段式版本号违反 Cargo/Tauri 的 semver 约束。三处均已修，并各自在本地复现验证过（细节见 CHANGELOG「顺手修掉的存量 bug」）。
+6. **安装包终于真的能构建出来了**：CI 首次跑到发布步骤，连续暴露三处**只有真构建才会显形**的缺陷 —— 陈旧 wheel 缓存让离线装配失败、`npx next build` 绕过 `prebuild` 导致产物漏许可被 FF-15 拦下、四段式版本号违反 Cargo/Tauri 的 semver 约束。三处均已修，并各自在本地复现验证过；本版安装包已由 CI 真实产出并发布（细节见 CHANGELOG「顺手修掉的存量 bug」）。
 
 > 完整变更、**尚未验证项**与发布凭据（源码提交 / 构建运行 / 哈希 / 回滚目标）见 [CHANGELOG v0.10.9](CHANGELOG.md)。
 
@@ -356,7 +357,7 @@ cd web && npm run build
 
 | 版本 | 日期 | 重点 |
 |------|------|------|
-| **v0.10.9** | 2026-10-24 | **Dependency Truth**：依赖 CVE 面清零（PyPI 157→0）、修 Next.js 未授权 RCE、安装包移出 torch 组（约 −500 MB）、`/api/health` 吞吐 65×、分层评分与 compose 提速、FF-15 许可闸门实装（工作流与代码补丁，不含新功能） |
+| **v0.10.9** | 2026-10-24 | **Dependency Truth**：依赖 CVE 面清零（PyPI 157→0）、修 Next.js 未授权 RCE、安装包移出 torch 组（**342.63 MiB / −119 MiB**）、`/api/health` 吞吐 65×、分层评分与 compose 提速、FF-15 许可闸门实装、构建链三处缺陷修复（wheel 陈旧缓存 / prebuild 被绕过 / 非 semver 版本号）—— 工作流与代码补丁，不含新功能 |
 | **v0.10.8** | 2026-10-17 | **Honest Desktop**：安装包自带运行时（461.62 MiB / 92 个离线包，无需装 Python）、修复「后端未找到」与导出页 PSD 失败、移除无效控件与假成功、新增 `/api/diagnostics` 与一键验收脚本（未签名） |
 | **v0.10.7** | 2026-10-16 | **依赖治理 + 发布修复**：抬高 Python/npm 依赖下限消除 CVE 面、修复 Release 无资产回归、清零版本号漂移（⚠️ 该版 8 MB 安装包缺运行时，已撤下） |
 | **v0.10.6** | 2026-10-15 | **CI 修复 + 版本统一**：关闭 pixi.js v8 破坏性升级 PR、dependabot 忽略 major、全栈版本号对齐到 0.10.6 |
