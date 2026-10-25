@@ -50,7 +50,7 @@ uvicorn>=0.27.0
 python-multipart>=0.0.32
 
 # ====== CLI Enhancement ======
-rich>=13.0.0
+rich>=15.0.0
 
 # ====== Desktop Pet ======
 pygame>=2.5.0; python_version < "3.14"

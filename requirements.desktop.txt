@@ -36,7 +36,7 @@ psd-tools>=1.24.0
 scipy>=1.15.3
 scikit-learn>=1.9.1
 cryptography>=50.0.2
-rich>=13.0.0
+rich>=15.0.0
 
 # ===== 图像处理 / 分割 / PSD =====
 # headless 版：无需 GUI 依赖，桌面版 UI 由 Tauri 承载。
