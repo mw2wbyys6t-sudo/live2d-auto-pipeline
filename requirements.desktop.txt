@@ -64,7 +64,7 @@ edge-tts>=7.3.1
 #   注意：0.10.30 起官方删除了经典 mp.solutions API。drivers/face_tracker
 #   已内置「经典 API 优先、缺失时切 Tasks FaceLandmarker」双路适配；对应的
 #   模型 face_landmarker.task 由装配脚本下载到 <res>/models/。
-mediapipe>=0.10.30,<0.10.32
+mediapipe>=1.1.1,<1.1.2
 
 # ===== AI：SAM2 语义分割 —— 刻意**不**内置（由应用内按需下载） =====
 #
