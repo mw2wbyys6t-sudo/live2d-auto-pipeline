@@ -59,7 +59,7 @@ pygame-ce>=2.5.0; python_version >= "3.14"
 # ====== Image Processing ======
 # opencv-python>=4.9.0.80: 捆绑的 libwebp 已含 CVE-2023-4863(堆缓冲区溢出)修复
 opencv-python>=4.9.0.80
-onnxruntime>=1.14.0
+onnxruntime>=1.31.0
 rembg[cpu]>=2.0.86
 
 # ====== Face Tracking (drivers/face_tracker) ======

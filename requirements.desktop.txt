@@ -41,7 +41,7 @@ rich>=13.0.0
 # ===== 图像处理 / 分割 / PSD =====
 # headless 版：无需 GUI 依赖，桌面版 UI 由 Tauri 承载。
 opencv-python-headless>=4.9.0.80
-onnxruntime>=1.14.0
+onnxruntime>=1.31.0
 rembg[cpu]>=2.0.86
 
 # ===== Live2D moc3 编译与官方内核验收 =====
