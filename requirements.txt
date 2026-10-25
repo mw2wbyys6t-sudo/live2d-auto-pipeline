@@ -54,7 +54,7 @@ rich>=13.0.0
 
 # ====== Desktop Pet ======
 pygame>=2.5.0; python_version < "3.14"
-pygame-ce>=2.5.0; python_version >= "3.14"
+pygame-ce>=2.5.8; python_version >= "3.14"
 
 # ====== Image Processing ======
 # opencv-python>=4.9.0.80: 捆绑的 libwebp 已含 CVE-2023-4863(堆缓冲区溢出)修复

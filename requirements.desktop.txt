@@ -50,7 +50,7 @@ live2d-py==0.8.1
 
 # ===== 桌宠 / 音频 / TTS / 面捕 =====
 pygame>=2.5.0; python_version < "3.14"
-pygame-ce>=2.5.0; python_version >= "3.14"
+pygame-ce>=2.5.8; python_version >= "3.14"
 sounddevice>=0.5.6
 soundfile>=0.14.0
 edge-tts>=7.3.1
