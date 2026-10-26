@@ -344,80 +344,39 @@
 - 真实验收入口是手动触发的 `moc3-acceptance` job（安装 live2d-py + xvfb + `LIVE2D_TEST_PIXELS=1`）。
   首次运行需人工确认环境可跑通。
 
-## 9. 依赖治理现状（2026-10-23 复核）
+## 9. 依赖治理现状（2026-10-26 复核）
 
-本节记录**仓库侧**能核实的那部分依赖状态。FOSSA 三项检查（Dependency Quality /
-License Compliance / Security Analysis）由第三方 SaaS 回写 commit status。
-本节先记 2026-10-23 复核（FOSSA 后台重扫）的数字，再补上当日新增的
-**仓库侧全量许可清单**（`scripts/fossa_license_inventory.py`）——
-它让「那 65 条到底是什么」第一次有了可复现的答案（后续移除 torch 组后降到 64）。
+本节记录仓库侧能核实的依赖状态。FOSSA 三项检查由第三方 SaaS 回写 commit status；本次定位到 main `42a99c7ca10955d26525d022a83f361ac443aff4`、revision scan `126535209`。
 
-**FOSSA 后台重扫的真实数字**（PR #48，commit `6d9a075`，2026-10-23）：
-
-| FOSSA 检查 | 治理前 | 治理后 | 变化 |
-|---|---|---|---|
-| Security Analysis | 129 vulnerabilities | **6 vulnerabilities** | −123（−95%）|
-| License Compliance | 67 issues | **65 issues** | −2 |
-| Dependency Quality | 6 quality issues | **5 quality issues** | −1 |
-
-本地用 OSV.dev 做的全量复扫（口径对齐 FOSSA：清单声明的下限 + 各生态锁文件的实装版本）
-得到**同样的 6 条**，两条路径交叉验证一致。
-
-### 那 64 条 License Compliance issue 到底是什么（2026-10-23 实算结论）
-
-**不是合规风险，是策略未配置。** 逐条实算 716 个依赖的许可后：
-
-| 档位 | 数量 | 含义 |
+| FOSSA 检查 | 当前结果 | 仓库侧处理与验证边界 |
 |---|---|---|
-| 允许（ALLOW） | **694** | 宽松型，可自由再分发，不施加文件级传染条件 |
-| 需审阅（REVIEW） | **22** | 弱 copyleft（LGPL / MPL），以库形式随附兼容，确认一次即可 |
-| 禁止（DENY） | **0** | **没有任何强 copyleft 或非商业条款依赖** |
-| 许可未声明 | **0** | `segment-anything` 随 torch 组移出基础依赖树后归零 |
+| Dependency Quality | **5 quality issues** | 已更新 `websockets>=17.3`、`psd-tools>=1.26.0`、`rich>=15.0.0`、`onnxruntime>=1.31.0`、`pygame-ce>=2.5.8`、`next^16.4.3`、`lucide-react^1.61.0`。`mediapipe` 保持 `<0.10.32`：1.1.1 强制引入 `opencv-contrib-python`，与 headless OpenCV 争抢 `cv2`。公共页不开放逐项质量明细，是否归零必须重扫确认。 |
+| License Compliance | **64 issues**（公共摘要 57 Flagged + 7 Denied） | 旧结论“DENY=0”只统计包元数据，未覆盖 FOSSA 对 OpenCV、Pillow 等依赖内嵌许可证的深扫，已撤回。7 条 Denied 需维护者逐条核对，不能全部放行。 |
+| Security Analysis | **4 vulnerabilities** | 用相同依赖版本在 OSV 复算为下表四项；均不能靠当前兼容升级直接消除，需按实际可达性在 FOSSA 后台逐条审阅。 |
 
-也就是说：那 64 条只是「不在 FOSSA 默认允许清单里」的计数，**没有一条与 Apache-2.0
-分发冲突**。要让它们归零，得在 FOSSA 后台按策略放行，而不是改代码。
-完整的三档清单与后台操作步骤见 **[docs/license-policy.md](license-policy.md)**。
+### 四项安全命中的依据与处置边界
 
-复现：
-
-```bash
-python scripts/fossa_license_inventory.py            # 报告
-python scripts/fossa_license_inventory.py --policy   # 策略建议
-```
-
-**仓库侧的依赖许可构成**（PyPI / npm / crates.io / deps.dev 官方元数据逐个查过）：
-
-- 直接依赖里绝大多数是宽松型：Apache-2.0（aiofiles / requests / python-multipart /
-  mediapipe / opencv / transformers / huggingface-hub）、MIT（fastapi / psd-tools /
-  rembg / rich / onnxruntime / sounddevice / urllib3 / py-moc3 / live2d-py）、
-  BSD-3-Clause（httpx / scipy / soundfile / torchvision / uvicorn / websockets /
-  scikit-learn / numpy）；
-- **弱 copyleft（22 条）需人工确认**：`pygame` / `pygame-ce`（LGPL）、`edge-tts`（LGPLv3）
-  —— 以库形式被 import（动态链接），与 Apache-2.0 分发兼容，但 FOSSA 的默认策略会要求
-  人工过一遍；`@img/sharp-libvips-*`（LGPL-3.0-or-later，Next.js `sharp` 的平台专属可选依赖）；
-  5 个 MPL-2.0 crate（`cssparser` / `cssparser-macros` / `dtoa-short` / `option-ext` /
-  `selectors`，文件级 copyleft 且未修改上游文件）；
-- **`segment-anything` 在 PyPI 上没有声明许可证**（GitHub 上是 Apache-2.0，但包元数据缺
-  `license` 字段）→ FOSSA 会报「未知许可」。它被 `core/segment_engine/semantic.py`
-  使用（`SamAutomaticMaskGenerator`），但已随 torch 组**移出基础依赖树**
-  （见 `requirements.desktop.txt`：SAM2 改为应用内按需下载），所以当前依赖树里的
-  「未声明许可」项为 **0**。若用户之后启用 SAM2 能力组把它装回来，需在 FOSSA 侧
-  按依赖名单独放行 —— 这是上游元数据缺失，仓库侧无法修。
-
-**FOSSA API key 需要账号持有人在后台手动创建**（Organization Settings → Integrations →
-API，**只显示一次**），仓库侧无法代劳；且要拿到那 64 条的逐条明细需要**企业版 API**。
-策略本身也必须在**项目后台**切换 —— 官方明确：项目已存在后改 `.fossa.yml` 的 `policy:`
-字段**不会生效**（"will *not* change the policy"）。
-
-### 剩余 6 条为什么修不掉（逐条核实过，不是「懒得修」）
-
-| 条目 | 公告 | 为什么无法消除 |
+| 条目 | 公告 | 当前证据与处置 |
 |---|---|---|
-| `golang.org/x/crypto` | `GO-2026-5932` | 这是 **openpgp 整个包的「不安全设计」通告**，不是某个版本的缺陷 —— Go 官方漏洞库对**任何** x/crypto 版本都会标它（上游明确说该包不再维护、无修复版）。本仓库**不使用** `openpgp`（只间接依赖 x/crypto 的 ssh 等包）。 |
-| `npm:braces` | `GHSA-vfj7-8cjw-p6xm` | 递归 AST walker 无深度保护，栈溢出。**braces 3.0.3 就是最新版**，无修复版本。传递自 `chokidar` / `micromatch`（开发期文件监听），不处理不可信输入。 |
-| `crates.io:glib` | `RUSTSEC-2024-0429` | 修复版是 0.20.0，但被 `gtk 0.18` ← `tauri 2.12` 的约束卡住（`cargo update -p glib --precise 0.20.11` 直接报 `no matching package`），要修得升 Tauri 大版本。且 **gtk/glib 是 Linux/GTK 专属依赖 —— 发行的 Windows NSIS 安装包根本不编译它**。 |
-| `crates.io:paste` | `RUSTSEC-2024-0436` | 上游仓库已归档、明确声明不再维护，**没有修复版本**（1.0.15 即最新版）。编译期传递依赖。 |
-| `crates.io:proc-macro-error` | `RUSTSEC-2024-0370` | 同上，维护者失联、无新版本、无修复版。编译期传递依赖（且它依赖 `syn 1.x`，会带重复依赖）。 |
+| `golang.org/x/crypto v0.58.0` | `GO-2026-5932` | `openpgp` 整包的不安全设计通告，无修复版本；本仓库不使用 `openpgp`。维护者可据代码路径审阅该 issue，不能靠升级 x/crypto 消除。 |
+| `crates.io:glib 0.18.5` | `RUSTSEC-2024-0429` / `GHSA-wrw7-89jp-8q8g` | 同一问题的两个 ID。`cargo tree --target all -i glib` 实测其链为 `tauri 2.12.5 → gtk 0.18.2 → glib 0.18.5`；Windows 默认树不含 glib，发行的 Windows NSIS 产物不编译它。修复仍受 Tauri/GTK 版本约束。 |
+| `crates.io:paste 1.0.15` | `RUSTSEC-2024-0436` | `cargo tree --target all -i paste` 实测其链为 `native/face_tracker → nokhwa 0.10.11 → paste`；上游归档、无修复版本。 |
+| `crates.io:proc-macro-error 1.0.4` | `RUSTSEC-2024-0370` | 实测经桌面 Linux 的 `glib-macros` / `gtk3-macros` 链引入；上游停止维护，无修复版本。 |
+
+这四项是**依赖版本与公告的复算结果**，不是 FOSSA 逐项 issue 的权限内回读。后台处理时必须再核对 issue 与公告一一对应；验收目标是重扫后 Security Analysis 为 0，或每项保留例外均有可审计依据。
+
+### License Compliance 为什么不能只靠本地清单判零
+
+`python scripts/fossa_license_inventory.py` 枚举四个生态的包元数据；2026-10-23 的 716 项统计为 ALLOW 694 / REVIEW 22 / DENY 0 / UNKNOWN 0。FOSSA 公共许可证页还列出了依赖内嵌的 GPL-2.0、GPL-3.0、LGPL、JSON 等许可证，证明两种扫描口径不同。
+
+维护者需要在 FOSSA 后台完成：
+
+1. 打开 scan `126535209` 的 57 条 Flagged 与 7 条 Denied，记录依赖、许可证、公告或许可证文本及是否进入实际发行产物。
+2. 弱 copyleft（LGPL/MPL）按分发方式审阅；强 copyleft / 非商业条款保持 Deny，实际进入产物且不兼容时替换依赖。只有识别错误或对应组件未分发时才按单条 issue 处理，不做全局忽略。
+3. 将项目绑定到审阅后的 `Apache-2.0 Distribution` 策略。已存在项目不会仅因修改 `.fossa.yml` 的 `policy:` 字段而换策略。
+4. 对同一提交重新扫描，确认 License Compliance 归零；未获 Maintainer Access 前，仓库侧无法代替这一步。
+
+完整策略与操作步骤见 **[docs/license-policy.md](license-policy.md)**。FOSSA API key 仍需账号持有人在 Organization Settings → Integrations → API 手动创建，且只显示一次。
 
 ### 本轮同时修掉的「声明与现实脱节」
 

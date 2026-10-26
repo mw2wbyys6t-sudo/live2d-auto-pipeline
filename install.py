@@ -379,10 +379,10 @@ def install_core(state=None):
             # 与清单冲突：单独装会拉到带 CVE 的版本）。
             "Pillow>=13.0.0", "numpy>=2.4.6", "requests>=2.34.2",
             "urllib3>=2.8.0", "httpx>=0.28.1", "aiohttp>=3.14.5",
-            "psd-tools>=1.24.0", "scipy>=1.15.3", "scikit-learn>=1.9.1",
-            "cryptography>=50.0.2", "rich>=13.0.0",
-            "opencv-python-headless>=4.9.0.80", "onnxruntime>=1.14.0",
-            "aiofiles>=25.1.0", "websockets>=17.2",
+            "psd-tools>=1.26.0", "scipy>=1.15.3", "scikit-learn>=1.9.1",
+            "cryptography>=50.0.2", "rich>=15.0.0",
+            "opencv-python-headless>=4.9.0.80", "onnxruntime>=1.31.0",
+            "aiofiles>=25.1.0", "websockets>=17.3",
         ]
         if run_pip(core_pkgs, "Installing individual packages...", state):
             state.mark_success(step_name + " (individual)")
@@ -399,7 +399,7 @@ def install_desktop_pet(state=None):
     step_name = "Desktop Pet Dependencies"
 
     if sys.version_info >= (3, 14):
-        pkgs = ["pygame-ce>=2.5.0"]
+        pkgs = ["pygame-ce>=2.5.8"]
     else:
         pkgs = ["pygame>=2.5.0"]
 

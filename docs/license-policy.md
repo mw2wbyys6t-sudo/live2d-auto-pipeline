@@ -2,27 +2,24 @@
 
 > **读者（Audience）**：维护者与合规负责人。
 > **文档类型（Diátaxis）**：explanation + how-to。
-> **真相源（Source of Truth）**：依赖许可清单由 [`scripts/fossa_license_inventory.py`](../scripts/fossa_license_inventory.py) 从四个生态的依赖树实算得出；本文件记录**判定依据**与**后台操作步骤**，清单本身请以脚本输出为准。
-> **最后校验（Last verified）**：2026-10-23（依赖树 716 条，基线测试 809 passed / 115 skipped）。
+> **真相源（Source of Truth）**：包元数据清单由 [`scripts/fossa_license_inventory.py`](../scripts/fossa_license_inventory.py) 实算；FOSSA 另做依赖内嵌许可证深扫，两者口径不同。本文件记录判定依据与后台操作步骤。
+> **最后校验（Last verified）**：2026-10-26（FOSSA revision scan `126535209`，commit `42a99c7`）。
 
 ---
 
 ## 1. 结论先说
 
-剩余的 **64 条 License Compliance issue 不是合规风险，是策略未配置**。
+当前 GitHub legacy status 为 **64 条 License Compliance issue**；同一 FOSSA 扫描的公共摘要分为 **57 条 Flagged + 7 条 Denied**。逐项 issue 详情需要 Maintainer Access，不能把 64 条一概归因成“策略未配置”，更不能全部放行。
 
-按 Apache-2.0 分发场景（ADR-001 Rev.4：本项目自 2026-09-22 起为 Apache-2.0，产出物对外分发）逐条实算 716 个依赖：
+2026-10-23 的本地清单曾得出 716 项中 ALLOW 694 / REVIEW 22 / DENY 0。这个结论**只覆盖 PyPI、npm、crates.io、Go 的包元数据**，没有覆盖 FOSSA 在 OpenCV、Pillow 等依赖内部发现的 GPL 等许可证文本，因此不能用来否定当前 7 条 Denied。
 
-| 档位 | 数量 | 含义 |
-|---|---|---|
-| 允许（ALLOW） | **694** | 宽松型许可，可自由再分发，不施加文件级传染条件 |
-| 需审阅（REVIEW） | **22** | 弱 copyleft（LGPL / MPL），以库形式随附是兼容的，确认一次即可 |
-| 禁止（DENY） | **0** | **没有任何强 copyleft 或非商业条款依赖** |
-| 许可未声明 | **0** | （`segment-anything` 随 torch 组移出基础依赖树后归零，见 §3.3）|
+仓库侧与后台必须分开处理：
 
-也就是说：**没有一条依赖的许可证与 Apache-2.0 分发冲突**。那 64 条是 FOSSA 拿着默认策略逐条比对后记下的"未在允许清单内"，而不是"发现了违规"。
+- **仓库侧**：保留强 copyleft / 非商业条款的 Deny 规则；发现实际进入发行产物且不兼容的依赖时，替换或移除，而不是放宽策略。
+- **FOSSA 后台**：维护者逐条打开 57+7 项，核对依赖、许可证和发行产物。弱 copyleft 按 §3.2 审阅；Denied 只有在证明对应组件未进入产物或许可证识别有误时，才能按单条 issue 处理。
+- **验收**：重新扫描同一提交，确认 License Compliance 为 0；若保留经审阅的例外，必须能看到逐条依据，不能只凭状态变绿。
 
-复现：
+本地包元数据清单仍可复现，但它不是 FOSSA 深扫的替代品：
 
 ```bash
 python scripts/fossa_license_inventory.py            # 人类可读报告
@@ -71,7 +68,7 @@ Name = `FOSSA_API_KEY`，Secret = 刚复制的 key。
 
 ---
 
-## 3. 后台配置策略（这一步才真正消掉 64 条 issue）
+## 3. 后台配置策略与逐项复核
 
 ⚠️ **关键**：改 `.fossa.yml` 的 `policy:` 字段**对已存在的项目不生效**。FOSSA 官方明确写着：
 
@@ -137,19 +134,33 @@ MPL-2.0
 
 > FOSSA 支持条件规则（Conditional Policy Rules），可对 MPL 加"仅第三方依赖且未修改"条件，把噪音降到 0。
 
-#### ⛔ Deny（禁止，0 项）
-
-当前依赖树**没有**任何强 copyleft / 非商业条款依赖。这一档留空即可；若希望"未来引入即报警"，可预先加入：
+#### ⛔ Deny（强 copyleft / 非商业条款，保持启用）
 
 ```
 AGPL-3.0
 GPL-2.0
+GPL-2.0-only
+GPL-2.0-or-later
 GPL-3.0
+GPL-3.0-only
+GPL-3.0-or-later
 SSPL-1.0
 BUSL-1.1
 Elastic-2.0
 Commons Clause
+CC-BY-NC-3.0
+CC-BY-NC-4.0
+CC-BY-NC-SA-4.0
 ```
+
+当前公共扫描有 **7 条 Denied**，但公共页不给出逐条映射，不能预设它们全是误报。维护者必须逐项核对：
+
+- 若强 copyleft 组件实际进入发行产物且与目标分发方式不兼容，替换或移除对应依赖；不要为了状态变绿而 Approve。
+- 若许可证只存在于上游源码包、对应组件未进入本仓库产物，在 issue 中记录产物清单证据后按该条处理。
+- 若 FOSSA 把双许可的 `OR` 分支误当成强制条件，记录实际选择的许可证后修正该条识别。
+- `JSON` 等含额外使用条件的许可证单独做合规审阅，不混入弱 copyleft 的批量放行。
+
+验收判据：同一提交重扫后 License Compliance 为 0；若组织允许保留已批准例外，每条例外都必须能回读到上述证据。
 
 ### 3.3 一个待确认项
 
@@ -200,7 +211,7 @@ export FOSSA_API_KEY=<你复制的 key>
 | 分析范围收敛（排除归档/文档） | ✅ | — | 已完成：`.fossa.yml` 的 `paths.exclude` |
 | 许可策略的三档规则 | ❌ | ✅ | 只能后台建，仓库侧无法声明 |
 | 项目绑定哪个策略 | ❌ | ✅ | 官方明确：改 `.fossa.yml` 不生效 |
-| issue 明细逐条读取 | ❌ | — | 需企业版 API |
+| issue 明细逐条读取 | ❌ | ✅ | 公共页只给汇总；维护者可在后台逐项审阅 |
 
 ---
 
