@@ -110,8 +110,8 @@ python -m drivers.live2d_runtime "模型文件.model3.json" --frames 120 --param
    `tests/integration/test_moc3_deformer_acceptance.py` 都钉住了这一点
    （用非方形网格 + 非方形矩形，才能同时暴露行列序与 y 朝向）。
 2. **V3_03 起，deformer 表非空时 `additional.quad_transforms` 必须非空。**
-   该段为空时内核报的是 `Header section is invalid` —— 完全不提变形器，
-   所以此前所有诊断都被引向「deformer 表内部缺字段」。官方 Haru 是 **V3_00**
+   该段为空时官方 Core 的加载结果并不稳定，因此导出前由 lint 强制拦截，
+   不再以特定内核报错作为验收判据。官方 Haru 是 **V3_00**
    （99 段、没有该段），因此从官方文件差分永远看不到这条约束。
    复现与长度规则实测：`tools/probe_deformer_header_variants.py`、
    `tools/probe_additional_rule.py`（只需非空，不要求每变形器一项；编译器按

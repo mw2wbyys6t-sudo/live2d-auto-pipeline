@@ -133,8 +133,7 @@ def _check_deformer_bands(doc: Moc3Container) -> List[LintIssue]:
 def _check_additional_section(doc: Moc3Container) -> List[LintIssue]:
     """V3_03 起，deformer 表非空时 additional 段必须有内容。
 
-    实测（tools/probe_deformer_header_variants.py）：该段为空时内核报的是
-    "Header section is invalid" —— 完全不提变形器，极易误诊。
+    官方 Core 的加载结果随环境不稳定，导出前由这里执行确定性的结构门禁。
     """
     issues: List[LintIssue] = []
     if doc.version < ms.MocVersion.V3_03:
@@ -144,8 +143,7 @@ def _check_additional_section(doc: Moc3Container) -> List[LintIssue]:
     if n_deformers and not extra:
         issues.append(LintIssue(
             "additional.quad_transforms",
-            f"deformer 表有 {n_deformers} 项但该段为空，"
-            f"官方内核会判 Header section is invalid"))
+            f"deformer 表有 {n_deformers} 项但该段为空，不满足导出契约"))
     elif extra and len(extra) != n_deformers:
         issues.append(LintIssue(
             "additional.quad_transforms",

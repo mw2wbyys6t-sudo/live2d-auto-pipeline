@@ -103,6 +103,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+
+def _safe_print(message: str) -> None:
+    """避免控制台编码不支持日志字符时中断服务。"""
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        print(message.encode(encoding, errors="replace").decode(encoding))
+
+
 # ---------- 项目路径设置 ----------
 PROJECT_ROOT = Path(__file__).parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -164,7 +174,7 @@ def _env_timeout(name: str, default: float) -> float:
         if value < 0:
             raise ValueError
     except ValueError:
-        print(f"⚠️  警告: {name}={raw!r} 不是合法超时秒数，回退默认值 {default:g}s")
+        _safe_print(f"⚠️  警告: {name}={raw!r} 不是合法超时秒数，回退默认值 {default:g}s")
         return default
     return value
 
@@ -261,20 +271,20 @@ class SegmentRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 启动时
-    print(f"\n{'='*60}")
-    print(f"  🎨 Live2D Master Agent API {VERSION} (Python Edition)")
-    print(f"  高性能 FastAPI 版本 - 直接调用 core 模块")
-    print(f"{'='*60}")
-    print(f"  服务地址: http://{SERVER_HOST}:{SERVER_PORT}")
+    _safe_print(f"\n{'='*60}")
+    _safe_print(f"  🎨 Live2D Master Agent API {VERSION} (Python Edition)")
+    _safe_print(f"  高性能 FastAPI 版本 - 直接调用 core 模块")
+    _safe_print(f"{'='*60}")
+    _safe_print(f"  服务地址: http://{SERVER_HOST}:{SERVER_PORT}")
     if SERVER_HOST not in ("127.0.0.1", "localhost", "::1"):
-        print(f"  ⚠️  监听在 {SERVER_HOST}：同一网络内的设备可不经验证访问本服务，"
+        _safe_print(f"  ⚠️  监听在 {SERVER_HOST}：同一网络内的设备可不经验证访问本服务，"
               f"请确认防火墙与 LIVE2D_ALLOWED_HOSTS 配置")
-    print(f"  输出目录: {OUTPUT_DIR}")
-    print(f"  项目根目录: {PROJECT_ROOT}")
-    print(f"{'='*60}\n")
+    _safe_print(f"  输出目录: {OUTPUT_DIR}")
+    _safe_print(f"  项目根目录: {PROJECT_ROOT}")
+    _safe_print(f"{'='*60}\n")
     yield
     # 关闭时
-    print("API 服务已停止")
+    _safe_print("API 服务已停止")
 
 
 app = FastAPI(title="Live2D Master Agent API", version=VERSION, lifespan=lifespan)
@@ -294,7 +304,7 @@ else:
 
 # 仅在明确配置了额外可信来源时才允许携带凭据；通配符场景必须关闭凭据
 if CORS_ORIGINS == ["*"]:
-    print("⚠️  警告: LIVE2D_CORS_ORIGINS='*' 时已自动关闭 allow_credentials")
+    _safe_print("⚠️  警告: LIVE2D_CORS_ORIGINS='*' 时已自动关闭 allow_credentials")
     _cors_allow_credentials = False
 else:
     _cors_allow_credentials = True
@@ -366,7 +376,7 @@ def _env_rate_limit() -> int:
             raise ValueError
         return val
     except ValueError:
-        print(f"⚠️  LIVE2D_RATE_LIMIT_PER_MIN={raw!r} 非法，回退默认 60/分")
+        _safe_print(f"⚠️  LIVE2D_RATE_LIMIT_PER_MIN={raw!r} 非法，回退默认 60/分")
         return 60
 
 

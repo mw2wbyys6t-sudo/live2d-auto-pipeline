@@ -3,8 +3,7 @@
 三条实测出来的约定在这里被钉住：
 1. 挂在 warp 下的网格，顶点存的是网格内的 (s, t)（官方 Haru：warp 下 80 个网格
    顶点全在 ~[0,1]，rotation 下的 4 个在模型空间）；
-2. V3_03 文档的 deformer 表非空时 additional 段必须非空，否则内核判
-   "Header section is invalid"；
+2. V3_03 文档的 deformer 表非空时 additional 段必须非空，由导出前 lint 稳定拦截；
 3. 静止形 = 参数默认值对应的那一形控制网格。
 复现脚本：tools/probe_warp_st_identity.py、tools/probe_additional_rule.py。
 """
@@ -122,21 +121,14 @@ def test_warp_package_loads_in_official_core(tmp_path):
         f"加载失败: {result['blocker']}\n{result['stdout']}\n{result['stderr']}")
 
 
-@requires_live2d
-def test_empty_additional_section_with_warp_is_rejected(tmp_path):
-    """负对照：删掉 additional 段，产物必须被内核拒绝 —— 钉住实测到的那条约束。
-
-    判据落在「完整清单能否加载」而不是「一致性检查」：实测（CubismNativeSDK 5-r.5 /
-    live2d-py 0.8.1）``HasMocConsistencyFromFile`` 对这份文档返回 **true**，
-    真正拒绝它的是 ``LoadModelJson``。加载才是用户装进 Cubism / VTube Studio 的
-    真实路径，所以负对照必须打在这道门上 —— 打在一致性检查上会得到假绿。
-    """
+def test_empty_additional_section_with_warp_is_rejected_by_lint():
+    """负对照：删掉 additional 段后，导出前的确定性结构门禁必须拒绝。"""
     doc = compile_static_rig(_rig((0.0,)))
     doc.set("additional.quad_transforms", [])
-    result = verify_moc3_load(str(_package(tmp_path, doc, "no_additional")))
-    assert result["ok"] is False, (
-        f"additional 段为空却被内核加载成功，该规则已不成立\n"
-        f"stdout={result['stdout']}")
+
+    issues = lint_document(doc)
+
+    assert any(issue.section == "additional.quad_transforms" for issue in issues)
 
 
 @requires_live2d

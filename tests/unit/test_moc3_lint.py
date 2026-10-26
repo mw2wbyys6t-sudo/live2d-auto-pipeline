@@ -77,7 +77,7 @@ def test_deformer_grid_rules_fire_on_bad_values():
 
 
 def test_empty_additional_section_with_deformers_is_reported():
-    """实测规则：V3_03 下 deformer 表非空而 additional 段为空 -> 内核判 Header invalid。"""
+    """V3_03 下 deformer 表非空而 additional 段为空时，导出门禁必须拒绝。"""
     from live2d_builder.exporter.moc3_lint import _check_additional_section
 
     doc = _deformer_doc(9)

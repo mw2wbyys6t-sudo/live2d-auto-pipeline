@@ -542,8 +542,11 @@ class TestSynthesisedSilhouette:
         assert SemanticLayerer._alpha_carries_silhouette(opaque) is False
         assert SemanticLayerer._alpha_carries_silhouette(cutout) is True
 
-    def test_segment_records_synthesised_silhouette(self):
+    def test_segment_records_synthesised_silhouette_without_model(self, monkeypatch):
+        """无可用学习模型时，真实回退路径必须记录自估剪影来源。"""
         seg = SemanticLayerer(device="cpu", model_type="isnet")
+        monkeypatch.setattr(seg, "_segment_isnet", lambda image: [])
+
         seg.segment(Image.fromarray(self._canvas(), "RGB"))
 
         assert seg._last_fg_synthesised is True

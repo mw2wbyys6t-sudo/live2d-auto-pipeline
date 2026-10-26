@@ -4,6 +4,8 @@
 用 tmp_path 构造迷你项目结构，直接调用内部 check_* 函数（不走 subprocess），
 对应 docs/architecture/index.md §4 FF-1 的可测自动化要求。
 """
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -41,6 +43,45 @@ def test_clean_python_file(tmp_path):
         (r.rule_id, [v.detail for v in r.violations]) for r in results
     ]
     assert sum(len(r.violations) for r in results) == 0
+
+
+def test_cli_reports_success_with_gbk_console(tmp_path):
+    """GBK 终端中的 PASS 符号不得让架构检查崩溃。"""
+    _write(tmp_path / "core" / "workflow.py", "import os\n")
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "gbk"
+
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "lint_architecture.py"), "--root", str(tmp_path)],
+        capture_output=True,
+        encoding="gbk",
+        errors="replace",
+        env=env,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.count("PASS") == 4
+
+
+def test_cli_reports_violations_with_gbk_console(tmp_path):
+    """GBK 终端中的 FAIL 符号和违规详情必须完整输出。"""
+    _write(tmp_path / "core" / "bad.py", "from drivers.bad import feature\n")
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "gbk"
+
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "lint_architecture.py"), "--root", str(tmp_path)],
+        capture_output=True,
+        encoding="gbk",
+        errors="replace",
+        env=env,
+        timeout=30,
+    )
+
+    assert proc.returncode == 1, proc.stderr
+    assert "FAIL" in proc.stdout
+    assert "core/bad.py" in proc.stdout
 
 
 # ============================================================

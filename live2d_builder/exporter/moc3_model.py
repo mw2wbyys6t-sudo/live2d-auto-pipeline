@@ -834,8 +834,7 @@ def _write_deformers(doc: Moc3Container, spec: RigSpec,
         doc.set("rotation_deformer_keyform.opacities", opacities)
 
     # V3_03 起的 additional 段：每个变形器一个 quad-transform 标志，0 = 网格形变。
-    # 实测：deformer 表非空而该段为空时，内核判 "Header section is invalid"
-    # （tools/probe_deformer_header_variants.py、tools/probe_additional_rule.py）。
+    # 空段的官方加载结果不稳定，导出前由 lint 强制拒绝。
     doc.set("additional.quad_transforms", [0] * n)
 
 

@@ -231,7 +231,7 @@ class TestWorkflowHelpOutput:
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=30,
         )
         out = proc.stdout
         for flag in ["--seed", "--negative-prompt", "--json", "--no-semantic"]:

@@ -74,7 +74,7 @@ def test_static_warp_stores_vertices_as_grid_coordinates():
 
 
 def test_non_empty_deformer_table_needs_additional_section():
-    """V3_03 下 deformer 表非空而 additional 段为空 -> 内核判 Header invalid。"""
+    """V3_03 下 deformer 表非空时，编译器必须写出 additional 段。"""
     doc = compile_static_rig(_spec([_lattice()]))
     assert doc.get("additional.quad_transforms") == [0]
     assert lint_document(doc) == []
