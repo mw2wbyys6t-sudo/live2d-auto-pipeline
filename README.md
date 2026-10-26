@@ -334,6 +334,7 @@ LLM_MODEL=gpt-4o-mini
 5. **项目仍在快速迭代中**，API 接口可能随版本变化。
 6. **Windows 安装包未签名**：首次运行会触发 SmartScreen「未知发布者」提示；请用上面给出的 SHA256 校验下载完整性。
 7. **安装包体积 306 MiB**：因为内置了完整 Python 运行时与模型，这是「装完就能用」的代价；对比旧版 8 MB（只含两个 exe，缺运行时）。
+8. **补充**：目前该项目是存在很多问题的，还没很多不完善的地方，我会多多进一步开发。
 
 详细说明见 [docs/LIMITATIONS.md](docs/LIMITATIONS.md)。
 
@@ -419,6 +420,7 @@ cd web && npm run build
 - [pixi-live2d-display](https://github.com/nicxfer/pixi-live2d-display) — Web Live2D 渲染
 - [Pollinations.ai](https://pollinations.ai) — 免费 AI 生图
 - [Live2D Cubism](https://www.live2d.com/) — 官方规范参考
+  
 
 感谢每一位 Star、Issue、PR 的贡献者。
 
