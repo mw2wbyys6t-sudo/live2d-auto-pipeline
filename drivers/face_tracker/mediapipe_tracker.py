@@ -17,12 +17,20 @@ from core.logger import get_logger
 log = get_logger("face_tracker")
 
 # Optional dependency: mediapipe
+#
+# 这里必须 catch Exception 而不是只有 ImportError：
+# `import mediapipe` 会在内部 import sounddevice，而 sounddevice 在没有音频
+# 后端的环境（CI 的 Linux runner、服务器版 Linux）里 import 时就抛
+# `PortAudioError`。它继承自 Exception 而**不是** ImportError/OSError，
+# 只 catch ImportError 会让它逃出去，把整条导入链打挂 —— 表现为
+# 「只是没装麦克风，结果连 moc3 导出测试都收集失败」。
+# 可选驱动不可用 ≠ 模块不可导入。
 try:
     import mediapipe as mp
     import cv2
     import numpy as np
     _MEDIAPIPE_AVAILABLE = True
-except ImportError:
+except Exception:  # noqa: BLE001 - 可选依赖探测，见上
     _MEDIAPIPE_AVAILABLE = False
     mp = None  # type: ignore
     cv2 = None  # type: ignore
