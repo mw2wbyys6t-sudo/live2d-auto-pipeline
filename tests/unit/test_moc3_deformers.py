@@ -55,12 +55,27 @@ def _pool_positions(doc, begin, count):
     return list(zip(chunk[0::2], chunk[1::2]))
 
 
+def _assert_points(actual, expected, **kwargs):
+    """逐点比较二维点列表。
+
+    不用 ``pytest.approx([(x, y), ...])``：``approx`` 对**嵌套结构**的支持
+    随 pytest 版本变化，部分版本上直接抛
+    ``TypeError: pytest.approx() does not support nested data structures``
+    （实测 CI 与本地版本行为不一致）。逐点比较在所有版本上一致。
+    """
+    assert len(actual) == len(expected), (
+        f"点数不符：实际 {len(actual)} != 期望 {len(expected)}（{actual}）")
+    for index, (got, want) in enumerate(zip(actual, expected)):
+        assert got == pytest.approx(want, **kwargs), (
+            f"第 {index} 个点不符：实际 {got} != 期望 {want}")
+
+
 def test_static_warp_stores_vertices_as_grid_coordinates():
     doc = compile_static_rig(_spec([_lattice()]))
     begin = doc.get("art_mesh_keyform.keyform_position_begin_indices")[0]
     # (s, t) 无量纲：不除 pixels_per_unit，且矩形参考网格下就是线性归一化
-    assert _pool_positions(doc, begin, 4) == pytest.approx(
-        [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)])
+    _assert_points(_pool_positions(doc, begin, 4),
+                   [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)])
     # 控制网格本身仍在模型空间（除以 ppu）
     grid_begin = doc.get(
         "warp_deformer_keyform.keyform_position_begin_indices")[0]
@@ -88,7 +103,7 @@ def test_reference_rect_is_the_default_keyform():
         parameter_id="Param0")
     rect = reference_rect(deformer, {"Param0": ParameterSpec("Param0", default=0.0)})
     assert rect == pytest.approx((0.0, 0.0, 100.0, 100.0))
-    assert to_grid_st([(25.0, 50.0)], rect) == pytest.approx([(0.25, 0.5)])
+    _assert_points(to_grid_st([(25.0, 50.0)], rect), [(0.25, 0.5)])
 
 
 def test_multi_keyform_warp_needs_a_keyform_at_parameter_default():
