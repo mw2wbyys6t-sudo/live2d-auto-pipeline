@@ -4,8 +4,8 @@ version = "1.0.0"
 edition = "2021"
 description = "Native face tracking for Live2D — camera capture + ARKit BlendShapes"
 # SPDX 许可证标识：此前缺失（`cargo metadata` 里 license 为 null），与根目录
-# LICENSE 一致（Apache-2.0）。
-license = "Apache-2.0"
+# LICENSE 一致（AGPL-3.0，ADR-001 Rev.5）。
+license = "AGPL-3.0-only"
 
 [[bin]]
 name = "face_tracker"

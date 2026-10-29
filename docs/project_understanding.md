@@ -162,7 +162,7 @@ tauri-build.yml 仅 bundle `desktop/bin/*`（live2d-api.exe + face_tracker.exe�
 - **Go**：直接依赖仅 gin v1.12.0 + gzip v1.2.6；indirect 残留 mongo-driver v2.5.0、quic-go v0.59.0 零引用 → `go mod tidy` 缩供应链面。无已知高危版本。
 - **Python**：requirements 全部 `>=` 无上界（可被新版 break）；CVE 下限已注释（requests/urllib3/aiohttp/cryptography/python-multipart）。本次桌面清单改**精确钉版本 + hash**。
 - **npm**：仅 4 运行时依赖（next 16.4.0 / react 18.3.1 / pixi 7.4.3 / lucide-react），无 postinstall 脚本；pixi v8 被 dependabot 忽略（API 不兼容）。
-- **许可证**：项目 Apache-2.0（ADR-001 Rev.4）；待补：安装包随附 LICENSE、model3.zip 内嵌 LICENSE（ADR-001 R4-7 待办）。live2d-py MIT、onnxruntime MIT、YuNet(OpenCV Zoo Apache-2.0)、ort BSD-3、nokhwa MIT、scipy/sklearn BSD、Pillow HPND、psd-tools MIT、py-moc3 MIT —— 全部宽松许可，无 copyleft 污染；SAM2 权重（按需下载）遵循 Apache-2.0 模型许可。
+- **许可证**：项目 AGPL-3.0 + 商业授权双轨（ADR-001 Rev.5，2026-10-29）；待补：安装包随附 LICENSE、model3.zip 内嵌 LICENSE。live2d-py MIT、onnxruntime MIT、YuNet(OpenCV Zoo Apache-2.0)、ort BSD-3、nokhwa MIT、scipy/sklearn BSD、Pillow HPND、psd-tools MIT、py-moc3 MIT —— 第三方依赖均为宽松许可，可与 AGPL 组合（衍生整体按 AGPL 发布）；SAM2 权重（按需下载）遵循 Apache-2.0 模型许可。
 - **89 安全项**：以现有 p1-p4 测试契约为基线，本次不回退任何加固；新增面（打包后）：WebView2 缺失引导、杀软拦截中文提示、中文/空格/长路径/非 ASCII 用户名。
 
 ## 8. 风险登记表（交付视角）

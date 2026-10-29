@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.9-ff69b4?style=flat-square" alt="version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green?style=flat-square" alt="license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="license"></a>
 <a href="https://app.fossa.com/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline"><img src="https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline.svg?type=shield" alt="FOSSA Status"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11+-blue?style=flat-square" alt="python"></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat-square" alt="go"></a>
@@ -437,4 +437,10 @@ cd web && npm run build
 
 ## 许可证
 
-[Apache-2.0](LICENSE) — 商业用途也欢迎。
+[AGPL-3.0](LICENSE) + 商业授权双轨（Dual License）。
+
+- **著作权**：全部原始成果的著作权归产权所有者（Live2D Master Agent Team）所有，开源不代表放弃著作权。
+- **开源使用**：可自由使用、修改、再分发，但衍生作品与再分发必须同样以 **AGPL-3.0** 开源，并保留 `LICENSE` 全文与版权声明；**将本项目用于对外提供网络服务（SaaS / API 服务）同样触发开源义务**。
+- **商用 / 二次开发**：可以商用，但前提是遵守上述开源义务。
+- **不想开源？**：需**告知产权所有者并另行取得商业授权**——请通过 [GitHub Issues](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/issues) 联系，说明用途与范围。
+- 历史版本（曾按 CC BY-NC / MIT / Apache-2.0 发布）对接收者仍然有效、不追溯；自 ADR-001 Rev.5 起的新提交与新发布按 AGPL-3.0 发布。

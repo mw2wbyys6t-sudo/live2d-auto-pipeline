@@ -1,6 +1,6 @@
 """产出物的许可证打包（FF-15「License 与署名完整性」）。
 
-ADR-001 (Rev.4) 定的义务：任何**对外分发**的产出物都必须内含 Apache-2.0
+ADR-001 (Rev.5) 定的义务：任何**对外分发**的产出物都必须内含 AGPL-3.0
 许可全文，且与仓库根的 ``LICENSE`` **逐字节一致**；根目录若存在 ``NOTICE``
 则一并保留。
 
@@ -28,7 +28,8 @@ from typing import List
 
 __all__ = ["license_files", "repo_root", "install_license_bundle"]
 
-#: 必须随产出物分发的文件。NOTICE 是 Apache-2.0 §4(d) 的条件义务：
+#: 必须随产出物分发的文件。NOTICE 沿自 Apache-2.0 §4(d) 的条件义务，
+#: 现行 AGPL-3.0（ADR-001 Rev.5）下沿用同一规则：
 #: 仓库里没有就不强求，但一旦有了就必须一起带走。
 _LICENSE_NAMES = ("LICENSE", "LICENSE.txt", "COPYING")
 _NOTICE_NAMES = ("NOTICE", "NOTICE.txt")

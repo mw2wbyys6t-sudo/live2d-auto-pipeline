@@ -308,4 +308,4 @@ Go API 服务通过以下方式与现有 Python 工具集成：
 
 ## 📄 许可证
 
-本项目采用 **Apache-2.0 License**，与主项目一致，详见根目录 [LICENSE](../LICENSE)。
+本项目采用 **AGPL-3.0 License + 商业授权双轨**，与主项目一致（ADR-001 Rev.5），详见根目录 [LICENSE](../LICENSE)。

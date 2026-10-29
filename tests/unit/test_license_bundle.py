@@ -1,7 +1,7 @@
 """FF-15「License 与署名完整性」的许可打包契约。
 
-背景：ADR-001 (Rev.4) 要求**对外分发的产出物**内含与仓库根 ``LICENSE``
-逐字节一致的 Apache-2.0 许可全文（根目录若有 ``NOTICE`` 则一并保留）。
+背景：ADR-001 (Rev.5) 要求**对外分发的产出物**内含与仓库根 ``LICENSE``
+逐字节一致的 AGPL-3.0 许可全文（根目录若有 ``NOTICE`` 则一并保留）。
 早先这条只是纸面承诺 —— 产出的模型包被用户再分发时不带任何许可声明。
 
 这些断言锁住的是「产出物里有没有许可、是不是同一份」这条契约，
@@ -72,11 +72,11 @@ class TestLicenseBundle:
         for name, data in snapshot.items():
             assert (tmp_path / name).read_bytes() == data
 
-    def test_license_is_apache_2_0(self):
-        """许可文本必须真的是 Apache-2.0（不是占位或别的协议）。"""
+    def test_license_is_agpl_3_0(self):
+        """许可文本必须真的是 AGPL-3.0（不是占位或别的协议）。"""
         text = (repo_root() / "LICENSE").read_text(encoding="utf-8", errors="ignore")
-        assert "Apache License" in text[:200]
-        assert "Version 2.0" in text[:400]
+        assert "GNU AFFERO GENERAL PUBLIC LICENSE" in text[:800]
+        assert "Version 3" in text[:800]
 
 
 class TestExportPackageCarriesLicense:

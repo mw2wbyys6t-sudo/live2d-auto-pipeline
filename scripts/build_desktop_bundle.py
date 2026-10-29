@@ -489,7 +489,7 @@ def copy_app_tree(app_dir: Path) -> None:
 def copy_license_bundle(dest: Path) -> None:
     """把许可证文件复制到安装包资源根（FF-15）。
 
-    ADR-001 Rev.4：对外分发的安装包必须内含与仓库根逐字节一致的 Apache-2.0
+    ADR-001 Rev.5：对外分发的安装包必须内含与仓库根逐字节一致的 AGPL-3.0
     许可全文；根目录若存在 NOTICE 则一并保留。放在 bundle/ 根 = 安装后的
     $RESOURCE 根，用户能在安装目录里直接看到许可文本。
     """

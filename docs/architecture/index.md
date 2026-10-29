@@ -134,7 +134,7 @@
 
 | ID | 标题 | 状态 | 日期 | 关键决策 | 本地校验路径 |
 |----|------|------|------|----------|-------------|
-| [**ADR-001**](adrs/ADR-001-license.md) | 许可协议选型（Rev.1 CC BY-NC 4.0 → Rev.2 CC BY-NC 2.0 → Rev.3 MIT → Rev.4 **Apache-2.0**，现行） | Accepted (Rev.4) | 2026-09-22 (Rev.4) | 以根目录 `LICENSE` 实际文本为唯一准绳，统一为 Apache-2.0：允许任何用途（商用/修改/分发/再许可/闭源）+ 显式专利授权；社区贡献门槛与 MIT 相当；保留未来版本切 Dual License 的权利 | `README.md` § 许可证 / 根目录 `LICENSE`（Apache-2.0 全文） |
+| [**ADR-001**](adrs/ADR-001-license.md) | 许可协议选型（Rev.1 CC BY-NC 4.0 → Rev.2 CC BY-NC 2.0 → Rev.3 MIT → Rev.4 Apache-2.0 → Rev.5 **AGPL-3.0 + 商业授权双轨**，现行） | Accepted (Rev.5) | 2026-10-29 (Rev.5) | 保留全部著作权；商用 / 二次开发 / 对外网络服务（AGPL §13）均须以 AGPL-3.0 开源并保留版权与许可声明；不愿开源者须告知产权所有者并取得单独商业授权（Dual License，GitHub Issues 通道）；历史宽松版本不追溯 | `README.md` § 许可证 / 根目录 `LICENSE`（AGPL-3.0 全文） |
 | [**ADR-002**](adrs/ADR-002-three-stack-python-go-next.md) | 三栈架构（Python+Go+Next.js） | Accepted | 2026-07-30 | Python=算法、Go=接入、Next=前端；Go→Python exec.CommandContext 桥；Docker 单容器双入口 | `requirements.txt` `api/go.mod` `web/package.json` `docker-compose.yml` |
 | [**ADR-003**](adrs/ADR-003-18-layer-order-amodal.md) | 18 层分层顺序 + 5 层 Amodal 补全 | Accepted | 2026-07-30 | 头皮→后发→…→特效（固定 18 序）；AMODAL_PARTS={hair_back, hair_mid, clothes_top, clothes_inner, neck} | `composer.py::STANDARD_LAYER_ORDER`、`AMODAL_PARTS` |
 | [**ADR-004**](adrs/ADR-004-face-tracker-mediapipe.md) | 面部捕捉（MediaPipe+EMA+RMS） | Accepted | 2026-07-30 | MediaPipe 468+iris；双指数 EMA + deadband；麦克风 RMS → ParamMouthOpenY 兜底 | `drivers/face_tracker/`、`drivers/audio/capture.py` |
@@ -179,7 +179,7 @@
 | **FF-12** | **桌宠启动时间** | `python -m core.cli pet` 到窗口出现 | ≤ 2.5s（SSD）/ ≤ 4s（HDD）| 本地脚本计时 | 每发版 | 最小化导入子集 | ADR-006 |
 | **FF-13** | **三栈构建总时长** | GitHub Actions 三 job 总墙钟 | ≤ 20 分钟 | Actions UI | 每次 PR | 优化缓存 / 并行度 | ADR-002 |
 | **FF-14** | **端到端生成耗时（CPU）** | Prompt → model3.zip 全流程（i7-12700）| ≤ 10 分钟 | 每周定时任务 | 每周 | 评估是否移除某个 Amodal 层 | ADR-003 |
-| **FF-15** | **License 与署名完整性** | 产出物（桌宠安装包、导出模型包、Web 构建包）内是否含 ADR-001 (Rev.4) 要求的 Apache-2.0 许可全文 | 100% 包含，且文本与根目录 `LICENSE` 文件的 **Apache-2.0 License** 原文逐字节一致（义务：保留版权+许可声明；若根目录存在 `NOTICE` 则一并保留）| Release 打包前钩子：`scripts/check-license-bundle.sh`（**已落地**，PR 级查 `web/public`，发布级查 `web/out` + `desktop/bundle` + `api/webui/dist`；不合规退出码 1 阻断发布）| 每次发版 | 阻断发布 | ADR-001 |
+| **FF-15** | **License 与署名完整性** | 产出物（桌宠安装包、导出模型包、Web 构建包）内是否含 ADR-001 (Rev.5) 要求的 AGPL-3.0 许可全文 | 100% 包含，且文本与根目录 `LICENSE` 文件的 **AGPL-3.0 License** 原文逐字节一致（义务：保留版权+许可声明；若根目录存在 `NOTICE` 则一并保留）| Release 打包前钩子：`scripts/check-license-bundle.sh`（**已落地**，PR 级查 `web/public`，发布级查 `web/out` + `desktop/bundle` + `api/webui/dist`；不合规退出码 1 阻断发布）| 每次发版 | 阻断发布 | ADR-001 |
 | **FF-16** | **Go→Python 命令注入安全** | `validatePath` 通过 / 失败比例 + shell meta 字符逃逸检测 | 0 失败（任何失败即高危） | `api/services/python_bridge_test.go` + `python_bridge_inject_test.go`（**已落地**，由 CI `go-build` job 的 `go test -v ./...` 覆盖 `./services` 注入红线用例）| 每次 PR | 阻断合并 + 人工审查 | ADR-002 |
 
 ---
@@ -189,7 +189,7 @@
 | ID | 风险描述 | 可能性 L/M/H | 影响 L/M/H | 等级 | 缓解措施（Mitigation） | 负责人 | 关联 ADR / FF |
 |----|----------|-------------|-----------|------|------------------------|--------|--------------|
 | **R-01** | 外部 LLM/图像 Provider 大面中断或涨价 | **H**（市场常态） | M | **高危** | ① ADR-005 5 级降级（OpenAI→Claude→Ollama→模板）；② 图像 3 Provider 并联（Pollinations 免 Key→Seedream→SenseNova）；③ 本地推理路线（v0.11 Roadmap ComfyUI 集成） | 网关负责人 + 图像管线负责人 | ADR-005/FF-7/FF-9；ADR-002 |
-| **R-02** | 品牌冒用 / 白嫖无回馈（Apache-2.0 下**允许商用**，商用本身合法，仅存在"冒用 Pygmalion Studio Team 品牌名、闭源商业化不回馈社区"的风险） | M（宽松协议通病） | M（社区生态损耗，非法律风险） | **中危**（从高危降级，因 Apache-2.0 下商用被明确许可） | ① **保留品牌护城河**：Pygmalion Studio Team 品牌名受商标法保护，商用 fork 不得冒用我方品牌名称与 Logo；② **License 文件 + 版权声明永久保留**：FF-15 强制每一份副本内嵌 Apache-2.0 LICENSE（含版权声明），形成可溯源的软署名；③ **社区口碑 + 文档生态**：优先打造官网、专属教程、AI 模型库、社区 QQ/微信群、Discord 社区——这些资产闭源商用 fork 抄不走，真正的商业客户会优先找原作者团队做支持；④ **未来版本 Dual License 权利保留**：版权所有者可随时对未来版本切换 Dual License（Apache-2.0 开源 + 商业付费企业版，含 SLA 保障；历史版本不追溯）；⑤ **工程质量差异化**：对新功能先在原作者维护的主线版本中优先上线，商用 fork 需自行跟进（形成事实上的差异化优势） | 产权所有者 + 品牌/社区负责人 | ADR-001/FF-15 |
+| **R-02** | 品牌冒用 / 闭源白嫖（AGPL-3.0 下商用与二次开发**须开源**，SaaS 场景由 §13 覆盖；残余风险为"冒用 Pygmalion Studio Team 品牌名"与"违规闭源不告知"） | M（强 Copyleft 下违规成本升高，概率下降） | M（社区生态损耗 + 个体违规） | **中低危**（Rev.5 起由中危降级：闭源商用须单独授权，白嫖路径被 AGPL §13 封死） | ① **保留品牌护城河**：Pygmalion Studio Team 品牌名受商标法保护，商用 fork 不得冒用我方品牌名称与 Logo；② **License 文件 + 版权声明永久保留**：FF-15 强制每一份副本内嵌 AGPL-3.0 LICENSE（含版权声明），形成可溯源的软署名；③ **社区口碑 + 文档生态**：优先打造官网、专属教程、AI 模型库、社区 QQ/微信群、Discord 社区——这些资产闭源商用 fork 抄不走，真正的商业客户会优先找原作者团队做支持；④ **Dual License 已落地（Rev.5）**：不愿开源的商用方须经 GitHub Issues 告知产权所有者并取得单独商业授权；历史 Apache-2.0/MIT 版本不追溯；⑤ **工程质量差异化**：对新功能先在原作者维护的主线版本中优先上线，商用 fork 需自行跟进（形成事实上的差异化优势） | 产权所有者 + 品牌/社区负责人 | ADR-001/FF-15 |
 | **R-03** | PyGame / MediaPipe / MediaPipe 模型依赖协议变更 | L（ASF 2.0 稳定） | M | 中危 | ① requirements.txt 钉版本；② `scripts/download_models.py` hash 校验；③ ADR-004/006 强调 BaseTracker 与 GUI 抽象，替换成本低 | 驱动负责人 | ADR-004/ADR-006 |
 | **R-04** | 18 层共享内核腐化（语义分层和 Live2D 绑定错位）| M（随代码量增长概率↑） | **H**（整管线崩盘） | **高危** | ① FF-2 强制 1:1 契约；② `composer.py::STANDARD_LAYER_ORDER` 冻结，任何变动须改 ADR-003；③ 每次改绑定管线必跑 `test_layer_order_contract.py` | 图像管线负责人 + 绑定负责人 | ADR-003/FF-2 |
 | **R-05** | Go→Python 子进程命令注入（路径/参数污染）| L | **H** | 高危 | `python_bridge.go::validatePath` 黑正则 + `exec.CommandContext`（不通过 shell，天然防 `; &&`）；CI 注入用例；FF-16 阻断 | Go 后端负责人 | ADR-002/FF-16 |

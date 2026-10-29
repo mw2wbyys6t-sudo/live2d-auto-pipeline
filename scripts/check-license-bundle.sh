@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # FF-15「License 与署名完整性」校验钩子。
 #
-# 契约（docs/architecture/index.md §4 FF-15 / ADR-001 Rev.4）：
-#   产出物（桌宠安装包、导出模型包、Web 构建包）内必须含 Apache-2.0 许可全文，
+# 契约（docs/architecture/index.md §4 FF-15 / ADR-001 Rev.5）：
+#   产出物（桌宠安装包、导出模型包、Web 构建包）内必须含 AGPL-3.0 许可全文，
 #   且文本与仓库根 LICENSE **逐字节一致**；仓库根若存在 NOTICE 则一并保留。
 #   失败即**阻断发布**。
 #
@@ -37,15 +37,15 @@ info() { printf '%s· %s%s\n' "$YELLOW" "$1" "$RESET"; }
 
 # ---------- 前置：源文件自身必须合规 ----------
 if [ ! -f "$LICENSE_SRC" ]; then
-    fail "仓库根缺少 LICENSE —— 无许可正文可分发（ADR-001 Rev.4 要求 Apache-2.0）"
+    fail "仓库根缺少 LICENSE —— 无许可正文可分发（ADR-001 Rev.5 要求 AGPL-3.0）"
     exit 1
 fi
-if ! head -n 3 "$LICENSE_SRC" | grep -qi "Apache License"; then
-    fail "根目录 LICENSE 的开头不是 Apache License 全文（ADR-001 Rev.4 要求 Apache-2.0）"
+if ! head -n 20 "$LICENSE_SRC" | grep -qi "AFFERO GENERAL PUBLIC LICENSE"; then
+    fail "根目录 LICENSE 的开头不是 AGPL-3.0 全文（ADR-001 Rev.5 要求 AGPL-3.0）"
 fi
-ok "根目录 LICENSE 就位（$(wc -c < "$LICENSE_SRC") 字节，Apache-2.0 全文）"
+ok "根目录 LICENSE 就位（$(wc -c < "$LICENSE_SRC") 字节，AGPL-3.0 全文）"
 if [ -n "$NOTICE_SRC" ]; then
-    ok "根目录 NOTICE 就位（$(wc -c < "$NOTICE_SRC") 字节，Apache-2.0 §4(d) 要求随附）"
+    ok "根目录 NOTICE 就位（$(wc -c < "$NOTICE_SRC") 字节，存在即随附）"
 fi
 
 # ---------- 校验单个产物 ----------

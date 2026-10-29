@@ -60,7 +60,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
 Source: "{#ProjectRoot}\dist\PygmalionStudio.exe"; DestDir: "{app}"; \
   Flags: ignoreversion
 ; 许可证全文（FF-15：对外分发的安装包必须内含与仓库根逐字节一致的
-; Apache-2.0 许可全文；仓库根若有 NOTICE 也一并安装）
+; AGPL-3.0 许可全文（ADR-001 Rev.5）；仓库根若有 NOTICE 也一并安装）
 Source: "{#ProjectRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 ; 便携 Python 与权重
 Source: "{#RuntimeDir}\python\*";  DestDir: "{app}\runtime\python";   \

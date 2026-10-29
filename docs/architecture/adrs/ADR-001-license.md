@@ -1,10 +1,10 @@
-# ADR-001：项目许可协议选型 —（Rev.1 CC BY-NC 4.0 → Rev.2 CC BY-NC 2.0 → Rev.3 MIT → Rev.4 **Apache-2.0**，现行）
+# ADR-001：项目许可协议选型 —（Rev.1 CC BY-NC 4.0 → Rev.2 CC BY-NC 2.0 → Rev.3 MIT → Rev.4 Apache-2.0 → Rev.5 **AGPL-3.0 + 商业授权双轨**，现行）
 
-> ⚠️ **现行生效版本 = Rev.4 Apache-2.0**。本文件保留 Rev.1～Rev.4 的完整决策沿革（用于历史版本发布的合法性追溯）；**Rev.1～Rev.3 各节均为历史记录，已被 Revision 4 取代，其中的证据与校验点只反映当时状态，不构成现行约束**。唯一准绳见文末 **Revision 4** 一节与根目录 `LICENSE`。
+> ⚠️ **现行生效版本 = Rev.5 AGPL-3.0 + 商业授权双轨（Dual License）**。本文件保留 Rev.1～Rev.5 的完整决策沿革（用于历史版本发布的合法性追溯）；**Rev.1～Rev.4 各节均为历史记录，其中的证据与校验点只反映当时状态，不构成现行约束**。唯一准绳见文末 **Revision 5** 一节与根目录 `LICENSE`。
 
-| 字段 | Rev.1 (CC BY-NC 4.0) | Rev.2 (CC BY-NC 2.0) | Rev.3 (MIT) | Rev.4 (**Apache-2.0，现行生效**) |
+| 字段 | Rev.1 (CC BY-NC 4.0) | Rev.2 (CC BY-NC 2.0) | Rev.3 (MIT) | Rev.4 (Apache-2.0) |
 |------|----------------------|----------------------|-------------|--------------------------------|
-| **状态** | Superseded（被 Rev.2 取代，历史版本永久有效） | Superseded（被 Rev.3 取代，commit `65fb3b4` 之前的历史发布永久有效） | Superseded（被 Rev.4 取代） | **Accepted (Rev.4，主分支现行)** |
+| **状态** | Superseded（被 Rev.2 取代，历史版本永久有效） | Superseded（被 Rev.3 取代，commit `65fb3b4` 之前的历史发布永久有效） | Superseded（被 Rev.4 取代） | Superseded（被 Rev.5 取代，历史发布永久有效）；**现行 = Rev.5 AGPL-3.0 + Dual License，见文末** |
 | **日期** | 2026-07-30 上午 | 2026-07-30 下午（降级加严） | 2026-07-30 当晚（恢复 MIT） | 2026-09-22（对齐实际 `LICENSE`，改用 Apache-2.0） |
 | **决策者** | Live2D Master Agent Team（产权所有者） | 同左 | 同左 | 同左 |
 | **本地校验** | 历史提交 `418e071` 之前 | commit `9b6c4a1` ～ `65fb3b4` 之间 | commit `65fb3b4` 之后 | `README.md` § 许可证；根目录 `LICENSE`（Apache-2.0 全文） |
@@ -323,3 +323,59 @@ Rev.3 恢复的 MIT 已解决"许可与代码类资产不匹配、社区贡献�
 
 - 与 ADR-002（三栈架构）配合：多语言栈（Python / Go / Next.js）与 Web 构建产物统一按 Apache-2.0 标识。
 - ADR-006（桌宠透明窗口运行时）：桌宠作为分发产物，启动界面须带 Apache-2.0 声明，且每份打包副本内嵌 `LICENSE` 全文。
+
+---
+
+# 📌 Revision 5 — 2026-10-29 修订：Apache-2.0 → **AGPL-3.0 + 商业授权双轨**（现行生效）
+
+> 本节为 Rev.5 单独决策记录。Rev.1～Rev.4 仍保留于上文，仅用于记录决策沿革与历史版本发布的合法性，不构成现行约束。
+
+## R5-1. 修订决策问题
+
+产权所有者明确提出三点现行诉求：
+
+1. **完全保留开发著作权**（开源不等于放弃著作权）；
+2. 他人将本项目**商用**或**基于本项目二次开发**时，**必须开源**其衍生成果；
+3. 不愿开源者，**必须告知产权所有者**（并取得单独商业授权）。
+
+Rev.4 的 Apache-2.0 为宽松许可，允许闭源商用且无需告知原作者，不满足诉求 2 与 3；Rev.2 的 CC BY-NC「一律禁商用」也不符合「允许商用但须开源或告知」的表述。
+
+## R5-2. 修订备选对比
+
+| 方案 | 描述 | 结论 |
+|------|------|------|
+| A · 维持 Apache-2.0 | 宽松、含专利授权，但允许闭源商用、无开源回馈义务 | ❌ 不满足诉求 2/3 |
+| B · GPL-3.0 | 强 Copyleft，但「仅提供网络服务」不构成分发，存在 SaaS 漏洞 | ❌ 对 SaaS 化商用约束不足 |
+| C · CC BY-NC 系列 | 禁止一切商用 | ❌ 与「允许商用但须开源或告知」矛盾 |
+| D · **AGPL-3.0 + 商业授权双轨（本次选定）** | 强 Copyleft 且覆盖网络服务场景（§13）：商用、二次开发、SaaS 均须以 AGPL-3.0 开源并保留版权与许可声明；不愿开源者须联系产权所有者取得商业授权 | ✅ 选定 |
+| E · 自制「开源或告知」协议 | 无法律可执行性、平台不识别 | ❌ 红线，禁止 |
+
+## R5-3. 修订决策
+
+**现行主分支协议 = AGPL-3.0（SPDX: `AGPL-3.0-only`）+ 商业授权双轨（Dual License）。**
+
+- 著作权始终归产权所有者（Live2D Master Agent Team）所有；`LICENSE` 顶部保留所有者版权声明与双轨说明，正文为 FSF 官方 AGPL-3.0 全文。
+- 任何再分发 / 衍生副本须保留 `LICENSE` 全文与版权声明；衍生作品与对外网络服务（AGPL §13）均须以 AGPL-3.0 开源。
+- 商业授权通道：通过 GitHub Issues 联系产权所有者，说明用途与范围后单独授权（对应架构索引中的 ADR-013 候选「商用授权流程与治理」）。
+- Rev.1～Rev.4 历史版本（CC BY-NC 4.0 / CC BY-NC 2.0 / MIT / Apache-2.0）对接收者永久有效、不追溯；自 Rev.5 起，所有新提交与新发布按 AGPL-3.0 发布。
+
+## R5-4. 修订后果
+
+### 正面 ✅
+- 商用与二次开发的开源回馈成为法定义务，SaaS 白嫖路径被 §13 封死（诉求 2 命中）。
+- 闭源商用必须走「告知 + 单独授权」通道，为产权所有者保留商业化空间（诉求 3 命中）。
+- 著作权与署名通过 `LICENSE` 强制随副本保留（诉求 1 命中）。
+
+### 负面 / 缓解 ⚠️
+- **生态门槛升高**：企业法务通常对 AGPL 谨慎，外部贡献与集成意愿可能下降。缓解：README 明确双轨含义与联系通道，保留历史宽松版本不追溯。
+- **与宽松许可依赖的组合需注意边界**：AGPL 与 MIT/Apache-2.0 依赖可以组合（依赖本身不变），但衍生整体须按 AGPL 发布；第三方依赖的许可治理仍由 `docs/license-policy.md`（FOSSA）负责，不因本次变更放宽。
+- **FF-15 义务文本变化**：产出物内嵌许可由 Apache-2.0 改为 AGPL-3.0 全文；NOTICE 规则不变（存在即随附）。
+
+## R5-5. Rev.5 证据与校验点（Engineering Control Evidence）
+
+- ✅ 根目录 `LICENSE` = FSF 官方 **AGPL-3.0** 全文 + 所有者版权声明与双轨说明
+- ✅ `README.md` 顶部 Badge / § 许可证 = **AGPL-3.0 + Dual License**（含商用开源义务与告知通道）
+- ✅ `docs/architecture/index.md` ADR 索引 / FF-15 / R-02 = **AGPL-3.0**
+- ✅ `api/README.md`、`docs/index.html`、`training/README.md`、`docs/project_understanding.md` = **AGPL-3.0**
+- ✅ 包元数据：`web/package.json`、`desktop/Cargo.toml`、`native/face_tracker/Cargo.toml` = `AGPL-3.0-only`
+- ✅ 工程闸门同步：`core/license_bundle.py`、`scripts/check-license-bundle.sh`、`scripts/build_desktop_bundle.py`、`.github/workflows/tauri-build.yml`、`deploy/installer/desktop.iss`、`tests/unit/test_license_bundle.py`（断言 AGPL-3.0 全文）
