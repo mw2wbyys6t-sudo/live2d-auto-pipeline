@@ -241,15 +241,25 @@ jobs:
       # 沙箱/本地无法搬运 1GB 产物，让 CI 自己发布是唯一可靠路径。
       #
       # 只取**本次新构建**的那一个 exe：bundle/nsis 目录里可能残留历史版本
-      # 安装包（构建缓存带回来的），用通配符上传会把 0.10.3~0.10.9 之类
+      # 安装包（构建缓存带回来的），用 `*.exe` 会把 0.10.3~0.10.9 之类
       # 的旧包一起挂到新 Release 上。
+      #
+      # 通配符必须是 `*-setup.exe`：Tauri 的 NSIS 产物名是
+      # `<productName>_<version>_x64-setup.exe`，后缀是**连字符**。
+      # 写成 `*_setup.exe`（下划线）会一个都匹配不到。
       - name: Locate the freshly built NSIS installer
         id: nsis
         shell: pwsh
         run: |
-          $f = Get-ChildItem desktop/target/release/bundle/nsis/*_setup.exe -ErrorAction SilentlyContinue |
+          $f = Get-ChildItem desktop/target/release/bundle/nsis/*-setup.exe -ErrorAction SilentlyContinue |
                Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $f) { Write-Error "NSIS installer not found"; exit 1 }
+          if (-not $f) {
+            Write-Host "bundle/nsis 内容："
+            Get-ChildItem desktop/target/release/bundle/nsis -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "  $($_.Name)" }
+            Write-Error "NSIS installer not found (expected *-setup.exe)"
+            exit 1
+          }
           Write-Host "installer: $($f.FullName) ($($f.Length) bytes)"
           "path=$($f.FullName)" >> $env:GITHUB_OUTPUT
           "name=$($f.Name)" >> $env:GITHUB_OUTPUT
