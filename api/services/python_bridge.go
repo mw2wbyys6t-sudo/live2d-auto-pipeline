@@ -46,6 +46,12 @@ type PythonBridge struct {
 	envCheckedAt time.Time
 	envOK        bool
 	envIssues    []string
+
+	// GPU 探测结果缓存（见 gpu_probe.go）：一次探测要跑 WMI + 解释器启动，
+	// 自检页轮询时不能每次都重跑。失败不缓存，下一次调用即重探。
+	gpuMu        sync.Mutex
+	gpuCheckedAt time.Time
+	gpuReport    map[string]interface{}
 }
 
 // pythonEnvCheckTTL 是环境探测结果的缓存有效期。
@@ -856,12 +862,14 @@ result = builder.build(layers)
 # FF-2：权威表 vs moc3 渲染层序。这条导出路径不产 PSD，故只比两份来源
 # （psd_order=None 表示该来源不可得，不当作通过）。层序错位要落盘，
 # 否则下载闸门看不到它 —— 内核接受只说明「能加载」，不说明「层级对」。
+# 量的是**构建结果**的网格顺序（= 写进 moc3 的 draw_order），不是喂进去的
+# 图层字典：测输入等于测自己的假设，构建环节一旦改序就会量不到。
 from core.psd.validator import check_layer_order
 from core.segment_engine.composer import LayerComposer
 order_issues = check_layer_order(
     LayerComposer.STANDARD_LAYER_ORDER,
     psd_order=None,
-    render_order=list(layers),
+    render_order=list((result.get("meshes") or {}).keys()),
 )
 meta_file = Path(out_dir) / "build_meta.json"
 if meta_file.is_file():
@@ -873,6 +881,9 @@ if meta_file.is_file():
         meta["layer_order"] = {
             "issue_count": len(order_issues),
             "issues": order_issues,
+            # 分层目录的 draw_index 与权威表冲突、被表纠正过：如实落盘，
+            # 别把「已纠正」和「本来就对」混成同一个 issue_count=0。
+            "normalized": bool(inputs.normalized),
         }
         meta_file.write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -899,6 +910,7 @@ summary["layers_used"] = list(layers)
 summary["layer_order_source"] = inputs.order_source
 summary["layers_unknown"] = inputs.unknown
 summary["layer_order_issues"] = order_issues
+summary["layer_order_normalized"] = bool(inputs.normalized)
 print(json.dumps(summary, ensure_ascii=False, default=str))
 `
 

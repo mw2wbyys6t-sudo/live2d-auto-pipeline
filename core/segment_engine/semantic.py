@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Semantic Segmentation Engine
+Pygmalion Studio - Semantic Segmentation Engine
 
 Segments an anime character image into the 18 standard Live2D parts using
 one of several backends (ISNet/anime-segmentation, SAM, or rembg), with
@@ -53,7 +53,11 @@ class SemanticSegmenter:
     """Semantic segmentation of anime character images into Live2D parts.
 
     Args:
-        device: ``"auto"``, ``"cpu"``, or ``"cuda"``.
+        device: ``"auto"``, ``"cpu"``, or ``"cuda"``. ``"auto"`` picks the best
+            runtime each path actually has: torch-facing backends use CUDA when
+            available, and the onnxruntime (ISNet) path additionally uses
+            DirectML, so AMD/Intel cards run on the GPU too. ``"cpu"`` is
+            honoured verbatim — it never gets upgraded to a GPU.
         model_type: Backend selector:
             - ``"isnet"`` (default) — SkyTNT/anime-segmentation style ISNet
             - ``"sam"`` — Segment Anything (supports anime-finetuned weights)
@@ -95,6 +99,9 @@ class SemanticSegmenter:
     ]
 
     def __init__(self, device: str = "auto", model_type: str = "isnet") -> None:
+        #: 用户侧的原始请求（"auto" / "cpu" / "cuda"）。:meth:`_ort_providers`
+        #: 用它区分「auto 可以上 GPU」与「明确要 CPU」，不能被解析后的值代替。
+        self.device_requested = (device or "auto").lower()
         self.device = self._resolve_device(device)
         self.model_type = self._resolve_backend((model_type or "isnet").lower())
         self._model = None
@@ -489,15 +496,25 @@ class SemanticSegmenter:
         # 1) 本地 ONNX 权重（桌面安装包内置）
         model_path = isnet_onnx.find_model()
         if model_path is not None:
-            try:
-                self._model = isnet_onnx.OnnxForegroundModel(
-                    model_path, providers=self._ort_providers()
-                )
-                self._fg_source = "onnx_local"
-                log.success(f"Loaded local ONNX foreground model: {model_path}")
-                return
-            except Exception as exc:
-                log.warning(f"Local ONNX foreground model failed: {exc}")
+            # GPU provider 在列表里 ≠ 建得起会话（无 DX12 设备、驱动异常、
+            # GPU 被独占都会失败）。此时必须退回 CPU 继续用学出来的掩码，
+            # 而不是丢模型掉进 HSV 颜色启发式 —— 后者是画质断崖。
+            attempts = [self._ort_providers()]
+            if attempts[0][0] != "CPUExecutionProvider":
+                attempts.append(["CPUExecutionProvider"])
+            for providers in attempts:
+                try:
+                    self._model = isnet_onnx.OnnxForegroundModel(
+                        model_path, providers=providers
+                    )
+                    self._fg_source = "onnx_local"
+                    log.success(
+                        f"Loaded local ONNX foreground model: {model_path} "
+                        f"(providers={self._used_ort_providers()})"
+                    )
+                    return
+                except Exception as exc:
+                    log.warning(f"ONNX load with {providers} failed: {exc}")
         else:
             log.info(
                 "No local foreground model found; will try anime_segmentation package"
@@ -525,19 +542,45 @@ class SemanticSegmenter:
         self._model = None
 
     def _ort_providers(self) -> List[str]:
-        """onnxruntime 执行提供方列表（优先 GPU，回落 CPU）。"""
+        """onnxruntime 执行提供方：``auto`` 优先 GPU（CUDA > DirectML），回落 CPU。
+
+        只看 onnxruntime 实际装了哪些 provider —— 装了 CPU 版就恒回 CPU，
+        不凭空指定（ORT 会直接报错）。显式 ``device="cpu"`` 是用户在省电/
+        腾显存，不抢回 GPU。
+        """
         if not isnet_onnx.HAS_ORT:  # pragma: no cover
             return ["CPUExecutionProvider"]
         try:
             available = isnet_onnx.ort.get_available_providers()
         except Exception:  # pragma: no cover
             return ["CPUExecutionProvider"]
-        if self.device == "cuda" and "CUDAExecutionProvider" in available:
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+        if self.device_requested == "cpu":
+            return ["CPUExecutionProvider"]
+        if self.device_requested == "cuda":
+            if "CUDAExecutionProvider" in available:
+                return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            log.warning("device='cuda' 但 onnxruntime 没有 CUDA provider，前景模型回落 CPU")
+            return ["CPUExecutionProvider"]
+        for gpu_ep in ("CUDAExecutionProvider", "DmlExecutionProvider"):
+            if gpu_ep in available:
+                return [gpu_ep, "CPUExecutionProvider"]
         return ["CPUExecutionProvider"]
 
-    def _onnx_provider(self) -> str:
-        return "CUDAExecutionProvider" if self.device == "cuda" else "CPUExecutionProvider"
+    def _used_ort_providers(self) -> List[str]:
+        """会话实际生效的 provider（模型未加载或非 ORT 路径时为空）。
+
+        只报「请求了什么」是不够的：请求 GPU 但被 ORT 静默退回 CPU 时，
+        用户看到的耗时才对得上真相。
+        """
+        model = self._model
+        if model is None:
+            return []
+        try:
+            return list(model.session.get_providers())
+        except Exception:
+            return []
+
 
     def _load_sam(self):
         """Load a Segment Anything model, preferring anime-finetuned weights."""

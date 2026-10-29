@@ -1,4 +1,4 @@
-# 🚀 Live2D Master Agent API (Go Edition)
+# 🚀 Pygmalion Studio API (Go Edition)
 
 基于 Go 语言构建的高性能 API 服务，提供 Live2D 图片生成、PSD 分层、See-through 工作流等完整功能。
 

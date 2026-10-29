@@ -1,7 +1,7 @@
 [package]
-name = "live2d-master-agent"
-version = "0.10.9"
-description = "Live2D Master Agent - Desktop Application (Pygmalion)"
+name = "pygmalion-studio"
+version = "0.10.10"
+description = "Pygmalion Studio - Desktop Application (Pygmalion)"
 authors = ["Pygmalion"]
 edition = "2021"
 # SPDX 许可证标识：此前缺失，导致 crates.io / FOSSA 的许可扫描拿不到本 crate 的
@@ -9,7 +9,7 @@ edition = "2021"
 license = "Apache-2.0"
 
 [lib]
-name = "live2d_master_agent_lib"
+name = "pygmalion_studio_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]

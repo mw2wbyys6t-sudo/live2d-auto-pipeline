@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - SAM2 + GroundingDINO segmentation backend
+Pygmalion Studio - SAM2 + GroundingDINO segmentation backend
 
 Opens-vocabulary part separation for anime character images:
 

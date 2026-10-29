@@ -1,5 +1,5 @@
 ; ---------------------------------------------------------------------------
-; Live2D Master Agent - Windows 安装包（Inno Setup 6）
+; Pygmalion Studio - Windows 安装包（Inno Setup 6）
 ;
 ; 编译（本机当前没有 iscc.exe，需先自行安装 Inno Setup）：
 ;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" deploy\installer\desktop.iss
@@ -8,7 +8,7 @@
 ; （便携 Python + CUDA torch + 只含 safetensors 的权重缓存）。
 ;
 ; 安装后目录：
-;   {app}\Live2DMasterAgent.exe        Go 桌面程序（内嵌 Web 工作台）
+;   {app}\PygmalionStudio.exe        Go 桌面程序（内嵌 Web 工作台）
 ;   {app}\runtime\python\              便携解释器
 ;   {app}\runtime\hf-cache\            模型权重
 ;   {app}\app\                         Python 工程（core/drivers/... ）
@@ -22,10 +22,10 @@
 ; 迁移），无需写注册表或改 Python 启动脚本。
 ; ---------------------------------------------------------------------------
 
-#define MyAppName      "Live2D Master Agent"
+#define MyAppName      "Pygmalion Studio"
 #define MyAppVersion   "0.10.8"
-#define MyAppPublisher "Live2D Master Agent"
-#define MyAppExeName   "Live2DMasterAgent.exe"
+#define MyAppPublisher "Pygmalion Studio"
+#define MyAppExeName   "PygmalionStudio.exe"
 #define ProjectRoot    "..\.."
 #define RuntimeDir     ProjectRoot + "\runtime"
 
@@ -38,7 +38,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=output
-OutputBaseFilename=Live2DMasterAgent-Setup-{#MyAppVersion}
+OutputBaseFilename=PygmalionStudio-Setup-{#MyAppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -57,7 +57,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
 
 [Files]
 ; 桌面程序（scripts/build_desktop.bat 产物）
-Source: "{#ProjectRoot}\dist\Live2DMasterAgent.exe"; DestDir: "{app}"; \
+Source: "{#ProjectRoot}\dist\PygmalionStudio.exe"; DestDir: "{app}"; \
   Flags: ignoreversion
 ; 许可证全文（FF-15：对外分发的安装包必须内含与仓库根逐字节一致的
 ; Apache-2.0 许可全文；仓库根若有 NOTICE 也一并安装）

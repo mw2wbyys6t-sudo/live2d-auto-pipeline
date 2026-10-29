@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Live2D Master Agent - Linux/macOS Installer
+# Pygmalion Studio - Linux/macOS Installer
 # 透传所有参数给 install.py（支持 --check / --dry-run / --minimal / --yes 等）
 set -e
 
-echo "🎭 Live2D Master Agent Installer"
+echo "🎭 Pygmalion Studio Installer"
 echo "========================================"
 
 # 预检 1：Python 必须存在，否则不进入 install.py（避免用户看到 Python traceback）
@@ -13,7 +13,7 @@ elif command -v python &>/dev/null; then
     PY=python
 else
     echo ""
-    echo "❌ 未检测到 Python。Live2D Master Agent 需要 Python 3.9+。"
+    echo "❌ 未检测到 Python。Pygmalion Studio 需要 Python 3.9+。"
     echo ""
     echo "请先安装 Python："
     echo "  • 通用下载页: https://www.python.org/downloads/"

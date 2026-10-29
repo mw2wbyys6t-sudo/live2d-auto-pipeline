@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, DragEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, DragEvent } from 'react';
 import { Upload, ImageIcon, X } from 'lucide-react';
 
 interface ImageUploaderProps {
@@ -8,42 +8,67 @@ interface ImageUploaderProps {
   accept?: string;
   maxSizeMB?: number;
   className?: string;
+  /** 预览完全由 value（如工作台的 object URL）驱动，组件不再自建 URL。 */
+  useExternalPreview?: boolean;
 }
 
 export default function ImageUploader({
   value,
   onChange,
-  label = 'Drop image here or click to upload',
+  label = '拖入或点击上传图片',
   accept = 'image/*',
   maxSizeMB = 10,
   className = '',
+  useExternalPreview = false,
 }: ImageUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<string | null>(value || null);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const internalUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setPreview(useExternalPreview || !internalUrlRef.current ? value || null : internalUrlRef.current);
+  }, [value, useExternalPreview]);
+
+  useEffect(() => {
+    return () => {
+      if (internalUrlRef.current) URL.revokeObjectURL(internalUrlRef.current);
+      internalUrlRef.current = null;
+    };
+  }, []);
+
+  const releaseInternal = () => {
+    if (internalUrlRef.current) URL.revokeObjectURL(internalUrlRef.current);
+    internalUrlRef.current = null;
+  };
 
   const handleFile = useCallback(
     (file: File | null) => {
       setError(null);
       if (!file) {
+        releaseInternal();
         setPreview(null);
         onChange(null);
         return;
       }
       if (!file.type.startsWith('image/')) {
-        setError('Please upload an image file');
+        setError('请上传图片文件');
         return;
       }
       if (file.size > maxSizeMB * 1024 * 1024) {
-        setError(`File exceeds ${maxSizeMB}MB limit`);
+        setError(`文件超过 ${maxSizeMB}MB 上限`);
         return;
       }
-      const url = URL.createObjectURL(file);
-      setPreview(url);
+      if (!useExternalPreview) {
+        releaseInternal();
+        const url = URL.createObjectURL(file);
+        internalUrlRef.current = url;
+        setPreview(url);
+      }
       onChange(file);
     },
-    [maxSizeMB, onChange],
+    [maxSizeMB, onChange, useExternalPreview],
   );
 
   const onDrop = useCallback(
@@ -57,7 +82,6 @@ export default function ImageUploader({
   );
 
   const onClear = () => {
-    if (preview && preview.startsWith('blob:')) URL.revokeObjectURL(preview);
     handleFile(null);
     if (inputRef.current) inputRef.current.value = '';
   };

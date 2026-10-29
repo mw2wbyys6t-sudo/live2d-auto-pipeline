@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Layer Composition & Ordering
+Pygmalion Studio - Layer Composition & Ordering
 
 Given per-part boolean masks and the original image, this module extracts
 transparent RGBA layers, applies amodal completion for occluded regions,

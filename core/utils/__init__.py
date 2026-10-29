@@ -1,4 +1,4 @@
-"""Core utility functions for Live2D Master Agent."""
+"""Core utility functions for Pygmalion Studio."""
 
 from core.utils.image_utils import (
     load_image, save_image, resize_to_max, remove_background,

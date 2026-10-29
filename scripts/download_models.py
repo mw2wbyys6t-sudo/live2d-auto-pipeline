@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Download AI models for Live2D Master Agent.
+Download AI models for Pygmalion Studio.
 Usage:
     python scripts/download_models.py --model sam       # SAM for segmentation
     python scripts/download_models.py --model rembg      # rembg background removal
@@ -93,7 +93,7 @@ def main():
                        default="all", help="Which model to download")
     args = parser.parse_args()
 
-    print(f"🎭 Live2D Master Agent - Model Downloader\n")
+    print(f"🎭 Pygmalion Studio - Model Downloader\n")
     print(f"Models directory: {MODELS_DIR}\n")
 
     if args.model in ("sam", "all"):

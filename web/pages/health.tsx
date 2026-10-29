@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { CheckCircle2, XCircle, Copy, RefreshCw, FolderOpen, Download, Ban } from 'lucide-react';
 import Layout from '../components/Layout';
 import { apiClient, type DiagnosticsReport, type OptionalModel } from '../lib/api-client';
+import { APP_NAME } from '../lib/brand';
 
 /**
  * 环境自检页（P2）：逐条绿/红展示解释器、脚本目录、产物可写、面捕三件套、
@@ -63,7 +64,7 @@ export default function HealthPage() {
   const copyDiagnostics = async () => {
     if (!report) return;
     const lines = [
-      `Live2D Master Agent ${report.version} (${report.os})`,
+      `${APP_NAME} ${report.version} (${report.os})`,
       `监听: ${report.host}:${report.port}`,
       ...report.checks.map((c) =>
         `${c.ok ? '✅' : '❌'} ${c.label}${c.detail ? ` — ${c.detail}` : ''}${c.issues?.length ? ` [${c.issues.join('; ')}]` : ''}`,
@@ -214,7 +215,7 @@ export default function HealthPage() {
             <span className="font-medium">日志目录</span>
           </div>
           <p className="text-xs text-gray-400 break-all">
-            Windows: <code>%APPDATA%\Live2DMasterAgent\logs</code>（出问题时把
+            Windows: <code>%APPDATA%\PygmalionStudio\logs</code>（出问题时把
             live2d.log 与下方诊断信息一并反馈）
           </p>
           <p className="text-[11px] text-gray-500 leading-relaxed">

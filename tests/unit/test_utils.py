@@ -152,8 +152,9 @@ class TestSecurity:
 
     def test_sanitize_prompt(self):
         from core.security import sanitize_prompt
-        result = sanitize_prompt("hello world; rm -rf /")
-        assert "rm" not in result.lower() or ";" not in result
+        # 提示词不是 shell 命令：正文必须原样保留，只去控制字符、按字符限长。
+        assert sanitize_prompt("hello world; rm -rf /") == "hello world; rm -rf /"
+        assert sanitize_prompt("模型 girl, English style") == "模型 girl, English style"
 
     def test_validate_image_path(self):
         from core.security import validate_image_path

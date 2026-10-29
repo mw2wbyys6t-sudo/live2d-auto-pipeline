@@ -7,9 +7,11 @@ import type {
   GenerationRequest,
   GenerationResult,
   GenerationStep,
+  GpuProbeReport,
   PipelineStatus,
   SystemStatus,
 } from '../types';
+import { APP_VERSION } from './brand';
 
 // Use empty string (relative paths) so requests go through Next.js rewrites
 // which proxies /api/* to the Go backend. This avoids CORS issues and works
@@ -91,7 +93,7 @@ export class APIClient {
           // ignore
         }
         // Extract error message from Go wrapper if available
-        let errMsg = `Request failed: ${res.status} ${res.statusText}`;
+        let errMsg = `请求失败：${res.status} ${res.statusText}`;
         const wrapper = data as { error?: string; message?: string };
         if (wrapper?.error) errMsg = wrapper.error;
         else if (wrapper?.message) errMsg = wrapper.message;
@@ -108,10 +110,10 @@ export class APIClient {
     } catch (err) {
       if (err instanceof APIError) throw err;
       if (err instanceof DOMException && err.name === 'AbortError') {
-        throw new APIError('Request timed out', 408);
+        throw new APIError('请求超时', 408);
       }
       throw new APIError(
-        err instanceof Error ? err.message : 'Network error',
+        err instanceof Error ? err.message : '网络异常',
         0,
       );
     } finally {
@@ -129,7 +131,7 @@ export class APIClient {
       });
       if (!res.ok) {
         throw new APIError(
-          `Download failed: ${res.status} ${res.statusText}`,
+          `下载失败：${res.status} ${res.statusText}`,
           res.status,
         );
       }
@@ -137,7 +139,7 @@ export class APIClient {
     } catch (err) {
       if (err instanceof APIError) throw err;
       throw new APIError(
-        err instanceof Error ? err.message : 'Network error',
+        err instanceof Error ? err.message : '网络异常',
         0,
       );
     } finally {
@@ -350,7 +352,7 @@ export class APIClient {
         signal: controller.signal,
       });
       if (!res.ok) {
-        let errMsg = `Generation failed: ${res.status} ${res.statusText}`;
+        let errMsg = `生成请求失败：${res.status} ${res.statusText}`;
         try {
           const errData = await res.json();
           if (errData.error) errMsg = errData.error;
@@ -390,8 +392,10 @@ export class APIClient {
 
   private mapGenerationResult(data: any): GenerationResult {
     // v0.10.1: Map full workflow result (with layers, model3, psd, etc.)
-    const imageUrl = data.image_url || (data.image_path ? `/output/${data.image_path.split('/').pop()}` : '');
-    const model3Url = data.model3_json || '';
+    // image_path 是绝对路径（Windows 下用反斜杠），按 /output/ 段推导，
+    // 不能 split('/').pop() —— 角色产物在 output/characters/<id>/ 下，会 404。
+    const imageUrl = data.image_url || outputUrlFromPath(data.image_path || '');
+    const model3Url = modelUrlFromPath(data.model3_json || '');
     const layersDir = data.layers_dir || '';
 
     return {
@@ -411,6 +415,20 @@ export class APIClient {
         character_id: data.character_id || '',
       },
       createdAt: data.created_at || new Date().toISOString(),
+      imagePath: data.image_path || '',
+      layersDir,
+      psdPath: data.psd_path || '',
+      psdUrl: data.psd_url || outputUrlFromPath(data.psd_path || ''),
+      model3Json: data.model3_json || '',
+      outputDir: data.output_dir || '',
+      characterId: data.character_id || '',
+      width: data.width ?? 1024,
+      height: data.height ?? 1024,
+      promptUser: data.prompt_user || '',
+      effectivePrompt: data.effective_prompt || '',
+      promptSent: data.prompt_sent || '',
+      promptLang: data.prompt_lang || '',
+      promptMismatch: !!data.prompt_mismatch,
     };
   }
 
@@ -449,7 +467,7 @@ export class APIClient {
       });
       if (!res.ok || !res.body) {
         throw new APIError(
-          `Chat failed: ${res.status} ${res.statusText}`,
+          `对话请求失败：${res.status} ${res.statusText}`,
           res.status,
         );
       }
@@ -522,7 +540,7 @@ export class APIClient {
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
-      let msg = `Export failed: ${res.status} ${res.statusText}`;
+      let msg = `导出失败：${res.status} ${res.statusText}`;
       try {
         const errData = await res.json();
         if (errData.error) msg = errData.error;
@@ -630,7 +648,12 @@ export class APIClient {
       const res = await fetch(`${this.baseURL}/api/health`, {
         signal: AbortSignal.timeout?.(5000),
       });
-      return res.status > 0;
+      // 开发期后端不在时，Next 的 rewrite 代理会用 5xx 纯文本冒充响应；
+      // 只有 503 + JSON（后端降级但活着）才算「可达」。其余 5xx 视为离线。
+      if (res.status >= 500 && res.status !== 503) return false;
+      const contentType = res.headers.get('content-type') || '';
+      if (res.status === 503 && !contentType.includes('application/json')) return false;
+      return true;
     } catch {
       return false;
     }
@@ -671,6 +694,16 @@ export class APIClient {
     }
   }
 
+  /** GPU 与推理运行时探测（后端真源 core/gpu_probe.py）。失败返回 null，不猜。 */
+  async getGpuStatus(): Promise<GpuProbeReport | null> {
+    try {
+      const res = await this.request<unknown>('/api/gpu', undefined, 8_000);
+      return extractData<GpuProbeReport>(res);
+    } catch {
+      return null;
+    }
+  }
+
   async getStatus(): Promise<SystemStatus | null> {
     try {
       const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -685,11 +718,18 @@ export class APIClient {
       const services = Array.isArray(data.services)
         ? (data.services as Array<{ name: string; available: boolean; version?: string }>)
         : [];
+      // GPU 状态单独探测：探测失败保持 undefined，让 UI 显示「未探测」，
+      // 不用 false 冒充「没有 GPU」（后端已能用，误报不可逆）。
+      const gpu = await this.getGpuStatus();
+      const usableGpu = Boolean(
+        gpu?.available && gpu.recommendation?.device && gpu.recommendation.device !== 'cpu',
+      );
       return {
         apiConnected: true,
         latencyMs,
-        // 本版本没有 GPU 探测能力：不设置 gpuAvailable，UI 显示「未探测」而不是谎报 false。
-        version: (data.version as string) ?? 'v0.10.9',
+        gpuAvailable: gpu ? usableGpu : undefined,
+        gpuName: gpu?.adapters?.find((a) => a.vendor && a.vendor !== 'OTHER')?.name,
+        version: (data.version as string) ?? `v${APP_VERSION}`,
         modelsLoaded: services.map((s) => s.name),
         providers: services.map((s) => ({
           id: s.name as never,
@@ -711,6 +751,31 @@ export class APIClient {
     } catch {
       return null;
     }
+  }
+
+  /** 工作台左栏的作品历史（新的在前）。 */
+  async listGenerations(limit = 20): Promise<GenerationRecord[]> {
+    try {
+      const res = await this.request<unknown>(
+        `/api/generations?limit=${limit}`,
+        undefined,
+        15_000,
+      );
+      const data = extractData<{ generations?: GenerationRecord[] }>(res);
+      return Array.isArray(data?.generations) ? data.generations : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** 读取分层目录的图层索引（layer_guide.json 的 Web 版）。 */
+  async listLayers(dir: string): Promise<LayersIndex> {
+    const res = await this.request<unknown>(
+      `/api/layers?dir=${encodeURIComponent(dir)}`,
+      undefined,
+      30_000,
+    );
+    return extractData<LayersIndex>(res);
   }
 
   async segmentImage(
@@ -771,7 +836,7 @@ export class APIClient {
         signal: controller.signal,
       });
       if (!res.ok) {
-        let errMsg = `Import failed: ${res.status} ${res.statusText}`;
+        let errMsg = `导入失败：${res.status} ${res.statusText}`;
         try {
           const errData = await res.json();
           if (errData.error) errMsg = errData.error;
@@ -807,7 +872,7 @@ export class APIClient {
         signal: controller.signal,
       });
       if (!res.ok) {
-        let errMsg = `Import failed: ${res.status} ${res.statusText}`;
+        let errMsg = `导入失败：${res.status} ${res.statusText}`;
         try {
           const errData = await res.json();
           if (errData.error) errMsg = errData.error;
@@ -848,7 +913,7 @@ export class APIClient {
         signal: controller.signal,
       });
       if (!res.ok) {
-        let errMsg = `Upload failed: ${res.status} ${res.statusText}`;
+        let errMsg = `上传失败：${res.status} ${res.statusText}`;
         try {
           const errData = await res.json();
           if (errData.error) errMsg = errData.error;
@@ -986,6 +1051,34 @@ export interface LatestGeneration {
   model3_url?: string;
   /** Go 后端补充的派生字段：模型目录（桌宠部署 model_dir） */
   output_dir?: string;
+  width?: number;
+  height?: number;
+  prompt?: string;
+  prompt_sent?: string;
+  prompt_lang?: string;
+  prompt_mismatch?: boolean;
+}
+
+/** 作品历史接口 /api/generations 返回的单条记录（与 latest_generation 同契约）。 */
+export type GenerationRecord = LatestGeneration & {
+  effective_prompt?: string;
+  model_dir?: string;
+};
+
+export interface LayerIndexEntry {
+  name: string;
+  draw_index: number;
+  url: string;
+  bbox?: number[];
+  size?: number[];
+  pixel_count?: number;
+}
+
+export interface LayersIndex {
+  layers_dir: string;
+  preview_url?: string;
+  layer_count: number;
+  layers: LayerIndexEntry[];
 }
 
 /**
@@ -1035,16 +1128,26 @@ function progressMessageToStep(
 const OUTPUT_URL_PREFIX = '/output/';
 const OUTPUT_PATH_SEP = '/output/';
 
+/** 把 output 目录内的服务器绝对路径（含 Windows 反斜杠）转成 /output/ Web URL。 */
+export function outputUrlFromPath(path: string): string {
+  const normalized = String(path || '').split('\\').join('/');
+  const idx = normalized.indexOf(OUTPUT_PATH_SEP);
+  if (idx < 0) return '';
+  const rel = normalized.substring(idx + OUTPUT_PATH_SEP.length);
+  return OUTPUT_URL_PREFIX.concat(rel);
+}
+
 /** 从 latest_generation.json 记录里的 model3_json 服务器路径推导 Web URL。 */
 export function modelUrlFromRecord(
   record: Pick<LatestGeneration, 'model3_url' | 'model3_json'>,
 ): string {
   if (record.model3_url) return record.model3_url;
-  const normalized = String(record.model3_json || '').split('\\').join('/');
-  const idx = normalized.indexOf(OUTPUT_PATH_SEP);
-  if (idx < 0) return '';
-  const rel = normalized.substring(idx + OUTPUT_PATH_SEP.length);
-  return OUTPUT_URL_PREFIX.concat(rel);
+  return outputUrlFromPath(record.model3_json);
+}
+
+/** 同 outputUrlFromPath，名字更贴近调用点（model3_json 路径）。 */
+export function modelUrlFromPath(path: string): string {
+  return outputUrlFromPath(path);
 }
 
 /** 从 model3_json 服务器路径推导模型目录（桌宠部署所需 model_dir）。 */

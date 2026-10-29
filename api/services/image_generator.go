@@ -88,6 +88,29 @@ type pythonWorkflowResult struct {
 	Error          string                 `json:"error,omitempty"`
 	ErrorState     string                 `json:"error_state,omitempty"`
 	Steps          map[string]interface{} `json:"steps,omitempty"`
+	Prompt         *workflowPrompt        `json:"prompt,omitempty"`
+}
+
+// workflowPrompt 是 core/workflow.py 写下的提示词链路记录。
+type workflowPrompt struct {
+	User      string `json:"user"`
+	Effective string `json:"effective"`
+	Sent      string `json:"sent"`
+	Negative  string `json:"negative,omitempty"`
+	Provider  string `json:"provider"`
+	Lang      string `json:"lang"`
+	Mismatch  bool   `json:"mismatch"`
+}
+
+// applyWorkflowPrompt 把 Python 侧的提示词记录映射到响应；缺失时保持空值。
+func applyWorkflowPrompt(resp *models.GenerateImageResponse, py *pythonWorkflowResult) {
+	if resp == nil || py == nil || py.Prompt == nil {
+		return
+	}
+	resp.EffectivePrompt = py.Prompt.Effective
+	resp.PromptSent = py.Prompt.Sent
+	resp.PromptLang = py.Prompt.Lang
+	resp.PromptMismatch = py.Prompt.Mismatch
 }
 
 // workflowOutputDir 返回 Python 工作流的产物目录。
@@ -146,13 +169,9 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 		args = append(args, "--negative-prompt", req.NegativePrompt)
 	}
 
-	// 添加提示词
-	prompt := req.Prompt
+	// 添加提示词（按字符截断：中文一个字算一个字符，切点不落在字符中间）
+	prompt := truncatePromptRunes(req.Prompt, promptMaxRunes)
 	if prompt != "" {
-		const maxPromptLen = 4000
-		if len(prompt) > maxPromptLen {
-			prompt = prompt[:maxPromptLen]
-		}
 		if strings.HasPrefix(prompt, "-") {
 			prompt = " " + prompt
 		}
@@ -234,10 +253,17 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 		imagePath = filepath.Join(g.cfg.Output.BaseDir, imagePath)
 	}
 
+	// 角色产物落在 output/characters/<id>/ 下，URL 必须由真实路径推导；
+	// 「/output/ + basename」会让生成结果在角色模式下直接 404。
+	imageURL := OutputURLFor(g.cfg, imagePath)
+	if imageURL == "" {
+		imageURL = "/output/" + filepath.Base(imagePath)
+	}
+
 	resp := &models.GenerateImageResponse{
 		Success:     true,
 		ImagePath:   imagePath,
-		ImageURL:    "/output/" + filepath.Base(imagePath),
+		ImageURL:    imageURL,
 		Seed:        req.Seed,
 		Width:       req.Width,
 		Height:      req.Height,
@@ -260,6 +286,8 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 			resp.Model3JSON = p
 		}
 	}
+
+	applyWorkflowPrompt(resp, &pyResult)
 
 	return resp, nil
 }
@@ -302,11 +330,7 @@ func (g *ImageGenerator) generateWithLocalGenerator(req models.GenerateImageRequ
 	}
 
 	if req.Prompt != "" {
-		const maxPromptLen = 4000
-		prompt := req.Prompt
-		if len(prompt) > maxPromptLen {
-			prompt = prompt[:maxPromptLen]
-		}
+		prompt := truncatePromptRunes(req.Prompt, promptMaxRunes)
 		if strings.HasPrefix(prompt, "-") {
 			prompt = " " + prompt
 		}
@@ -345,9 +369,14 @@ func (g *ImageGenerator) generateWithLocalGenerator(req models.GenerateImageRequ
 		outputPath = filepath.Join(g.cfg.Output.BaseDir, outputPath)
 	}
 
+	imageURL := OutputURLFor(g.cfg, outputPath)
+	if imageURL == "" {
+		imageURL = "/output/" + filepath.Base(outputPath)
+	}
+
 	return &models.GenerateImageResponse{
 		ImagePath: outputPath,
-		ImageURL:  "/output/" + filepath.Base(outputPath),
+		ImageURL:  imageURL,
 		Seed:      req.Seed,
 		Width:     req.Width,
 		Height:    req.Height,

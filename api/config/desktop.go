@@ -30,8 +30,8 @@ func resolveDesktopRoot(exeDir string) string {
 // 目录约定（见 ADR-010）：
 //   程序本体只读：<res>/app（源码）、<res>/python（embeddable）、<res>/models、
 //                 <res>/onnxruntime.dll、<res>/face_tracker.exe
-//   用户数据可写：%APPDATA%\Live2DMasterAgent（config/logs/hf-cache/characters）
-//                 文档\Live2DMasterAgent\output（产物）
+//   用户数据可写：%APPDATA%\PygmalionStudio（config/logs/hf-cache/characters）
+//                 文档\PygmalionStudio\output（产物）
 //
 // configProvided=true 表示命令行 -config 指定了文件：用户目录（output/characters）
 // 以文件为准，本函数只补 python/scripts/hf/面捕等程序本体字段。
@@ -117,19 +117,75 @@ func envOr(key, def string) string {
 	return def
 }
 
-// appDataRoot 返回用户可写配置根：Windows %APPDATA%\Live2DMasterAgent；
-// 其他平台 ~/.live2d-master-agent（开发/测试）。
-func appDataRoot() string {
-	if runtime.GOOS == "windows" {
-		if appdata := os.Getenv("APPDATA"); appdata != "" {
-			return filepath.Join(appdata, "Live2DMasterAgent")
+// 产品目录名（v0.10.10 起：Pygmalion Studio → Pygmalion Studio）。
+//
+// 改名不能把用户已有数据留在老目录里自生自灭，所以解析规则是固定的一条：
+// **新目录优先，旧目录只要存在就继续沿用**。绝不「新目录不存在就凭空切过去」——
+// 那在用户眼里等于角色库/导出产物被清空。
+const (
+	appDirName         = "PygmalionStudio"
+	appDirNameUnix     = ".pygmalion-studio"
+	legacyDirNameDot   = ".live2d-master-agent"
+	legacyDirNameKebab = "live2d-master-agent"
+	legacyDirNameOld   = "Live2DMasterAgent"
+)
+
+var legacyDataDirNames = []string{legacyDirNameOld, legacyDirNameKebab}
+
+// dirFor 在 base 下按「首选名 → 旧名沿用 → 回落首选名」挑一个目录。
+func dirFor(base string, preferred string, legacyNames []string) string {
+	if base == "" {
+		return ""
+	}
+	if fileExists(filepath.Join(base, preferred)) {
+		return filepath.Join(base, preferred)
+	}
+	for _, name := range legacyNames {
+		if fileExists(filepath.Join(base, name)) {
+			return filepath.Join(base, name)
 		}
 	}
+	return filepath.Join(base, preferred)
+}
+
+// resolveDataRoot 纯函数版数据根（goos/appdata/home 全部由参数给定，便于测试）。
+func resolveDataRoot(goos, appdata, home string) string {
+	if goos == "windows" {
+		if appdata != "" {
+			return dirFor(appdata, appDirName, legacyDataDirNames)
+		}
+	}
+	if home == "" {
+		return filepath.Join(os.TempDir(), appDirName)
+	}
+	legacy := append([]string{legacyDirNameDot}, legacyDataDirNames...)
+	return dirFor(home, appDirNameUnix, legacy)
+}
+
+// resolveDocumentsRoot 纯函数版「文档」根（产物目录所在）。
+func resolveDocumentsRoot(goos, userprofile, home string) string {
+	if goos == "windows" {
+		if userprofile != "" {
+			base := filepath.Join(userprofile, "Documents")
+			return dirFor(base, appDirName, legacyDataDirNames)
+		}
+	}
+	if home == "" {
+		return filepath.Join(os.TempDir(), appDirName)
+	}
+	base := filepath.Join(home, "Documents")
+	return dirFor(base, appDirName, legacyDataDirNames)
+}
+
+// appDataRoot 返回用户可写配置根：Windows %APPDATA%\PygmalionStudio
+// （老用户仍是 PygmalionStudio / pygmalion-studio）；
+// 其他平台 ~/.pygmalion-studio（老的 ~/.pygmalion-studio 沿用）。
+func appDataRoot() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(os.TempDir(), "Live2DMasterAgent")
+		home = ""
 	}
-	return filepath.Join(home, ".live2d-master-agent")
+	return resolveDataRoot(runtime.GOOS, os.Getenv("APPDATA"), home)
 }
 
 // documentsRoot 返回「文档」目录根：Windows %USERPROFILE%\Documents（非 ASCII
@@ -137,12 +193,7 @@ func appDataRoot() string {
 func documentsRoot() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(os.TempDir(), "Live2DMasterAgent")
+		home = ""
 	}
-	if runtime.GOOS == "windows" {
-		if docs := os.Getenv("USERPROFILE"); docs != "" {
-			return filepath.Join(docs, "Documents", "Live2DMasterAgent")
-		}
-	}
-	return filepath.Join(home, "Documents", "Live2DMasterAgent")
+	return resolveDocumentsRoot(runtime.GOOS, os.Getenv("USERPROFILE"), home)
 }

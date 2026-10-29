@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - 高级生成管道 v1.0
+Pygmalion Studio - 高级生成管道 v1.0
 弯道超车核心技术：LoRA + ControlNet + 图生图风格迁移
 
 三大超车路径：
@@ -517,7 +517,7 @@ class AdvancedPipeline:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Live2D Master Agent - 高级生成管道（弯道超车）",
+        description="Pygmalion Studio - 高级生成管道（弯道超车）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 三大超车路径:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent v0.10.9 - One-Click Installer
+Pygmalion Studio v0.10.10 - One-Click Installer
 
 Usage:
     python install.py              # Full install (core + desktop pet)
@@ -142,7 +142,7 @@ class InstallState:
 def print_header():
     print(f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
-║       🎭 Live2D Master Agent v0.10.9 - Installer       ║
+║       🎭 Pygmalion Studio v0.10.10 - Installer      ║
 ║       AI Character → Live2D Model → Desktop Pet          ║
 ╚══════════════════════════════════════════════════════════╝{C.RESET}
 """)
@@ -151,7 +151,7 @@ def print_header():
 def print_check_header():
     print(f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
-║     📦 Live2D Master Agent 环境检测                          ║
+║     📦 Pygmalion Studio 环境检测                          ║
 ╚══════════════════════════════════════════════════════════╝{C.RESET}
 """)
 
@@ -381,7 +381,12 @@ def install_core(state=None):
             "urllib3>=2.8.0", "httpx>=0.28.1", "aiohttp>=3.14.5",
             "psd-tools>=1.26.0", "scipy>=1.15.3", "scikit-learn>=1.9.1",
             "cryptography>=50.0.2", "rich>=15.0.0",
-            "opencv-python-headless>=4.9.0.80", "onnxruntime>=1.31.0",
+            "opencv-python-headless>=4.9.0.80",
+            # 运行时按平台分流，与 requirements 清单一致：Windows 用 DirectML 版
+            # （自带 DmlExecutionProvider），其余平台用 CPU 版。两者共用
+            # onnxruntime/ 目录，同装会互相覆盖，所以只能选一个。
+            ("onnxruntime-directml>=1.24.4" if sys.platform == "win32"
+             else "onnxruntime>=1.31.0"),
             "aiofiles>=25.1.0", "websockets>=17.3",
         ]
         if run_pip(core_pkgs, "Installing individual packages...", state):
@@ -408,7 +413,9 @@ def install_desktop_pet(state=None):
     pkgs.append("mediapipe>=0.10.30,<0.10.32")
     pkgs.extend(["sounddevice>=0.5.6", "soundfile>=0.14.0"])
     pkgs.append("edge-tts>=7.3.1")
-    pkgs.append("rembg[cpu]>=2.0.86")
+    # rembg 不再默认安装（v0.10.10）：它钉着 CPU 版 onnxruntime，会把 Windows 上
+    # 已装的 DirectML 运行时静默覆盖掉。需要 rembg 后端时走应用内「能力」页，
+    # 或手动 pip install "rembg[cpu]"（代价是失去 GPU 加速）。
 
     if run_pip(pkgs, "Installing desktop pet, tracking, and TTS packages...", state):
         if not state.dry_run:
@@ -567,7 +574,7 @@ def create_env_file():
         print(f"\n{C.GREEN}✓ Created .env from .env.example{C.RESET}")
         print(f"{C.YELLOW}  Edit .env to add your API keys (optional){C.RESET}")
     else:
-        env_file.write_text("""# Live2D Master Agent Configuration
+        env_file.write_text("""# Pygmalion Studio Configuration
 # Copy this to .env and edit
 
 # API Keys (optional - Pollinations is free, no key needed)
@@ -657,7 +664,7 @@ def verify_installation():
     try:
         sys.path.insert(0, str(PROJECT_ROOT))
         from core.version import __version__
-        print(f"\n  {C.GREEN}✓ Live2D Master Agent v{__version__} ready!{C.RESET}")
+        print(f"\n  {C.GREEN}✓ Pygmalion Studio v{__version__} ready!{C.RESET}")
     except Exception as e:
         print(f"\n  {C.RED}✗ Core module error: {e}{C.RESET}")
         errors.append("core")
@@ -847,7 +854,7 @@ def print_summary(state):
 def main():
     import argparse
     parser = argparse.ArgumentParser(
-        description="Live2D Master Agent Installer",
+        description="Pygmalion Studio Installer",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
@@ -955,4 +962,10 @@ def main():
 
 
 if __name__ == "__main__":
+    # Windows 默认控制台代码页（中文为 cp936/GBK）编不出本脚本满屏的 emoji，
+    # 直接 UnicodeEncodeError 让用户「还没开始装就 exit 1」。只在可执行入口
+    # 降级为 replace：import 本模块的调用方（测试/其它工具）策略不受影响。
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(errors="replace")
     main()

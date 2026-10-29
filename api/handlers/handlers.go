@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,7 +23,7 @@ import (
 
 // Version 是后端的语义版本号，集中定义避免散落多处版本字符串不同步。
 // v0.10.3：首次集中化管理，更新时只需改这一处。
-const Version = "v0.10.9-go"
+const Version = "v0.10.10-go"
 
 type Handler struct {
 	cfg            *config.Config
@@ -233,6 +234,9 @@ func (h *Handler) GenerateCharacter(c *gin.Context) {
 	taskID := fmt.Sprintf("gen_%d", time.Now().UnixNano())
 	h.wsHub.BroadcastProgress(taskID, "starting", 5, "开始生成...")
 
+	// 角色一致性会把设定文本拼进 req.Prompt；历史记录要留下用户原文。
+	userPrompt := req.Prompt
+
 	if req.CharacterID != "" {
 		if prompt, err := h.charSvc.GetGenerationPrompt(req.CharacterID, req.Prompt); err == nil {
 			req.Prompt = prompt
@@ -254,6 +258,9 @@ func (h *Handler) GenerateCharacter(c *gin.Context) {
 		return
 	}
 	h.wsHub.BroadcastProgress(taskID, "done", 100, "生成完成！")
+	if result.PromptUser == "" {
+		result.PromptUser = userPrompt
+	}
 	services.RecordLatestGeneration(h.cfg, result)
 	c.JSON(http.StatusOK, models.Response{Success: true, Message: "角色生成成功", Data: result})
 }
@@ -455,6 +462,40 @@ func (h *Handler) LatestGeneration(c *gin.Context) {
 	c.JSON(http.StatusOK, models.Response{Success: true, Data: record})
 }
 
+// ListGenerations 返回工作台左栏的作品历史（新的在前）。limit 非法时按默认值。
+func (h *Handler) ListGenerations(c *gin.Context) {
+	limit := 0
+	if raw := c.Query("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			limit = parsed
+		}
+	}
+	items := services.ListGenerations(h.cfg, limit)
+	c.JSON(http.StatusOK, models.Response{Success: true, Data: map[string]interface{}{
+		"generations": items,
+		"count":       len(items),
+	}})
+}
+
+// ListLayers 把分层目录的 layer_guide.json 转成前端可直接加载的图层列表。
+func (h *Handler) ListLayers(c *gin.Context) {
+	dir := c.Query("dir")
+	if strings.TrimSpace(dir) == "" {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "缺少分层目录参数 dir"})
+		return
+	}
+	index, err := services.ListLayers(h.cfg, dir)
+	if err != nil {
+		status := http.StatusBadRequest
+		if !errors.Is(err, services.ErrPathOutsideBase) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Data: index})
+}
+
 // UploadImage 接收一张图片（multipart 字段名 file），保存到 output/uploads/
 // 并返回 {path, url}。path 供 /api/segment 与参考图端点使用。
 func (h *Handler) UploadImage(c *gin.Context) {
@@ -627,6 +668,36 @@ func (h *Handler) ListImageProviders(c *gin.Context) {
 	}})
 }
 
+// GetGPUStatus 报告本机 GPU 与推理运行时的真实状态。
+//
+// 判定逻辑只在 Python 侧 core.gpu_probe 一份，这里透传结果；探测失败时
+// 仍返回完整键集（前端自检页的项目数不能因为后端换了而跳变），
+// 错误详情只进日志，不随响应体下发。
+func (h *Handler) GetGPUStatus(c *gin.Context) {
+	gpu, err := h.pythonBridge.ProbeGPU(c.Request.Context())
+	if err != nil {
+		log.Printf("[error] GPU 探测: %v", err)
+		c.JSON(http.StatusOK, models.Response{
+			Success: true,
+			Message: "GPU 状态暂不可用",
+			Data: map[string]interface{}{
+				"available":      false,
+				"adapters":       []interface{}{},
+				"runtime":        map[string]interface{}{},
+				"recommendation": map[string]interface{}{"device": "cpu"},
+				"query_ok":       false,
+			},
+		})
+		return
+	}
+	data := make(map[string]interface{}, len(gpu)+1)
+	for k, v := range gpu {
+		data[k] = v
+	}
+	data["query_ok"] = true
+	c.JSON(http.StatusOK, models.Response{Success: true, Data: data})
+}
+
 // ListCapabilities 返回可选重型能力的可导入性 + 最近一次下载任务状态。
 func (h *Handler) ListCapabilities(c *gin.Context) {
 	probe, err := h.capMgr.Probe(c.Request.Context(), h.pythonBridge)
@@ -789,7 +860,7 @@ func (h *Handler) GetAPIInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, models.Response{
 		Success: true,
 		Data: map[string]interface{}{
-			"name":        "Live2D Master Agent API",
+			"name":        "Pygmalion Studio API",
 			"version":     Version,
 			"description": "AI角色生成、一致性维护、LLM聊天、Live2D导出 API",
 			"features":    features,
@@ -799,6 +870,7 @@ func (h *Handler) GetAPIInfo(c *gin.Context) {
 			},
 			"endpoints": []map[string]string{
 				{"method": "GET", "path": "/api/health", "desc": "健康检查"},
+				{"method": "GET", "path": "/api/gpu", "desc": "本机 GPU 与推理运行时探测"},
 				{"method": "GET", "path": "/api/status", "desc": "系统状态"},
 				{"method": "GET", "path": "/api/info", "desc": "API信息"},
 				{"method": "GET", "path": "/api/models", "desc": "可用模型列表"},

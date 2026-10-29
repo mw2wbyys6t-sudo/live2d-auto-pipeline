@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Provider Router (Abstract Provider Registry)
+Pygmalion Studio - Provider Router (Abstract Provider Registry)
 
 Automatically discovers and routes to the best available image provider.
 Priority: seedream > sensenova > pollinations (free fallback).

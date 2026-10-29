@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Character Manager
+Pygmalion Studio - Character Manager
 
 CRUD operations for CharacterCard objects stored as JSON files,
 plus reference-image embedding extraction and generation-prompt

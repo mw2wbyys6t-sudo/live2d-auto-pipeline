@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Drivers Module
+Pygmalion Studio - Drivers Module
 
 Hardware and rendering drivers:
 - face_tracker: MediaPipe-based real-time face tracking with ARKit blendshapes

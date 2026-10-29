@@ -1,4 +1,4 @@
-# 💡 Live2D Master Agent - 最佳实践指南
+# 💡 Pygmalion Studio - 最佳实践指南
 
 **专业技巧，让你的作品更出色！**
 

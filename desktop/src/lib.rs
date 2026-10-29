@@ -90,9 +90,9 @@ fn go_binary_name() -> &'static str {
 
 fn desktop_binary_name() -> &'static str {
     if cfg!(windows) {
-        "Live2DMasterAgent.exe"
+        "PygmalionStudio.exe"
     } else {
-        "Live2DMasterAgent"
+        "PygmalionStudio"
     }
 }
 
@@ -100,7 +100,7 @@ fn desktop_binary_name() -> &'static str {
 ///
 /// Development mode (running `cargo tauri dev` from `desktop/`):
 ///   1. ../api/live2d-api(.exe)       — freshly built Go binary
-///   2. ../dist/Live2DMasterAgent(.exe) — full desktop build
+///   2. ../dist/PygmalionStudio(.exe) — full desktop build
 ///
 /// Production mode (installed via NSIS / running the bundled exe):
 ///   3. <resource_dir>/live2d-api(.exe) — Tauri bundles `desktop/bin/*` here
@@ -218,7 +218,7 @@ pub fn run() {
             };
 
             window
-                .title("Live2D Master Agent")
+                .title("Pygmalion Studio")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(800.0, 600.0)
                 .center()

@@ -1,10 +1,11 @@
 <p align="center">
-  <img src="assets/icon/logo_512.png" width="180" alt="Live2D Master Agent Logo">
+  <img src="assets/icon/logo_512.png" width="180" alt="Pygmalion Studio Logo">
 </p>
 
-<h1 align="center">Live2D Master Agent</h1>
+<h1 align="center">Pygmalion Studio</h1>
 
 <p align="center">
+  <em>（原名 Live2D Master Agent，v0.10.10 起改名 —— 已发布的 v0.10.9 安装包仍沿用旧名）</em><br>
   <strong>用一句话，让 AI 帮你生成一个能动的二次元角色。</strong><br>
   从文本描述 → AI 立绘 → 自动分层 → Live2D 模型 → 可导出可预览。
 </p>
@@ -111,6 +112,13 @@
 
 > ✅ 安装包**自带完整运行时**：嵌入式 CPython 3.12 + 离线依赖 + `app/` 源码树 + 原生面捕（YuNet + `onnxruntime.dll`）。**无需预装 Python**。
 
+> 🧪 **开发中的 v0.10.10（代号「GPU Aware」）尚未发布**：代码里已把分层接上 GPU
+> —— Windows 随包改带 `onnxruntime-directml`（N/A/I 卡通用，不需 CUDA），自检页新增
+> `GPU 与推理运行时` 一行；本机实测 ISNet 前景推理 **1149ms → 163ms（≈7.0×）**，
+> 且两条路径的前景掩码**逐像素一致**（IoU 1.0000）。
+> **安装包还没构建、也没做产物级验收**，所以上面的下载链接仍指向已验收通过的 v0.10.9；
+> 出包并实跑通过后才会改这段。详见 [CHANGELOG.md](CHANGELOG.md)。
+
 **使用方式**：
 1. 从 Release 下载 `Live2D.Master.Agent_0.10.9_x64-setup.exe`
 2. 若之前装过旧版，先运行旧安装目录里的 `uninstall.exe`
@@ -191,7 +199,8 @@ python scripts/build_desktop_bundle.py --go-exe api/live2d-api.exe \
 
 # 3) 打 NSIS 安装包
 cd desktop && cargo tauri build --bundles nsis
-# 产物：desktop/target/release/bundle/nsis/Live2D Master Agent_<version>_x64-setup.exe
+# 产物：desktop/target/release/bundle/nsis/Pygmalion Studio_<version>_x64-setup.exe
+#       （v0.10.9 及之前打出来的包用的是旧 productName，文件名仍是 Live2D.Master.Agent_*）
 ```
 
 **只想要一个轻量 exe 调试**（不含运行时，需本机 Python 3.11+）：

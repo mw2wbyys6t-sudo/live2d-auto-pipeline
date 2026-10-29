@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - 可选 AI 模型依赖安装入口
+Pygmalion Studio - 可选 AI 模型依赖安装入口
 
 requirements.txt 中标注为「large, install separately with install_models.py」
 的重量级依赖由此脚本统一安装。默认安装核心依赖之外的图像生成 / 语义分割 /
@@ -116,7 +116,7 @@ def install(packages: List[str], dry_run: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Live2D Master Agent 可选 AI 模型依赖安装",
+        description="Pygmalion Studio 可选 AI 模型依赖安装",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--all", action="store_true", help="安装全部分组")

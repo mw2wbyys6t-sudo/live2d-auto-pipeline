@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - 脸部定位（YuNet 优先，肤色连通域兜底）
+Pygmalion Studio - 脸部定位（YuNet 优先，肤色连通域兜底）
 
 分层必须在角色体内确定「脸」的精确位置：眼睛、眉毛、嘴都按脸的包围盒
 切分，脸偏一点就会把刘海切进眼睛、把嘴切到下巴。
@@ -118,7 +118,7 @@ def default_search_dirs() -> List[Path]:
         dirs.append(base / "models" / "face")
 
     home = Path.home()
-    dirs.append(home / ".live2d-master-agent" / "models")
+    dirs.append(home / ".pygmalion-studio" / "models")
     dirs.append(home / ".cache" / "live2d" / "models")
     return dirs
 

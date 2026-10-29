@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - 52-Layer Standard Structure Mapper (DEF-004 IMPLEMENTED)
+Pygmalion Studio - 52-Layer Standard Structure Mapper (DEF-004 IMPLEMENTED)
 
 DEF-004: Maps K-means or manually separated layers to the official
 Live2D Cubism 52-layer standard, and generates parameter/physics configuration.
@@ -538,7 +538,7 @@ class Layer52Generator:
         # 4. Human-readable guide
         guide_path = out / "52_LAYER_GUIDE.txt"
         with open(guide_path, 'w', encoding='utf-8') as f:
-            f.write(f"Live2D Master Agent v0.9.0 - 52-Layer Standard Configuration\n")
+            f.write(f"Pygmalion Studio v0.9.0 - 52-Layer Standard Configuration\n")
             f.write("=" * 70 + "\n\n")
             f.write(f"Character: {character_name}\n")
             f.write(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")

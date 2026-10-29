@@ -57,7 +57,13 @@ _register(Component(
 
 
 def data_root() -> Path:
-    return Path(os.environ.get("LIVE2D_DATA_DIR", str(Path.home() / "Live2DMasterAgent")))
+    """按需组件的数据根（解析规则唯一真源在 core.app_paths）。"""
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from core.app_paths import data_root as _resolve
+
+    return _resolve()
 
 
 def dest_path(c: Component) -> Path:

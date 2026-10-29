@@ -1,5 +1,5 @@
 """
-Live2D Master Agent - Python API Server (FastAPI)
+Pygmalion Studio - Python API Server (FastAPI)
 兼容 Go API 接口格式，直接调用 core 模块。
 
 ⚠️ 降级模式：本服务是 Go API（./api/live2d-api）的降级替代实现，
@@ -21,8 +21,9 @@ SUPPORTED_ENDPOINTS（降级模式下可用）：
     GET  /api/models             可用模型列表（provider 实测可用性）
     GET  /api/expressions        表情列表（静态模板）
     GET  /api/scripts            scripts/ 目录脚本列表
-    GET  /api/diagnostics        环境自检（8 项 checks，与 Go 同构）
+    GET  /api/diagnostics        环境自检（9 项 checks，与 Go 同构）
     GET  /api/providers          图像生成上游 provider 状态
+    GET  /api/gpu                本机 GPU 与推理运行时探测（含推荐设备）
     GET  /api/models/optional    可选重模型清单 + 就绪状态
     GET  /api/generations/models output 下已导出的 Live2D 模型列表
 
@@ -126,7 +127,7 @@ CHARACTERS_DIR = ASSETS_DIR / "characters"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 CHARACTERS_DIR.mkdir(parents=True, exist_ok=True)
 
-VERSION = "v0.10.9-py"
+VERSION = "v0.10.10-py"
 SERVER_PORT = 8080  # v0.10.3: 与 Go 后端及前端代理目标一致
 # 安全默认：只监听本机回环（与 Go 服务同一策略），避免同 WiFi/局域网设备
 # 无鉴权调用（耗 API 额度、读 output 产物、驱动摄像头）。确需局域网访问时
@@ -272,7 +273,7 @@ class SegmentRequest(BaseModel):
 async def lifespan(app: FastAPI):
     # 启动时
     _safe_print(f"\n{'='*60}")
-    _safe_print(f"  🎨 Live2D Master Agent API {VERSION} (Python Edition)")
+    _safe_print(f"  🎨 Pygmalion Studio API {VERSION} (Python Edition)")
     _safe_print(f"  高性能 FastAPI 版本 - 直接调用 core 模块")
     _safe_print(f"{'='*60}")
     _safe_print(f"  服务地址: http://{SERVER_HOST}:{SERVER_PORT}")
@@ -287,7 +288,7 @@ async def lifespan(app: FastAPI):
     _safe_print("API 服务已停止")
 
 
-app = FastAPI(title="Live2D Master Agent API", version=VERSION, lifespan=lifespan)
+app = FastAPI(title="Pygmalion Studio API", version=VERSION, lifespan=lifespan)
 
 # CORS 中间件
 # 严格白名单：默认只放行本地工作台（与 Go API 的 AllowedOrigins 默认值一致）。
@@ -723,6 +724,27 @@ def _probe_providers() -> Dict[str, Any]:
     }
 
 
+def _probe_gpu() -> Dict[str, Any]:
+    """GPU 探测：硬件枚举 + 本进程可用的推理运行时 + 推荐设备。
+
+    单真源在 core.gpu_probe；这里只负责报告，判定逻辑不在服务端复制一份。
+    """
+    from core.gpu_probe import probe_gpu
+
+    return probe_gpu()
+
+
+def _probe_gpu_row() -> Dict[str, Any]:
+    """自检页的 GPU 行（口径与 Go 侧 gpuDiagnosticCheck 一致）。"""
+    from core.gpu_probe import diagnostics_row
+
+    try:
+        return diagnostics_row(_probe_gpu())
+    except Exception as exc:
+        logging.getLogger("api_server").warning("GPU 探测失败: %s", exc)
+        return diagnostics_row(None, error=exc)
+
+
 def _probe_tracker() -> Dict[str, Any]:
     """面捕组件的真实状态。
 
@@ -779,7 +801,7 @@ def _probe_output_writable() -> Dict[str, Any]:
 # ---------- 基础端点 ----------
 @app.get("/")
 async def root():
-    return ok({"version": VERSION, "name": "Live2D Master Agent API"}, "API 运行中")
+    return ok({"version": VERSION, "name": "Pygmalion Studio API"}, "API 运行中")
 
 
 @app.get("/api/health")
@@ -871,7 +893,7 @@ async def get_api_info():
 
     return ok({
         "version": VERSION,
-        "name": "Live2D Master Agent",
+        "name": "Pygmalion Studio",
         "endpoints": {
             "health": "GET /api/health",
             "status": "GET /api/status",
@@ -915,9 +937,14 @@ async def get_models():
 
 # ---------- 环境自检 / 上游 provider / 可选重模型 ----------
 def _data_root() -> Path:
-    """用户数据根（与 Go config/desktop.go、scripts/optional_components.py 同源）。"""
-    env = os.environ.get("LIVE2D_DATA_DIR", "").strip()
-    return Path(env) if env else (Path.home() / "Live2DMasterAgent")
+    """用户数据根（解析规则唯一真源在 core.app_paths，与 Go config/desktop.go 同口径）。
+
+    产品改名后不能假设数据只在老位置：解析器会「新目录优先、旧目录存在即沿用」，
+    这里不再自己拼路径，避免 Python 与 Go 两套后端读写到不同目录。
+    """
+    from core.app_paths import data_root
+
+    return data_root()
 
 
 # 可选重模型清单：与 Go services/model_download.go 的 optionalRegistry 保持一致。
@@ -961,12 +988,16 @@ async def diagnostics():
     """环境自检：逐项返回运行时状态，全部只读，不触发任何生成。
 
     检查项的 key 与 Go 侧完全一致（backend / python / scripts_dir / output_dir /
-    tracker_exe / tracker_model / tracker_dll / bind_loopback），否则前端自检页
+    tracker_exe / tracker_model / tracker_dll / gpu / bind_loopback），否则前端自检页
     在两种后端下显示的项目数会跳变。
     """
     py = _PROBES.get("python_env", _PROBE_TTL, _probe_python_env)
     tracker = _PROBES.get("tracker", _PROBE_TTL, _probe_tracker)
     out = _PROBES.get("output_writable", _PROBE_TTL, _probe_output_writable)
+    # 自检页的结论必须是「当下」的：用户刚装完 CUDA/DirectML 就点诊断，
+    # 不能吃 /api/gpu 那 30s 缓存（Go 侧诊断页同样先失效再重探）。
+    _PROBES._items.pop("gpu", None)
+    gpu_row = _probe_gpu_row()
 
     checks = [
         {"key": "backend", "label": "后端服务", "ok": True, "detail": f"{VERSION}（Python 降级模式）"},
@@ -982,6 +1013,7 @@ async def diagnostics():
          "detail": tracker["model_detail"]},
         {"key": "tracker_dll", "label": "ONNX Runtime 运行库", "ok": bool(tracker["dll_ok"]),
          "detail": tracker["dll_detail"]},
+        gpu_row,
         {"key": "bind_loopback", "label": "仅本机回环监听", "ok": _is_loopback(SERVER_HOST),
          "detail": SERVER_HOST},
     ]
@@ -1005,6 +1037,19 @@ async def list_image_providers():
         "registered": providers["registered"],
         "query_ok": providers["query_ok"],
     })
+
+
+@app.get("/api/gpu")
+async def get_gpu_status():
+    """GPU 与推理运行时的真实状态（首访要跑一次 WMI，故走线程 + TTL 缓存）。"""
+    timeout = _env_timeout("LIVE2D_GPU_PROBE_TIMEOUT", 20.0)
+    try:
+        gpu = await _to_thread_bounded(
+            lambda: _PROBES.get("gpu", _PROBE_TTL, _probe_gpu), timeout
+        )
+    except asyncio.TimeoutError:
+        return err(_timeout_message("GPU 探测", timeout, "LIVE2D_GPU_PROBE_TIMEOUT"), 504)
+    return ok(gpu)
 
 
 @app.get("/api/models/optional")

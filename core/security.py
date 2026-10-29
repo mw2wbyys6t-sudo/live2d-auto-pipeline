@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Security Module (Consolidated, Hardened)
+Pygmalion Studio - Security Module (Consolidated, Hardened)
 
 Unified security utilities:
 - Path traversal prevention
@@ -211,35 +211,27 @@ def scan_psd_layer_count(filepath: str, max_layers: int = MAX_PSD_LAYERS) -> Tup
 
 # --- Input Sanitization ---
 
-_DANGEROUS_COMMANDS = [
-    'rm -rf', 'rm -f', r'\brm\b', 'del ', 'rmdir', 'format ', 'mkfs',
-    'dd if=', 'curl ', 'wget ', 'python ', 'bash ', 'sh ', 'cmd ',
-    'powershell', 'eval(', 'exec(', 'system(', '__import__',
-    'subprocess', 'os.system', 'os.popen', 'chmod ', 'chown ',
-]
-
-_DANGEROUS_CHARS_PROMPT = [';', '&', '|', '`', '$(', '${', '\\', '\n', '\r']
+# 提示词只作为 argv 参数与 JSON 字段进入下游，从不拼进 shell 命令，所以这里
+# 不做「危险字符/命令子串」改写：旧实现会把 ``English style`` 换成
+# ``Engli____style``、把 ``model girl`` 换成 ``mo___girl``，用户提示词被静默
+# 篡改却无从得知。真正的注入面在调用方：Go 侧用 ``--`` 与前导空格隔离 argv，
+# JSON 编码负责转义。这里只保留两件必要的事：去控制字符、按字符限长。
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def sanitize_prompt(prompt: str, max_length: int = 4000) -> str:
-    """Sanitize user prompt to prevent injection attacks."""
+    """Normalize a user prompt without rewriting its content.
+
+    Keeps newlines (prompts are multi-line friendly) and all printable text,
+    including CJK and shell-looking words. Length is counted in characters,
+    so a 4000-character Chinese prompt is kept whole instead of being cut at
+    1333 characters by a byte-based limit.
+    """
     if not prompt:
         return ""
-    # Truncate to max length
-    prompt = prompt[:max_length]
-    # Remove dangerous characters
-    for ch in _DANGEROUS_CHARS_PROMPT:
-        prompt = prompt.replace(ch, '')
-    # Remove dangerous command patterns (case insensitive)
-    lower = prompt.lower()
-    for cmd in _DANGEROUS_COMMANDS:
-        pattern = re.compile(re.escape(cmd), re.IGNORECASE)
-        lower_check = lower
-        while pattern.search(lower_check):
-            m = pattern.search(lower_check)
-            prompt = prompt[:m.start()] + '_' * (m.end() - m.start()) + prompt[m.end():]
-            lower_check = lower_check[m.end():]
-    return prompt.strip()
+    normalized = prompt.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = _CONTROL_CHARS_RE.sub("", normalized)
+    return cleaned[:max_length].strip()
 
 
 def sanitize_filename(filename: str, max_length: int = 255) -> str:
@@ -346,7 +338,7 @@ if __name__ == "__main__":
     tests = [
         (validate_path("/etc/passwd", base_dir="/tmp"), False, "Path traversal outside base"),
         (validate_path("../../etc/passwd"), False, "Double dot traversal"),
-        (sanitize_prompt("hello; rm -rf /"), "hello", "Command injection blocked"),
+        (sanitize_prompt("hello; rm -rf /"), "hello; rm -rf /", "Prompt text kept as-is (no shell)"),
         (sanitize_filename('bad:file/name?.png'), "bad_file_name_.png", "Bad filename chars"),
         (redact_sensitive("sk-abcdefghijklmnopqrstuvwx1234"), "sk-abcdefg***REDACTED***", "API key redacted"),
     ]

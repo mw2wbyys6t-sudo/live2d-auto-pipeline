@@ -1,4 +1,4 @@
-# ❓ Live2D Master Agent - 常见问题
+# ❓ Pygmalion Studio - 常见问题
 
 **FAQ - 解答你的疑惑！**
 
@@ -16,10 +16,10 @@
 
 ## 🔰 基础问题
 
-### Q1: Live2D Master Agent是什么？
+### Q1: Pygmalion Studio是什么？
 
 **A**: 
-Live2D Master Agent是一款AI辅助Live2D制作工具。它可以帮助你：
+Pygmalion Studio是一款AI辅助Live2D制作工具。它可以帮助你：
 - 从文本描述生成角色立绘
 - 自动分层生成PSD文件
 - 提供Rigging和参数设计指导

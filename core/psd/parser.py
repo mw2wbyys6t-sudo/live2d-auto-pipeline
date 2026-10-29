@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - PSD Parser with Malicious File Protection (P2-1 FIXED)
+Pygmalion Studio - PSD Parser with Malicious File Protection (P2-1 FIXED)
 
 P2-1: Before parsing any PSD file, validates:
 - File magic bytes

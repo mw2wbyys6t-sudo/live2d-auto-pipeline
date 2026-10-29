@@ -1,9 +1,9 @@
 {
-  "name": "live2d-master-agent",
-  "version": "0.10.9",
+  "name": "pygmalion-studio",
+  "version": "0.10.10",
   "private": true,
   "license": "Apache-2.0",
-  "description": "Live2D Master Agent - Full-stack workbench for AI character generation and Live2D model building",
+  "description": "Pygmalion Studio - Full-stack workbench for AI character generation and Live2D model building",
   "scripts": {
     "dev": "next dev",
     "prebuild": "node scripts/copy-license.mjs",

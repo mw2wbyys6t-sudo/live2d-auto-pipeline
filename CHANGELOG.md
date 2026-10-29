@@ -4,6 +4,177 @@
 
 ---
 
+## [v0.10.10] — 2026-10-28 — 代号「GPU Aware」（**未发布**：尚无 tag、无 Release；安装包已构建并通过产物级验收）
+
+> **本版目标**：让「正式使用」真的能跑 GPU —— 不是加开关，而是把探测、选卡、
+> 随包运行时和装配期校验串成一条能被实测证伪的链路。
+>
+> **状态诚实说明**：以下所有数字都是本机（RTX 2060；随包口径按 cp312 wheel 核对）
+> 当场跑出来的。产物级验收已在本机完成（2026-10-28）：
+> `Pygmalion Studio_0.10.10_x64-setup.exe` 337,552,975 B（321.92 MiB），
+> SHA256 `2ee9210fe69aa4801b342e3d3387cb5b239b528c84f77061356b67aa31280d9a`；
+> 静默安装（currentUser，落盘 936MB）→ 启动 → `/api/gpu` 返回
+> `recommendation.device=dml`、`runtime.onnxruntime_providers` 含 `DmlExecutionProvider`，
+> `/api/diagnostics` 九项全 true、`python_path` 指向安装目录内 `python\pythonw.exe`，
+> 前端页以 Pygmalion Studio 品牌提供 → 静默卸载后安装目录、卸载表项与开始菜单
+> 快捷方式均清空。**"已发布"仍不成立**：tag/Release/CI 产物尚未产生。
+
+### ✨ 新增
+
+- **前端接上 GPU 状态**：首页状态卡的 GPU 行改为读 `GET /api/gpu`
+  （`web/lib/api-client.ts::getGpuStatus`）；探测失败时保持 `undefined` → UI 显示
+  「未探测」，不再用 `false` 冒充「没有 GPU」。品牌与版本也各自收到唯一出口：
+  `web/lib/brand.ts` + `next.config.js` 注入 `NEXT_PUBLIC_APP_VERSION`
+  （此前 `index.tsx` / `Sidebar.tsx` / `api-client.ts` 三处写死 `v0.10.9`，
+  升版本时页脚会停在旧版本 —— 现已由测试禁止前端出现写死的版本号字面量）。
+- **产品改名：Live2D Master Agent → Pygmalion Studio**（决策与影响见
+  [ADR-008](docs/architecture/adrs/ADR-008-product-rename.md)）。随品牌一起改的是
+  真正有影响的身份，不是只换个标题：
+
+  | 位置 | 旧 | 新 |
+  |---|---|---|
+  | Tauri `productName` / 窗口标题 | Live2D Master Agent | Pygmalion Studio |
+  | Tauri `identifier` | com.pygmalion.live2d-master-agent | com.pygmalion.studio |
+  | Cargo 包名 / 二进制名（决定 CI 产物路径） | live2d-master-agent(.exe) | pygmalion-studio(.exe) |
+  | Rust lib 名 + `main.rs` 调用 | live2d_master_agent_lib | pygmalion_studio_lib |
+  | NSIS `MyAppName` / `MyAppExeName` / 产物名 | Live2DMasterAgent | PygmalionStudio |
+  | 数据根（Windows） | `%APPDATA%\Live2DMasterAgent` | `%APPDATA%\PygmalionStudio` |
+  | 产物根 | `Documents\Live2DMasterAgent\output` | `Documents\PygmalionStudio\output` |
+  | 密钥库目录 | `%APPDATA%\live2d-master-agent\vault.key` | `%APPDATA%\PygmalionStudio\vault.key` |
+
+  **老用户数据不丢**是这次改名的硬约束，实现方式是「新目录优先，旧目录只要存在就
+  继续沿用」：`core/app_paths.py` 与 `api/config/desktop.go` 各有一份同规则的解析器，
+  两边都由测试钉住（含 `.live2d-master-agent` 与 kebab/紧凑两种历史名、以及旧的
+  `.env` 技能目录仍作为回退路径被搜索）。**刻意不改**的两处：保险库旧版密钥派生输入
+  `APP_IDENTIFIER`（改了就解不开老密文）与 Go 后端二进制名 `live2d-api`（内部标识，
+  不是品牌，改它只会打断 `desktop/src/lib.rs` 的启动查找链）。
+- **GPU 探测单真源 `core/gpu_probe.py`**：WMI 枚举适配器 + 归一化厂商 + 本进程实际的
+  onnxruntime provider / torch CUDA 能力 + 推荐设备（`cuda` > `dml` > `cpu`）。
+  硬件采集与判定分离，判定逻辑用注入的假数据测，无 GPU 的 CI 也能复现。
+- **`GET /api/gpu`（Go 与 Python 降级后端同构）** 与自检页新增 `gpu` 一行；
+  Go 侧 `InvalidateGPUProbe()` 保证「装完运行时立刻重探」，不吃 30s 旧结论。
+- **分层自动上卡**：`SemanticLayerer(device="auto")`（生产两处调用点的默认值）现在按
+  `CUDA > DirectML > CPU` 选 provider；建会话失败会退回 CPU 继续用学出来的掩码，
+  不再一路掉到 HSV 颜色启发式（画质断崖）。
+
+### 🔴 修复
+
+- **Windows 基础包的运行时冲突**（实测证据决定本版方案）：`onnxruntime` 与
+  `onnxruntime-directml` 是不同发行名、同一个 `onnxruntime/` 模块目录，**后装的覆盖前装的**，
+  pip 全程不报错。实测在 DirectML 之上装 CPU 版 1.31.0 后，`DmlExecutionProvider` 直接消失。
+  因此：Windows 走 `onnxruntime-directml>=1.24.4`，其余平台走 `onnxruntime>=1.31.0`，
+  并把钉着 CPU 版 `onnxruntime` 的 **`rembg` 移出基础包**（它本来就是按需能力组，
+  `capabilityPlans["rembg"]` 早已接线；冒烟清单里的 `rembg` 也一并撤下 —— 全新
+  bundle 必然缺它，留着只会每次装配刷一条无意义 `[warn]`）。
+- **按需装 rembg 不再吃掉 GPU**（Windows）：`rembg[cpu]` 钉着 CPU 版
+  `onnxruntime`，与基础包带的 `onnxruntime-directml` 共用同一个 `onnxruntime/` 目录，
+  实测装完 `DmlExecutionProvider` 静默消失、分层悄悄退回 CPU。能力安装器改为
+  **两步**：装 rembg，再 `--force-reinstall --no-deps` 恢复 DirectML 运行时
+  （`api/services/capability_manager.go::installSteps`，任一步失败即整组失败并留输出）。
+  恢复用的发行名由测试钉在 `requirements.desktop.txt` 的 win32 条目上，防止只改一边。
+- **装配期硬闸门**：`scripts/build_desktop_bundle.py` 冒烟步骤改为**实测随包解释器的 provider**，
+  缺 `DmlExecutionProvider` 直接 fail 并点名「rembg 把 CPU 版装回来了」这类根因；
+  结果写入 `BUILD-INFO.json` 的 `ort_providers`（记录实测值，不记录声明值）。
+- **装配按宿主机解释器串味**（本机 Python 3.14 上实测暴露）：脚本此前只在**非 Windows 宿主**
+  才传 `--platform/--python-version/--abi`，Windows 宿主直接按宿主机挑轮子 —— 不改就会把
+  cp314 的 numpy/scipy 灌进包内嵌入式 3.12 运行时，装完 import 即崩。另一层是 pip 的
+  `--python-version` **只**约束 wheel 标签、不接管环境标记（标记仍按宿主机求值，见
+  `pip/_internal/req/req_install.py`），于是 `python_version < "3.14"` 在 3.14 机器上判反，
+  把 `pygame-ce` 装进本该带 `pygame` 的包，而冒烟照样绿（两者都提供 `pygame` 模块）。
+  现在轮子标签恒定钉在 `cp312 / win_amd64`，标记由 `flatten_requirements()` 按同一口径
+  自行求值，真正喂给 pip 的是 `.cache/desktop-bundle/requirements.resolved.txt`；
+  wheel 缓存指纹同时纳入**解析结果**，口径一变旧缓存必作废（CI 的 `restore-keys` 前缀匹配
+  正是「清单没改、恢复出旧 wheel」的现场）。钉死后的实跑（宿主 Python 3.14）：53 个轮子
+  全部是 `win_amd64` 或纯 Python，ABI 只有 `cp312-cp312` 与 `cp37/310/311-abi3`、**没有
+  cp314**；清单里的 `pygame` 也确实解析成 `pygame 2.6.1`，`pygame-ce` 一个都没有。
+- **改名漏掉 WebView 壳**：`desktop/dist/index.html` 的 `<title>` 还写着旧产品名。它是
+  **入库且随安装包分发**的文件（Tauri 窗口标题取的就是它），而改名一致性测试把「目录名叫
+  `dist`」整个跳过，于是这类文件一直隐身。已改标题、把该文件纳入逐项核对，并把扫描范围
+  收窄成只排除真正的生成物（`web/out/`、`api/webui/dist/`）。
+- **日志轮转永久失效**：`get_logger()` 每个名字都新建一个 `RotatingFileHandler`，全都指向
+  同一份 `logs/live2d.log`。Windows 上另一句柄占着文件时重命名抛 `WinError 32`，于是轮转
+  永远失败：日志停在 10MB 不再滚动，触发轮转的那条记录被 logging 丢弃，只剩 stderr 噪音
+  （分层与生成都会同时命中多个命名 logger，所以这不是边缘场景）。实测（随包 CPython
+  3.12.10，两个命名 logger + 10MB 旧日志）：修复前 `live2d.log.1` 不出现、文件停在
+  10,485,761 B；修复后轮转成功、新文件 188 B。现在文件句柄按绝对路径进程内共享。
+  回归测试刻意用「预填 10MB」而不是小阈值：CPython 3.14 起空文件不触发轮转
+  （gh-116263），写小阈值会让用例在修复前也「通过」。
+- **ISNet 权重镜像两条都是 404**：`ISNET_ANIME_URLS` 里挂着的
+  `huggingface.co/skytnt/anime-seg/.../isnet-anime.onnx` 与 `hf-mirror.com` 同名地址
+  全都不存在（该仓库只有 `isnetis.onnx`，文件名与哈希都对不上），所谓「两条镜像兜底」
+  实际只剩 GitHub 一条。2026-10-28 实测：GitHub 直连 **~25 kB/s**（176MB 要两小时），
+  `hf-mirror` 404。现改为经 `gh-proxy.com` 反代同一个 release 资产（实测 7–19 MB/s，
+  落地 SHA256 与锁定表一致），并删掉死链 —— 反代若返回别的内容，`verify_hash` 会拦下。
+- **`onnxruntime-dll` 的 SHA256 回填路径是空的**：锁定表约定「空字符串 = 首次构建实测记录、
+  复核后回填」，脚本结尾也确实会打印这行的实测值 —— 但 DLL 从 zip 解出来后是直接拷进包的，
+  **从来没有被测过哈希**，于是那行提示永远打印空串，锁定表里这一格永远填不上。现在解压后
+  先校验再拷贝（键 `onnxruntime-dll`），并把**来源 zip 一起纳入缓存清理**：只删解压产物
+  的话，下次会从同一个坏 zip 再解一遍。守卫用的是集合对撞 —— 结尾提示清单里的键必须与
+  `verify_hash` 实测点完全一致、且与 `hashes.json` 的键同集合，缺一边即失败。
+  实测值已回填为 `0c42dc4e…`，重跑装配即为强制校验（`[hash] onnxruntime-dll OK`）。
+- **`ci.yml` 的下限与清单漂移**（上一批改了 `requirements.txt` 却没同步 CI）：
+  `websockets 17.2→17.3`、`psd-tools 1.24.0→1.26.0`、`rich 13.0.0→15.0.0`、
+  `onnxruntime 1.14.0→1.31.0`。新增测试逐条对撞 —— CI 声称「按下限安装」就得真是下限。
+- **`desktop/Cargo.lock` 停在 `0.10.8`**（清单已是 `0.10.9`）：这让 `cargo build --locked`
+  直接失败。已对齐，并加锁文件断言防复发。
+- **Windows GBK 控制台崩溃**：`api_server.py` 启动横幅与安全警告、`scripts/lint_architecture.py`
+  的 ✓/✗ 输出，此前在非 UTF-8 代码页会 `UnicodeEncodeError` 中断导入/运行。
+  改为局部安全输出（不在 import 期改调用方的全局 stream 策略），并补 PASS/FAIL 两条子进程回归。
+- **一键安装器在中文 Windows 上直接崩退**（本轮实测发现，`install.py`）：脚本满屏 emoji
+  （🔍 🎭 ✓ 🎉）在默认 cp936 控制台触发 `UnicodeEncodeError`，用户**还没开始安装就 exit 1**。
+  修法同上：只在 `__main__` 入口把 stdout/stderr 降级为 `errors="replace"`，
+  不改变 import 方的全局策略。回归用例 `tests/unit/test_installer_console_encoding.py`
+  用子进程 + `PYTHONIOENCODING=gbk` 跑 `--dry-run` 与 `--check` 两条路径
+  （并保留一条 UTF-8 用例，防止把正常终端输出搞成乱码）；移除兜底后两条 GBK 用例确定性变红。
+
+### 📐 实测（同一 ISNet 权重、同一张 600×900 立绘、逐次取最小值）
+
+**用户等的这一步（整条分层）——`SemanticLayerer.segment()` 生产路径，两次运行：**
+
+| 运行时 | provider 实测 | 分层 mean 耗时 | 16 层逐层像素 |
+|---|---|---|---|
+| 现状（基础包 CPU 版 onnxruntime 1.30） | `CPUExecutionProvider` | **1923 ms** | 基准（合计 118,298 px） |
+| 装上 DirectML 后 · 强制 CPU | `CPUExecutionProvider` | **1640 ms** | 基准 |
+| 装上 DirectML 后 · `device="auto"` | `DmlExecutionProvider` + CPU | **383 ms** | **与强制 CPU 完全一致**（逐层最大差 0，合计 118,298 px） |
+
+即端到端 **≈4.3× / 5.2×**（两次运行），加速比小于单算子的 7× 是因为剩下的
+~300 ms 花在 CPU 侧预处理与颜色/部位启发式上 —— 那部分不吃 GPU。
+
+**单算子对照（同一模型、同一输入）**：前景推理 CPU 1149 ms → DirectML 163 ms
+（≈7.0×），两条路径前景掩码 **IoU 1.0000、差异像素 0**。也就是说提速没有拿结果换速度。
+
+**基线为什么重要**：现状那一行是**当前发布出去的包**的真实表现 —— 卡在那里，
+但 `device="auto"` 与 `cpu` 的差异只有 1.04×（噪声），因为它根本没有 GPU provider。
+
+### 🧪 验证口径（本轮已跑）
+
+- Python 单元 `772 → 778 passed`（新增 GPU 探测、依赖策略、版本单真源三组）；
+  集成 `112 passed / 48 skipped`；Go `go test ./...` 全绿（含真实解释器端到端）。
+- 关键判定都做了**变异验证**：去掉缓存身份校验、去掉 TTL、去掉 CPU 兜底、
+  让「有卡但只能跑 CPU」冒充绿色 —— 对应测试都确定性变红，随后恢复源码。
+
+### ⚠️ 已知限制
+
+- DirectML 版本线只到 **1.24.4**（CPU 线是 1.31.x），Windows 下限因此低于其余平台；
+  它是另一个发行名，不代表「落后于 CPU 版」。
+- 非 Windows 仍走 CPU 版 onnxruntime（DirectML 只发 Windows wheel）；
+  NVIDIA 想用 CUDA 需自行装 `onnxruntime-gpu`，与本版默认路径互斥。
+- 硬件枚举依赖 WMI，非 Windows 返回空适配器；`AdapterRAM` 上限 4 GiB（6/12 GiB 的卡
+  也会被报成 ~4.29e9），驱动不上报时为 `null` —— 该字段是 WMI 口径，不是真实显存。
+- **本版没做**：面捕（Rust 原生 + CPU `onnxruntime.dll`）仍不上 GPU；LLM/TTS 走云 API；
+  扩散生图仍是可选组。GPU 收益目前只落在分层这一步。
+- 依赖变更后**尚未重新出包验证**：Windows 装包机器上是否真的拿到 DML，
+  要等下一次 `build_desktop_bundle.py` 实跑（闸门已就位，失败会点名根因）。
+- FOSSA 三项检查仍需维护者授权逐项复核（未闭环，见 docs/LIMITATIONS.md §9）。
+
+### ↩️ 如何回退
+
+- 单台机器要强制 CPU：调用侧传 `device="cpu"`（显式请求不会被自动选卡抢回去）。
+- 需要 rembg 后端：`pip install "rembg[cpu]"` —— 代价是它会覆盖 DirectML，
+  自检页 `gpu` 行会如实变成「运行时只有 CPU provider」。
+
+---
+
 ## [v0.10.9] — 2026-10-24 — 代号「Dependency Truth」
 
 > **本版目标**：把 FOSSA 三项告警（Security Analysis / License Compliance / Dependency

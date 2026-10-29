@@ -66,14 +66,19 @@ def test_order_follows_draw_index_not_filename(tmp_path):
 
 
 def test_missing_guide_falls_back_to_filename_and_says_so(tmp_path):
-    """缺 guide 时退回字母序，并如实报告来源与未登记层（不静默假装用了 guide）。"""
+    """缺 guide 时如实报告降级；但层序仍以权威表为准，不按字母序硬排。
+
+    字母序正是本模块记录过的历史缺陷（``mouth`` 排在 ``mouth_cavity`` 之前 →
+    口腔盖住嘴唇）。既然权威表能给出正确次序，降级路径没有理由退回一个已知
+    错误的顺序；表外的层仍在彼此之间保持字母序。
+    """
     for name in ("face", "hair_back", "mouth"):
         _write_layer(tmp_path, name)
 
     inputs = load_export_inputs(str(tmp_path))
 
     assert inputs.order_source == "filename"
-    assert list(inputs.paths) == sorted(inputs.paths)
+    assert list(inputs.paths) == ["hair_back", "face", "mouth"]
     assert inputs.unknown == sorted(inputs.paths)
 
 
@@ -87,6 +92,39 @@ def test_layers_absent_from_guide_are_reported(tmp_path):
 
     assert inputs.unknown == ["mystery_part"]
     assert "mystery_part" in inputs.paths       # 仍参与构建，只是排在最前
+
+
+def test_legacy_draw_index_is_normalized_to_the_authoritative_table(tmp_path):
+    """层序权威表 2026-10-21 从 18 项扩到 65 项并改了 face 语义。
+
+    更早的分层目录里 ``draw_index`` 是按旧表算的（脸/嘴被甩到刘海之后）。导出
+    若照抄它，编译出的 moc3 层序与现行 FF-2 契约不符，下载闸门会**永远**拒绝
+    这个产物（实测 issue_count=10，409 无解）。因此顺序的唯一真源是权威表，
+    ``draw_index`` 只在表未覆盖时决定相对次序。重排对静止画面逐像素零差异，
+    改的只是部件运动时的遮挡关系。
+    """
+    for name in ("hair_back", "hair_front", "eyebrows", "face", "mouth"):
+        _write_layer(tmp_path, name)
+    _write_guide(tmp_path, [
+        ("hair_back", 0), ("hair_front", 1), ("eyebrows", 2), ("face", 3), ("mouth", 4)])
+
+    inputs = load_export_inputs(str(tmp_path))
+
+    assert list(inputs.paths) == ["hair_back", "face", "hair_front", "eyebrows", "mouth"]
+    assert inputs.normalized is True
+
+
+def test_guide_already_matching_the_table_is_left_alone(tmp_path):
+    """本来就合规的分层目录不得被改动，也不得谎报「已重排」。"""
+    for name in ("hair_back", "face", "mouth_cavity", "mouth"):
+        _write_layer(tmp_path, name)
+    _write_guide(tmp_path, [
+        ("hair_back", 0), ("face", 1), ("mouth_cavity", 14), ("mouth", 15)])
+
+    inputs = load_export_inputs(str(tmp_path))
+
+    assert list(inputs.paths) == ["hair_back", "face", "mouth_cavity", "mouth"]
+    assert inputs.normalized is False
 
 
 def test_empty_directory_raises_instead_of_silently_returning_nothing(tmp_path):

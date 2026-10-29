@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - 本地占位图 Provider（完全离线兜底）
+Pygmalion Studio - 本地占位图 Provider（完全离线兜底）
 
 当所有云端 provider（Seedream/SenseNova/OpenAI/Pollinations）都不可用
 （无 API Key 或断网）时，此 provider 保证「输入文本 → 产出图片」主链路

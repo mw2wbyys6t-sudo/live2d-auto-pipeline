@@ -59,9 +59,9 @@ jobs:
           # 此前这里装的是无约束 latest，等于下限声明从未被任何 CI 验证过。
           pip install "Pillow>=13.0.0" "numpy>=2.4.6" "requests>=2.34.2" \
                     "urllib3>=2.8.0" "httpx>=0.28.1" "aiohttp>=3.14.5" \
-                    "aiofiles>=25.1.0" "websockets>=17.2" "psd-tools>=1.24.0" \
+                    "aiofiles>=25.1.0" "websockets>=17.3" "psd-tools>=1.26.0" \
                     "scipy>=1.15.3" "scikit-learn>=1.9.1" "cryptography>=50.0.2" \
-                    "rich>=13.0.0" "opencv-python>=4.9.0.80" "onnxruntime>=1.14.0"
+                    "rich>=15.0.0" "opencv-python>=4.9.0.80" "onnxruntime>=1.31.0"
           # Python API server (api_server.py) deps. tests/integration/test_api_contract.py
           # and tests/unit/test_runtime_readiness.py import api_server at module scope,
           # so these must be present or pytest fails collection.
@@ -435,7 +435,7 @@ jobs:
           L2D_SIGN_THUMBPRINT: ${{ secrets.L2D_SIGN_THUMBPRINT }}
         run: |
           $params = @{
-            Path        = @('desktop/target/release/live2d-master-agent.exe', 'desktop/target/release/bundle/nsis/*.exe')
+            Path        = @('desktop/target/release/pygmalion-studio.exe', 'desktop/target/release/bundle/nsis/*.exe')
             Mode        = $env:L2D_SIGN_MODE
             SignCommand = $env:L2D_SIGN_COMMAND
             PfxBase64   = $env:L2D_SIGN_PFX_BASE64

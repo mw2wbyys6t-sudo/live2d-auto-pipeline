@@ -1,12 +1,12 @@
 # 桌面版（Desktop）
 
-> 把 Live2D Master Agent 变成**电脑里的软件**：双击安装包，桌面窗口里就是完整工作台。
+> 把 Pygmalion Studio 变成**电脑里的软件**：双击安装包，桌面窗口里就是完整工作台。
 > 不需要 Node 开发服务器、不需要自装 Python、不需要端口代理。
 
 ## 形态与架构
 
 ```
-┌──────────────────── Live2D Master Agent.exe（Tauri 壳）────────────────────┐
+┌──────────────────── Pygmalion Studio.exe（Tauri 壳）────────────────────┐
 │  Rust + WebView2：拉起 Go 后端、等待健康检查、退出时回收子进程               │
 └───────────────────────────────┬────────────────────────────────────────────┘
                                 │ spawn，等待 127.0.0.1:8080 就绪
@@ -22,7 +22,7 @@
 安装后的资源目录（`{res}` = Tauri `resource_dir`）：
 
 ```
-{install}\Live2D Master Agent.exe
+{install}\Pygmalion Studio.exe
 {res}\live2d-api.exe
 {res}\face_tracker.exe
 {res}\onnxruntime.dll
@@ -38,8 +38,8 @@
 用户数据**严格不写安装目录**：
 
 ```
-%APPDATA%\Live2DMasterAgent\              config / logs / hf-cache / characters
-%USERPROFILE%\Documents\Live2DMasterAgent\output\
+%APPDATA%\PygmalionStudio\              config / logs / hf-cache / characters
+%USERPROFILE%\Documents\PygmalionStudio\output\
 ```
 
 ## 构建
@@ -75,9 +75,15 @@ scripts\build_tauri_release.bat
   （清单：`requirements.desktop.txt`；**torch 组刻意不在清单内**，见下方「已知边界」）
 - 修 `python312._pth`（放开 `import site`）并写 `sitecustomize.py`
 - 拷源码树与原生二进制，生成 `BUILD-INFO.json`，最后用随包解释器做导入冒烟
+- 解析口径恒定钉在**随包解释器**（`cp312 / win_amd64`）：轮子标签靠 `--python-version`
+  /`--abi`/`--platform`，而环境标记 pip 不按目标解释器求值，所以由
+  `flatten_requirements()` 自己按同一口径算完，交给 pip 的是
+  `.cache/desktop-bundle/requirements.resolved.txt`（`python_version < "3.14"`
+  这类分支才不会在 3.14 的装配机上选成 `pygame-ce`）
 
-> 必须在 **Windows** 上装配：pip 的 `--platform` 只约束 wheel 标签，不改变
-> `platform_system` / `python_version` 等环境标记的评估，跨平台装配会选错版本。
+> 装配本身已不依赖宿主机：在非 Windows 宿主上也能解析出与 Windows 一致的依赖集合。
+> 但**出正式包仍要在 Windows 上跑** —— 第 5 步冒烟要用随包的 win_amd64 解释器真跑，
+> 而 `DmlExecutionProvider` 这道 GPU 闸门就是冒烟的一部分；非 Windows 宿主会跳过它。
 
 ## 运行要求与首次启动
 
@@ -105,6 +111,33 @@ scripts\build_tauri_release.bat
   有 `solutions` 时走经典 `FaceMesh`，否则切 **Tasks `FaceLandmarker`**
   （模型 `{res}\models\face_landmarker.task`）。任一路不可用时按原逻辑优雅降级。
 
+## GPU 加速（v0.10.10 起）
+
+- **自动选卡**：分层的前景模型（ISNet，走 onnxruntime）按
+  `CUDAExecutionProvider > DmlExecutionProvider > CPUExecutionProvider` 选 provider；
+  入口是 `SemanticLayerer(device="auto")`，生产两处调用点都用默认值，无需用户配置。
+- **Windows 随包即带 GPU 运行时**：`requirements.desktop.txt` 在 Windows 上装
+  `onnxruntime-directml`（自带 `DmlExecutionProvider`，N/A/I 卡通用，不需要 CUDA 工具链），
+  其余平台装 CPU 版 `onnxruntime`。两者**共用 `onnxruntime/` 目录且会互相覆盖**，
+  所以钉着 CPU 版的 `rembg` 已移出基础包（改为应用内按需下载，且安装器会在装完
+  rembg 之后**强制重装 DirectML 运行时** —— 否则装一次 rembg 就静默失去 GPU）。
+- **实测收益（用户等的这一步）**：600×900 立绘的**整条分层** `SemanticLayerer.segment()`
+  从 mean **1923 ms**（当前发布包只有 CPU provider）降到 **383 ms**（`device="auto"` 自动选卡），
+  约 **4.3×**；同一次 A/B 的 16 层逐层像素**完全一致**（合计 118,298 px，最大差 0）。
+  单算子前景推理是 1149 ms → 163 ms（≈7.0×，掩码 IoU 1.0000）；端到端倍数较低是因为
+  剩余 ~300 ms 花在 CPU 侧预处理与部位启发式上，不吃 GPU。
+- **看哪里**：自检页 `GPU 与推理运行时` 一行、`GET /api/gpu`；首页状态卡的 GPU 行
+  也已接上 `/api/gpu`（探测失败时保持「未探测」，不用 `false` 冒充「没有 GPU」）。
+  品牌名在前端的唯一出口是 `web/lib/brand.ts`，界面版本由 `next.config.js` 从
+  `web/package.json` 构建期注入 —— 不再写死在组件里。
+  「有卡但运行时只有 CPU provider」会被明确标为不通过并写出卡型与原因 ——
+  这类情况在 v0.10.10 之前是完全静默的。
+- **失败与回退**：GPU provider 在列表里 ≠ 建得起会话（无 DX12、驱动异常、GPU 被独占）。
+  建会话失败会自动退回 CPU 继续用学出来的掩码，**不会**掉到 HSV 颜色启发式；
+  要主动只用 CPU（省电 / 腾显存），调用侧传 `device="cpu"`。
+- **不在本版范围**：面捕（Rust 原生 + CPU `onnxruntime.dll`）仍走 CPU；
+  LLM/TTS 走云 API；扩散生图仍是可选能力组。
+
 ## 已知边界
 
 - 内嵌 UI 是**构建时刻**的快照；改前端后必须重新构建安装包。
@@ -128,7 +161,7 @@ scripts\build_tauri_release.bat
 
 ## HF_HOME 决策（已采纳方案 B）
 
-打包后的权重缓存位于 `%APPDATA%\Live2DMasterAgent\hf-cache`，而 `transformers`
+打包后的权重缓存位于 `%APPDATA%\PygmalionStudio\hf-cache`，而 `transformers`
 默认读用户目录。决策：Go 侧 `python_bridge` 在 `exec.CommandContext` 时注入：
 
 ```

@@ -16,7 +16,7 @@ import (
 
 // OptionalComponent 是「基础包不进、应用内按需下载」的重模型。
 //
-// 设计（ADR-010）：权重落在可写的 HfCache（%APPDATA%\Live2DMasterAgent\hf-cache），
+// 设计（ADR-010）：权重落在可写的 HfCache（%APPDATA%\PygmalionStudio\hf-cache），
 // 绝不写只读安装目录；下载支持 HTTP Range 断点续传、SHA256 校验、取消。
 // sha256 为空表示该条目尚未人工核实哈希，跳过校验但在状态里标注 unverified。
 type OptionalComponent struct {

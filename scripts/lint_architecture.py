@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Architecture Lint — Live2D Master Agent (FF-1 红线)
+Architecture Lint — Pygmalion Studio (FF-1 红线)
 ====================================================
 
 落地 docs/architecture/index.md §4 FF-1「依赖方向正确性（三栈解耦）」：

@@ -2,7 +2,7 @@
   "_comment": "下载物 SHA256 锁定表。空字符串 = 首次构建由 Bundle-Desktop.ps1（现为 scripts/build_desktop_bundle.py）实测记录到 BUILD-INFO，回写本文件后转为强制校验（不匹配即失败）。版本升级时必须同步更新。",
   "python-embed": "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3",
   "yunet-onnx": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
-  "onnxruntime-dll": "",
+  "onnxruntime-dll": "0c42dc4e278f0968fdf9ebf1b1e54a74c657a9942e70803e453c91993451cf4c",
   "face-landmarker-task": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
   "isnet-anime-onnx": "f15622d853e8260172812b657053460e20806f04b9e05147d49af7bed31a6e99"
 }

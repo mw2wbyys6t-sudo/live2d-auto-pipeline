@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live2D Master Agent - PSD 图层名 → 语义部件识别."""
+"""Pygmalion Studio - PSD 图层名 → 语义部件识别."""
 
 from __future__ import annotations
 

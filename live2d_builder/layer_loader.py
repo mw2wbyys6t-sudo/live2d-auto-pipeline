@@ -35,27 +35,32 @@ __all__ = [
 class ExportLayerInputs:
     """一次导出装载的完整结果（全部 JSON 可序列化）。"""
 
-    # 按 draw_index 排好序的 {层名: PNG 绝对路径}；顺序即 moc3 的 draw_order。
+    # 按权威层序排好序的 {层名: PNG 绝对路径}；顺序即 moc3 的 draw_order。
     paths: "OrderedDict[str, str]"
-    # 顺序取自哪："layer_guide"（权威）或 "filename"（降级，无 guide 时）。
+    # 顺序取自哪："layer_guide"（有 guide）或 "filename"（降级，无 guide 时）。
     order_source: str
-    # 不在 layer_guide.json 里的层名（按字母序追加到最前；非空说明词表漂移）。
+    # 不在 layer_guide.json 里的层名（排在最后、按字母序；非空说明词表漂移）。
     unknown: List[str] = field(default_factory=list)
     # 实际读到的 draw_index 表；fallback 路径为空 dict。
     draw_index: Dict[str, float] = field(default_factory=dict)
+    # draw_index 与权威层序表冲突、被表纠正过：如实报告，不静默改用户的顺序。
+    normalized: bool = False
 
 
 def load_export_inputs(layers_dir: str) -> ExportLayerInputs:
-    """按 draw_index 排序返回 {name: path}，同时报告顺序来源与未知层名。
+    """按权威层序表排序返回 {name: path}，并报告顺序来源、未知层与是否被纠正。
 
     Args:
         layers_dir: 分层产物目录（PNG + 可选 ``layer_guide.json``）。
 
     Note:
-        ``draw_index`` 是顺序的唯一权威（小的先画、在底层）；
+        层序的唯一真源是 ``LayerComposer.STANDARD_LAYER_ORDER``（表内越靠后=画得
+        越靠前）。``draw_index`` 只是分层当时的产物顺序，用作表内层之间的初始
+        次序；与权威表冲突时被表纠正，并在 ``normalized`` 里如实报告。
         ``layer_guide.json`` 缺失或不可读时退回文件名字母序（降级路径）。
-        不在 ``draw_index`` 里的层按字母序追加到最前，并打印一次警告，
-        不再静默兜底（历史上 ``mouth_cavity`` 正是这样排到最前、盖住嘴唇）。
+        不在权威表里的层排在最后并保持相对次序，同时打印一次警告，
+        不再静默兜底（历史上 ``mouth_cavity`` 正是被字母序排到 ``mouth`` 之后、
+        口腔盖住嘴唇）。
 
     Raises:
         FileNotFoundError: 目录里没有任何可用 PNG。
@@ -74,17 +79,34 @@ def load_export_inputs(layers_dir: str) -> ExportLayerInputs:
 
     unknown = sorted(n for n in paths if n not in draw_index)
     if unknown:
-        _warn("图层不在 layer_guide.json 中，按字母序追加到最前: "
+        _warn("图层不在 layer_guide.json 中，按权威层序表排位（表外者排最后）: "
               + json.dumps(unknown, ensure_ascii=False))
 
     tail = float(len(draw_index) + 1)
-    ordered_names = sorted(paths, key=lambda n: (draw_index.get(n, tail), n))
+    guide_order = sorted(paths, key=lambda n: (draw_index.get(n, tail), n))
+    ordered_names = _by_standard_order(guide_order)
     return ExportLayerInputs(
         paths=OrderedDict((name, paths[name]) for name in ordered_names),
         order_source="layer_guide" if draw_index else "filename",
         unknown=unknown,
         draw_index=draw_index,
+        normalized=ordered_names != guide_order,
     )
+
+
+def _by_standard_order(names: List[str]) -> List[str]:
+    """按 ``STANDARD_LAYER_ORDER`` 稳定重排，表外的层保持原相对位置。
+
+    权威表是层序的唯一真源：``draw_index`` 只是分层当时的产物，而表本身会演进
+    （2026-10-21 从 18 项扩到 65 项并改了 face 语义）。照抄旧 ``draw_index`` 会
+    让旧分层目录永远过不了 FF-2 下载闸门，用户手上没有任何补救入口。
+    """
+    from core.segment_engine.composer import LayerComposer
+
+    rank = {name: index for index, name in enumerate(LayerComposer.STANDARD_LAYER_ORDER)}
+    outside = float(len(rank) + 1)
+    # 表内按表排位；表外一律落到最后、并保持原有相对次序（sorted 是稳定排序）。
+    return sorted(names, key=lambda n: rank.get(n, outside))
 
 
 def load_export_layer_inputs(layers_dir: str) -> "OrderedDict[str, str]":

@@ -47,6 +47,11 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from packaging.requirements import InvalidRequirement, Requirement
+except ImportError:  # 装配机通常只保证有 pip，而 pip 自带一份 packaging
+    from pip._vendor.packaging.requirements import InvalidRequirement, Requirement
+
 # Windows 控制台/CI 的默认编码常是 cp1252（非 UTF-8），直接 print 中文会抛
 # UnicodeEncodeError 把整个装配打断。统一切到 UTF-8（reconfigure 需 3.7+，
 # 失败则忽略，不影响功能）。
@@ -86,19 +91,23 @@ YUNET_URL = (
 # 脸仅 0.7%、眼睛完全缺失）。安装包内置权重才能保证分层质量稳定。
 #
 # 官方来源是 HuggingFace 的 skytnt/anime-seg（rembg 2.x 也是从这里取），
-# 国内网络直连 huggingface.co 常不稳定，故追加 hf-mirror.com 镜像兜底。
-#
 # **rembg 官方 release 排第一**：2026-10-21 起 skytnt/anime-seg 两个地址都返回
 # 404（上游仓库被删/改名），桌面构建因此在「装配运行时」阶段整条挂掉
 # （run 39576584827）。rembg 的 v0.0.0 release 里那份 isnet-anime.onnx 与锁定表
 # 的 SHA256 逐字节一致（实测 176,069,933 B → f15622d8…），是同一个文件，
 # 所以只换下载源、不动哈希锁定。
+#
+# 2026-10-28 复测：skytnt/anime-seg 至今只有 `isnetis.onnx`（不是同名文件、哈希也
+# 不同），原先留下的两条 HuggingFace「镜像」全部稳定 404，等于兜底链形同虚设；
+# GitHub 直连在本机只有 ~25 kB/s（176MB → 两小时）。现改为经 gh-proxy 反代同一
+# release 资产，实测 7–19 MB/s，落地文件哈希与锁定表一致。反代只改路由、不改字节，
+# 但如果哪天被篡改或缓存了别的东西，`verify_hash` 会直接拦下（不是静默接受）。
 ISNET_ANIME_NAME = "isnet-anime.onnx"
 ISNET_ANIME_URLS = (
     "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
     + ISNET_ANIME_NAME,
-    "https://huggingface.co/skytnt/anime-seg/resolve/main/" + ISNET_ANIME_NAME,
-    "https://hf-mirror.com/skytnt/anime-seg/resolve/main/" + ISNET_ANIME_NAME,
+    "https://gh-proxy.com/https://github.com/danielgatis/rembg/releases/"
+    "download/v0.0.0/" + ISNET_ANIME_NAME,
 )
 
 ONNXRUNTIME_VERSION = "1.31.0"
@@ -126,7 +135,7 @@ DEFAULT_REQUIREMENTS = ROOT / "requirements.desktop.txt"
 # 嵌入式 Python 存在 pythonXY._pth 时会进入 isolated 模式（忽略 PYTHONPATH），
 # 而 Go 桥以 `python <res>/app/core/workflow.py` 调用，脚本目录是 core/ 而非项目
 # 根，故必须在此显式补上 <res>/app。按 __file__ 绝对定位，与盘符/用户名无关。
-SITECUSTOMIZE = '''"""Live2D Master Agent：把同目录树下的 app/ 注入 sys.path。
+SITECUSTOMIZE = '''"""Pygmalion Studio：把同目录树下的 app/ 注入 sys.path。
 
 嵌入式 Python + pythonXY._pth = isolated 模式，PYTHONPATH 被忽略；Go 桥以脚本
 绝对路径调用 core/workflow.py，sys.path[0] 是 core/ 而非项目根。这里按本文件
@@ -148,7 +157,9 @@ SMOKE_REQUIRED = ["PIL", "numpy", "scipy", "sklearn", "cv2", "psd_tools",
 # 它们不随包分发（见 requirements.desktop.txt 与 core/capabilities.py 的设计
 # 契约），由应用内按需下载，缺失是**预期状态** —— 留在 optional 里只会让每次
 # 装配日志刷出一条无意义的 [warn]。
-SMOKE_OPTIONAL = ["mediapipe", "mediapipe.tasks.python.vision", "rembg",
+# rembg 同理（v0.10.10 起移出基础包：它钉着 CPU 版 onnxruntime，会静默顶掉
+# Windows 的 DirectML；分层主链路走 isnet 权重直连，不经过 rembg）。
+SMOKE_OPTIONAL = ["mediapipe", "mediapipe.tasks.python.vision",
                   "edge_tts", "sounddevice", "soundfile", "pygame", "live2d"]
 
 
@@ -257,7 +268,13 @@ def download_any(urls: tuple[str, ...], dest: Path, *, offline: bool) -> Path:
     sys.exit("❌ 全部镜像均下载失败：\n   " + "\n   ".join(errors))
 
 
-def verify_hash(path: Path, expected: str, key: str, record: dict) -> None:
+def verify_hash(path: Path, expected: str, key: str, record: dict,
+                *, evict: Path | None = None) -> None:
+    """记录实测 SHA256；锁定表已有值时不匹配即失败。
+
+    `evict` 用于「来源缓存」（如解压前的 zip）：被校验文件只是它的产物，
+    只删产物下次还会从同一个坏缓存里解出来，所以两者一起清掉。
+    """
     actual = sha256_file(path)
     record[key] = actual
     if not expected:
@@ -265,15 +282,22 @@ def verify_hash(path: Path, expected: str, key: str, record: dict) -> None:
         return
     if actual.lower() != expected.lower():
         # 删掉坏缓存，避免以后每次构建都复用同一个错误文件（如 LFS 指针）。
-        try:
-            path.unlink()
-            removed = "已删除该缓存文件，重跑会重新下载。"
-        except OSError:
-            removed = "缓存文件删除失败，可手动清理。"
+        removed = []
+        for target in (path, evict):
+            if target is None:
+                continue
+            try:
+                if target.is_dir():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+                removed.append(str(target))
+            except OSError:
+                removed.append(f"{target}（删除失败，可手动清理）")
         sys.exit(
             f"❌ SHA256 校验失败：{key}\n"
             f"   期望 {expected}\n   实测 {actual}\n   文件 {path}\n"
-            f"   {removed}\n"
+            f"   已清理：{', '.join(removed) or '无'}\n"
             f"   若确属版本升级，请更新 {HASHES_FILE.relative_to(ROOT)} 后重试。")
     print(f"    [hash] {key} OK")
 
@@ -303,18 +327,96 @@ def write_sitecustomize(site_packages: Path) -> None:
     print("    [path] 写入 sitecustomize.py（注入 <res>/app 到 sys.path）")
 
 
+# 安装包只发 Windows x64：wheel 标签、随包解释器、环境标记三者必须同一口径。
+PLATFORM_TAG = "win_amd64"
+
+# 环境标记的求值口径。pip 的 --platform/--python-version **只**约束 wheel 标签，
+# 标记仍按宿主机求值（pip/_internal/req/req_install.py 用 packaging 的
+# default_environment），所以这一步必须自己接管 —— 见 flatten_requirements()。
+# 这里只列**需要覆盖**的键：packaging 会与 default_environment() 合并。
+TARGET_MARKER_ENV_BY_PLATFORM = {
+    "win_amd64": {
+        "sys_platform": "win32",
+        "platform_system": "Windows",
+        "os_name": "nt",
+        "platform_machine": "AMD64",
+    },
+}
+
+
+def target_marker_env() -> dict:
+    env = dict(TARGET_MARKER_ENV_BY_PLATFORM[PLATFORM_TAG])
+    env.update({
+        "python_version": PYTHON_VERSION[:4],
+        "python_full_version": PYTHON_VERSION,
+        "implementation_name": "cpython",
+        "implementation_version": PYTHON_VERSION,
+        "platform_python_implementation": "CPython",
+        "extra": "",
+    })
+    return env
+
+
+def flatten_requirements(text: str) -> list[str]:
+    """按随包解释器求值环境标记，产出真正交给 pip 的依赖行。
+
+    宿主机解释器一旦和嵌入式 3.12 不一致，直接把原始清单喂给 pip 就会串味：
+    `python_version < "3.14"` 在 3.14 机器上判成 False，产物里装的是 pygame-ce
+    而不是 pygame —— 冒烟还照样绿（两者都提供 `pygame` 模块）。
+    """
+    lines: list[str] = []
+    env = target_marker_env()
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("-"):
+            lines.append(line)  # --index-url 之类的选项行原样透传
+            continue
+        try:
+            req = Requirement(line)
+        except InvalidRequirement as exc:
+            raise ValueError(f"第 {lineno} 行无法解析依赖行：{line!r}（{exc}）") from exc
+        if req.marker is not None and not req.marker.evaluate(env):
+            continue
+        req.marker = None
+        lines.append(str(req))
+    return lines
+
+
+def resolved_requirements(requirements: Path, wheels_dir: Path) -> Path:
+    """把求值后的清单落盘（缓存目录里，便于人工核对装配到底喂了什么）。"""
+    out = wheels_dir.parent / "requirements.resolved.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(flatten_requirements(
+        requirements.read_text(encoding="utf-8"))) + "\n", encoding="utf-8")
+    return out
+
+
 def pip_common_args() -> list:
-    """始终只取二进制轮子；非 Windows 宿主机时显式声明目标环境（跨平台装配）。"""
-    args = ["--only-binary=:all:"]
-    if platform.system() != "Windows":
-        args += ["--platform", "win_amd64", "--python-version", PYTHON_VERSION[:4],
-                 "--implementation", "cp", "--abi", PYTHON_ABI]
-    return args
+    """把 wheel 标签钉在**随包解释器**（嵌入式 CPython 3.12 / win_amd64）上。
+
+    pip 默认按宿主机解释器挑轮子，而产物里的解释器是解压出来的 3.12.10。两者
+    一旦不一致（比如在 Python 3.14 的 Windows 机器上装配），cp314 的 numpy/opencv
+    会被灌进 3.12 的 site-packages，装完直接 ImportError。CI 恰好用了 3.12 才没暴露。
+    环境标记不在这里解决 —— pip 不按 --python-version 求值标记，见 flatten_requirements()。
+    """
+    return ["--only-binary=:all:",
+            "--platform", PLATFORM_TAG,
+            "--python-version", PYTHON_VERSION[:4],
+            "--implementation", "cp",
+            "--abi", PYTHON_ABI]
 
 
 def _requirements_digest(requirements: Path) -> str:
-    """清单内容指纹：wheel 缓存是否仍然对应当前依赖清单。"""
-    return hashlib.sha256(requirements.read_bytes()).hexdigest()
+    """缓存指纹：清单原文 + 按随包解释器求值出的解析结果。
+
+    只看原文不够 —— CI 的 actions/cache 用 restore-keys 前缀匹配，清单没改、
+    解析口径（钉死的 3.12/win_amd64）改了时，旧 wheel 集合照样被恢复出来。
+    """
+    body = requirements.read_bytes()
+    resolved = "\n".join(flatten_requirements(body.decode("utf-8"))).encode("utf-8")
+    return hashlib.sha256(body + b"\n" + resolved).hexdigest()
 
 
 def download_wheels(requirements: Path, wheels_dir: Path, offline: bool) -> None:
@@ -355,16 +457,18 @@ def download_wheels(requirements: Path, wheels_dir: Path, offline: bool) -> None
     if offline:
         sys.exit(f"❌ 离线模式但 wheel 缓存为空：{wheels_dir}")
     wheels_dir.mkdir(parents=True, exist_ok=True)
+    resolved = resolved_requirements(requirements, wheels_dir)
     run([sys.executable, "-m", "pip", "download", *pip_common_args(),
-         "--no-cache-dir", "-d", wheels_dir, "-r", requirements])
+         "--no-cache-dir", "-d", wheels_dir, "-r", str(resolved)])
     marker.write_text(want + "\n", encoding="utf-8")
 
 
 def install_wheels(requirements: Path, wheels_dir: Path, site_packages: Path) -> None:
     site_packages.mkdir(parents=True, exist_ok=True)
+    resolved = resolved_requirements(requirements, wheels_dir)
     run([sys.executable, "-m", "pip", "install", "--no-index",
          "--find-links", wheels_dir, "--target", site_packages,
-         "--no-cache-dir", "--upgrade", *pip_common_args(), "-r", requirements])
+         "--no-cache-dir", "--upgrade", *pip_common_args(), "-r", str(resolved)])
 
 
 def copy_app_tree(app_dir: Path) -> None:
@@ -410,14 +514,15 @@ def copy_binary(src: Path, dest: Path, label: str) -> None:
     print(f"    [bin ] {label} → {dest.name}  {human(dest.stat().st_size)}")
 
 
-def smoke_test(bundle: Path) -> None:
+def smoke_test(bundle: Path) -> dict:
+    """用随包解释器校验导入，并返回实测到的 onnxruntime provider 列表。"""
     py = bundle / "python" / "python.exe"
     if not py.exists():
         print("  [跳过] 未找到 python.exe，无法冒烟")
-        return
+        return {}
     if platform.system() != "Windows":
         print("  [跳过] 非 Windows 宿主，无法执行 win_amd64 解释器")
-        return
+        return {}
     probes = SMOKE_REQUIRED + SMOKE_OPTIONAL
     code = (
         "import importlib, json\n"
@@ -429,6 +534,11 @@ def smoke_test(bundle: Path) -> None:
         "        res[m] = 'ok'\n"
         "    except Exception as e:\n"
         "        res[m] = 'FAIL: %s' % e\n"
+        "try:\n"
+        "    import onnxruntime as _ort\n"
+        "    res['__ORT_PROVIDERS__'] = _ort.get_available_providers()\n"
+        "except Exception as e:\n"
+        "    res['__ORT_PROVIDERS__'] = 'FAIL: %s' % e\n"
         "print('__SMOKE__' + json.dumps(res))\n"
     )
     print("  [冒烟] 用随包解释器校验导入 ...")
@@ -443,6 +553,7 @@ def smoke_test(bundle: Path) -> None:
         sys.exit(f"❌ 冒烟未产出结果（随包解释器无法运行）。\nstdout:\n{proc.stdout}\n"
                  f"stderr:\n{proc.stderr}")
     res = json.loads(line)
+    providers = res.pop("__ORT_PROVIDERS__", None)
     failed_required = []
     for m in SMOKE_REQUIRED:
         if res.get(m) != "ok":
@@ -453,6 +564,24 @@ def smoke_test(bundle: Path) -> None:
     if failed_required:
         sys.exit("❌ 必装模块导入失败：\n  " + "\n  ".join(failed_required))
     print(f"    [ok  ] 必装 {len(SMOKE_REQUIRED)} 项全部可导入")
+
+    # GPU 运行时闸门：Windows 基础包必须带 DmlExecutionProvider。
+    # onnxruntime 与 onnxruntime-directml 共用 onnxruntime/ 目录，任何把 CPU 版
+    # 拉回来的依赖（rembg[cpu] 就是那个）都会**静默**顶掉 DirectML —— pip 不报错、
+    # 导入也成功，只有分层的真实耗时回到 CPU。所以这里必须实测并硬失败。
+    if isinstance(providers, str) and providers.startswith("FAIL"):
+        sys.exit(f"❌ 随包 onnxruntime 无法枚举 provider：{providers}")
+    if not isinstance(providers, list):
+        sys.exit("❌ 冒烟未取到 onnxruntime provider 列表（不能假定 GPU 运行时到位）")
+    print(f"    [ort ] providers = {providers}")
+    if "DmlExecutionProvider" not in providers:
+        sys.exit(
+            "❌ 随包 onnxruntime 缺少 DmlExecutionProvider —— 分层的 GPU 加速不会生效。\n"
+            "   最常见原因：某个依赖（rembg[cpu] 等）把 CPU 版 onnxruntime 装了回来，\n"
+            "   两个发行名共用 onnxruntime/ 目录，后装的覆盖前装的。\n"
+            f"   实测 provider：{providers}"
+        )
+    return {"ort_providers": providers}
 
 
 def main() -> int:
@@ -492,13 +621,12 @@ def main() -> int:
         sys.exit(f"❌ 依赖清单不存在：{requirements}")
     if platform.system() != "Windows":
         print(
-            "⚠  当前宿主非 Windows。pip 的 --platform 只约束 wheel 标签，**不改变环境\n"
-            "   标记的评估**（platform_system / python_version 仍按宿主机），因此：\n"
-            "     - torch 等含 platform_system 标记的依赖可能解析失败（Linux 上会误拉\n"
-            "       nvidia-* 依赖）；\n"
-            "     - pygame / pygame-ce 这类 python_version 分支可能选错。\n"
-            "   正式安装包务必在 Windows（GitHub Actions windows-latest，python 3.12）\n"
-            "   上装配；本机运行仅用于调试装配逻辑，冒烟校验会被自动跳过。")
+            "⚠  当前宿主非 Windows。轮子标签已钉在随包解释器上（--platform/\n"
+            "   --python-version/--abi），环境标记由 flatten_requirements() 按同一口径\n"
+            "   自行求值（pip 自己不做这件事），所以**解析出来的依赖集合**与 Windows\n"
+            "   宿主机一致；但第 5 步冒烟要在随包的 win_amd64 解释器里真跑，非 Windows\n"
+            "   宿主只能跳过 —— 而 DmlExecutionProvider 这道 GPU 闸门正是冒烟的一部分。\n"
+            "   正式出包仍须在 Windows 上装配并跑完整冒烟。")
 
     hashes = load_hashes()
     record: dict = {}
@@ -506,7 +634,7 @@ def main() -> int:
     cache.mkdir(parents=True, exist_ok=True)
 
     print("=" * 68)
-    print(" Live2D Master Agent — 桌面运行时装配")
+    print(" Pygmalion Studio — 桌面运行时装配")
     print(f" 产物: {dest}")
     print(f" 缓存: {cache}")
     print("=" * 68)
@@ -561,11 +689,18 @@ def main() -> int:
                            cache / f"onnxruntime-win-x64-{ONNXRUNTIME_VERSION}.zip",
                            offline=offline)
         extract_dir = cache / f"ort-{ONNXRUNTIME_VERSION}"
-        if not extract_dir.exists():
+        dll = next(extract_dir.rglob("onnxruntime.dll"), None) \
+            if extract_dir.is_dir() else None
+        if dll is None:
+            # 校验失败会删掉 dll 再退出；此时解压目录还在，必须重解压而不是报缺失。
+            if extract_dir.is_dir():
+                shutil.rmtree(extract_dir)
             extract_zip(ort_zip, extract_dir)
-        dll = next(extract_dir.rglob("onnxruntime.dll"), None)
+            dll = next(extract_dir.rglob("onnxruntime.dll"), None)
         if dll is None:
             sys.exit(f"❌ 在 {extract_dir} 中未找到 onnxruntime.dll")
+        verify_hash(dll, hashes.get("onnxruntime-dll", ""), "onnxruntime-dll",
+                    record, evict=ort_zip)
         dest.mkdir(parents=True, exist_ok=True)
         shutil.copy2(dll, dest / "onnxruntime.dll")
         print(f"    [dll ] onnxruntime.dll {human((dest / 'onnxruntime.dll').stat().st_size)}")
@@ -604,8 +739,7 @@ def main() -> int:
 
     # ---- 5) 冒烟 + BUILD-INFO ----
     print("[5/5] 冒烟校验与 BUILD-INFO")
-    if not args.no_smoke_test:
-        smoke_test(dest)
+    smoke_info = {} if args.no_smoke_test else smoke_test(dest)
 
     sizes = {
         "python": dir_size(dest / "python"),
@@ -614,9 +748,11 @@ def main() -> int:
         "total": dir_size(dest),
     }
     info = {
-        "product": "Live2D Master Agent",
+        "product": "Pygmalion Studio",
         "python_embed": PYTHON_VERSION,
         "onnxruntime": ONNXRUNTIME_VERSION,
+        # 随包 Python 的分层运行时 provider（装配期实测，不是声明值）。
+        "ort_providers": smoke_info.get("ort_providers", []),
         "yunet": YUNET_NAME,
         "sha256": record,
         "sizes_bytes": sizes,

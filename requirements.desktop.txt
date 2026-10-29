@@ -1,4 +1,4 @@
-# Live2D Master Agent — 桌面安装包内置运行时依赖清单
+# Pygmalion Studio — 桌面安装包内置运行时依赖清单
 # ---------------------------------------------------------------------------
 # 用途：scripts/build_desktop_bundle.py 用它装配「随安装包分发」的嵌入式 Python
 # 运行时。目标 = 用户装完即可用，无需自己装 Python 或任何依赖。
@@ -41,8 +41,23 @@ rich>=15.0.0
 # ===== 图像处理 / 分割 / PSD =====
 # headless 版：无需 GUI 依赖，桌面版 UI 由 Tauri 承载。
 opencv-python-headless>=4.9.0.80
-onnxruntime>=1.31.0
-rembg[cpu]>=2.0.86
+# 前景分割运行时按平台分流（实测：ISNet 600×900 立绘 CPU 1149ms → DirectML 163ms，
+# 两条路径的前景掩码逐像素一致，IoU 1.0000）：
+#   - Windows 装 onnxruntime-directml，自带 DmlExecutionProvider，N/A/I 卡通用，
+#     不需要 CUDA 工具链；版本线独立，最新只到 1.24.4（CPU 线是 1.31.x）。
+#   - 其余平台沿用 CPU 版（DirectML 只发 Windows wheel）。
+# ⚠️ 两者**不能同装**：它们是不同发行名、同一个 onnxruntime/ 模块目录，
+#    后装的会静默覆盖前者（实测：装完 CPU 版后 DmlExecutionProvider 直接消失），
+#    而 pip 对此毫不知情。所以凡是钉着 onnxruntime 的包都不能进基础包。
+onnxruntime-directml>=1.24.4; sys_platform == "win32"
+onnxruntime>=1.31.0; sys_platform != "win32"
+# rembg **已移出基础包**（v0.10.10）：它钉着 CPU 版 onnxruntime，会把 Windows 的
+# DirectML 覆盖掉。它本来就是「应用内按需下载」的能力组
+# （api/services/capability_manager.go 的 capabilityPlans["rembg"]），
+# 分层主链路走 isnet_onnx 直连本地权重，不依赖 rembg。
+# 应用内安装会在 rembg 之后自动强制重装 onnxruntime-directml（否则装完 rembg
+# 就静默失去 GPU）。若你手动 `pip install "rembg[cpu]"`，请补一步恢复：
+#     pip install --force-reinstall --no-deps "onnxruntime-directml>=1.24.4"
 
 # ===== Live2D moc3 编译与官方内核验收 =====
 py-moc3>=0.1.0

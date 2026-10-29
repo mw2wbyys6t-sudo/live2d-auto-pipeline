@@ -184,7 +184,7 @@ def main() -> int:
     print(f"  runtime/hf-cache  {human(weight_bytes)}")
     print(f"  合计              {human(venv_bytes + weight_bytes)}")
     print("\n下一步：装 Inno Setup 后编译 deploy/installer/desktop.iss；"
-          "运行时用 Live2DMasterAgent.exe -config config.portable.json 指向该 runtime。")
+          "运行时用 PygmalionStudio.exe -config config.portable.json 指向该 runtime。")
     return 0
 
 

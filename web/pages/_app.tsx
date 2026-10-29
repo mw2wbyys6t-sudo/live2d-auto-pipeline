@@ -3,23 +3,27 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/router';
 import Layout from '../components/Layout';
 import ErrorBoundary from '../components/ErrorBoundary';
+import { APP_NAME } from '../lib/brand';
 import '../styles/globals.css';
 
 const PAGE_TITLES: Record<string, string> = {
-  '/': 'Dashboard',
-  '/characters': 'Characters',
-  '/generate': 'AI Generation',
-  '/layers': 'Layer Workstation',
-  '/live2d': 'Live2D Builder',
-  '/preview': 'Live Preview',
-  '/chat': 'AI Chat',
-  '/export': 'Export Center',
+  '/': '工作台',
+  '/characters': '角色库',
+  '/generate': '生成',
+  '/layers': '分层',
+  '/live2d': 'Live2D 预览',
+  '/preview': '预览',
+  '/chat': 'AI 对话',
+  '/export': '导出',
   '/health': '环境自检',
 };
 
+/** 单页工作台自带外壳，不能再套一层带侧边栏的 Layout。 */
+const BARE_ROUTES = new Set(['/', '/generate', '/layers', '/live2d', '/preview', '/export']);
+
 function resolveTitle(pathname: string): string {
-  if (pathname.startsWith('/characters/')) return 'Character Editor';
-  return PAGE_TITLES[pathname] || 'Live2D Master';
+  if (pathname.startsWith('/characters/')) return '角色编辑';
+  return PAGE_TITLES[pathname] || APP_NAME;
 }
 
 export default function App({ Component, pageProps }: AppProps) {
@@ -45,6 +49,14 @@ export default function App({ Component, pageProps }: AppProps) {
   }, []);
 
   const title = resolveTitle(router.pathname);
+
+  if (BARE_ROUTES.has(router.pathname)) {
+    return (
+      <ErrorBoundary>
+        <Component {...pageProps} />
+      </ErrorBoundary>
+    );
+  }
 
   return (
     <Layout title={title}>

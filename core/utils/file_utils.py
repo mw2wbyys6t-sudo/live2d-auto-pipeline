@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - File Utility Functions
+Pygmalion Studio - File Utility Functions
 
 Helpers for directory management, filename sanitization, timestamps,
 cleanup, hashing, file sizing, and recursive image discovery.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Part Identifier
+Pygmalion Studio - Part Identifier
 
 Identifies body parts from K-means clusters (or other layer outputs) using
 position (computed from actual pixel centroids), mean color, and area.

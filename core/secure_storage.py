@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Secure Storage Module
+Pygmalion Studio - Secure Storage Module
 
 Security:
 - REQUIRES cryptography library (Fernet AES-128-CBC + HMAC-SHA256)
@@ -23,7 +23,9 @@ import secrets
 import stat
 import atexit
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Mapping, Optional, Dict
+
+from core.app_paths import APP_DIR_NAME, LEGACY_DIR_NAMES
 
 # P0-4 FIX: Require cryptography at import time with clear error message
 try:
@@ -47,25 +49,51 @@ def _require_crypto():
         )
 
 
-def _default_master_key_path() -> Path:
-    """随机主密钥文件的存放位置：用户配置目录（与项目文件/密文分离）。
+def _config_root_for_platform(platform: str, env: Mapping[str, str], home: Path) -> Path:
+    """配置根目录（密钥库放这里，与数据目录分开）。"""
+    if platform == "win32":
+        appdata = env.get("APPDATA")
+        return Path(appdata) if appdata else home / "AppData" / "Roaming"
+    if platform == "darwin":
+        return home / "Library" / "Application Support"
+    xdg = env.get("XDG_CONFIG_HOME")
+    return Path(xdg) if xdg else home / ".config"
 
-    - LIVE2D_VAULT_KEY_FILE 显式覆盖（测试/运维/便携部署）；
-    - Windows: %APPDATA%/live2d-master-agent/vault.key
-    - macOS:   ~/Library/Application Support/live2d-master-agent/vault.key
-    - Linux:   $XDG_CONFIG_HOME 或 ~/.config/live2d-master-agent/vault.key
+
+def master_key_path_for_platform(
+    platform: str,
+    env: Optional[Mapping[str, str]] = None,
+    home: Optional[Path] = None,
+) -> Path:
+    """主密钥路径：显式覆盖 > 旧目录里已有的密钥 > 新目录。
+
+    产品改名（Pygmalion Studio → Pygmalion Studio）时，如果只顾换新目录，
+    首次读取就会「密钥不存在 → 随机生成一把新的」，旧密文从此解不开 ——
+    那是用户数据的静默损坏。所以这里必须先看旧目录在不在。
     """
-    override = os.environ.get("LIVE2D_VAULT_KEY_FILE", "").strip()
+    environment = dict(os.environ) if env is None else dict(env)
+    override = environment.get("LIVE2D_VAULT_KEY_FILE", "").strip()
     if override:
         return Path(override)
-    home = Path.home()
-    if sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
-        return base / "live2d-master-agent" / "vault.key"
-    if sys.platform == "darwin":
-        return home / "Library" / "Application Support" / "live2d-master-agent" / "vault.key"
-    base = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
-    return base / "live2d-master-agent" / "vault.key"
+    base_home = Path(home) if home else Path(environment.get("HOME") or Path.home())
+    root = _config_root_for_platform(platform, environment, base_home)
+    for name in (APP_DIR_NAME, *LEGACY_DIR_NAMES):
+        candidate = root / name / "vault.key"
+        if candidate.is_file():
+            return candidate
+    return root / APP_DIR_NAME / "vault.key"
+
+
+def _default_master_key_path() -> Path:
+    """随机主密钥文件的存放位置（用户配置目录，与项目文件/密文分离）。
+
+    - LIVE2D_VAULT_KEY_FILE 显式覆盖（测试/运维/便携部署）；
+    - Windows: %APPDATA%/PygmalionStudio/vault.key
+    - macOS:   ~/Library/Application Support/PygmalionStudio/vault.key
+    - Linux:   $XDG_CONFIG_HOME 或 ~/.config/PygmalionStudio/vault.key
+    旧版目录名（live2d-master-agent / Live2DMasterAgent）若已存在密钥则继续沿用。
+    """
+    return master_key_path_for_platform(sys.platform)
 
 
 def _harden_path(path: Path) -> None:
@@ -89,7 +117,8 @@ class SecureStorage:
     仅作为解密回退（_derive_legacy_key），用于迁移历史保险库，不再用于加密。
     """
 
-    APP_IDENTIFIER = b'live2d-master-agent-v8.0-secure-storage'
+    # legacy KDF 输入：改名会改变派生结果，导致旧保险库永远解不开，因此必须保持字节一致（仅用于解密回退）。
+    APP_IDENTIFIER = b'pygmalion-studio-v8.0-secure-storage'
     PBKDF2_ITERATIONS = 200_000  # 仅用于旧保险库的兼容解密
     KEY_LENGTH = 32  # 256-bit key for Fernet
 

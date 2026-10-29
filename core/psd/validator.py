@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - PSD Validator
+Pygmalion Studio - PSD Validator
 Validates PSD files against Live2D Cubism Editor standards.
 """
 

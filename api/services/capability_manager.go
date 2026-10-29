@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,10 +75,10 @@ func (cm *CapabilityManager) Probe(ctx context.Context, pb *PythonBridge) (map[s
 
 // Download 启动某能力组的后台 pip 安装；组名不在白名单则拒绝。
 func (cm *CapabilityManager) Download(group string) (*capabilityJob, error) {
-	spec, ok := capabilityPlans[group]
-	if !ok {
+	if _, ok := capabilityPlans[group]; !ok {
 		return nil, fmt.Errorf("未知能力组: %s", group)
 	}
+	steps := installSteps(group, runtime.GOOS)
 
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
@@ -89,26 +91,46 @@ func (cm *CapabilityManager) Download(group string) (*capabilityJob, error) {
 	cm.jobs[group] = job
 	cm.lastJob = group
 
-	go cm.runInstall(job, spec)
+	go cm.runInstall(job, steps)
 	return job, nil
 }
 
-// runInstall 在后台执行 pip install，把尾部输出与终态写回 job。
-func (cm *CapabilityManager) runInstall(job *capabilityJob, spec []string) {
-	args := append([]string{"-m", "pip", "install", "--no-warn-script-location", "--disable-pip-version-check"}, spec...)
-	cmd := exec.CommandContext(context.Background(), cm.cfg.Python.PythonPath, args...)
-	cmd.Dir = cm.cfg.Python.ScriptsDir
-	configurePythonProcess(cmd)
-	cmd.Cancel = func() error {
-		killPythonProcess(cmd)
-		return os.ErrProcessDone
-	}
-	cmd.WaitDelay = 10 * time.Second
+// gpuRuntimeSpec 是 Windows 基础包随带的分层运行时发行名。
+// 它必须与 requirements.desktop.txt 的 win32 条目保持一致（有测试钉住）。
+const gpuRuntimeSpec = "onnxruntime-directml>=1.24.4"
 
-	output, err := cmd.CombinedOutput()
-	tail := string(output)
-	if len(tail) > 4000 {
-		tail = tail[len(tail)-4000:]
+// installSteps 给出某能力组在指定平台上的 pip 调用序列（不含解释器路径）。
+//
+// 为什么 rembg 在 Windows 上要多一步：基础包带的是 onnxruntime-directml，
+// 而 rembg[cpu] 钉着 CPU 版 onnxruntime。两个发行名共用同一个 onnxruntime/
+// 目录，后装的覆盖先装的，pip 全程不报错 —— 装完 rembg，分层的 GPU 加速就
+// 静默消失了。因此 rembg 之后强制重装 DirectML 运行时（--no-deps 只补文件，
+// 不动其它依赖）。
+func installSteps(group, goos string) [][]string {
+	spec, ok := capabilityPlans[group]
+	if !ok {
+		return nil
+	}
+	base := []string{"-m", "pip", "install", "--no-warn-script-location", "--disable-pip-version-check"}
+	steps := [][]string{append(append([]string{}, base...), spec...)}
+	if goos == "windows" && group == "rembg" {
+		steps = append(steps, append(append([]string{}, base...),
+			"--force-reinstall", "--no-deps", gpuRuntimeSpec))
+	}
+	return steps
+}
+
+// runInstall 顺序执行该能力组的 pip 步骤，把尾部输出与终态写回 job。
+// 任一步失败即终止（不吞错误：GPU 运行时没恢复成功时必须让用户看到）。
+func (cm *CapabilityManager) runInstall(job *capabilityJob, steps [][]string) {
+	var tail string
+	var err error
+	for _, args := range steps {
+		runErr := cm.runPip(args, &tail)
+		if runErr != nil {
+			err = runErr
+			break
+		}
 	}
 
 	cm.mu.Lock()
@@ -121,6 +143,29 @@ func (cm *CapabilityManager) runInstall(job *capabilityJob, spec []string) {
 		return
 	}
 	job.Status = "done"
+}
+
+// runPip 执行一次 pip 调用，并把输出尾部累积到 tail（供 job 详情展示）。
+func (cm *CapabilityManager) runPip(args []string, tail *string) error {
+	cmd := exec.CommandContext(context.Background(), cm.cfg.Python.PythonPath, args...)
+	cmd.Dir = cm.cfg.Python.ScriptsDir
+	configurePythonProcess(cmd)
+	cmd.Cancel = func() error {
+		killPythonProcess(cmd)
+		return os.ErrProcessDone
+	}
+	cmd.WaitDelay = 10 * time.Second
+
+	output, err := cmd.CombinedOutput()
+	chunk := string(output)
+	if len(chunk) > 4000 {
+		chunk = chunk[len(chunk)-4000:]
+	}
+	*tail += chunk
+	if err != nil {
+		return fmt.Errorf("%w（pip 步骤：%s）", err, strings.Join(args[len(args)-1:], " "))
+	}
+	return nil
 }
 
 // Status 返回某组最近一次任务状态；未下载过返回 nil（前端按探测结果显示）。

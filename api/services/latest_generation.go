@@ -27,16 +27,33 @@ func RecordLatestGeneration(cfg *config.Config, resp *models.GenerateImageRespon
 		return
 	}
 	record := map[string]interface{}{
-		"character_id": resp.CharacterID,
-		"image_path":   resp.ImagePath,
-		"image_url":    resp.ImageURL,
-		"layers_dir":   resp.LayersDir,
-		"psd_path":     resp.PSDPath,
-		"model3_json":  resp.Model3JSON,
-		"output_dir":   resp.OutputDir,
-		"created_at":   time.Now().Format(time.RFC3339),
+		"character_id":     resp.CharacterID,
+		"image_path":       resp.ImagePath,
+		"image_url":        outputURLForPath(cfg, resp.ImagePath, resp.ImageURL),
+		"layers_dir":       resp.LayersDir,
+		"psd_path":         resp.PSDPath,
+		"model3_json":      resp.Model3JSON,
+		"output_dir":       resp.OutputDir,
+		"width":            resp.Width,
+		"height":           resp.Height,
+		"prompt":           resp.PromptUser,
+		"effective_prompt": resp.EffectivePrompt,
+		"prompt_sent":      resp.PromptSent,
+		"prompt_lang":      resp.PromptLang,
+		"prompt_mismatch":  resp.PromptMismatch,
+		"created_at":       time.Now().Format(time.RFC3339),
 	}
 	writeLatestGeneration(cfg, record)
+	appendGenerationHistory(cfg, record)
+}
+
+// outputURLForPath 优先由 output 目录内的真实路径推导 Web URL；推导失败
+// （例如路径不在 output 下）才退回调用方给的原值。
+func outputURLForPath(cfg *config.Config, path, fallback string) string {
+	if url := OutputURLFor(cfg, path); url != "" {
+		return url
+	}
+	return fallback
 }
 
 func writeLatestGeneration(cfg *config.Config, record map[string]interface{}) {
@@ -173,6 +190,121 @@ func ListExportedModels(cfg *config.Config) []map[string]interface{} {
 		return nil
 	})
 	return results
+}
+
+// generations_history.json 是工作台左栏「作品」列表的数据源：每次成功生成
+// 追加一条，最新的排在最前。latest_generation.json 只保留一条，不足以支撑
+// 多作品切换，也不该让「打开软件 → 继续上一件作品」依赖扫描目录的运气。
+const (
+	generationsHistoryFileName = "generations_history.json"
+	maxGenerationHistory       = 50
+	defaultGenerationLimit     = 20
+)
+
+func generationsHistoryPath(cfg *config.Config) string {
+	return filepath.Join(cfg.Output.BaseDir, generationsHistoryFileName)
+}
+
+// historyEntryKey 用「这一件作品独有的产物路径」识别同一次作品：分层目录每次生成
+// 都新建，是唯一稳定的身份；output_dir 在角色工作流里就是产物根目录（所有作品共用），
+// 拿它当键会把历史压成一条。同一作品重生成时分层目录复用 → 替换旧条目而不是堆出一长串。
+func historyEntryKey(record map[string]interface{}) string {
+	for _, field := range []string{"layers_dir", "output_dir", "image_path"} {
+		if v, ok := record[field].(string); ok && v != "" {
+			return v
+		}
+	}
+	if id, ok := record["character_id"].(string); ok && id != "" {
+		if ts, ok := record["created_at"].(string); ok && ts != "" {
+			return id + "@" + ts
+		}
+	}
+	return ""
+}
+
+// readGenerationHistory 读取历史；文件缺失或损坏都返回空列表（左栏降级为空，
+// 不是接口报错）。坏文件在下一次写入时被覆盖。
+func readGenerationHistory(cfg *config.Config) []map[string]interface{} {
+	data, err := os.ReadFile(generationsHistoryPath(cfg))
+	if err != nil {
+		return nil
+	}
+	var history []map[string]interface{}
+	if json.Unmarshal(data, &history) != nil {
+		return nil
+	}
+	return history
+}
+
+// appendGenerationHistory 把一条记录插到最前，按 key 去重并封顶。
+// 先写临时文件再 rename，避免进程中断留下半截 JSON 把整个历史弄失效。
+func appendGenerationHistory(cfg *config.Config, record map[string]interface{}) {
+	if cfg == nil || record == nil {
+		return
+	}
+	key := historyEntryKey(record)
+	kept := make([]map[string]interface{}, 0, maxGenerationHistory)
+	kept = append(kept, record)
+	for _, item := range readGenerationHistory(cfg) {
+		if key != "" && historyEntryKey(item) == key {
+			continue
+		}
+		kept = append(kept, item)
+		if len(kept) >= maxGenerationHistory {
+			break
+		}
+	}
+	writeGenerationHistory(cfg, kept)
+}
+
+func writeGenerationHistory(cfg *config.Config, history []map[string]interface{}) {
+	b, err := json.MarshalIndent(history, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(cfg.Output.BaseDir, 0o755); err != nil {
+		return
+	}
+	tmp := generationsHistoryPath(cfg) + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return
+	}
+	if err := os.Rename(tmp, generationsHistoryPath(cfg)); err != nil {
+		_ = os.Remove(tmp)
+	}
+}
+
+// ListGenerations 返回工作台左栏的作品列表（新的在前）。limit<=0 用默认值，
+// 超过上限按上限截断。
+func ListGenerations(cfg *config.Config, limit int) []map[string]interface{} {
+	if cfg == nil {
+		return []map[string]interface{}{}
+	}
+	if limit <= 0 {
+		limit = defaultGenerationLimit
+	}
+	if limit > maxGenerationHistory {
+		limit = maxGenerationHistory
+	}
+	history := readGenerationHistory(cfg)
+	if len(history) > limit {
+		history = history[:limit]
+	}
+	for _, record := range history {
+		if record == nil {
+			continue
+		}
+		enrichLatestGeneration(cfg, record)
+		if url := outputURLForPath(cfg, stringField(record, "image_path"), stringField(record, "image_url")); url != "" {
+			record["image_url"] = url
+		}
+	}
+	return history
+}
+
+func stringField(record map[string]interface{}, field string) string {
+	v, _ := record[field].(string)
+	return v
 }
 
 // findNewestModel3 递归查找 output 目录下 mtime 最新的 *.model3.json。

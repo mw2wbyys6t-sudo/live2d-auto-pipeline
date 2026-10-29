@@ -1,5 +1,7 @@
 """Regression tests for artifact truthfulness and PSD compositing."""
 import json
+from pathlib import Path
+
 from PIL import Image
 from psd_tools import PSDImage
 from core.psd.creator import PSDCreator
@@ -35,3 +37,25 @@ def test_invalid_moc_header_is_rejected(tmp_path):
         {'layers': {'face': Image.new('RGBA', (16, 16), 'red')}}, str(tmp_path))
     (tmp_path / result['moc3_ref']).write_bytes(b'not a model' * 10)
     assert not ModelValidator().validate_all(str(tmp_path))['valid']
+
+
+def test_preview_layers_reach_model3(tmp_path):
+    """整幅画布图层清单必须写进 model3.json。
+
+    浏览器播放器优先按 PreviewLayers 叠图层；清单缺失时退回叠「图集切片」，
+    每张图集都是角色的一个局部切片却被铺满整个画布，画面变成错位的重影。
+    """
+    result = Model3Exporter(max_atlas_size=64).export(
+        {'layers': {'face': Image.new('RGBA', (16, 16), 'red'),
+                    'hair_front': Image.new('RGBA', (16, 16), 'blue')}},
+        str(tmp_path))
+    model3 = json.loads(Path(result['model3_json']).read_text(encoding='utf-8'))
+
+    preview = model3.get('PreviewLayers')
+    assert preview, 'model3.json 缺少 PreviewLayers，网页预览会退化成重影'
+    assert [entry['Name'] for entry in preview] == ['face', 'hair_front']
+    assert [entry['Z'] for entry in preview] == [0, 1]
+    for entry in preview:
+        assert (tmp_path / entry['Texture']).is_file()
+        assert entry['Width'] == 16 and entry['Height'] == 16
+        assert entry['Group'] in {'face', 'hair', 'body', 'mouth', 'other'}

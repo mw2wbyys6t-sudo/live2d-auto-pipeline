@@ -1,4 +1,4 @@
-"""Live2D Master Agent - Image Generation Providers"""
+"""Pygmalion Studio - Image Generation Providers"""
 
 from core.image_gen.base import ImageProvider, GenerationResult, GenerationError
 from core.image_gen.router import ProviderRouter, get_router

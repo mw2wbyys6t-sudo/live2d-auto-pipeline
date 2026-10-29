@@ -15,7 +15,7 @@
 安装包采用 ADR-007 的「自带运行时」布局（`{res}` = 安装后的 Tauri 资源目录）：
 
 ```
-{install}\Live2D Master Agent.exe      Tauri 壳（Rust + WebView2）
+{install}\Pygmalion Studio.exe      Tauri 壳（Rust + WebView2）
 {res}\live2d-api.exe                   Go 后端（内嵌 Web 工作台）
 {res}\face_tracker.exe                 Rust 原生面捕
 {res}\onnxruntime.dll                  面捕 load-dynamic 依赖
@@ -28,8 +28,8 @@
 用户数据**严格不写安装目录**：
 
 ```
-%APPDATA%\Live2DMasterAgent\              config / logs / hf-cache / characters
-%USERPROFILE%\Documents\Live2DMasterAgent\output\
+%APPDATA%\PygmalionStudio\              config / logs / hf-cache / characters
+%USERPROFILE%\Documents\PygmalionStudio\output\
 ```
 
 > 首次启动时 Go 端 `config.ApplyDesktopLayout` 会凭 `<res>\app\core\workflow.py`

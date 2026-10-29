@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Visual Embedding Extraction
+Pygmalion Studio - Visual Embedding Extraction
 
 Provides CLIP-based or histogram-based visual embedding extraction with
 lazy model loading and graceful degradation when heavy ML dependencies

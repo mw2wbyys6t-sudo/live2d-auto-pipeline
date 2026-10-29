@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - QA Engine (P2-2 FIXED: stable issue IDs)
+Pygmalion Studio - QA Engine (P2-2 FIXED: stable issue IDs)
 
 P2-2: Issue IDs are deterministic (hash-based) and do not change between runs.
 Quality assessment for generated images and PSDs against Live2D standards.

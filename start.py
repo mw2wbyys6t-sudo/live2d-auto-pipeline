@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent 一键启动器（跨平台）
+Pygmalion Studio 一键启动器（跨平台）
 
 Usage:
     python start.py              # 并行启动 Go API (8080) + Next.js (3000)
@@ -55,7 +55,7 @@ class C:
 def banner():
     print(f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
-║     🚀 Live2D Master Agent 一键启动器                       ║
+║     🚀 Pygmalion Studio 一键启动器                       ║
 ║     Go API :8080  +  Next.js :3000                          ║
 ╚══════════════════════════════════════════════════════════╝{C.RESET}
 """)
@@ -449,7 +449,7 @@ def run(start_api=True, start_web=True, open_browser_flag=True):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Live2D Master Agent 一键启动器（Go API + Next.js）",
+        description="Pygmalion Studio 一键启动器（Go API + Next.js）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"

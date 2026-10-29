@@ -1,4 +1,4 @@
-# Live2D Master Agent v0.10.8 - Python Requirements
+# Pygmalion Studio - Python Requirements（版本号唯一真源见 core/version.py）
 # Installation: python -m pip install -r requirements.txt
 # 官方内核验收（moc3-acceptance / 逐像素形变判据）额外需要：
 #   pip install live2d-py pygame-ce
@@ -21,8 +21,10 @@
 # - python-multipart>=0.0.32: 0.0.18 命中 14 条（Content-Type ReDoS 序列），
 #                        0.0.31 起全部修复
 # - requests>=2.34.2:    2.32.3 命中 4 条；2.33.0 起修复（对齐 dependabot 目标）
-# - rembg[cpu]>=2.0.86:  2.0.0 命中 7 条（onnxruntime/Pillow 传递依赖链），
-#                        2.0.75 起修复；2.0.86 要求 Python>=3.11
+# - rembg：v0.10.10 起**不在基础清单里**（它钉 CPU 版 onnxruntime，会覆盖 Windows 的
+#                        DirectML 运行时；见下方 Image Processing 段）。历史 CVE 结论保留：
+#                        2.0.0 命中 7 条（onnxruntime/Pillow 传递依赖链），2.0.75 起修复，
+#                        2.0.86 要求 Python>=3.11 —— 按需装它时请沿用该下限。
 # - numpy>=2.4.6:       2.5.4 要求 Python>=3.12，3.11 上最高只能到 2.4.6；
 #                        2.4.6 与 2.5.4 均为 0 CVE。地板是**最低**版本 ——
 #                        3.12 上 pip 仍会装到 2.5.4
@@ -59,8 +61,15 @@ pygame-ce>=2.5.8; python_version >= "3.14"
 # ====== Image Processing ======
 # opencv-python>=4.9.0.80: 捆绑的 libwebp 已含 CVE-2023-4863(堆缓冲区溢出)修复
 opencv-python>=4.9.0.80
-onnxruntime>=1.31.0
-rembg[cpu]>=2.0.86
+# 前景分割运行时按平台分流：Windows 用 DirectML 版（实测 ISNet 分层 1149ms → 163ms，
+# 掩码逐像素一致），其余平台用 CPU 版（DirectML 只发 Windows wheel）。
+# ⚠️ 不能同装：两个发行名共用 onnxruntime/ 目录，后装的会静默覆盖前装的，
+#    pip 不知情。因此任何钉着 onnxruntime 的包（如 rembg）都不能进基础清单。
+onnxruntime-directml>=1.24.4; sys_platform == "win32"
+onnxruntime>=1.31.0; sys_platform != "win32"
+# rembg 移出基础清单（v0.10.10）：它钉 CPU 版 onnxruntime，会覆盖 Windows 的
+# DirectML 运行时。分层主链路用 isnet_onnx 直连本地权重，不需要 rembg；
+# 要用 rembg 后端时装它：pip install "rembg[cpu]"（会失去 DirectML）。
 
 # ====== Face Tracking (drivers/face_tracker) ======
 # 与 requirements.desktop.txt 保持同一条约束（此前两边不一致）：

@@ -135,14 +135,20 @@ def test_bridge_export_orders_layers_by_layer_guide(tmp_path):
         f"口腔必须画在嘴唇之下，实际层序 {used}")
 
 
-def test_bridge_export_falls_back_to_filename_order_without_guide(tmp_path):
-    """缺 layer_guide.json 时退回字母序，并把顺序来源如实标出。"""
+def test_bridge_export_falls_back_to_standard_order_without_guide(tmp_path):
+    """缺 layer_guide.json 时按权威层序表排位，并把「无 guide」如实标出。
+
+    字母序正是本文件开头记录的历史缺陷：`sorted()` 得到 mouth 在 mouth_cavity
+    之前 → 口腔盖住嘴唇。既然权威表能给出正确次序，降级路径没有理由退回一个
+    已知错误的顺序。
+    """
     layers_dir = _build_layers_dir(tmp_path, with_guide=False)
     result = _run_bridge(tmp_path, layers_dir, script=_extract_bridge_script())
 
     used = result["layers_used"]
     assert result["layer_order_source"] == "filename"
-    assert used == sorted(_LAYERS), f"无 guide 时应按字母序，实际 {used}"
+    assert used == ["hair_back", "face", "mouth_cavity", "mouth"], (
+        f"无 guide 时应按权威表排位，实际 {used}")
     assert "preview" not in used
     # 退化路径也必须如实报告顺序来源，不能静默假装用的是 guide。
     assert result["layers_unknown"] == sorted(_LAYERS)
@@ -163,22 +169,29 @@ def _swap_guide_entries(layers_dir: Path, first: str, second: str) -> None:
     guide_path.write_text(json.dumps(guide, ensure_ascii=False), encoding="utf-8")
 
 
-def test_bridge_export_reports_layer_order_mismatch(tmp_path):
-    """内核接受只说明「能加载」，不说明「层级对」—— 错位必须被点名。"""
+def test_bridge_export_normalizes_conflicting_draw_index(tmp_path):
+    """draw_index 与权威表冲突时：以表为准纠正，并如实报告「被纠正过」。
+
+    旧契约是「点名错位然后由下载闸门拒绝」。层序权威表本身会演进
+    （2026-10-21 从 18 项扩到 65 项并改了 face 语义），照旧契约意味着表一改，
+    所有旧分层目录永久无法打包，用户手上没有任何补救入口 —— 实测
+    issue_count=10 的 409 就是这么来的。现在导出以表为准归一化，
+    静止画面逐像素零差异，改的只是部件运动时的遮挡关系。
+    """
     layers_dir = _build_layers_dir(tmp_path, with_guide=True)
     _swap_guide_entries(layers_dir, "mouth_cavity", "mouth")
 
     result = _run_bridge(tmp_path, layers_dir, script=_extract_bridge_script())
 
-    issues = result["layer_order_issues"]
-    named = {issue["layer"] for issue in issues}
-    assert {"mouth_cavity", "mouth"} <= named, f"必须点名错位的层，实际 {named}"
-    assert all(issue["code"] == "layer_order_mismatch" for issue in issues)
-    assert all(issue["message"] for issue in issues)
+    used = result["layers_used"]
+    assert used.index("mouth_cavity") < used.index("mouth"), (
+        f"口腔必须被纠正到嘴唇之下，实际层序 {used}")
+    assert result["layer_order_normalized"] is True, "被纠正过必须可见，不能静默改序"
+    assert result["layer_order_issues"] == [], "纠正后不得留下假阻塞"
 
 
-def test_bridge_export_persists_layer_order_into_build_meta(tmp_path):
-    """错位结论必须落进 build_meta.json —— 否则下载闸门读不到它。"""
+def test_bridge_export_persists_normalization_into_build_meta(tmp_path):
+    """纠正结论必须落进 build_meta.json —— 否则「本来就对」与「被改过」无法区分。"""
     layers_dir = _build_layers_dir(tmp_path, with_guide=True)
     _swap_guide_entries(layers_dir, "mouth_cavity", "mouth")
 
@@ -186,9 +199,8 @@ def test_bridge_export_persists_layer_order_into_build_meta(tmp_path):
 
     meta_path = Path(result["output_dir"]) / "build_meta.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    assert meta["layer_order"]["issue_count"] == len(result["layer_order_issues"])
-    assert meta["layer_order"]["issue_count"] > 0
-    assert meta["layer_order"]["issues"][0]["message"]
+    assert meta["layer_order"]["issue_count"] == len(result["layer_order_issues"]) == 0
+    assert meta["layer_order"]["normalized"] is True
 
 
 def test_bridge_export_writes_zero_issues_for_consistent_order(tmp_path):
@@ -200,3 +212,6 @@ def test_bridge_export_writes_zero_issues_for_consistent_order(tmp_path):
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     assert result["layer_order_issues"] == []
     assert meta["layer_order"]["issue_count"] == 0
+    # 第三向：本来就合规时不得谎报「被纠正过」，否则 normalized 失去信息量。
+    assert result["layer_order_normalized"] is False
+    assert meta["layer_order"]["normalized"] is False

@@ -626,7 +626,9 @@ export class Live2DPlayer {
   destroy(): void {
     this._generation++;
     this.stop();
-    this.frameCallbacks = [];
+    // frameCallbacks 属于播放器持有者（ModelCanvas 在构造时注册一次），
+    // 而 destroy() 也会被 loadModel 当作「换模型前的复位」调用。
+    // 在这里清空会让 onFrame 在首次加载后静默失效（帧率恒为 0）。
     this.layers = [];
     this.params.clear();
     this.targetParams.clear();
@@ -634,7 +636,10 @@ export class Live2DPlayer {
     this.resolvedParams = STANDARD_PARAMS.map((p) => ({ ...p }));
     this.bounds = resolveBounds(null);
     if (this.app) {
-      this.app.destroy(true, { children: true, texture: true, baseTexture: true });
+      // removeView=false：<canvas> 由 React 持有，Pixi 不能把它从 DOM 里摘走；
+      // 也不强制丢上下文 —— 否则换模型时在同一个 canvas 上重建渲染器会拿到
+      // 一个失效上下文（WebGL 初始化报 checkMaxIfStatementsInShader(0)）。
+      this.app.destroy(false, { children: true, texture: true, baseTexture: true });
       this.app = null;
     }
     this.root = null;

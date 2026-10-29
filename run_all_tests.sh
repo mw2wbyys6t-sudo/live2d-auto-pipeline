@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Live2D Master Agent - 一键运行所有测试
+# Pygmalion Studio - 一键运行所有测试
 # 使用: ./run_all_tests.sh [--no-services] [--skip-e2e]
 #   --no-services  跳过启停服务（假设已启动）
 #   --skip-e2e     跳过端到端测试
@@ -35,7 +35,7 @@ done
 RESULTS=()
 
 echo -e "${BLUE}============================================================${NC}"
-echo -e "${BLUE}     🧪 Live2D Master Agent - 自动化测试套件${NC}"
+echo -e "${BLUE}     🧪 Pygmalion Studio - 自动化测试套件${NC}"
 echo -e "${BLUE}============================================================${NC}"
 echo ""
 

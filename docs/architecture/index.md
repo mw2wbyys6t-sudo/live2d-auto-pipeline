@@ -1,8 +1,8 @@
-# 🏛️ Live2D Master Agent — 架构决策总览（Staff Engineer）
+# 🏛️ Pygmalion Studio — 架构决策总览（Staff Engineer）
 
 > 本文档是项目架构决策的**唯一真相源索引**。所有 ADR、系统图、上下文映射、适应性函数、风险登记册在此聚合。
 >
-> **生成日期**：2026-07-30 ｜ **生效版本**：v0.10.0 ｜ **责任方**：Live2D Master Agent Team
+> **生成日期**：2026-07-30 ｜ **生效版本**：v0.10.0 ｜ **责任方**：Pygmalion Studio Team
 
 ---
 
@@ -140,16 +140,22 @@
 | [**ADR-004**](adrs/ADR-004-face-tracker-mediapipe.md) | 面部捕捉（MediaPipe+EMA+RMS） | Accepted | 2026-07-30 | MediaPipe 468+iris；双指数 EMA + deadband；麦克风 RMS → ParamMouthOpenY 兜底 | `drivers/face_tracker/`、`drivers/audio/capture.py` |
 | [**ADR-005**](adrs/ADR-005-llm-bridge-router-emotion.md) | LLM 网关（多 Provider 路由 + 7 情绪联动） | Accepted | 2026-07-30 | 5 级降级链；首 token 3 词快速情绪 + 整段精细；7 类情绪→28 参数映射表 | `llm_bridge/providers/router.py`、`emotion/analyzer.py` |
 | [**ADR-006**](adrs/ADR-006-desktop-pet-pygame-ce.md) | 桌宠透明窗口（PyGame CE） | Accepted | 2026-07-30 | pygame-ce 为主 + 原版 pygame 回退；Win DWM/NSWindow/X11 三平台原生透明；Animator 纯逻辑解耦 | `drivers/desktop_pet/window.py` 等 5 件 |
+| [**ADR-007**](adrs/adr-007-desktop-install-layout.md) | 桌面安装布局（Tauri resources + 外置 embeddable Python） | Accepted | 2026-10-16 | NSIS 只 bundle `desktop/bin/*` 不足以让装机可用；确立 `{res}` 布局：Go/面捕 exe + onnxruntime.dll + CPython embeddable + `app/` 源码树 + 权重，Inno+CUDA venv 路线废弃 | `scripts/build_desktop_bundle.py`、`desktop/tauri.conf.json`（此前**漏登记于本表**，2026-10-27 补） |
+| [**ADR-008**](adrs/ADR-008-product-rename.md) | 产品改名（Live2D Master Agent → Pygmalion Studio） | Accepted | 2026-10-28 | 品牌不再依赖第三方商标；改名覆盖真正有影响的身份（productName / identifier / Cargo 包名与二进制名 / NSIS / 数据与产物目录 / 密钥库目录），并固定一条兼容规则：**新目录优先、旧目录存在即沿用**；保险库旧 KDF 输入与 `live2d-api` 内部名刻意不改 | `core/app_paths.py`、`api/config/desktop.go`、`tests/unit/test_product_name_consistency.py` |
 
 ### 拟议 ADR（Backlog，下次迭代）
 
+> 编号修正（2026-10-27）：下表原把 ADR-007 留给 ComfyUI，但 **ADR-007 已被
+> 「桌面安装布局」占用**（`adrs/adr-007-desktop-install-layout.md`），ADR-008 也已被
+> 「产品改名」占用（`adrs/ADR-008-product-rename.md`）。候选项因此整体顺延，避免将来撞号。
+
 | 编号（候选） | 标题 | 触发条件 |
 |-------------|------|---------|
-| ADR-007 | ComfyUI 工作流集成（Roadmap v0.11.0） | 启动 v0.11 开发时 |
-| ADR-008 | 全身模型 + VRM 3D 导出（Roadmap v0.12.0） | 启动 v0.12 开发时 |
-| ADR-009 | 多角色换装编辑器（Roadmap v0.10.5） | 启动 v0.10.5 开发时 |
-| ADR-010 | Redis 任务队列 + 分布式 Worker 扩容 | 单实例并发 > 20 生成任务时 |
-| ADR-011 | 商用授权（Dual License）流程与治理 | 有企业客户付费需求时 |
+| ADR-009 | ComfyUI 工作流集成（Roadmap v0.11.0） | 启动 v0.11 开发时 |
+| ADR-010 | 全身模型 + VRM 3D 导出（Roadmap v0.12.0） | 启动 v0.12 开发时 |
+| ADR-011 | 多角色换装编辑器（Roadmap v0.10.5） | 启动 v0.10.5 开发时 |
+| ADR-012 | Redis 任务队列 + 分布式 Worker 扩容 | 单实例并发 > 20 生成任务时 |
+| ADR-013 | 商用授权（Dual License）流程与治理 | 有企业客户付费需求时 |
 
 ---
 
@@ -183,7 +189,7 @@
 | ID | 风险描述 | 可能性 L/M/H | 影响 L/M/H | 等级 | 缓解措施（Mitigation） | 负责人 | 关联 ADR / FF |
 |----|----------|-------------|-----------|------|------------------------|--------|--------------|
 | **R-01** | 外部 LLM/图像 Provider 大面中断或涨价 | **H**（市场常态） | M | **高危** | ① ADR-005 5 级降级（OpenAI→Claude→Ollama→模板）；② 图像 3 Provider 并联（Pollinations 免 Key→Seedream→SenseNova）；③ 本地推理路线（v0.11 Roadmap ComfyUI 集成） | 网关负责人 + 图像管线负责人 | ADR-005/FF-7/FF-9；ADR-002 |
-| **R-02** | 品牌冒用 / 白嫖无回馈（Apache-2.0 下**允许商用**，商用本身合法，仅存在"冒用 Live2D Master Agent Team 品牌名、闭源商业化不回馈社区"的风险） | M（宽松协议通病） | M（社区生态损耗，非法律风险） | **中危**（从高危降级，因 Apache-2.0 下商用被明确许可） | ① **保留品牌护城河**：Live2D Master Agent Team 品牌名受商标法保护，商用 fork 不得冒用我方品牌名称与 Logo；② **License 文件 + 版权声明永久保留**：FF-15 强制每一份副本内嵌 Apache-2.0 LICENSE（含版权声明），形成可溯源的软署名；③ **社区口碑 + 文档生态**：优先打造官网、专属教程、AI 模型库、社区 QQ/微信群、Discord 社区——这些资产闭源商用 fork 抄不走，真正的商业客户会优先找原作者团队做支持；④ **未来版本 Dual License 权利保留**：版权所有者可随时对未来版本切换 Dual License（Apache-2.0 开源 + 商业付费企业版，含 SLA 保障；历史版本不追溯）；⑤ **工程质量差异化**：对新功能先在原作者维护的主线版本中优先上线，商用 fork 需自行跟进（形成事实上的差异化优势） | 产权所有者 + 品牌/社区负责人 | ADR-001/FF-15 |
+| **R-02** | 品牌冒用 / 白嫖无回馈（Apache-2.0 下**允许商用**，商用本身合法，仅存在"冒用 Pygmalion Studio Team 品牌名、闭源商业化不回馈社区"的风险） | M（宽松协议通病） | M（社区生态损耗，非法律风险） | **中危**（从高危降级，因 Apache-2.0 下商用被明确许可） | ① **保留品牌护城河**：Pygmalion Studio Team 品牌名受商标法保护，商用 fork 不得冒用我方品牌名称与 Logo；② **License 文件 + 版权声明永久保留**：FF-15 强制每一份副本内嵌 Apache-2.0 LICENSE（含版权声明），形成可溯源的软署名；③ **社区口碑 + 文档生态**：优先打造官网、专属教程、AI 模型库、社区 QQ/微信群、Discord 社区——这些资产闭源商用 fork 抄不走，真正的商业客户会优先找原作者团队做支持；④ **未来版本 Dual License 权利保留**：版权所有者可随时对未来版本切换 Dual License（Apache-2.0 开源 + 商业付费企业版，含 SLA 保障；历史版本不追溯）；⑤ **工程质量差异化**：对新功能先在原作者维护的主线版本中优先上线，商用 fork 需自行跟进（形成事实上的差异化优势） | 产权所有者 + 品牌/社区负责人 | ADR-001/FF-15 |
 | **R-03** | PyGame / MediaPipe / MediaPipe 模型依赖协议变更 | L（ASF 2.0 稳定） | M | 中危 | ① requirements.txt 钉版本；② `scripts/download_models.py` hash 校验；③ ADR-004/006 强调 BaseTracker 与 GUI 抽象，替换成本低 | 驱动负责人 | ADR-004/ADR-006 |
 | **R-04** | 18 层共享内核腐化（语义分层和 Live2D 绑定错位）| M（随代码量增长概率↑） | **H**（整管线崩盘） | **高危** | ① FF-2 强制 1:1 契约；② `composer.py::STANDARD_LAYER_ORDER` 冻结，任何变动须改 ADR-003；③ 每次改绑定管线必跑 `test_layer_order_contract.py` | 图像管线负责人 + 绑定负责人 | ADR-003/FF-2 |
 | **R-05** | Go→Python 子进程命令注入（路径/参数污染）| L | **H** | 高危 | `python_bridge.go::validatePath` 黑正则 + `exec.CommandContext`（不通过 shell，天然防 `; &&`）；CI 注入用例；FF-16 阻断 | Go 后端负责人 | ADR-002/FF-16 |
@@ -211,7 +217,7 @@
 | **日志分级** | 默认 INFO 级；DEBUG 只在本地/单测可开；任何 ERROR 必须附 traceback 和用户可见友好提示 | 生产环境关闭 DEBUG |
 | **测试覆盖** | 单元测试覆盖核心算法（segment、blendshape、emotion、qa、validator）；不强制 UI 端到端；每条 ADR 的 Fitness Functions 至少 1 条自动化测试 | v0.10.0 早期：允许 e2e 用例以手动测试 checklist 形式存在（须登记 `tests/e2e/checklist.md`） |
 | **性能优化** | 先 profile 再改；禁止"因为可能更快"的预优化 | 只有已知瓶颈（如 Amodal 补全）可预先选算法 |
-| **署名/版权** | 新文件头部必须包含项目 License 标识与 Live2D Master Agent Team 版权年；导出产物（model3.zip / pet exe / Web 构建）必须内嵌 ADR-001 要求的署名 | 纯第三方粘贴代码（附来源链接）除外 |
+| **署名/版权** | 新文件头部必须包含项目 License 标识与 Pygmalion Studio Team 版权年；导出产物（model3.zip / pet exe / Web 构建）必须内嵌 ADR-001 要求的署名 | 纯第三方粘贴代码（附来源链接）除外 |
 
 ---
 

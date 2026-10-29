@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Seedream/ARK Provider (DEF-003 IMPLEMENTED)
+Pygmalion Studio - Seedream/ARK Provider (DEF-003 IMPLEMENTED)
 
 Volcano Engine ARK / Seedream image generation integration.
 Seedream is ByteDance's high-quality image generation model,
@@ -21,6 +21,7 @@ from core.image_gen.base import (
     GenerationError,
     checked_image_download,
 )
+from core.image_gen.prompt_lang import append_live2d_tags, detect_lang
 
 
 class SeedreamProvider(ImageProvider):
@@ -94,9 +95,10 @@ class SeedreamProvider(ImageProvider):
         }
 
         # ARK uses OpenAI-compatible /images/generations endpoint
+        sent_prompt = self._build_prompt(prompt)
         payload = {
             "model": use_model,
-            "prompt": self._build_prompt(prompt),
+            "prompt": sent_prompt,
             "size": size,
             "n": 1,
             "response_format": "b64_json",
@@ -162,10 +164,14 @@ class SeedreamProvider(ImageProvider):
                     image_path=path,
                     provider=self.name,
                     model=use_model,
-                    prompt=prompt,
+                    prompt=sent_prompt,
                     width=width,
                     height=height,
-                    metadata={"quality": qual},
+                    metadata={
+                        "quality": qual,
+                        "prompt_lang": detect_lang(prompt),
+                        "prompt_mismatch": False,
+                    },
                 )
 
             except requests.RequestException as e:
@@ -236,14 +242,11 @@ class SeedreamProvider(ImageProvider):
         return candidates[0][1] if candidates else "1024x1024"
 
     def _build_prompt(self, prompt: str) -> str:
-        """Build optimized prompt for Seedream with Live2D-specific tags."""
-        live2d_tags = (
-            "anime style, high quality, masterpiece, best quality, "
-            "full body, front-facing, T-pose or A-pose, simple white background, "
-            "clean lineart, flat shading, distinct color regions, "
-            "character design for Live2D rigging"
-        )
-        return f"{prompt}, {live2d_tags}"
+        """Build optimized prompt for Seedream with Live2D-specific tags.
+
+        中文原生模型：中文提示词配中文标签，避免把用户看不懂的英文塞进提示词。
+        """
+        return append_live2d_tags(prompt)
 
     def get_setup_guide(self) -> str:
         return (

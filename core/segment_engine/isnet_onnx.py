@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - 本地 ONNX 前景（抠图）模型运行时
+Pygmalion Studio - 本地 ONNX 前景（抠图）模型运行时
 
 为什么不用 rembg 直接跑：
 ``rembg.new_session()`` 在本地找不到权重时会**静默联网下载**（ISNet 约 176MB）。

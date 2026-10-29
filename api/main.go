@@ -280,13 +280,16 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 		api.GET("/tracking/status", h.TrackingStatus)
 
 		// 跨页面流水线接力 v0.10.1：最近生成 / 真实分层 / 图片上传
+		api.GET("/generations", h.ListGenerations)
 		api.GET("/generations/latest", h.LatestGeneration)
 		api.GET("/generations/models", h.ListExportedModels)
+		api.GET("/layers", h.ListLayers)
 		api.POST("/segment", h.SegmentImage)
 		api.POST("/upload", h.UploadImage)
 
 		// 生成上游状态 + 外部素材导入 v0.10.1
 		api.GET("/providers", h.ListImageProviders)
+		api.GET("/gpu", h.GetGPUStatus)
 		api.POST("/import/psd", h.ImportPSD)
 		api.POST("/import/pngs", h.ImportPNGs)
 
@@ -424,7 +427,7 @@ func stripNextPrefix(p string) string {
 func printServerInfo(cfg *config.Config, addr string) {
 	separator := strings.Repeat("=", 80)
 	fmt.Println("\n" + separator)
-	fmt.Printf("║     🎨 Live2D Master Agent API %s (Go Edition)       ║\n", handlers.Version)
+	fmt.Printf("║     🎨 Pygmalion Studio API %s (Go Edition)       ║\n", handlers.Version)
 	fmt.Println("║     高性能优化版本 - 支持连接池、并发处理、请求缓存          ║")
 	fmt.Println(separator)
 	fmt.Printf("║  服务地址: http://%s\n", addr)

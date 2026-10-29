@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Pygmalion (Live2D Master Agent) — 项目专属图标生成器。
+"""Pygmalion (Pygmalion Studio) — 项目专属图标生成器。
 
 设计理念：以 Pygmalion（皮格马利翁）神话为灵感 —— 画框倾斜表示"创作边界被打破"，
 框内少女是线稿草图（未完成），框外一只手伸入画布拿画笔（创作者介入）。
-寓意"创作者赋予造物生命"，与 Live2D Master Agent "把草图变成可动模型" 的核心精神契合。
+寓意"创作者赋予造物生命"，与 Pygmalion Studio "把草图变成可动模型" 的核心精神契合。
 
 视觉调性：
   - 极简三色调（黑 + 白 + 深青色 #1e5f74），避开 AI 偏爱的粉紫渐变/装饰星光

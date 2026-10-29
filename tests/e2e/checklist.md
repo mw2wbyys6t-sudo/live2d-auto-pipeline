@@ -3,6 +3,16 @@
 > 适用对象：Tauri NSIS 安装包（ADR-007「自带运行时」布局）。
 > 登记依据：`docs/architecture/index.md` 约定——手动 e2e 用例统一登记在本文件。
 >
+> 品牌口径：本清单按 **v0.10.10 起的新名（Pygmalion Studio / PygmalionStudio）** 书写。
+> 验收 **v0.10.9 及更早的已发布包**时，把名字换回旧名：exe 用旧名 `Live2D Master Agent.exe`、
+> 数据根用旧名 `%APPDATA%\Live2DMasterAgent`、
+> 产物用旧名 `%USERPROFILE%\Documents\Live2DMasterAgent\output`。
+> 新包必须同时验下面这条**改名兼容项**（A 类）：
+> - [ ] 在装有旧版的机器上升级后，`/api/diagnostics` 与角色库仍能看到旧数据
+>       （解析规则是「新目录优先、旧目录存在即沿用」，见 `core/app_paths.py` 与
+>       `api/config/desktop.go` 的 `resolveDataRoot`）；已存的 API Key 仍能解密
+>       （密钥库沿用旧 `vault.key` 位置）。
+>
 > 判定规则：
 > - **A 类**（阻断发布）：任一失败即不得发布，必须修完重打。
 > - **B 类**（记录不阻断）：失败写入发布说明，说明影响面与后续计划。
@@ -20,8 +30,8 @@
 
 ```powershell
 # 定位安装目录（改一次，后面所有命令复用）
-$exe = Get-ChildItem "$env:LOCALAPPDATA\Live2D Master Agent\Live2D Master Agent.exe" -ErrorAction SilentlyContinue
-if (-not $exe) { $exe = Get-ChildItem "$env:ProgramFiles\Live2D Master Agent\Live2D Master Agent.exe" -ErrorAction SilentlyContinue }
+$exe = Get-ChildItem "$env:LOCALAPPDATA\Pygmalion Studio\Pygmalion Studio.exe" -ErrorAction SilentlyContinue
+if (-not $exe) { $exe = Get-ChildItem "$env:ProgramFiles\Pygmalion Studio\Pygmalion Studio.exe" -ErrorAction SilentlyContinue }
 $res = if ($exe) { Split-Path $exe.FullName } else { "" }
 "RES = $res"
 ```
@@ -34,14 +44,14 @@ $res = if ($exe) { Split-Path $exe.FullName } else { "" }
 - [ ] 安装过程不要求管理员提权（currentUser 安装）。
 - [ ] 安装包体积在预期区间（约 **0.9 GB**；**不含** torch 组 —— 那组由应用内按需下载）。
       显著偏小说明装配不完整；**超过 1.2 GB 说明 torch 组被误打回了包内**。
-- [ ] 安装完成后开始菜单/桌面快捷方式存在，目标指向 `{res}\Live2D Master Agent.exe`。
+- [ ] 安装完成后开始菜单/桌面快捷方式存在，目标指向 `{res}\Pygmalion Studio.exe`。
 - [ ] 杀毒软件未隔离安装目录下的 `live2d-api.exe` / `python\python.exe`（检查杀软隔离区）。
 
 ## 2. 落盘完整性（A，可一键跑）
 
 ```powershell
 $need = @(
-  "Live2D Master Agent.exe",
+  "Pygmalion Studio.exe",
   "live2d-api.exe",
   "face_tracker.exe",
   "onnxruntime.dll",
@@ -68,7 +78,9 @@ foreach ($n in $need) {
 ```
 
 - [ ] 缺失 0 项。
-- [ ] `BUILD-INFO.json` 含 `sha256`（python-embed / yunet-onnx / face-landmarker-task）与 `sizes_bytes`。
+- [ ] `BUILD-INFO.json` 含 `sha256`（python-embed / yunet-onnx / onnxruntime-dll /
+      face-landmarker-task / isnet-anime-onnx —— 五项齐全，且与
+      `scripts/windows/hashes.json` 逐值一致）与 `sizes_bytes`。
 
 > 说明：`models\face_landmarker.task` 是 Python 面捕走 MediaPipe **Tasks** 路径所需模型；
 > `/api/diagnostics` 目前只校验 YuNet 与 `onnxruntime.dll`，这一项需人工确认。
@@ -90,14 +102,26 @@ foreach ($n in $need) {
       `sitecustomize.py` 已把 `{res}\app` 注入 `sys.path`。
 - [ ] `TORCH_ABSENT_OK` —— torch 组**不应**出现在包内（出现即装配回退到旧清单）。
       需要 SAM2 时走应用内「能力」页下载，见 §9。
+- [ ] **包内 Python 自带 GPU provider**（v0.10.10 的「安装包默认带 GPU 运行时」）：
+
+```powershell
+& "{res}\python\python.exe" -c "import onnxruntime as o;print(o.get_available_providers())"
+& "{res}\python\python.exe" -c "import importlib.util as u;print('rembg',u.find_spec('rembg') is not None,'torch',u.find_spec('torch') is not None)"
+```
+
+      第一条必须含 `DmlExecutionProvider`（装配期冒烟已把它做成硬失败闸门，这里是
+      对**产物**的复核）；第二条必须是 `rembg False torch False` —— rembg 一旦回到
+      包内就会把 CPU 版 `onnxruntime` 装回来，静默顶掉 DirectML。
+- [ ] `{res}\BUILD-INFO.json` 的 `ort_providers` 是实测值且含 `DmlExecutionProvider`；
+      `python_embed` 为 `3.12.x`（与包内 `--version` 一致，防止 wheel 按宿主解释器解析）。
 
 ## 4. 启动与后端（A）
 
 - [ ] 双击快捷方式后 **10 秒内**出现应用窗口。
 - [ ] 窗口**不是** `Go API backend not found` 错误页（若出现，见 §8）。
 - [ ] 首次启动自动创建：
-      `%APPDATA%\Live2DMasterAgent\`（含 `logs` / `hf-cache` / `characters`）
-      与 `%USERPROFILE%\Documents\Live2DMasterAgent\output\`。
+      `%APPDATA%\PygmalionStudio\`（含 `logs` / `hf-cache` / `characters`）
+      与 `%USERPROFILE%\Documents\PygmalionStudio\output\`。
 - [ ] 安装目录内**没有**新增 `output\` 等可写产物（用户数据不得写安装目录）。
 
 ```powershell
@@ -109,7 +133,10 @@ Invoke-RestMethod http://127.0.0.1:8080/api/info   | ConvertTo-Json -Depth 6
       （若返回 503 且 `python_ok = false`，看 `error` 里的具体缺失模块。）
 - [ ] `/api/diagnostics` 的 `checks` 全部 `ok = true`：
       `backend`、`python`、`scripts_dir`、`output_dir`、`tracker_exe`、
-      `tracker_model`、`tracker_dll`、`bind_loopback`。
+      `tracker_model`、`tracker_dll`、`gpu`、`bind_loopback`。
+      例外：`gpu` 在两种情况下**预期为 false**，属如实报告而非故障 ——
+      ① 本机确实没有可用独显；② 有独显但 `onnxruntime` 只装了 CPU provider
+      （issue 文案会点出卡型并说明分层回落 CPU）。
 
 ```powershell
 $d = Invoke-RestMethod http://127.0.0.1:8080/api/diagnostics
@@ -118,15 +145,24 @@ $d.data | Select-Object python_path, output_dir
 ```
 
 - [ ] `python_path` 指向 `{res}\python\pythonw.exe`（或 `python.exe`）。
-- [ ] `output_dir` 指向 `Documents\Live2DMasterAgent\output`（**不是**安装目录）。
+- [ ] `output_dir` 指向 `Documents\PygmalionStudio\output`（**不是**安装目录）。
 - [ ] `bind_loopback = true`（监听 `127.0.0.1`）。
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/api/gpu | ConvertTo-Json -Depth 6
+```
+
+- [ ] `/api/gpu` 的 `data.runtime.onnxruntime_providers` 含 `DmlExecutionProvider`
+      （读的是**包内解释器**的实际 provider，不是宿主机 Python 的）。
+- [ ] `data.recommendation.device`：有独显的机器为 `dml`（N 卡装 CUDA 组后为 `cuda`）；
+      无独显机器为 `cpu` 且 `available = false`，`adapters` 里虚拟显示卡归 `OTHER` 不计入。
 
 ## 5. 核心业务链路（A）
 
 按 UI 从左到右走一遍（Generate → Layers → Export → Preview → Pet）：
 
 - [ ] **Generate**：输入提示词生成一张立绘，页面出现图片；
-      产物落在 `Documents\Live2DMasterAgent\output\`。
+      产物落在 `Documents\PygmalionStudio\output\`。
       （默认走 Pollinations 免费云，需要联网；失败时会给出明确报错而非假成功。）
 - [ ] **Layers**：对刚生成的图执行分层，产出 `output\layers_*\layer_*.png`。
 - [ ] **Export**：导出 Live2D，`output\live2d_exports\<角色>\` 下出现
@@ -143,7 +179,7 @@ $d.data | Select-Object python_path, output_dir
       返回运行中（`source = native`），画面有参数变化。
 - [ ] `POST /api/tracking/stop` 后状态停止，**摄像头指示灯熄灭**。
 - [ ] （B）Python 桌宠跟随：若桌宠启用了 Python 面捕，检查
-      `%APPDATA%\Live2DMasterAgent\logs\` 中无
+      `%APPDATA%\PygmalionStudio\logs\` 中无
       `Failed to start FaceTracker` / `未找到 face_landmarker.task`。
 
 > 两条面捕路径：原生 `face_tracker.exe`（默认）+ Python `mediapipe`

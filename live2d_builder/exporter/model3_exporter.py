@@ -165,6 +165,10 @@ class Model3Exporter:
         }
         if layout is not None:
             model3["Layout"] = layout
+        # 预览清单必须随 model3.json 落盘：网页播放器没有它就只能叠图集切片，
+        # 画面会变成错位的重影（PNG 早就写好了，只是清单一直没进模型）。
+        if preview_layers:
+            model3["PreviewLayers"] = preview_layers
 
         model3_path = out / f"{character_name}.model3.json"
         model3_path.write_text(

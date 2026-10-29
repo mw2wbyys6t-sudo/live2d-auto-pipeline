@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - ComfyUI 集成工具
+Pygmalion Studio - ComfyUI 集成工具
 版本: 0.10.3
 功能: 连接 ComfyUI 和 Live2D 工作流
 """
@@ -26,7 +26,7 @@ class Live2DComfyUI:
         """打印标题"""
         print()
         print("=" * 60)
-        print("🎨 Live2D Master Agent - ComfyUI 集成工具")
+        print("🎨 Pygmalion Studio - ComfyUI 集成工具")
         print("=" * 60)
         print()
     
@@ -363,7 +363,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description="Live2D Master Agent - ComfyUI 集成工具"
+        description="Pygmalion Studio - ComfyUI 集成工具"
     )
     parser.add_argument(
         "--url", 

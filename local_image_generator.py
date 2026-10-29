@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live2D Master Agent - 本地兜底图像生成器.
+"""Pygmalion Studio - 本地兜底图像生成器.
 
 用途：在所有云端 provider 都不可用（无 API Key / 断网）时，保证
 「生成 → 分层 → 导出 → 预览」主链路依然可以走通 —— 产出一张

@@ -551,3 +551,87 @@ class TestSynthesisedSilhouette:
 
         assert seg._last_fg_synthesised is True
         assert seg._last_fg_source == "synthesised"
+
+
+class TestOnnxProviderSelection:
+    """ISNet 走 onnxruntime：装了 GPU provider 就必须真的用上。"""
+
+    class _FakeOrt:
+        def __init__(self, providers):
+            self._providers = providers
+
+        def get_available_providers(self):
+            return list(self._providers)
+
+    def _patch(self, monkeypatch, providers):
+        from core.segment_engine import isnet_onnx
+
+        monkeypatch.setattr(isnet_onnx, "HAS_ORT", True, raising=False)
+        monkeypatch.setattr(isnet_onnx, "ort", self._FakeOrt(providers), raising=False)
+
+    def test_auto_uses_dml_when_cuda_absent(self, monkeypatch):
+        """只有 DirectML 的机器（AMD/Intel 卡、无 CUDA）也应跑 GPU，而不是静默 CPU。"""
+        self._patch(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
+        seg = SemanticLayerer(device="auto", model_type="isnet")
+
+        assert seg._ort_providers()[0] == "DmlExecutionProvider"
+
+    def test_auto_prefers_cuda_when_available(self, monkeypatch):
+        self._patch(monkeypatch, ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"])
+        seg = SemanticLayerer(device="auto", model_type="isnet")
+
+        assert seg._ort_providers()[0] == "CUDAExecutionProvider"
+
+    def test_auto_stays_cpu_when_no_gpu_provider_installed(self, monkeypatch):
+        """没装 GPU provider 时不能凭空指定，否则 onnxruntime 直接报错。"""
+        self._patch(monkeypatch, ["AzureExecutionProvider", "CPUExecutionProvider"])
+        seg = SemanticLayerer(device="auto", model_type="isnet")
+
+        assert seg._ort_providers() == ["CPUExecutionProvider"]
+
+    def test_explicit_cpu_request_is_not_overridden(self, monkeypatch):
+        """用户显式要 CPU（省电/腾显存）时，自动选卡不能抢回去。"""
+        self._patch(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
+        seg = SemanticLayerer(device="cpu", model_type="isnet")
+
+        assert seg._ort_providers() == ["CPUExecutionProvider"]
+
+    def test_loaded_model_provider_is_reported(self, monkeypatch):
+        """自检与日志要说清「实际跑在哪个 provider 上」，不能只看请求值。"""
+        self._patch(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
+        seg = SemanticLayerer(device="auto", model_type="isnet")
+        seg._model_loaded = True
+        seg._model = type("_M", (), {"session": type("_S", (), {"get_providers": lambda self: ["DmlExecutionProvider", "CPUExecutionProvider"]})()})()
+
+        assert seg._used_ort_providers() == ["DmlExecutionProvider", "CPUExecutionProvider"]
+
+    def test_gpu_provider_init_failure_falls_back_to_cpu_not_heuristics(self, monkeypatch):
+        """GPU 在列表里但建会话失败（无 DX12/驱动异常）时，必须退回 CPU 权重推理。
+
+        丢掉 ONNX 模型会一路掉到 HSV 颜色启发式 —— 分层质量断崖，比慢更糟。
+        """
+        from core.segment_engine import isnet_onnx
+
+        self._patch(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
+
+        class _Session:
+            def __init__(self, providers):
+                self._providers = providers
+
+            def get_providers(self):
+                return list(self._providers)
+
+        class _FakeModel:
+            def __init__(self, path, providers=None):
+                if providers and providers[0] != "CPUExecutionProvider":
+                    raise RuntimeError("DML init failed")
+                self.session = _Session(list(providers or []))
+
+        monkeypatch.setattr(isnet_onnx, "find_model", lambda: Path("isnet-fake.onnx"), raising=False)
+        monkeypatch.setattr(isnet_onnx, "OnnxForegroundModel", _FakeModel)
+
+        seg = SemanticLayerer(device="auto", model_type="isnet")
+        seg._load_isnet()
+
+        assert seg._fg_source == "onnx_local"
+        assert seg._used_ort_providers() == ["CPUExecutionProvider"]

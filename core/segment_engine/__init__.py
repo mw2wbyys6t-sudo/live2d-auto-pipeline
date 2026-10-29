@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - core.segment_engine
+Pygmalion Studio - core.segment_engine
 
 Re-exports the public segmentation / composition classes:
 

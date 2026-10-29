@@ -313,11 +313,13 @@
   `/api/models/optional/download`、`/api/models/optional/cancel`）统一回 **501 + `go_endpoint` 指引**，
   不回 202 假成功。降级模式的边界是「这些能力只有 Go API 有真实实现」，不是「大部分接口没写」。
 - 降级模式现已与 Go 侧**对齐前端实际调用的全部端点**（此前 8 个返回 404，导致健康页误报
-  「无法连接后端」）：`GET /api/diagnostics`、`GET /api/providers`、`GET /api/models/optional`、
+  「无法连接后端」）：`GET /api/diagnostics`、`GET /api/providers`、`GET /api/gpu`、
+  `GET /api/models/optional`、
   `GET /api/generations/models`、`GET /api/tracking/status`、`POST /api/upload`、
   `POST /api/import/psd`、`POST /api/import/pngs`、`POST /api/characters/:id/references`、
   `POST /api/characters/:id/embedding`。端点对齐由「前端路径字面量 × 后端路由表」的全量对账
   核过（不是逐个端点手查）。
+
 - 参数校验失败（422）现在也走统一响应信封 `{success, error, data}`。FastAPI 默认回
   `{"detail": [...]}`，前端解析不到 `error` 字段，只能显示一句 "Request failed: 422"；
   Go 侧一直是走 `models.Response` 的 —— 这是又一处 Go/Python 信封不一致。
@@ -391,7 +393,54 @@
 - **`install.py` 的兜底列表与清单冲突**（`Pillow>=10.0.0` / `numpy>=1.24.0` /
   `urllib3>=2.2.2`），且 `PYTHON_MIN = (3, 9)` 与清单要求完全脱节。已对齐。
 
-## 10. 参考
+## 10. GPU 探测的边界（2026-10-27 新增）
+
+`GET /api/gpu`（Go 与 Python 降级后端同构）与自检页的 `gpu` 行由
+[`core/gpu_probe.py`](../core/gpu_probe.py) 单真源判定，两端只透传结果。当前边界：
+
+- **探测已接进自动选卡**：`SemanticLayerer(device="auto")`（生产两处调用点的默认值）
+  现在按 `CUDA > DirectML > CPU` 选 onnxruntime provider；建会话失败会退回 CPU
+  继续用学出来的掩码，不再一路掉到 HSV 颜色启发式。
+- **实测收益（量在用户等的那一步）**：600×900 立绘的**整条分层**
+  `SemanticLayerer.segment()` mean **1923 ms → 383 ms**（≈4.3×；前者是当前发布包的真实表现，
+  它只有 CPU provider，所以 `auto` 与 `cpu` 差 1.04× 属噪声）。同一次 A/B 的 16 层
+  逐层像素完全一致（合计 118,298 px，最大差 0）。单算子前景推理 1149 ms → 163 ms
+  （≈7.0×，掩码 IoU 1.0000）；端到端倍数低，是因为剩余 ~300 ms 是 CPU 预处理与
+  部位启发式，不吃 GPU。数据来自 RTX 2060 + onnxruntime-directml 1.24.4。
+- **Windows 基础包现在带 GPU 运行时**（v0.10.10 决策）：`requirements*.txt` 按平台分流 ——
+  Windows 装 `onnxruntime-directml>=1.24.4`（自带 `DmlExecutionProvider`），
+  其余平台装 `onnxruntime>=1.31.0`（DirectML 只发 Windows wheel）。
+- **CPU 包与 DirectML 包不能共存**（实测）：两者共用 `onnxruntime/` 目录，
+  后装 `onnxruntime`（1.31.0）会把 `DmlExecutionProvider` 顶掉，`pip` 视而不见
+  （它们是不同发行名）。而 `rembg[cpu]` 恰好钉着 `onnxruntime`，
+  因此 **rembg 已移出基础包**（它本来就是按需能力组：`capabilityPlans["rembg"]` 早已接线，
+  冒烟清单里的 `rembg` 也在 v0.10.10 一并撤下 —— 全新 bundle 必然缺它），
+  否则「默认带 GPU」会变成安装顺序的碰运气。
+  应用内安装 rembg 后，安装器会**强制重装** DirectML 运行时补回 GPU
+  （`api/services/capability_manager.go::installSteps`）；手动 `pip install "rembg[cpu]"`
+  仍需自己补那一步，否则会静默失去 GPU —— 但自检页的 `gpu` 行会如实显示出来。
+- **装配期硬闸门（已实跑）**：`scripts/build_desktop_bundle.py` 的冒烟步骤实测随包解释器的
+  provider，缺 `DmlExecutionProvider` 直接失败并点名根因，结果写进
+  `BUILD-INFO.json` 的 `ort_providers`。2026-10-28 在装配机上真跑通过：随包
+  CPython 3.12.10 实测 `['DmlExecutionProvider', 'CPUExecutionProvider']`，
+  必装 9 项全部可导入，`site-packages` 628 MB。
+- **装配口径钉在随包解释器，而不是宿主机**：轮子标签（`--platform win_amd64`、
+  `--python-version 3.12`、`--abi cp312`）恒定钉死；环境标记 pip 不按目标解释器求值，
+  所以由 `flatten_requirements()` 自己算完再把 `requirements.resolved.txt` 交给 pip。
+  否则在 Python 3.14 的装配机上会解析出 cp314 轮子、并把
+  `python_version < "3.14"` 判反（装成 `pygame-ce`），而冒烟对这两种错都无感。
+- **硬件枚举限 Windows**：走 `Get-CimInstance Win32_VideoController`；
+  非 Windows 平台返回空适配器（`available = false`），不会误报。
+- **显存数字是 WMI 口径**：`Win32_VideoController.AdapterRAM` 上限 4 GiB，
+  6/12 GiB 的卡也会被报成 ~4.29e9；驱动不上报时为 `null`（保留未知，不写成 0）。
+  要精确显存得换 NVAPI 一类接口，当前没做。
+- **虚拟显示器不计入可用 GPU**：实测本机枚举到 `GameViewer Virtual Display Adapter`
+  等虚拟卡，归为 OTHER，避免远程桌面环境被误判为有独显。
+- **运行时能力以 import 为准**：装了 `onnxruntime` 不等于有 GPU provider；
+  实测本机为 `AzureExecutionProvider / CPUExecutionProvider`，因此即便存在
+  RTX 2060，推荐仍是 `cpu`，自检行按不通过显示并写明原因。
+
+## 11. 参考
 
 - 详细运维/部署边界见 [docs/DEPLOY.md](DEPLOY.md)、[docs/FAQ.md](FAQ.md)。
 - 架构不变量与适应性函数见 [docs/architecture/index.md](architecture/index.md) § 4（FF-1 ~ FF-16）。

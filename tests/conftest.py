@@ -1,4 +1,4 @@
-"""Pytest configuration and shared fixtures for Live2D Master Agent tests."""
+"""Pytest configuration and shared fixtures for Pygmalion Studio tests."""
 
 import sys
 import os

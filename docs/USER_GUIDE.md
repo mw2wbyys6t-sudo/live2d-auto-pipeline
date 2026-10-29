@@ -1,4 +1,4 @@
-# 📖 Live2D Master Agent - 完整使用教程
+# 📖 Pygmalion Studio - 完整使用教程
 
 **详细指南，让你成为Live2D大师！**
 

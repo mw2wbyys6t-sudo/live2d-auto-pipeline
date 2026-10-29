@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Pet Runner
+Pygmalion Studio - Pet Runner
 
 Runs a pet package or layer directory directly. Supports two modes:
 1. Real-time parameter-driven mode with FaceTracker + AudioCapture

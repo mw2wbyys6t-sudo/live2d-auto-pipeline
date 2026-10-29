@@ -23,18 +23,21 @@ interface ModelCanvasProps {
   wireframe?: boolean;
   onReady?: (player: Live2DPlayer) => void;
   onFrame?: () => void;
+  /** 模型加载失败时把原因交给调用方展示，不再静默留一张空白画布。 */
+  onError?: (message: string) => void;
 }
 
 const ModelCanvas = forwardRef<ModelCanvasHandle, ModelCanvasProps>(function ModelCanvas(
-  { modelUrl, className = '', wireframe = false, onReady, onFrame },
+  { modelUrl, className = '', wireframe = false, onReady, onFrame, onError },
   ref,
 ) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<Live2DPlayer | null>(null);
   const onReadyRef = useRef(onReady);
   const onFrameRef = useRef(onFrame);
+  const onErrorRef = useRef(onError);
   onReadyRef.current = onReady;
+  onErrorRef.current = onError;
   onFrameRef.current = onFrame;
 
   useImperativeHandle(ref, () => ({
@@ -77,8 +80,15 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, ModelCanvasProps>(function Mod
   }));
 
   useEffect(() => {
-    if (!canvasRef.current) return;
-    const player = new Live2DPlayer(canvasRef.current, {
+    const container = containerRef.current;
+    if (!container) return;
+    // 画布由播放器自己创建并持有：React 严格模式/热重载会把挂载效应跑两遍，
+    // 复用同一个 <canvas> 时第二个 Pixi 渲染器拿到的是已被销毁的 WebGL 上下文
+    // （报 checkMaxIfStatementsInShader(0)），预览就永久空白。
+    const canvas = document.createElement('canvas');
+    canvas.className = 'w-full h-full block';
+    container.appendChild(canvas);
+    const player = new Live2DPlayer(canvas, {
       backgroundAlpha: 0,
       autoStart: false,
     });
@@ -90,6 +100,7 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, ModelCanvasProps>(function Mod
 
     return () => {
       player.destroy();
+      canvas.remove();
       playerRef.current = null;
     };
   }, []);
@@ -104,7 +115,10 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, ModelCanvasProps>(function Mod
           playerRef.current?.start();
         }
       })
-      .catch(() => undefined);
+      .catch((err) => {
+        if (cancelled) return;
+        onErrorRef.current?.(err instanceof Error ? err.message : '模型加载失败');
+      });
     return () => {
       cancelled = true;
     };
@@ -133,7 +147,7 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, ModelCanvasProps>(function Mod
         backgroundSize: wireframe ? '40px 40px' : undefined,
       }}
     >
-      <canvas ref={canvasRef} className="w-full h-full block" />
+      {/* 画布由播放器在挂载效应里创建并插入（见上方注释），React 不持有它。 */}
     </div>
   );
 });

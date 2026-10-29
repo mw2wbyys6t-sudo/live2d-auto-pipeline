@@ -102,7 +102,7 @@
 
 ### 4.4 数据目录违规（成功标准 #9）
 
-当前所有产物写进 `ScriptsDir/output`（config.go:252 `filepath.Join(baseDir,"output")`；image_generator.go:101；upload_service.go:62；character_service.go:24 写 baseDir/assets/characters）。安装目录（NSIS currentUser 下 `%LOCALAPPDATA%\Programs\...`）不可写/卸载应清空 → **必须实现 LIVE2D_DATA_DIR，拆分 `%APPDATA%\Live2DMasterAgent`（config/logs/缓存）与「文档\Live2DMasterAgent」（output/角色库）**。Go 目前不读 LIVE2D_DATA_DIR（grep 零命中），Python `core/config.py:280-286` 用 OUTPUT_DIR/LIVE2D_PROJECT_ROOT。
+当前所有产物写进 `ScriptsDir/output`（config.go:252 `filepath.Join(baseDir,"output")`；image_generator.go:101；upload_service.go:62；character_service.go:24 写 baseDir/assets/characters）。安装目录（NSIS currentUser 下 `%LOCALAPPDATA%\Programs\...`）不可写/卸载应清空 → **必须实现 LIVE2D_DATA_DIR，拆分 `%APPDATA%\PygmalionStudio`（config/logs/缓存）与「文档\PygmalionStudio」（output/角色库）**。Go 目前不读 LIVE2D_DATA_DIR（grep 零命中），Python `core/config.py:280-286` 用 OUTPUT_DIR/LIVE2D_PROJECT_ROOT。
 
 ### 4.5 打包现状（根因确认）
 
@@ -135,6 +135,7 @@ tauri-build.yml 仅 bundle `desktop/bin/*`（live2d-api.exe + face_tracker.exe�
 | GET | /api/generations/latest,/api/generations/models | — | 跨页接力/模型列表 |
 | POST | /api/import/psd,/api/import/pngs | — | 素材导入（500MB 上限） |
 | GET | /api/providers | ListImageProviders | 上游可用性 |
+| GET | /api/gpu | GetGPUStatus | 本机 GPU + 推理运行时探测（判定在 core/gpu_probe） |
 | GET | /api/scripts,/api/cache/stats, POST /api/cache/clear | — | 工具 |
 | GET | /output/*filepath | ServeOutput | 产物静态服务（防目录列举/穿越） |
 | — | SPA NoRoute | main.go:301-363 | 内嵌静态站回退 |
@@ -200,7 +201,7 @@ tauri-build.yml 仅 bundle `desktop/bin/*`（live2d-api.exe + face_tracker.exe�
 
 ## 9. P0 设计决策预告（详见 P0 ADR）
 
-1. 安装布局：Tauri `resources` 下 `bin/`（live2d-api.exe、face_tracker.exe、onnxruntime.dll、models/yunet.onnx）、`python/`（embeddable 3.12 + 离线 site-packages）、`app/`（Python 源码树 core/drivers/live2d_builder/llm_bridge/prompts/templates + local_image_generator.py）；首启由 lib.rs 在 `%APPDATA%\Live2DMasterAgent` 生成 config.json（python_path/scripts_dir/data_dir 全部指向资源与用户目录），spawn 追加 `-config`。
+1. 安装布局：Tauri `resources` 下 `bin/`（live2d-api.exe、face_tracker.exe、onnxruntime.dll、models/yunet.onnx）、`python/`（embeddable 3.12 + 离线 site-packages）、`app/`（Python 源码树 core/drivers/live2d_builder/llm_bridge/prompts/templates + local_image_generator.py）；首启由 lib.rs 在 `%APPDATA%\PygmalionStudio` 生成 config.json（python_path/scripts_dir/data_dir 全部指向资源与用户目录），spawn 追加 `-config`。
 2. 保留 resources + `-config` 最小改动路线（不升 sidecar），另立 ADR 记录 sidecar 对比。
 3. requirements.desktop.txt 精确钉版本 + hash；torch/rembg/mediapipe/sounddevice 全部按需下载。
 4. tauri-build.yml 先跑 PowerShell 打包脚本（下载校验 embeddable Python → 修 ._pth → 离线装配 → 拷 app → 下载校验 YuNet/DLL → 生成 BUILD-INFO）再 cargo tauri build。

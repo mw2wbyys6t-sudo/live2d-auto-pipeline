@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Secure Configuration Manager (P0-5 FIXED: env path resolution)
+Pygmalion Studio - Secure Configuration Manager (P0-5 FIXED: env path resolution)
 
 P0-5 Fix: .env file is searched in multiple locations to support:
 1. LIVE2D_PROJECT_ROOT (set by root wrappers)
@@ -77,7 +77,7 @@ class SecureConfig:
         3. live2d package parent dir (project root) /.env
         4. Current working directory/.env
         5. Directory of the main script (sys.argv[0])/.env
-        6. ~/.trae-cn/skills/live2d-master-agent/.env (Trae Skill default)
+        6. ~/.trae-cn/skills/pygmalion-studio/.env (Trae Skill default)
         7. ~/.live2d/.env (user home config)
         """
         search_paths = []
@@ -106,8 +106,11 @@ class SecureConfig:
             except (OSError, RuntimeError):
                 pass
 
-        # 6. Trae Skill config directory
-        search_paths.append(Path.home() / ".trae-cn" / "skills" / "live2d-master-agent" / ".env")
+        # 6. Skill config directory —— 新旧两个名字都要找：
+        #    目录名当年是**按旧产品名**落的盘，只留新名会让已配置好 .env 的
+        #    用户「Key 凭空失效」；旧路径按 legacy 顺序排在后面，仅作回退。
+        search_paths.append(Path.home() / ".trae-cn" / "skills" / "pygmalion-studio" / ".env")
+        search_paths.append(Path.home() / ".trae-cn" / "skills" / "live2d-master-agent" / ".env")  # legacy
 
         # 7. User home config
         search_paths.append(Path.home() / ".live2d" / ".env")

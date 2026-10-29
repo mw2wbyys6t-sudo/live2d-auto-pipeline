@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Unified Workflow Engine (v0.10.0)
+Pygmalion Studio - Unified Workflow Engine (v0.10.0)
 
 Full pipeline: Text-to-Image -> QA -> Optimize -> Layer -> PSD -> 52-layer mapping -> Pet
 
@@ -42,6 +42,7 @@ from core.psd.validator import (
 from drivers.desktop_pet.animator import DesktopPetAnimator
 from core.qa.engine import QAEngine
 from core.security import sanitize_prompt, validate_image_path
+from core.image_gen.prompt_lang import detect_lang
 
 log = get_logger("workflow")
 
@@ -487,24 +488,27 @@ class WorkflowEngine:
             if not valid:
                 raise RuntimeError(f"Invalid input image: {reason}")
 
-        # Merge character consistency prompts
+        # Merge character consistency prompts. 后缀语言跟随用户提示词：中文用户
+        # 不该在自己的提示词后面看到 "twintail hair" 这类英文枚举。
         effective_prompt = prompt
         effective_negative = negative_prompt or ""
         if self._character_card:
-            style_suffix = self._character_card.generate_style_prompt()
+            card_lang = detect_lang(prompt) if prompt else "en"
+            separator = "，" if card_lang == "zh" else ", "
+            style_suffix = self._character_card.generate_style_prompt(lang=card_lang)
             if effective_prompt:
-                effective_prompt = f"{effective_prompt}, {style_suffix}"
+                effective_prompt = f"{effective_prompt}{separator}{style_suffix}"
             else:
                 effective_prompt = style_suffix
-            char_neg = self._character_card.generate_negative_prompt()
+            char_neg = self._character_card.generate_negative_prompt(lang=card_lang)
             if effective_negative:
-                effective_negative = f"{effective_negative}, {char_neg}"
+                effective_negative = f"{effective_negative}{separator}{char_neg}"
             else:
                 effective_negative = char_neg
             log.info(f"Character consistency applied: {self._character_card.name}")
 
         try:
-            log.section(f"Live2D Master Agent v{__version__}")
+            log.section(f"Pygmalion Studio v{__version__}")
 
             # === Step 1: Generate or load image ===
             if input_image:
@@ -536,6 +540,19 @@ class WorkflowEngine:
                     "model": gen_result.model,
                     "path": character_path,
                     "elapsed": gen_result.elapsed_seconds,
+                }
+                # 「实际发送给模型的提示词」只认 provider 记录的那串（含风格标签）；
+                # 用户原文、合并角色一致性后的文本也一并留下，便于在界面里对照。
+                prompt_meta = gen_result.metadata or {}
+                result["prompt"] = {
+                    "user": prompt,
+                    "effective": effective_prompt,
+                    "sent": gen_result.prompt,
+                    "negative": effective_negative or None,
+                    "provider": gen_result.provider,
+                    "lang": prompt_meta.get("prompt_lang")
+                    or detect_lang(safe_prompt),
+                    "mismatch": bool(prompt_meta.get("prompt_mismatch", False)),
                 }
                 log.success(f"Image generated: {character_path}")
 
@@ -881,7 +898,7 @@ def run_workflow(
 if __name__ == "__main__":
     import json as _json
     import argparse
-    parser = argparse.ArgumentParser(description=f"Live2D Master Agent v{__version__}")
+    parser = argparse.ArgumentParser(description=f"Pygmalion Studio v{__version__}")
     parser.add_argument("prompt", nargs="?", default="", help="Character description")
     parser.add_argument("--input", "-i", help="Input image path (skip generation)")
     parser.add_argument("--output", "-o", help="Output directory")

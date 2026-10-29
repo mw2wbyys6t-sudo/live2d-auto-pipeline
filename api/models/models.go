@@ -42,6 +42,13 @@ type GenerateImageResponse struct {
 	Error        string            `json:"error,omitempty"`
 	// 各步骤产物路径
 	Steps        map[string]interface{} `json:"steps,omitempty"`
+	// 提示词链路：用户原文 → 合并角色一致性 → 真正发给上游（含风格标签）。
+	// 前端用它展示「实际发送了什么」，中文提示词出问题时不必靠猜。
+	PromptUser      string `json:"prompt_user,omitempty"`
+	EffectivePrompt string `json:"effective_prompt,omitempty"`
+	PromptSent      string `json:"prompt_sent,omitempty"`
+	PromptLang      string `json:"prompt_lang,omitempty"`
+	PromptMismatch  bool   `json:"prompt_mismatch,omitempty"`
 }
 
 // PSD分层请求

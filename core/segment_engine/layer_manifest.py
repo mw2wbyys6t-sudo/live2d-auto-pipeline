@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Layer Manifest v1
+Pygmalion Studio - Layer Manifest v1
 
 Defines the canonical contract for layered outputs. Every layerer must emit a
 ``layer_manifest.json`` next to its PNG files so downstream consumers (PSD

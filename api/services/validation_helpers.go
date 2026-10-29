@@ -43,6 +43,26 @@ func ClampImageDimensions(width, height int) (int, int) {
 	return clampImageDimension(width), clampImageDimension(height)
 }
 
+// promptMaxRunes 是提示词上限：按**字符**计，不是字节。旧实现用 len()/切片
+// 按字节截断，4000 字节约等于 1333 个汉字，而且切点可能落在汉字或 emoji
+// 中间，下游拿到非法 UTF-8（显示成 �，模型也读不对）。
+const promptMaxRunes = 4000
+
+// truncatePromptRunes 按 Unicode 码点截断，绝不切开一个字符。
+func truncatePromptRunes(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	count := 0
+	for i := range s {
+		if count == limit {
+			return s[:i]
+		}
+		count++
+	}
+	return s
+}
+
 // ErrPathOutsideBase 是目录归属校验失败的哨兵错误，handler 层可用 errors.Is
 // 把它映射为 400（请求非法）而非 500（服务内部错误）。
 var ErrPathOutsideBase = fmt.Errorf("路径超出允许的输出目录范围")

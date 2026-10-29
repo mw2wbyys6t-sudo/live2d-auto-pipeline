@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live2D Master Agent - OpenAI 兼容图像生成 Provider.
+"""Pygmalion Studio - OpenAI 兼容图像生成 Provider.
 
 对接任何「OpenAI Images API」兼容的服务端点：
 - OpenAI 官方（gpt-image-1 / dall-e-3）
@@ -26,6 +26,7 @@
 import base64
 import os
 import time
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -38,6 +39,7 @@ from core.image_gen.base import (
     ImageProvider,
     checked_image_download,
 )
+from core.image_gen.prompt_lang import detect_lang, has_cjk
 from core.logger import get_logger
 
 log = get_logger("image_gen.openai_compat")
@@ -141,13 +143,19 @@ class OpenAICompatProvider(ImageProvider):
         out.write_bytes(image_bytes)
 
         return GenerationResult(
+            success=True,
             image_path=str(out),
             width=width,
             height=height,
             seed=seed if seed is not None else 0,
             provider=self.display_name,
             model=self.model,
+            prompt=full_prompt,
             elapsed_seconds=round(time.time() - started, 2),
+            metadata={
+                "prompt_lang": detect_lang(prompt),
+                "prompt_mismatch": has_cjk(prompt),
+            },
         )
 
     def _default_output_path(self) -> str:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Image Provider Base Class (Provider Registry Pattern)
+Pygmalion Studio - Image Provider Base Class (Provider Registry Pattern)
 
 Abstract base for all image generation providers. The ProviderRouter
 automatically discovers and routes to registered providers.
@@ -38,6 +38,7 @@ class GenerationResult:
     prompt: str = ""
     width: int = 0
     height: int = 0
+    seed: int = 0
     elapsed_seconds: float = 0.0
     error: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)

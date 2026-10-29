@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live2D Master Agent — CI 端到端冒烟（P1 验收闸门，确定性、可断网运行）。
+"""Pygmalion Studio — CI 端到端冒烟（P1 验收闸门，确定性、可断网运行）。
 
 用法：
     LIVE2D_SMOKE=1 python scripts/smoke_e2e.py --base http://127.0.0.1:8080 \

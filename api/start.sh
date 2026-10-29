@@ -1,5 +1,5 @@
 #!/bin/bash
-# Live2D Master Agent API 启动脚本
+# Pygmalion Studio API 启动脚本
 
 set -e
 
@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║     🎨 Live2D Master Agent API 启动器                       ║${NC}"
+echo -e "${BLUE}║     🎨 Pygmalion Studio API 启动器                       ║${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo
 

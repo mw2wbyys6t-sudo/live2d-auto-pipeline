@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Character Card Data Model
+Pygmalion Studio - Character Card Data Model
 
 Defines the CharacterCard dataclass that stores all visual and persona
 parameters needed to maintain character consistency across generations.
@@ -12,6 +12,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from core.character.colors import describe_color
+from core.character.lexicon import term
 
 
 def _now_iso() -> str:
@@ -312,41 +315,82 @@ class CharacterCard:
     # Prompt generation
     # ------------------------------------------------------------------
 
-    def generate_style_prompt(self) -> str:
+    def generate_style_prompt(self, lang: str = "en") -> str:
         """Generate a prompt suffix that locks character consistency.
 
         The returned string is meant to be appended to the base image
         generation prompt to anchor the character's appearance.
 
+        ``lang="zh"`` 输出中文描述（中文原生模型），色值统一转成颜色名：
+        图像模型不认识 ``#3a2a1a`` 这样的 hex，原样拼进提示词等于没写锚点。
+
+        Args:
+            lang: ``zh`` or ``en``.
+
         Returns:
             A comma-separated string of consistency descriptors.
         """
+        zh = lang == "zh"
         parts: List[str] = []
 
         # Face descriptors
-        parts.append(f"{self.face_shape} face")
-        parts.append(f"{self.eye_shape} {self.eye_color} eyes")
+        if zh:
+            parts.append(f"{term('face_shape', self.face_shape, 'zh')}脸型")
+            parts.append(
+                f"{describe_color(self.eye_color, 'zh')}的"
+                f"{term('eye_shape', self.eye_shape, 'zh')}"
+            )
+        else:
+            parts.append(f"{term('face_shape', self.face_shape, 'en')} face")
+            parts.append(
+                f"{describe_color(self.eye_color, 'en')} "
+                f"{term('eye_shape', self.eye_shape, 'en')}"
+            )
         if self.eye_size != 1.0:
-            parts.append(f"eye size {self.eye_size:.2f}")
-        parts.append(f"{self.eyebrow_shape} eyebrows")
+            parts.append(f"眼睛大小 {self.eye_size:.2f}" if zh else f"eye size {self.eye_size:.2f}")
+        parts.append(term("eyebrow_shape", self.eyebrow_shape, lang))
 
         # Hair descriptors
-        parts.append(f"{self.hair_color} {self.hair_style} hair")
-        parts.append(f"{self.bangs_style} bangs")
-        if self.highlights_color:
-            parts.append(f"{self.highlights_color} hair highlights")
+        if zh:
+            parts.append(
+                f"{describe_color(self.hair_color, 'zh')}"
+                f"{term('hair_style', self.hair_style, 'zh')}发型"
+            )
+            parts.append(term("bangs_style", self.bangs_style, "zh"))
+            if self.highlights_color:
+                parts.append(f"{describe_color(self.highlights_color, 'zh')}挑染")
+        else:
+            parts.append(
+                f"{describe_color(self.hair_color, 'en')} "
+                f"{term('hair_style', self.hair_style, 'en')}"
+            )
+            parts.append(term("bangs_style", self.bangs_style, "en"))
+            if self.highlights_color:
+                parts.append(f"{describe_color(self.highlights_color, 'en')} hair highlights")
 
         # Body descriptors
-        parts.append(f"{self.body_type} body")
-        parts.append(f"{self.proportions} proportions")
+        if zh:
+            parts.append(f"{term('body_type', self.body_type, 'zh')}体型")
+            parts.append(f"{term('proportions', self.proportions, 'zh')}比例")
+        else:
+            parts.append(f"{term('body_type', self.body_type, 'en')} body")
+            parts.append(f"{term('proportions', self.proportions, 'en')} proportions")
 
         # Palette
         if self.skin_tone:
-            parts.append(f"{self.skin_tone} skin tone")
+            parts.append(
+                f"{describe_color(self.skin_tone, 'zh')}肤色"
+                if zh
+                else f"{describe_color(self.skin_tone, 'en')} skin tone"
+            )
         if self.primary_colors:
-            parts.append("primary colors " + ", ".join(self.primary_colors[:4]))
+            joined = ("、" if zh else ", ").join(
+                describe_color(c, lang) for c in self.primary_colors[:4]
+            )
+            parts.append(f"主色 {joined}" if zh else "primary colors " + joined)
         if self.accent_color:
-            parts.append(f"accent color {self.accent_color}")
+            accent = describe_color(self.accent_color, lang)
+            parts.append(f"点缀色 {accent}" if zh else f"accent color {accent}")
 
         # Outfit (high-level)
         if self.current_outfit:
@@ -359,26 +403,44 @@ class CharacterCard:
             parts.append(self.style_constraints)
 
         # Character name anchor
-        parts.append(f"character sheet of {self.name}")
-        parts.append("consistent character design, same character, reference sheet")
+        if zh:
+            parts.append(f"角色设定图：{self.name}")
+            parts.append("同一角色，一致的角色设计，参考设定图")
+        else:
+            parts.append(f"character sheet of {self.name}")
+            parts.append("consistent character design, same character, reference sheet")
 
-        return ", ".join(p for p in parts if p)
+        separator = "，" if zh else ", "
+        return separator.join(p for p in parts if p)
 
-    def generate_negative_prompt(self) -> str:
+    def generate_negative_prompt(self, lang: str = "en") -> str:
         """Generate a negative prompt to prevent character drift.
+
+        Args:
+            lang: ``zh`` or ``en``.
 
         Returns:
             A comma-separated negative prompt string.
         """
-        defaults = [
-            "different character", "inconsistent design", "multiple characters",
-            "mutated face", "asymmetrical eyes", "bad anatomy",
-            "extra limbs", "deformed", "low quality", "blurry",
-            "wrong hair color", "wrong eye color",
-        ]
+        if lang == "zh":
+            defaults = [
+                "不同的角色", "角色设计不一致", "多个人物",
+                "面部畸形", "眼睛不对称", "人体结构错误",
+                "多余肢体", "变形", "低质量", "模糊",
+                "发色错误", "瞳色错误",
+            ]
+            separator = "，"
+        else:
+            defaults = [
+                "different character", "inconsistent design", "multiple characters",
+                "mutated face", "asymmetrical eyes", "bad anatomy",
+                "extra limbs", "deformed", "low quality", "blurry",
+                "wrong hair color", "wrong eye color",
+            ]
+            separator = ", "
         if self.negative_prompt:
             defaults.insert(0, self.negative_prompt)
-        return ", ".join(defaults)
+        return separator.join(defaults)
 
     # ------------------------------------------------------------------
     # Iterative refinement

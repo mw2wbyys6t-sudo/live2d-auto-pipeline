@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Image Utility Functions
+Pygmalion Studio - Image Utility Functions
 
 Provides common image loading, saving, resizing, background removal,
 enhancement, compositing, and preview utilities used across the pipeline.

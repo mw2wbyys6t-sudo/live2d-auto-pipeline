@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - SenseNova (商汤日日新) Provider
+Pygmalion Studio - SenseNova (商汤日日新) Provider
 High-quality cloud API provider.
 """
 
@@ -19,6 +19,7 @@ from core.image_gen.base import (
     GenerationError,
     checked_image_download,
 )
+from core.image_gen.prompt_lang import append_live2d_tags, detect_lang
 
 
 class SenseNovaProvider(ImageProvider):
@@ -70,9 +71,10 @@ class SenseNovaProvider(ImageProvider):
             "Content-Type": "application/json",
         }
 
+        sent_prompt = self._optimize_prompt(prompt)
         payload = {
             "model": model,
-            "prompt": self._optimize_prompt(prompt),
+            "prompt": sent_prompt,
             "size": size,
             "n": 1,
         }
@@ -136,9 +138,13 @@ class SenseNovaProvider(ImageProvider):
                     image_path=path,
                     provider=self.name,
                     model=model,
-                    prompt=prompt,
+                    prompt=sent_prompt,
                     width=width,
                     height=height,
+                    metadata={
+                        "prompt_lang": detect_lang(prompt),
+                        "prompt_mismatch": False,
+                    },
                 )
 
             except requests.RequestException as e:
@@ -158,12 +164,11 @@ class SenseNovaProvider(ImageProvider):
         return self.SIZE_MAP[closest]
 
     def _optimize_prompt(self, prompt: str) -> str:
-        """Add Live2D-specific prompt optimizations."""
-        tags = (
-            "anime style, high quality, masterpiece, full body, front-facing, "
-            "clear outlines, simple background, character design for Live2D rigging"
-        )
-        return f"{prompt}, {tags}"
+        """Add Live2D-specific prompt optimizations.
+
+        中文原生模型：中文提示词配中文标签，英文提示词仍走英文标签。
+        """
+        return append_live2d_tags(prompt)
 
     def get_setup_guide(self) -> str:
         return (

@@ -1,13 +1,13 @@
 @echo off
 chcp 65001 >nul
-echo 🎭 Live2D Master Agent Installer
+echo 🎭 Pygmalion Studio Installer
 echo ========================================
 echo.
 
 REM 预检 1：python 必须存在，否则不进入 install.py（避免用户看到 Python traceback）
 where python >nul 2>&1
 if %errorlevel% neq 0 (
-    echo ❌ 未检测到 Python。Live2D Master Agent 需要 Python 3.9+。
+    echo ❌ 未检测到 Python。Pygmalion Studio 需要 Python 3.9+。
     echo.
     echo 请先安装 Python：
     echo   • 下载页：https://www.python.org/downloads/

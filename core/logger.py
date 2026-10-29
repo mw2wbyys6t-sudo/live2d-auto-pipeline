@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Unified Logging & Telemetry System (DEF-007)
+Pygmalion Studio - Unified Logging & Telemetry System (DEF-007)
 
 Provides structured logging with:
 - Console output with rich formatting (if available) or plain text
@@ -91,7 +91,6 @@ def _redact_message(msg: str) -> str:
 
 class _RedactingFormatter(logging.Formatter):
     """Formatter wrapper that redacts sensitive values from every log record.
-
     This sits between the handler and the inner formatter so that
     all log output (console, file, rich) is automatically sanitized,
     regardless of which log method (debug/info/warning/error/critical) was called.
@@ -105,8 +104,13 @@ class _RedactingFormatter(logging.Formatter):
         return _redact_message(formatted)
 
 
+# 文件句柄按绝对路径进程内共享：同一日志文件只能有一个 RotatingFileHandler，
+# 否则 Windows 上轮转的重命名会因另一句柄占用而抛 WinError 32。
+_FILE_HANDLERS: Dict[str, RotatingFileHandler] = {}
+
+
 class Live2DLogger:
-    """Unified logger for the Live2D Master Agent system."""
+    """Unified logger for the Pygmalion Studio system."""
 
     _instances: Dict[str, "Live2DLogger"] = {}
 
@@ -153,14 +157,21 @@ class Live2DLogger:
             log_dir = str(Path(root) / "logs")
         os.makedirs(log_dir, exist_ok=True)
         log_file = str(Path(log_dir) / "live2d.log")
-        handler = RotatingFileHandler(
-            log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
-        )
-        handler.setLevel(logging.DEBUG)
-        handler.setFormatter(_RedactingFormatter(
-            "[%(asctime)s] %(levelname)-7s %(name)s:%(lineno)d - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        ))
+        # 每个命名 logger 都会走到这里，但同一个日志文件只能有一个句柄：
+        # Windows 上另一句柄开着时 os.rename 会抛 WinError 32，轮转从此永久失败
+        # （日志停在 maxBytes 不再滚动，触发轮转的记录还会被 logging 吞掉）。
+        key = os.path.normcase(os.path.abspath(log_file))
+        handler = _FILE_HANDLERS.get(key)
+        if handler is None:
+            handler = RotatingFileHandler(
+                log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            )
+            handler.setLevel(logging.DEBUG)
+            handler.setFormatter(_RedactingFormatter(
+                "[%(asctime)s] %(levelname)-7s %(name)s:%(lineno)d - %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S"
+            ))
+            _FILE_HANDLERS[key] = handler
         self._logger.addHandler(handler)
 
     def debug(self, msg: str, **kwargs):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Left/Right Part Splitting
+Pygmalion Studio - Left/Right Part Splitting
 
 Semantic segmenters detect limbs as one coarse mask (``arms``, ``hands``,
 ``legs``). Live2D rigging needs each side as an independent layer, because a

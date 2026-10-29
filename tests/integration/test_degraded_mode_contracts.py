@@ -156,12 +156,12 @@ class TestApiInfoContract:
         assert endpoints["status"] == "GET /api/status"
 
 
-# ---------- /api/diagnostics：与 Go 侧同构的 8 项自检 ----------
+# ---------- /api/diagnostics：与 Go 侧同构的 9 项自检 ----------
 
 class TestDiagnosticsContract:
     _GO_CHECK_KEYS = [
         "backend", "python", "scripts_dir", "output_dir",
-        "tracker_exe", "tracker_model", "tracker_dll", "bind_loopback",
+        "tracker_exe", "tracker_model", "tracker_dll", "gpu", "bind_loopback",
     ]
 
     def test_check_keys_match_go_backend(self, client):

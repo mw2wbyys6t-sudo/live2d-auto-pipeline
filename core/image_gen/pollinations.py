@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Pollinations.ai Provider (Free, no API key required)
+Pygmalion Studio - Pollinations.ai Provider (Free, no API key required)
 """
 
 import time
@@ -16,13 +16,7 @@ from core.image_gen.base import (
     GenerationError,
     read_bounded,
 )
-
-LIVE2D_NEGATIVE_PROMPT = (
-    "lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, "
-    "fewer digits, cropped, worst quality, low quality, normal quality, jpeg artifacts, "
-    "signature, watermark, username, blurry, deformed, mutated, ugly, disfigured, "
-    "3d, realistic, photorealistic, nsfw"
-)
+from core.image_gen.prompt_lang import detect_lang, has_cjk, negative_tags
 
 
 class PollinationsProvider(ImageProvider):
@@ -54,7 +48,8 @@ class PollinationsProvider(ImageProvider):
 
         # Build optimized prompt for Live2D character design
         optimized_prompt = self._build_live2d_prompt(prompt)
-        neg = negative_prompt or LIVE2D_NEGATIVE_PROMPT
+        lang = detect_lang(prompt)
+        neg = negative_prompt or negative_tags(lang)
 
         params = {
             "width": width,
@@ -102,6 +97,10 @@ class PollinationsProvider(ImageProvider):
                     prompt=optimized_prompt,
                     width=width,
                     height=height,
+                    metadata={
+                        **self._prompt_metadata(prompt),
+                        "negative_sent": neg,
+                    },
                 )
             except requests.RequestException as e:
                 last_error = str(e)
@@ -134,13 +133,23 @@ class PollinationsProvider(ImageProvider):
         return str(p)
 
     def _build_live2d_prompt(self, prompt: str) -> str:
-        """Build a Live2D-optimized prompt."""
+        """Build a Live2D-optimized prompt.
+
+        Pollinations 背后是 SD/Flux 系模型，只认英文标签；为了不让中文用户
+        面对一串无意义的英文而不知情，调用方会把 ``_prompt_metadata`` 里的
+        ``prompt_mismatch`` 一并透出。
+        """
         live2d_tags = (
             "anime style, full body, front-facing, simple white background, "
             "clean line art, flat colors, chibi or standard proportions, "
             "clear silhouette, high quality, masterpiece"
         )
         return f"{prompt}, {live2d_tags}"
+
+    @staticmethod
+    def _prompt_metadata(prompt: str) -> dict:
+        """标记提示词语言与「标签语言不匹配」。"""
+        return {"prompt_lang": detect_lang(prompt), "prompt_mismatch": has_cjk(prompt)}
 
     def get_setup_guide(self) -> str:
         return "Pollinations.ai is free and requires no API key or setup."

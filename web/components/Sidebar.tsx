@@ -1,14 +1,11 @@
 import Link from 'next/link';
 import { useRouter } from 'next/router';
+import { APP_NAME, APP_VERSION } from '../lib/brand';
 import {
   LayoutDashboard,
   Users,
   Sparkles,
-  Layers,
-  Box,
-  Eye,
   MessageSquare,
-  Download,
   Activity,
 } from 'lucide-react';
 
@@ -19,15 +16,11 @@ interface NavItem {
   match?: (pathname: string) => boolean;
 }
 
+// 生成/分层/预览/导出已并入单页工作台，侧栏只保留真正独立的页面。
 const NAV_ITEMS: NavItem[] = [
-  { href: '/', label: 'Dashboard', icon: LayoutDashboard, match: (p) => p === '/' },
-  { href: '/characters', label: 'Characters', icon: Users, match: (p) => p.startsWith('/characters') },
-  { href: '/generate', label: 'Generate', icon: Sparkles },
-  { href: '/layers', label: 'Layers', icon: Layers },
-  { href: '/live2d', label: 'Live2D Builder', icon: Box },
-  { href: '/preview', label: 'Preview', icon: Eye },
-  { href: '/chat', label: 'Chat', icon: MessageSquare },
-  { href: '/export', label: 'Export', icon: Download },
+  { href: '/', label: '工作台', icon: LayoutDashboard, match: (p) => p === '/' },
+  { href: '/characters', label: '角色库', icon: Users, match: (p) => p.startsWith('/characters') },
+  { href: '/chat', label: 'AI 对话', icon: MessageSquare },
   { href: '/health', label: '环境自检', icon: Activity, match: (p) => p.startsWith('/health') },
 ];
 
@@ -60,8 +53,8 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
                 <Sparkles className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h1 className="text-sm font-bold text-white leading-tight">Live2D Master</h1>
-                <p className="text-[10px] text-gray-500 uppercase tracking-wider">Agent Workbench</p>
+                <h1 className="text-sm font-bold text-white leading-tight">{APP_NAME}</h1>
+                <p className="text-[10px] text-gray-500 tracking-wider">中文角色工作台</p>
               </div>
             </Link>
           </div>
@@ -93,12 +86,12 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
 
           <div className="p-4 border-t border-gray-800">
             <div className="rounded-lg bg-gradient-to-br from-pink-500/10 to-purple-500/10 border border-pink-500/20 p-3">
-              <p className="text-xs font-semibold text-pink-300 mb-1">Pro tip</p>
+              <p className="text-xs font-semibold text-pink-300 mb-1">使用提示</p>
               <p className="text-[11px] text-gray-400 leading-relaxed">
-                Enable character consistency to keep visual identity across generations.
+                工作台里用中文写提示词即可；开启角色一致性可在多次生成间保持同一张脸。
               </p>
             </div>
-            <p className="text-[10px] text-gray-600 text-center mt-3">v0.10.9 · Made with ♥</p>
+            <p className="text-[10px] text-gray-600 text-center mt-3">v{APP_VERSION} · Made with ♥</p>
           </div>
         </div>
       </aside>

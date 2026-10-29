@@ -1,4 +1,4 @@
-// Central TypeScript types for the Live2D Master Agent workbench
+// 工作台前端的类型中枢（品牌名统一取自 lib/brand.ts）
 
 // ---------- Characters ----------
 
@@ -125,6 +125,22 @@ export interface GenerationResult {
   model3Url?: string;
   metadata: Record<string, string | number | boolean>;
   createdAt: string;
+  /** 工作台需要的产物路径（后端原始响应字段）。 */
+  imagePath?: string;
+  layersDir?: string;
+  psdPath?: string;
+  psdUrl?: string;
+  model3Json?: string;
+  outputDir?: string;
+  characterId?: string;
+  width?: number;
+  height?: number;
+  /** 提示词链路：用户原文 → 合并一致性 → 上游真正收到的那一份。 */
+  promptUser?: string;
+  effectivePrompt?: string;
+  promptSent?: string;
+  promptLang?: string;
+  promptMismatch?: boolean;
 }
 
 // ---------- Layers ----------
@@ -468,6 +484,26 @@ export interface ExportDownload {
 }
 
 // ---------- System ----------
+
+/** `GET /api/gpu` 的返回体（判定真源在后端 core/gpu_probe.py，前端只展示）。 */
+export interface GpuProbeReport {
+  available: boolean;
+  adapters: Array<{
+    name: string;
+    vendor?: string;
+    driver_version?: string | null;
+    /** WMI 口径，上限 4 GiB；驱动不上报时为 null（未知，不是 0）。 */
+    vram_bytes?: number | null;
+  }>;
+  runtime?: {
+    onnxruntime_available?: boolean;
+    onnxruntime_providers?: string[];
+    torch_available?: boolean;
+    torch_cuda_available?: boolean;
+    torch_device_name?: string | null;
+  };
+  recommendation?: { device?: 'cuda' | 'dml' | 'cpu' | string };
+}
 
 export interface SystemStatus {
   apiConnected: boolean;

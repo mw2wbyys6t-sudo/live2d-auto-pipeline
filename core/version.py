@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Live2D Master Agent - Version information (single source of truth)"""
+"""Pygmalion Studio - Version information (single source of truth)"""
 
-__version__ = "0.10.9"
-__version_info__ = (0, 10, 9)
-__release_date__ = "2026-10-24"
-__codename__ = "Dependency Truth"
+__version__ = "0.10.10"
+__version_info__ = (0, 10, 10)
+__release_date__ = "2026-10-28"
+__codename__ = "GPU Aware"
 
 VERSION = __version__
 VERSION_STRING = f"v{__version__}"
-FULL_VERSION_STRING = f"Live2D Master Agent v{__version__} ({__codename__}, {__release_date__})"
+FULL_VERSION_STRING = f"Pygmalion Studio v{__version__} ({__codename__}, {__release_date__})"
 
 
 def get_version() -> str:

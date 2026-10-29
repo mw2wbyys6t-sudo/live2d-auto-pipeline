@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent v0.10.0 - Interactive CLI
+Pygmalion Studio v0.10.0 - Interactive CLI
 
 Usage:
     python -m core.cli                    # Interactive menu
@@ -20,7 +20,7 @@ def print_banner():
     """Print the startup banner."""
     print(f"""
 ╔══════════════════════════════════════════════════════════╗
-║       🎭 Live2D Master Agent v{__version__:<24s}║
+║       🎭 Pygmalion Studio v{__version__:<24s}║
 ║       AI Character → Live2D Model → Desktop Pet        ║
 ╚══════════════════════════════════════════════════════════╝
 """)
@@ -266,7 +266,7 @@ def _show_docs():
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description=f"Live2D Master Agent v{__version__}",
+        description=f"Pygmalion Studio v{__version__}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command")

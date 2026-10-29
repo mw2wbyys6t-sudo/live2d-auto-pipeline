@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live2D Master Agent - Amodal Completion
+Pygmalion Studio - Amodal Completion
 
 Fills in occluded regions (e.g. hair behind the face, clothes behind arms)
 so that extracted layers remain complete as standalone textures for Live2D
