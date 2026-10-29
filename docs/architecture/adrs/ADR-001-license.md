@@ -354,7 +354,7 @@ Rev.4 的 Apache-2.0 为宽松许可，允许闭源商用且无需告知原作�
 
 **现行主分支协议 = AGPL-3.0（SPDX: `AGPL-3.0-only`）+ 商业授权双轨（Dual License）。**
 
-- 著作权始终归产权所有者（Live2D Master Agent Team）所有；`LICENSE` 顶部保留所有者版权声明与双轨说明，正文为 FSF 官方 AGPL-3.0 全文。
+- 著作权始终归产权所有者（Live2D Master Agent Team）所有；`LICENSE` 为 **FSF 官方 AGPL-3.0 纯净全文**（不加任何头尾，保证 GitHub licensee 正确识别为 AGPL-3.0）；所有者版权声明、双轨说明与**更改原因**（防止不知情私自商业化；Fork 无需告知；下载源码闭源商用必须告知）见 `README.md` § 许可证，并随 v0.10.10 tag / Release 发布。
 - 任何再分发 / 衍生副本须保留 `LICENSE` 全文与版权声明；衍生作品与对外网络服务（AGPL §13）均须以 AGPL-3.0 开源。
 - 商业授权通道：通过 GitHub Issues 联系产权所有者，说明用途与范围后单独授权（对应架构索引中的 ADR-013 候选「商用授权流程与治理」）。
 - Rev.1～Rev.4 历史版本（CC BY-NC 4.0 / CC BY-NC 2.0 / MIT / Apache-2.0）对接收者永久有效、不追溯；自 Rev.5 起，所有新提交与新发布按 AGPL-3.0 发布。
@@ -373,7 +373,7 @@ Rev.4 的 Apache-2.0 为宽松许可，允许闭源商用且无需告知原作�
 
 ## R5-5. Rev.5 证据与校验点（Engineering Control Evidence）
 
-- ✅ 根目录 `LICENSE` = FSF 官方 **AGPL-3.0** 全文 + 所有者版权声明与双轨说明
+- ✅ 根目录 `LICENSE` = FSF 官方 **AGPL-3.0** 纯净全文（GitHub 可识别）；所有者版权声明、双轨说明与更改原因在 `README.md` § 许可证及 v0.10.10 Release notes
 - ✅ `README.md` 顶部 Badge / § 许可证 = **AGPL-3.0 + Dual License**（含商用开源义务与告知通道）
 - ✅ `docs/architecture/index.md` ADR 索引 / FF-15 / R-02 = **AGPL-3.0**
 - ✅ `api/README.md`、`docs/index.html`、`training/README.md`、`docs/project_understanding.md` = **AGPL-3.0**

@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.9-ff69b4?style=flat-square" alt="version"></a>
+  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.10-ff69b4?style=flat-square" alt="version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="license"></a>
 <a href="https://app.fossa.com/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline"><img src="https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline.svg?type=shield" alt="FOSSA Status"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11+-blue?style=flat-square" alt="python"></a>
@@ -100,11 +100,12 @@
 
 **下载安装包**（Windows，双击安装）：
 
-👉 [最新 Release v0.10.9](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.9)
+👉 [最新 Release v0.10.10](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.10)
 
 | 下载文件 | 说明 |
 |----------|------|
-| `Live2D.Master.Agent_0.10.9_x64-setup.exe` | **Windows 安装包（NSIS）** — 双击安装，装完即可用 |
+| `Pygmalion Studio_0.10.10_x64-setup.exe` | **最新 Windows 安装包（NSIS）** — 321.92 MiB，DirectML GPU 加速；验收记录见 [CHANGELOG.md](CHANGELOG.md) |
+| `Live2D.Master.Agent_0.10.9_x64-setup.exe` | 上一版 Windows 安装包（旧 Release） — 双击安装，装完即可用 |
 
 > 实测体积 **342.63 MiB**（上一版 461.62 MiB，净减 **119 MiB / −26%**）。本版把误打进包的
 > torch 组移了出去（`requirements.desktop.txt` 29 → 24 条）；注意「−500 MB」指的是 torch 组
@@ -112,15 +113,15 @@
 
 > ✅ 安装包**自带完整运行时**：嵌入式 CPython 3.12 + 离线依赖 + `app/` 源码树 + 原生面捕（YuNet + `onnxruntime.dll`）。**无需预装 Python**。
 
-> 🧪 **开发中的 v0.10.10（代号「GPU Aware」）尚未发布**：代码里已把分层接上 GPU
+> 🚀 **v0.10.10（代号「GPU Aware」）已发布**：代码里已把分层接上 GPU
 > —— Windows 随包改带 `onnxruntime-directml`（N/A/I 卡通用，不需 CUDA），自检页新增
 > `GPU 与推理运行时` 一行；本机实测 ISNet 前景推理 **1149ms → 163ms（≈7.0×）**，
 > 且两条路径的前景掩码**逐像素一致**（IoU 1.0000）。
-> **安装包还没构建、也没做产物级验收**，所以上面的下载链接仍指向已验收通过的 v0.10.9；
-> 出包并实跑通过后才会改这段。详见 [CHANGELOG.md](CHANGELOG.md)。
+> 本版起许可证切换为 **AGPL-3.0 + 商业授权双轨**（原因见下方「许可证」章节）。
+> 安装包构建与产物级验收记录详见 [CHANGELOG.md](CHANGELOG.md)。
 
 **使用方式**：
-1. 从 Release 下载 `Live2D.Master.Agent_0.10.9_x64-setup.exe`
+1. 从 Release 下载 v0.10.10 安装包（`Pygmalion Studio_0.10.10_x64-setup.exe`；旧版 `Live2D.Master.Agent_0.10.9_x64-setup.exe` 仍可在旧 Release 获取）
 2. 若之前装过旧版，先运行旧安装目录里的 `uninstall.exe`
 3. 双击安装（NSIS 安装向导）；装完先确认安装目录含 `live2d-api.exe`、`python\`、`app\`、`models\`
 4. 从开始菜单或桌面快捷方式启动，应用会自动拉起本地后端并打开工作台 `http://localhost:8080`
@@ -437,10 +438,14 @@ cd web && npm run build
 
 ## 许可证
 
-[AGPL-3.0](LICENSE) + 商业授权双轨（Dual License）。
+[AGPL-3.0](LICENSE) + 商业授权双轨（Dual License）。Copyright (C) 2026 Live2D Master Agent Team（产权所有者）。
 
-- **著作权**：全部原始成果的著作权归产权所有者（Live2D Master Agent Team）所有，开源不代表放弃著作权。
-- **开源使用**：可自由使用、修改、再分发，但衍生作品与再分发必须同样以 **AGPL-3.0** 开源，并保留 `LICENSE` 全文与版权声明；**将本项目用于对外提供网络服务（SaaS / API 服务）同样触发开源义务**。
-- **商用 / 二次开发**：可以商用，但前提是遵守上述开源义务。
-- **不想开源？**：需**告知产权所有者并另行取得商业授权**——请通过 [GitHub Issues](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/issues) 联系，说明用途与范围。
-- 历史版本（曾按 CC BY-NC / MIT / Apache-2.0 发布）对接收者仍然有效、不追溯；自 ADR-001 Rev.5 起的新提交与新发布按 AGPL-3.0 发布。
+**为什么从 Apache-2.0 改为 AGPL-3.0（v0.10.10 起，ADR-001 Rev.5）**：为了防止在作者不知情的情况下被私自商业化。项目完整度越来越高，尽管现在还存在大量问题，作者也要保留自己的开发著作权。**作者非常欢迎大家基于本项目进行二次开发和商业化**，希望大家能够理解。
+
+具体到自己身上的三种情况：
+
+- **直接 Fork 本项目到你的 GitHub 账户**：不用告知作者，随意 Fork，欢迎二次开发（Fork 自带公开溯源，遵守 AGPL-3.0 即可）。
+- **二次开发 / 商业化并保持开源**：同样不用单独告知，遵守 AGPL-3.0（衍生作品以 AGPL-3.0 开源、保留 `LICENSE` 全文与版权声明；对外提供网络服务/SaaS 也触发开源义务）。
+- **把源码下载到本地、不开源、还进行商业化**：**不允许在不告知作者的情况下进行**。这种情况必须**告知作者并取得单独商业授权**——请通过 [GitHub Issues](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/issues) 联系，说明用途与范围。
+
+历史版本（曾按 CC BY-NC / MIT / Apache-2.0 发布）对接收者仍然有效、不追溯；自 v0.10.10（ADR-001 Rev.5）起的新提交与新发布按 AGPL-3.0 发布。
