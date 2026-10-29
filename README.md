@@ -294,7 +294,7 @@ cd web && npm install && npm run dev
 │   └── live2d_runtime/      软件 Live2D 渲染
 ├── llm_bridge/            AI 对话网关
 ├── api/                   Go REST API（Gin）
-├── web/                   Next.js 工作台（8 页面）
+├── web/                   Next.js 工作台（单页三栏：作品栏 + 阶段画布 + 操作台）
 ├── desktop/               Tauri v2 外壳（窗口 + 拉起后端 + NSIS 打包）
 ├── native/face_tracker/   Rust 原生面捕（YuNet + onnxruntime）
 ├── scripts/               装配与验收（build_desktop_bundle.py、windows/verify_desktop_install.ps1）

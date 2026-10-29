@@ -286,15 +286,19 @@
 
 ## 5. 前端工作台
 
-- `/live2d` 的「Model structure」静态树、Physics 面板与 Wireframe 开关已于 v1 真实性清理中**移除**
+> v0.10.10 起，「生成 / 分层 / 预览 / 导出」四个页面已合并为**单页三栏工作台**（`/`）：
+> 左栏作品列表、中间阶段画布、右栏操作台。下文出现的 `/generate`、`/layers`、`/preview`、
+> `/export`、`/live2d` 均指工作台里的**阶段**，旧地址只保留为带 `?stage=` 的重定向。
+
+- 预览阶段的「Model structure」静态树、Physics 面板与 Wireframe 开关已于 v1 真实性清理中**移除**
   （它们此前只是写死的展示，不随模型变化、也不影响渲染）。当前只保留真实生效的参数滑块、
-  表情应用、Validate 与模型加载入口。
+  表情应用、自检读数与模型加载入口。
 - `/characters/[id]` 的 embedding 重算与参考图上传已接通后端（`POST /api/characters/:id/embedding`、
-  `POST /api/characters/:id/references`，v0.10.1）；「Generation history」目前展示全局最近一次
-  生成记录（`latest_generation.json`），**尚无按角色的生成历史**。
-- 生成进度已走 WebSocket 实时推送（前端订阅 `/api/ws` 的 `type:"progress"` 广播）；导出页仍为
-  一次性请求 + 阶段推送。
-- `/preview` 的摄像头面捕**不再在浏览器内运行**：改用原生 Rust `native/face_tracker` 子进程
+  `POST /api/characters/:id/references`，v0.10.1）；工作台左栏列的是**全局**作品历史
+  （`generations_history.json`，同一分层目录的重生成会替换旧条目），**尚无按角色的生成历史**。
+- 生成与导出都走 WebSocket 实时进度（前端订阅 `/api/ws` 的 `type:"progress"` 广播）；
+  WS 不可用时两者都退化为「只知成功/失败、没有过程百分比」，结论仍来自 HTTP 响应本身。
+- 预览阶段的摄像头面捕**不再在浏览器内运行**：改用原生 Rust `native/face_tracker` 子进程
   （Windows 下摄像头设备不可共享，浏览器拿不到画面）。前端 `web/lib/native-tracker.ts` 连接
   `/api/ws` 订阅 `tracking_frame`；`POST /api/tracking/start|stop`、`GET /api/tracking/status`
   为控制与状态接口。浏览器内 MediaPipe 面捕（`web/lib/face-tracker.ts`）已移除。
