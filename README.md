@@ -104,7 +104,7 @@
 
 | 下载文件 | 说明 |
 |----------|------|
-| `Pygmalion Studio_0.10.10_x64-setup.exe` | **最新 Windows 安装包（NSIS）** — 321.92 MiB，DirectML GPU 加速；验收记录见 [CHANGELOG.md](CHANGELOG.md) |
+| `Pygmalion.Studio_0.10.10_x64-setup.exe` | **最新 Windows 安装包（NSIS）** — 317.61 MiB（333,039,110 B），DirectML GPU 加速；验收记录见 [CHANGELOG.md](CHANGELOG.md) |
 | `Live2D.Master.Agent_0.10.9_x64-setup.exe` | 上一版 Windows 安装包（旧 Release） — 双击安装，装完即可用 |
 
 > 实测体积 **342.63 MiB**（上一版 461.62 MiB，净减 **119 MiB / −26%**）。本版把误打进包的
