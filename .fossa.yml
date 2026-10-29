@@ -24,11 +24,15 @@ project:
   name: live2d-auto-pipeline
   # 许可策略名（必须先在 FOSSA 后台创建，名字必须完全一致）。
   #
+  # v0.10.10 起项目自身协议由 Apache-2.0 改为 AGPL-3.0 + 商业授权双轨
+  # （ADR-001 Rev.5），策略名随之改为 `AGPL-3.0 Distribution`。旧策略把
+  # AGPL-3.0 放在 Deny 档，会让「项目自身 LICENSE」被判违规。
+  #
   # ⚠️ 官方明确：项目已存在后，改 .fossa.yml 的 policy 字段**不会生效**
   #    （"changing the policy: field ... will not change the policy"）。
   #    正确做法：FOSSA 后台 → 该项目 → Settings → Issues Policies → 选中策略。
   #    这里保留声明，是为了让 CLI 新建项目 / 新克隆副本时用上同一套策略。
-  policy: Apache-2.0 Distribution
+  policy: AGPL-3.0 Distribution
 
 # 分析目标路径过滤：排除归档与文档，仅扫生产相关路径
 paths:

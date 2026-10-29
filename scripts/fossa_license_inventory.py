@@ -59,33 +59,59 @@ ALLOW = {
     "IJG",
     # CDLA-Permissive-2.0（webpki-root-certs）：宽松许可
     "CDLA-Permissive-2.0",
+    # AGPL-3.0 系列：**本项目自身协议**（ADR-001 Rev.5）。AGPL 项目吸收 AGPL
+    # 代码没有兼容问题；继续放在 DENY 会让项目自己被判违规。
+    "AGPL-3.0", "AGPL-3.0-only", "AGPL-3.0-or-later",
 }
 
-#: 弱 copyleft / 条款型许可：以库形式（动态链接 / import）随 Apache-2.0 项目
-#: 分发是兼容的，但要求人工确认一次 —— FOSSA 的默认策略通常把这档记成 issue。
+#: 弱 copyleft / 条款型许可：以库形式（动态链接 / import）随**本项目**分发是
+#: 兼容的，但要求人工确认一次 —— FOSSA 的默认策略通常把这档记成 issue。
+#:
+#: ``GPL-3.0`` 系列也归这一档（而不是 DENY）：本项目自 v0.10.10 起自身协议是
+#: AGPL-3.0（ADR-001 Rev.5），而 AGPL-3.0 与 GPL-3.0 之间有 GPL-3.0 §13 的
+#: 双向授权条款，二者可以合法组合。但它会把「整体须以 GPL-3.0 或 AGPL-3.0
+#: 分发」的义务传导进来，与 AGPL 双轨（商业授权）需要逐条核对，所以是
+#: 「需人工确认」而不是「自动允许」。
 REVIEW = {
     "LGPL-2.0", "LGPL-2.1", "LGPL-2.0-only", "LGPL-2.0-or-later",
     "LGPL-2.1-only", "LGPL-2.1-or-later", "LGPL-3.0", "LGPL-3.0-only",
     "LGPL-3.0-or-later", "LGPLLR", "MPL-1.1", "MPL-2.0",
     "CDDL-1.0", "CDDL-1.1", "EPL-1.0", "EPL-2.0", "Artistic-2.0", "OSL-3.0",
     "QPL-1.0", "IPL-1.0", "Sleepycat", "EUPL-1.2", "APSL-2.0",
+    "GPL-3.0", "GPL-3.0-only", "GPL-3.0-or-later",
 }
 
-#: 强 copyleft / 条款型限制 —— 与 Apache-2.0 分发不兼容，必须挡掉。
+#: 与 AGPL-3.0 不兼容 / 非商业条款 —— 必须挡掉。
+#:
+#: 注意 ``AGPL-3.0`` **不在**这里：它是本项目自身协议，挡掉等于判自己违规。
+#: ``GPL-2.0-only`` 仍在 DENY：无 "or later" 时升不到 GPL-3.0，走不到 §13 互认。
 DENY = {
-    "GPL-2.0", "GPL-2.0-only", "GPL-2.0-or-later", "GPL-3.0", "GPL-3.0-only",
-    "GPL-3.0-or-later", "AGPL-1.0", "AGPL-3.0", "AGPL-3.0-only",
-    "AGPL-3.0-or-later", "SSPL-1.0", "BUSL-1.1", "Commons Clause",
+    "GPL-2.0", "GPL-2.0-only", "GPL-2.0-or-later",
+    "AGPL-1.0", "SSPL-1.0", "BUSL-1.1", "Commons Clause",
     "CC-BY-NC-4.0", "CC-BY-NC-SA-4.0", "JSON", "CC-BY-NC-3.0", "Elastic-2.0",
 }
 
 #: 许可文本里出现这些片段 → 归入 DENY（包元数据常写自由文本而非 SPDX id）。
+#:
+#: 从 ``agpl`` 改成了 ``agpl-?1``：AGPL-3.0 现在是本项目自身协议，不能再靠
+#: 自由文本匹配把它打成禁止；AGPL-1.0 仍然不兼容，单独保留。
 _DENY_PAT = re.compile(
-    r"agpl|gnu general public|sspl|server side public|business source|"
-    r"commons clause|non.?commercial|no derivative|creative commons.*nc|"
-    r"proprietary|all rights reserved",
+    r"agpl-?1(?:\.0)?\b|gnu[\s-]*general[\s-]*public|\bgpl-?2\b|\bsspl|"
+    r"server side public|business source|commons clause|non.?commercial|"
+    r"no derivative|creative commons.*nc|proprietary|all rights reserved",
     re.I,
 )
+
+#: 自由文本里的 AGPL-3（项目自身协议）与 GPL-3（可经 §13 组合）。
+#: 必须**排在** ``_DENY_PAT`` 之前判定：``gnu general public`` 会同时命中
+#: GPL-3 与 GPL-2 的自由文本，不先认出 v3 就会把 GPL-3 误判成禁止。
+#:
+#: 分隔符用 ``[\s-]*``：``_normalize_spdx`` 会把 "GNU General Public License
+#: v3.0" 归一成 "GNU-GENERAL-PUBLIC-LICENSE-V3.0"（空格变连字符），正则只写
+#: 空格会完全匹配不到。
+_AGPL3_PAT = re.compile(r"affero.*?3|agpl-?3", re.I)
+_GPL3_PAT = re.compile(
+    r"general[\s-]*public.*?(?:v|version[\s-]*)3|gpl-?3(?!\d)", re.I)
 _REVIEW_PAT = re.compile(r"lesser general public|lgpl|mozilla public|mpl|cddl|"
                          r"eclipse public|artistic", re.I)
 
@@ -120,6 +146,12 @@ def _classify_one(ident: str) -> str:
         return "DENY"
     if upper.startswith("APACHE-2.0"):
         return "ALLOW"
+    # 自由文本要先认出 AGPL-3 / GPL-3 再走 DENY_PAT，否则
+    # "GNU General Public License v3.0" 会被 "gnu general public" 打成禁止。
+    if _AGPL3_PAT.search(norm):
+        return "ALLOW"
+    if _GPL3_PAT.search(norm):
+        return "REVIEW"
     if _DENY_PAT.search(norm):
         return "DENY"
     if _REVIEW_PAT.search(norm):

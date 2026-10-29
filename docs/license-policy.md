@@ -93,17 +93,26 @@ Name = `FOSSA_API_KEY`，Secret = 刚复制的 key。
 
 **Policies → Licensing → Create Policy → Type: Licensing**
 
-- **Title**：`Apache-2.0 Distribution`（与 `.fossa.yml` 里的 `project.policy` 保持一致）
-- **Description**：`基于本仓库实算依赖树的 Apache-2.0 分发许可策略`
+- **Title**：`AGPL-3.0 Distribution`（与 `.fossa.yml` 里的 `project.policy` 保持一致）
+- **Description**：`基于本仓库实算依赖树的 AGPL-3.0 双轨分发许可策略`
+
+> ⚠️ **v0.10.10 起项目自身协议已由 Apache-2.0 改为 AGPL-3.0 + 商业授权双轨**
+> （ADR-001 Rev.5）。旧策略名 `Apache-2.0 Distribution` 必须停用：它把
+> `AGPL-3.0` 放在 **Deny** 档，而项目自己的 `LICENSE` 现在就是 AGPL-3.0，
+> 于是 FOSSA 会判「项目自身违规」—— 这是 License Compliance issue 里
+> 最先要消掉的一类误报。
 
 ### 3.2 填三档规则
 
 FOSSA 的规则分三档：**Approve**（永不记 issue）、**Flag for Review**（记 issue 待人工批准）、**Deny**（记 issue 要求移除）。
 
-#### ✅ Approve（允许，18 项）
+#### ✅ Approve（允许）
 
 ```
 0BSD
+AGPL-3.0
+AGPL-3.0-only
+AGPL-3.0-or-later
 Apache-2.0
 Apache-2.0 WITH LLVM-exception
 BSD
@@ -123,17 +132,26 @@ Unlicense
 Zlib
 ```
 
-#### ⚠️ Flag for Review（弱 copyleft，5 项）
+> **为什么 AGPL-3.0 从 Deny 移到了 Approve**：项目自身 `LICENSE` 就是 AGPL-3.0
+> （ADR-001 Rev.5）。AGPL 项目吸收 AGPL 代码没有任何兼容问题；继续 Deny 只会
+> 让「项目自己」被判违规。这一条不影响对其他强 copyleft 的判断 —— GPL 系列
+> 仍然需要人工确认（见下）。
+
+#### ⚠️ Flag for Review（弱 copyleft + 需组合确认的强 copyleft）
 
 ```
 LGPL
 LGPL-2.1
+LGPL-2.1-or-later
 LGPL-3.0
 LGPL-3.0-or-later
 MPL-2.0
+GPL-3.0
+GPL-3.0-only
+GPL-3.0-or-later
 ```
 
-这些是**已确认兼容**的，确认一次即可放行。逐条依据：
+**弱 copyleft（LGPL / MPL）—— 已确认兼容，确认一次即可放行**：
 
 | 许可 | 依赖 | 依据 |
 |---|---|---|
@@ -143,18 +161,20 @@ MPL-2.0
 | LGPL-2.1 | `pygame` / `pygame-ce` | 同上，`requirements.txt` 里按 Python 版本二选一 |
 | MPL-2.0 | `cssparser` / `cssparser-macros` / `dtoa-short` / `option-ext` / `selectors` | 文件级 copyleft，**未修改**上游文件（不修改即无义务） |
 
+**GPL-3.0 系列 —— 因为项目已是 AGPL 才能放行，但仍要逐条确认**：
+
+AGPL-3.0 与 GPL-3.0 之间通过 GPL-3.0 §13 的双向授权条款可以组合，所以
+GPL-3.0 依赖不再天然违规；但它会把「整体必须以 GPL-3.0 或 AGPL-3.0 分发」
+的义务传导进来，与 AGPL 双轨（商业授权）的条款需要逐条核对。因此放在
+**Flag for Review**，人工确认后再批准单条 issue，不批量 Approve。
+
 > FOSSA 支持条件规则（Conditional Policy Rules），可对 MPL 加"仅第三方依赖且未修改"条件，把噪音降到 0。
 
-#### ⛔ Deny（强 copyleft / 非商业条款，保持启用）
+#### ⛔ Deny（与 AGPL 不兼容 / 非商业条款，保持启用）
 
 ```
-AGPL-3.0
 GPL-2.0
 GPL-2.0-only
-GPL-2.0-or-later
-GPL-3.0
-GPL-3.0-only
-GPL-3.0-or-later
 SSPL-1.0
 BUSL-1.1
 Elastic-2.0
@@ -163,6 +183,10 @@ CC-BY-NC-3.0
 CC-BY-NC-4.0
 CC-BY-NC-SA-4.0
 ```
+
+> `GPL-2.0-only` 与 AGPL-3.0 **不兼容**（GPL-2.0 无 "or later" 时无法升级到
+> GPL-3.0，也就走不到 §13 的互认路径），保持 Deny。`GPL-2.0-or-later` 理论上
+> 可经 GPL-3.0 中转，但组合链条复杂，按 Deny 处理、需要时单独评估。
 
 当前公共扫描有 **7 条 Denied**，但公共页不给出逐条映射，不能预设它们全是误报。维护者必须逐项核对：
 

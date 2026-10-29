@@ -85,9 +85,17 @@ class TestClassify:
             ("LGPL v2.1", "REVIEW"),
             ("LGPL-3.0-or-later", "REVIEW"),
             ("MPL-2.0", "REVIEW"),
-            ("GPL-3.0", "DENY"),
-            ("GPL-3.0-only", "DENY"),
-            ("AGPL-3.0", "DENY"),
+            # GPL-3.0 从 DENY 移到 REVIEW：项目自身已是 AGPL-3.0（ADR-001 Rev.5），
+            # 二者可经 GPL-3.0 §13 组合，但需要逐条确认义务传导，故不自动放行。
+            ("GPL-3.0", "REVIEW"),
+            ("GPL-3.0-only", "REVIEW"),
+            # AGPL-3.0 是项目自身协议，必须 ALLOW —— 否则 FOSSA 会判项目自己违规。
+            ("AGPL-3.0", "ALLOW"),
+            ("AGPL-3.0-only", "ALLOW"),
+            ("AGPL-1.0", "DENY"),
+            # GPL-2.0 无 "or later" 时升不到 GPL-3.0，走不到 §13 互认，仍禁止。
+            ("GPL-2.0", "DENY"),
+            ("GPL-2.0-only", "DENY"),
             ("SSPL-1.0", "DENY"),
         ],
     )
