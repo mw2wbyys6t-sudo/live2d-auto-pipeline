@@ -109,6 +109,8 @@ output-*/
 # --- 工具产物（增量） ---
 # .aider* 覆盖 .aider / .aider.conf.yml / .aider.chat.history.md 等
 .aider*
+# 编辑器/代理生成的本地报告（画布与 report.json，非项目代码）
+.qoder-credits/
 
 # --- 本地缓存（增量） ---
 .venv-*/
