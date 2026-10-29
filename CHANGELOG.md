@@ -12,6 +12,19 @@
 > **下载源码到本地、不开源且商业化的，必须告知作者并取得单独商业授权**（GitHub Issues 通道）。
 > 历史版本不追溯。
 
+> **本次发布前修掉的问题**：
+> 1. **CI 的 Python 测试在无音频环境全量收集失败** —— `sounddevice` 在没有
+>    PortAudio 后端时抛的是 `PortAudioError`（继承 `Exception`，不是 `OSError`），
+>    原导入守卫没接住，导致「只是没装麦克风依赖」却把整条导入链打挂。
+>    现按可选依赖本意兜住全部失败形态（[drivers/audio/capture.py](drivers/audio/capture.py)）。
+> 2. **`/api/generate` 成功却回报 `data.success=false`** —— 本地生成器路径漏赋值
+>    `Success`，前端按该字段判断，会把成功的生成显示成失败。已修并补回归测试。
+> 3. **CLI 无法显式选择本地生图引擎** —— `core/cli.py generate --provider` 的可选值
+>    与 ProviderRouter 不一致（缺 comfyui / sd_webui / openai / local_placeholder）。
+> 4. **自有 crate 被依赖许可策略判成「禁止」** —— 项目自身改为 AGPL-3.0 后，
+>    `fossa_license_inventory.py` 把它自己的两个 crate 判进了 DENY 档。
+>    现在第一方组件单列，不适用依赖三档（依赖侧策略不因此放宽）。
+
 > **本版目标**：让「正式使用」真的能跑 GPU —— 不是加开关，而是把探测、选卡、
 > 随包运行时和装配期校验串成一条能被实测证伪的链路。同版本还并入了第二条主线：
 > 把软件形态真正做成「工作台」，并让中文提示词端到端可用（详见下）。

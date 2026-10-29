@@ -557,9 +557,14 @@ def collect(offline: bool) -> List[Dict[str, str]]:
             if not offline or eco == "npm":
                 lic = _RESOLVERS[eco](name, ver)
             cache[key] = lic or ""
+        # 第一方组件（本仓库自己发布的 crate）不适用依赖策略：它的许可由
+        # ADR-001 决定（Rev.5 起 = AGPL-3.0），不能按「第三方依赖是否兼容
+        # 本项目」的三档判定，否则项目自身会被自己的策略判成「禁止」。
+        own = name in _OWN_CRATES
         rows.append({
             "ecosystem": eco, "name": name, "version": ver,
-            "license": lic or UNKNOWN, "bucket": classify(lic),
+            "license": lic or UNKNOWN,
+            "bucket": "SELF" if own else classify(lic),
         })
 
     # 分生态限速：crates.io / PyPI 对匿名并发敏感，一味开 16 线程会大面积
@@ -585,14 +590,17 @@ def collect(offline: bool) -> List[Dict[str, str]]:
 
 
 def print_report(rows: List[Dict[str, str]]) -> None:
-    total = len(rows)
-    counts = Counter(r["bucket"] for r in rows)
+    # 第一方组件单列，不计入依赖三档（它是「我们自己」，不是「我们的依赖」）。
+    dep_rows = [r for r in rows if r["bucket"] != "SELF"]
+    self_rows = [r for r in rows if r["bucket"] == "SELF"]
+    total = len(dep_rows)
+    counts = Counter(r["bucket"] for r in dep_rows)
     print(f"依赖总数：{total}")
     for bucket in ("ALLOW", "REVIEW", "DENY", UNKNOWN):
         print(f"  {bucket:8s} {counts.get(bucket, 0):4d}")
     print()
     by_eco = defaultdict(Counter)
-    for r in rows:
+    for r in dep_rows:
         by_eco[r["ecosystem"]][r["bucket"]] += 1
     print(f"{'生态':10s} {'总数':>6s} {'允许':>6s} {'需审阅':>8s} {'禁止':>6s} {'未知':>6s}")
     for eco in sorted(by_eco):
@@ -600,6 +608,12 @@ def print_report(rows: List[Dict[str, str]]) -> None:
         print(f"{eco:10s} {sum(c.values()):6d} {c['ALLOW']:6d} {c['REVIEW']:8d} "
               f"{c['DENY']:6d} {c[UNKNOWN]:6d}")
     print()
+    if self_rows:
+        print("=== 第一方组件（本仓库自有，不适用依赖策略）===")
+        for r in self_rows:
+            print(f"  {r['ecosystem']:10s} {r['name']:34s} {r['version']:12s} "
+                  f"{r['license']}  ← ADR-001 Rev.5：AGPL-3.0 + 商业授权双轨")
+        print()
     print("=== 需人工审阅（弱 copyleft / 条款型）===")
     for r in rows:
         if r["bucket"] == "REVIEW":
@@ -654,8 +668,12 @@ def print_policy(rows: List[Dict[str, str]]) -> None:
     print("# 用法：FOSSA 后台 → Policies → Licensing → Create Policy → Type: Licensing")
     print("#       按下面三档填「允许 / 需审阅 / 禁止」的许可标识列表。")
     print("#")
-    print("# 判定基准：本仓库自身是 Apache-2.0（ADR-001 Rev.4），产出物对外分发，")
-    print("# 所以标准是「该依赖的许可能否出现在 Apache-2.0 项目的分发物里」。")
+    print("# 判定基准：本仓库自身自 v0.10.10 起是 **AGPL-3.0 + 商业授权双轨**"
+          "（ADR-001 Rev.5）。")
+    print("# 本策略只管**第三方依赖**；本项目自己的两个 crate（pygmalion-studio /")
+    print("# face_tracker）不在三档里 —— 它们的许可由 ADR-001 决定。")
+    print("# 依赖侧仍按「该依赖是否适合进入对外分发物」三档判定，**不因项目自身")
+    print("# 协议变更而自动放宽**：强 copyleft 依赖继续需要人工确认后再决定。")
     print("#")
     print("# 下面是**单个 SPDX 标识**（FOSSA 按标识匹配，不是按整个表达式）。")
     print()
@@ -664,6 +682,8 @@ def print_policy(rows: List[Dict[str, str]]) -> None:
     review: List[str] = []
     deny: List[str] = []
     for r in rows:
+        if r["bucket"] == "SELF":
+            continue
         if r["license"] == UNKNOWN:
             continue
         # 按**单个标识**独立定档，不能按整个表达式 —— "Apache-2.0 AND
@@ -690,11 +710,11 @@ def print_policy(rows: List[Dict[str, str]]) -> None:
     show("允许（无需审阅）", allow,
          "宽松型许可，可自由再分发，不施加文件级传染条件。")
     show("允许，但需一次人工确认（弱 copyleft）", review,
-         "以库形式（动态链接 / import）随 Apache-2.0 项目分发是兼容的；\n"
+         "以库形式（动态链接 / import）随本项目分发是兼容的；\n"
          "# 要求确认一次：pygame / pygame-ce / edge-tts 是 LGPL（被 import），\n"
          "# @img/sharp-libvips-* 是 libvips 的 LGPL 运行时（仅 Linux/macOS 分支用）。")
     show("禁止", deny,
-         "强 copyleft / 非商业条款 —— 与 Apache-2.0 分发不兼容。")
+         "强 copyleft / 非商业条款 —— 需人工确认后再决定是否引入（策略不随项目自身协议变更而放宽）。")
 
     unknown = sorted({r["name"] for r in rows if r["bucket"] == UNKNOWN})
     if unknown:

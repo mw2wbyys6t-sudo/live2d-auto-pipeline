@@ -3,15 +3,26 @@
 > **读者（Audience）**：维护者与合规负责人。
 > **文档类型（Diátaxis）**：explanation + how-to。
 > **真相源（Source of Truth）**：包元数据清单由 [`scripts/fossa_license_inventory.py`](../scripts/fossa_license_inventory.py) 实算；FOSSA 另做依赖内嵌许可证深扫，两者口径不同。本文件记录判定依据与后台操作步骤。
-> **最后校验（Last verified）**：2026-10-26（FOSSA revision scan `126535209`，commit `42a99c7`）。
+> **最后校验（Last verified）**：2026-10-29（FOSSA revision scan `126535209`，commit `42a99c7`；本项目自身协议已于 v0.10.10 起改为 AGPL-3.0 + 商业授权双轨，见 ADR-001 Rev.5）。
+
+---
+
+## 0. 本策略的适用范围（先读这段）
+
+- **本策略只管第三方依赖**：某个依赖的许可证是否适合进入本项目的对外分发物。
+- **本项目自身不在三档里**：`pygmalion-studio`、`face_tracker` 这两个自有 crate 的许可由
+  ADR-001 决定（Rev.5 起 = **AGPL-3.0 + 商业授权双轨**），不按「依赖是否兼容本项目」
+  判定。它们在本地清单里单列在「第一方组件」一节。
+- **项目协议变更不放宽依赖策略**：强 copyleft 依赖（GPL / AGPL / SSPL / BUSL / Commons Clause）
+  仍然进「禁止」档，需要人工确认后再决定是否引入。
 
 ---
 
 ## 1. 结论先说
 
-当前 GitHub legacy status 为 **64 条 License Compliance issue**；同一 FOSSA 扫描的公共摘要分为 **57 条 Flagged + 7 条 Denied**。逐项 issue 详情需要 Maintainer Access，不能把 64 条一概归因成“策略未配置”，更不能全部放行。
+当前 GitHub legacy status 为 **65 条 License Compliance issue**（2026-10-29）；同一 FOSSA 扫描的公共摘要分为 **57 条 Flagged + 7 条 Denied**。逐项 issue 详情需要 Maintainer Access，不能把 65 条一概归因成“策略未配置”，更不能全部放行。
 
-2026-10-23 的本地清单曾得出 716 项中 ALLOW 694 / REVIEW 22 / DENY 0。这个结论**只覆盖 PyPI、npm、crates.io、Go 的包元数据**，没有覆盖 FOSSA 在 OpenCV、Pillow 等依赖内部发现的 GPL 等许可证文本，因此不能用来否定当前 7 条 Denied。
+2026-10-29 的本地清单：**714 项依赖**中 ALLOW 692 / REVIEW 22 / DENY 0 / 未知 0，另有 **2 项第一方组件**（自有 crate，不适用本策略）。这个结论**只覆盖 PyPI、npm、crates.io、Go 的包元数据**，没有覆盖 FOSSA 在 OpenCV、Pillow 等依赖内部发现的 GPL 等许可证文本，因此不能用来否定当前 7 条 Denied。
 
 仓库侧与后台必须分开处理：
 

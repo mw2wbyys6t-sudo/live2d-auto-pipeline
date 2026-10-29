@@ -276,7 +276,11 @@ def main():
     gen.add_argument("prompt", help="Character description")
     gen.add_argument("--output", "-o", default="./output")
     gen.add_argument("--provider", default="auto",
-                     choices=["pollinations", "sensenova", "seedream", "auto"])
+                     # 与 ProviderRouter.PRIORITY 对齐：本地引擎（comfyui /
+                     # sd_webui）必须能被显式选中，否则用户装了 ComfyUI 却只能
+                     # 靠 auto 命中；local_placeholder 是离线兜底。
+                     choices=["comfyui", "sd_webui", "pollinations", "sensenova",
+                              "seedream", "openai", "local_placeholder", "auto"])
     gen.add_argument("--deploy-desktop", action="store_true")
     gen.add_argument("--no-semantic", action="store_true")
     gen.add_argument("--k", type=int, default=12, help="K-means clusters (default: 12)")

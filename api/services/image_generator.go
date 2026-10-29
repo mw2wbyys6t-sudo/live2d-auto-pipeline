@@ -382,6 +382,10 @@ func (g *ImageGenerator) generateWithLocalGenerator(req models.GenerateImageRequ
 		Height:    req.Height,
 		Source:    "local_generator_v3",
 		CreatedAt: time.Now(),
+		// 这条路径已经产出了图片文件，success 必须为 true：前端（web/lib/api-client.ts
+		// 的 mapLegacyResponse）按 data.success 判断成败，漏赋值会把「生成成功」
+		// 显示成失败。
+		Success: true,
 	}, nil
 }
 

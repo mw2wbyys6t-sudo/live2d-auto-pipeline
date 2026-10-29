@@ -30,18 +30,23 @@ except ImportError:
 try:
     import sounddevice as sd
     _SD_AVAILABLE = True
-except (ImportError, OSError):
-    # sounddevice 在「装了但系统缺 PortAudio」时抛的是 OSError 而不是 ImportError
-    # （sounddevice.py 载入即 dlopen libportaudio）。只 catch ImportError 时这个
-    # OSError 会逃出去，把整条导入链打挂 —— 表现为「只是没装麦克风依赖，
-    # 结果所有测试都收集失败」。这里按可选依赖的本意兜住。
+except Exception:  # noqa: BLE001 - 可选依赖探测，必须兜住 PortAudioError
+    # sounddevice 的失败方式有三种，都不是普通的 ImportError：
+    #   1) 没装            → ImportError
+    #   2) 装了但缺 libportaudio → OSError（dlopen 失败）
+    #   3) 装了但系统没有音频后端（CI 的 Linux runner 没有 PulseAudio，
+    #      服务器版 Linux 也常见）→ sounddevice.PortAudioError，
+    #      而它**继承自 Exception 而不是 OSError**，只 catch OSError 会让它
+    #      逃出去，把整条导入链打挂 —— 表现为「只是没装麦克风依赖，
+    #      结果所有测试都收集失败」。
+    # 这里按可选依赖的本意兜住全部失败形态：采集不可用 ≠ 模块不可导入。
     _SD_AVAILABLE = False
     sd = None  # type: ignore
 
 try:
     import pyaudio
     _PA_AVAILABLE = True
-except ImportError:
+except Exception:  # noqa: BLE001 - 同上：缺 PortAudio 时 pyaudio 抛 OSError
     _PA_AVAILABLE = False
     pyaudio = None  # type: ignore
 
