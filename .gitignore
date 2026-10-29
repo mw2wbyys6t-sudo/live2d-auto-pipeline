@@ -89,6 +89,11 @@ dist/
 api/webui/dist/*
 !api/webui/dist/.gitkeep
 
+# 本地生图引擎运行时（数 GB，只在本机存在，绝不入库）
+.pylibs/
+.tmp_wheels/
+.comfy_runtime/
+
 # ============================================================
 # 增量补充：过程性产物（避免误入版本控制）
 # 以下规则均为原 .gitignore 未覆盖的项；已存在的不再重复。

@@ -36,11 +36,16 @@ class ProviderRouter:
 
     def _register_defaults(self):
         """Register built-in providers."""
+        from core.image_gen.comfyui import ComfyUIProvider
         from core.image_gen.local_placeholder import LocalPlaceholderProvider
         from core.image_gen.openai_compat import OpenAICompatProvider
         from core.image_gen.pollinations import PollinationsProvider
+        from core.image_gen.sd_webui import SDWebUIProvider
         from core.image_gen.sensenova import SenseNovaProvider
         from core.image_gen.seedream import SeedreamProvider
+        # 本地引擎优先：ComfyUI / SD WebUI（必须本机地址，见 local_http）。
+        self.register_provider("comfyui", ComfyUIProvider)
+        self.register_provider("sd_webui", SDWebUIProvider)
         self.register_provider("pollinations", PollinationsProvider)
         self.register_provider("sensenova", SenseNovaProvider)
         self.register_provider("seedream", SeedreamProvider)
@@ -51,10 +56,33 @@ class ProviderRouter:
         # 用确定性占位图保证「生成 → 分层 → 导出」主链路依然走通。
         self.register_provider("local_placeholder", LocalPlaceholderProvider)
 
-    # 统一的路由优先级：配置了高质量付费 Key 的 provider 永远先被尝试，
-    # OpenAI 兼容网关次之，免费 Pollinations 兜底；完全离线时由
-    # local_placeholder 保证产图（哪怕只是占位剪影）。
-    PRIORITY = ["seedream", "sensenova", "openai", "pollinations", "local_placeholder"]
+    # 统一的路由优先级：本机引擎优先，其次才是云端（付费 Key / 免费兜底），
+    # 最后是离线占位图。
+    PRIORITY = [
+        "comfyui",
+        "sd_webui",
+        "seedream",
+        "sensenova",
+        "openai",
+        "pollinations",
+        "local_placeholder",
+    ]
+
+    # 只连本机、不发外网请求的 provider。
+    LOCAL_PROVIDERS = ("comfyui", "sd_webui", "local_placeholder")
+
+    @staticmethod
+    def local_only() -> bool:
+        """LIVE2D_LOCAL_ONLY=1 时只允许本地 provider（零外网请求）。"""
+        return (os.environ.get("LIVE2D_LOCAL_ONLY", "") or "").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+
+    def effective_priority(self) -> List[str]:
+        """本次运行实际会尝试的 provider 顺序。"""
+        if self.local_only():
+            return [n for n in self.PRIORITY if n in self.LOCAL_PROVIDERS]
+        return list(self.PRIORITY)
 
     def register_provider(self, name: str, provider_cls: Type[ImageProvider]):
         """Register a new provider class."""
@@ -79,8 +107,8 @@ class ProviderRouter:
     def get_available_providers(self) -> List[Dict[str, str]]:
         """Return list of available providers with metadata."""
         result = []
-        # Priority order
-        priority = self.PRIORITY
+        # Priority order（本地模式下列表里只剩本机引擎，不会出现云端项）
+        priority = self.effective_priority()
         for name in priority:
             if name in self._registry:
                 p = self._get_provider(name)
@@ -94,7 +122,7 @@ class ProviderRouter:
 
     def auto_select(self) -> Optional[ImageProvider]:
         """Auto-select the best available provider."""
-        for name in self.PRIORITY:
+        for name in self.effective_priority():
             p = self._get_provider(name)
             if p and p.is_available():
                 log.debug(f"Auto-selected provider: {p.display_name}")
@@ -129,7 +157,7 @@ class ProviderRouter:
         if provider:
             providers_to_try = [provider]
         else:
-            providers_to_try = list(self.PRIORITY)
+            providers_to_try = self.effective_priority()
 
         last_error = None
         temp_files = set()
@@ -195,6 +223,7 @@ class ProviderRouter:
                         "display_name": p.display_name,
                         "available": p.is_available(),
                         "requires_key": p.requires_api_key,
+                        "local": name in self.LOCAL_PROVIDERS,
                         "setup_guide": p.get_setup_guide(),
                     })
             except Exception as e:

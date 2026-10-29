@@ -206,6 +206,8 @@ class ImageProvider(abc.ABC):
     name: str = "base"
     display_name: str = "Base Provider"
     requires_api_key: bool = False
+    # 是否为「只连本机」的本地引擎（本地模式下只会尝试这些 provider）
+    is_local: bool = False
     max_retries: int = 2
     timeout: int = 60
 

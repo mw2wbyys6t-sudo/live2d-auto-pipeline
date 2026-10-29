@@ -904,7 +904,9 @@ if __name__ == "__main__":
     parser.add_argument("--output", "-o", help="Output directory")
     parser.add_argument("--deploy-desktop", action="store_true", help="Create desktop pet")
     parser.add_argument("--k", type=int, default=12, help="K-means clusters (default: 12)")
-    parser.add_argument("--provider", choices=["pollinations", "sensenova", "seedream", "auto"],
+    parser.add_argument("--provider",
+                        choices=["auto", "comfyui", "sd_webui", "pollinations",
+                                  "sensenova", "seedream", "openai", "local_placeholder"],
                         default="auto", help="Image provider")
     parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--height", type=int, default=1024)

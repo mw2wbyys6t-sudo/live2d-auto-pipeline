@@ -180,6 +180,11 @@ class SecureConfig:
             'IMAGE_MODEL': 'gpt-image-1',
             'LIVE2D_LOG_LEVEL': 'INFO',
             'LIVE2D_TELEMETRY': '0',
+            # 本地生图引擎（只连本机回环地址；见 core/image_gen/local_http.py）
+            'COMFYUI_BASE_URL': 'http://127.0.0.1:8188',
+            'SD_WEBUI_BASE_URL': 'http://127.0.0.1:7860',
+            # 1 = 只允许本地引擎，完全不发起外网请求
+            'LIVE2D_LOCAL_ONLY': '0',
             # 安全默认：桌面形态只绑回环；容器由 Dockerfile/compose 显式
             # 注入 0.0.0.0，不依赖这里的默认值。
             'GO_API_HOST': '127.0.0.1',

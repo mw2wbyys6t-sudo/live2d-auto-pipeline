@@ -29,6 +29,7 @@ class LocalPlaceholderProvider(ImageProvider):
     name = "local_placeholder"
     display_name = "本地占位图（离线兜底）"
     requires_api_key = False
+    is_local = True
     max_retries = 0
     timeout = 30
 

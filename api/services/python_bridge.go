@@ -373,15 +373,18 @@ func (pb *PythonBridge) RunSeeThroughWorkflow(imagePath string) (*models.SeeThro
 	comfyuiDir := pb.cfg.ComfyUI.BaseDir
 	if _, err := os.Stat(comfyuiDir); os.IsNotExist(err) {
 		return &models.SeeThroughResponse{
-			Status:  "error",
-			Message: "ComfyUI 未安装，请先运行 python install_comfyui_advanced.py",
+			Status: "error",
+			Message: "未找到 ComfyUI 目录（当前路径: " + comfyuiDir + "）。" +
+				"如需用 See-through 工作流，请先安装 ComfyUI 并在配置文件里把 comfyui.base_dir 指向它；" +
+				"仅做本地生图不需要这一步，直接启动 ComfyUI 即可。",
 		}, nil
 	}
 	seeThroughDir := filepath.Join(comfyuiDir, "custom_nodes", "ComfyUI-See-through")
 	if _, err := os.Stat(seeThroughDir); os.IsNotExist(err) {
 		return &models.SeeThroughResponse{
-			Status:  "error",
-			Message: "See-through 未安装，请先运行 python install_comfyui_advanced.py",
+			Status: "error",
+			Message: "未安装 See-through 自定义节点（缺少 " + seeThroughDir + "）。" +
+				"可在 ComfyUI 的 custom_nodes 目录下自行安装，或改用分层页的颜色/语义分层。",
 		}, nil
 	}
 	return &models.SeeThroughResponse{
