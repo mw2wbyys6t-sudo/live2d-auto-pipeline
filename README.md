@@ -37,10 +37,10 @@
 | PSD 导出 | ✅ 可用 | 需 `pip install psd-tools`；缺了也能降级导出 PNG 包 |
 | Live2D moc3 导出 | ✅ 可用 | **自研编译器，已通过 Live2D 官方 Cubism Core 逐像素验收** |
 | 面部捕捉驱动 | ✅ 安装包内置 | 桌面版用 Rust 原生面捕（YuNet + `onnxruntime.dll`），**不需要装 Python / MediaPipe**；从源码运行才走 MediaPipe。CI 已验证 exe / 模型 / dll 齐备，未接摄像头实测驱动效果 |
-| 桌宠运行 | ⚠️ 未实机验证 | pygame 已随包分发，但多窗口 / 置顶行为尚未在真机验收 |
-| LLM 对话 + 语音 | ⚠️ 需 Key | 对话需要 OpenAI/Anthropic API Key 或本地 Ollama |
+| 桌宠运行 |   ✅目前已经实现，实机验证过了 | pygame 已随包分发，但多窗口 / 置顶行为真机验收，依旧存在问题 |
+| LLM 对话 + 语音 | ⚠️ 需 Key | 对话需要 OpenAI/Anthropic API Key 或本地 Ollama ，目前还在规划中|
 | 离线依赖 | ✅ 安装包自带 | 嵌入式 CPython 3.12 + 离线包（site-packages 约 0.9 GB），装完即可跑，无需预装 Python。torch 组（SAM2 用）按需下载 |
-
+| 规划| 后续我会持续将问题逐渐解决掉，目前开发时间不是很多的，但是我是会一直在维护这个仓库的。
 > 一句话总结：**「生成 → 分层 → 导出」核心链路完全可用，安装包装完即带运行时**；高级交互（LLM 对话）需自备 Key，面捕 / 桌宠尚待真机验证。
 
 ---
