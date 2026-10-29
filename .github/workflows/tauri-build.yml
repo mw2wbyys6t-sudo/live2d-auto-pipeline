@@ -239,10 +239,25 @@ jobs:
 
       # tag 推送时，把 NSIS 安装包直接挂到该 tag 对应的 GitHub Release 上：
       # 沙箱/本地无法搬运 1GB 产物，让 CI 自己发布是唯一可靠路径。
+      #
+      # 只取**本次新构建**的那一个 exe：bundle/nsis 目录里可能残留历史版本
+      # 安装包（构建缓存带回来的），用通配符上传会把 0.10.3~0.10.9 之类
+      # 的旧包一起挂到新 Release 上。
+      - name: Locate the freshly built NSIS installer
+        id: nsis
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem desktop/target/release/bundle/nsis/*_setup.exe -ErrorAction SilentlyContinue |
+               Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $f) { Write-Error "NSIS installer not found"; exit 1 }
+          Write-Host "installer: $($f.FullName) ($($f.Length) bytes)"
+          "path=$($f.FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($f.Name)" >> $env:GITHUB_OUTPUT
+
       - name: Attach installer to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: desktop/target/release/bundle/nsis/*.exe
+          files: ${{ steps.nsis.outputs.path }}
           fail_on_unmatched_files: true
