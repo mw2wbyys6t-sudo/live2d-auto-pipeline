@@ -30,6 +30,18 @@ class PollinationsProvider(ImageProvider):
 
     BASE_URL = "https://image.pollinations.ai/prompt/"
 
+    #: 永久性 HTTP 结论 → 该说什么。这类错误重试不会变好，只会让用户多等
+    #: 2+4 秒后看到一句读不出原因的「failed after 3 attempts」。
+    #: 429 与 5xx 不在这里：那是限流/抖动，该继续按原策略退避。
+    _PERMANENT_HTTP_HINTS = {
+        402: ("免密通道的免费配额已耗尽或已转为付费（HTTP 402）。"
+              "请在设置里配置可用的图像服务（Seedream / SenseNova / OpenAI 兼容端点）后重试。"),
+        401: ("免密通道要求鉴权（HTTP 401）：该端点已不再免密可用，"
+              "请在设置里填入图像服务密钥后重试。"),
+        403: ("免密通道拒绝访问（HTTP 403）：权限或风控限制，"
+              "请改用已配置的图像服务，或稍后再试。"),
+    }
+
     def is_available(self) -> bool:
         return True  # Always available - no API key needed
 
@@ -102,6 +114,15 @@ class PollinationsProvider(ImageProvider):
                         "negative_sent": neg,
                     },
                 )
+            except requests.HTTPError as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                hint = self._PERMANENT_HTTP_HINTS.get(status)
+                if hint:
+                    raise GenerationError(
+                        hint, provider=self.name, retryable=False
+                    ) from exc
+                last_error = str(exc)
+                time.sleep(2 ** attempt)
             except requests.RequestException as e:
                 last_error = str(e)
                 time.sleep(2 ** attempt)

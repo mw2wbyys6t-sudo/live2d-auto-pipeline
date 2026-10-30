@@ -35,8 +35,9 @@ def _kmeans_returns(engine, monkeypatch):
 
     def fake(image, output_dir=None):
         called["yes"] = True
-        # 与 core/segment_engine/kmeans.py:175 的真实返回同构（含 layer_count）。
-        return {"layers": [{"name": "layer_000", "path": "x.png"}],
+        # 与 core/segment_engine/kmeans.py:175 的真实返回同构
+        # （含 layer_count 与每层 pixel_count —— 分层闸门看的就是后者）。
+        return {"layers": [{"name": "layer_000", "path": "x.png", "pixel_count": 40}],
                 "layer_count": 1,
                 "method": "kmeans", "output_dir": str(output_dir)}
 
@@ -130,7 +131,7 @@ def test_semantic_layers_are_kept_even_when_hsv_degraded(tmp_path, monkeypatch):
     """带部位名的 HSV 结果要保留：换成 K-means 会让 PSD 失去可编辑语义。"""
     engine = _engine(tmp_path)
     engine.semantic_layerer.next_result = {
-        "layers": [{"name": "hair_front", "path": "h.png"}],
+        "layers": [{"name": "hair_front", "path": "h.png", "pixel_count": 40}],
         "method": "semantic_hsv_fallback", "output_dir": "out/layers"}
     called = _kmeans_returns(engine, monkeypatch)
 
@@ -145,7 +146,7 @@ def test_kmeans_only_path_skips_the_semantic_segmenter(tmp_path, monkeypatch):
     engine = wf.WorkflowEngine(output_dir=str(tmp_path),
                                use_semantic_segmentation=False)
     monkeypatch.setattr(engine.kmeans_layerer, "layer", lambda image, output_dir=None: {
-        "layers": [{"name": "layer_000", "path": "x.png"}],
+        "layers": [{"name": "layer_000", "path": "x.png", "pixel_count": 40}],
         "method": "kmeans", "output_dir": "km"})
     result = {"steps": {}}
     out, layer_result = engine._step_layering(Image.new("RGBA", (8, 8)), result, 1)

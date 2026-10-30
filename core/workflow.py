@@ -306,6 +306,47 @@ class WorkflowEngine:
     #: Beyond this, "upscaling" invents detail instead of resampling.
     MAX_UPSCALE_FACTOR = 4.0
 
+    #: 分层退化闸门：画面里根本没有角色时，分层器会退化到颜色启发式并抠出
+    #: 几十像素的碎片。实测（2026-10-29）：上游返回风景图时最大部件 45px /
+    #: 1000×1000 = 0.0045%；正常人物图最大部件 16.2%。三个数量级的差距让
+    #: 阈值不敏感，取 1%。
+    #:
+    #: 这条闸门只拦「整幅画面几乎没有被任何部件覆盖」这一种退化，**不能**证明
+    #: 画里有角色：一张被涂成一整块的背景同样能过。判"有没有人"需要人脸/部件
+    #: 证据（见 core/segment_engine/face_detect.py），那是另一件事。
+    MIN_PART_COVERAGE = 0.01
+
+    def _assert_layering_usable(self, layer_result, image_size) -> None:
+        """分层没有产出可用角色部件时立即失败，不要让空模型往下走。
+
+        这条闸门存在的理由：链路上游（图像生成）与下游（PSD/rigging/导出）都只看
+        「请求成功、文件存在」，于是一张与提示词无关的风景图照样能产出一件
+        「成功」的作品，用户在左栏点开才发现是空的。
+
+        与 ``layer_quality.verdict``（自述为 "Pass/fail for the workflow gate"）的
+        分工：那道门看的是「部件是否把角色剪影解释够」（``explained_fraction`` ≥ 0.70），
+        而它需要一张前景剪影。实测（2026-10-29）生成图是无 alpha 的 RGB PNG，
+        ``foreground_of()`` 两个样本都取不到剪影 → ``explained_fraction`` 为 None →
+        那道门按设计**不参与判定**，只剩 defect_count（软门槛，刻意不致命）。
+        所以这里补的是它够不到的那段：没有剪影可量时，用「最大部件占画布比例」
+        兜住「整幅画几乎什么都没被分层」这一种退化。
+        """
+        layers = (layer_result or {}).get("layers") or []
+        width, height = image_size
+        area = max(1, int(width) * int(height))
+        counts = [int(layer.get("pixel_count") or 0) for layer in layers]
+        largest = max(counts) if counts else 0
+        coverage = largest / area
+
+        if coverage >= self.MIN_PART_COVERAGE:
+            return
+        raise RuntimeError(
+            f"分层没有产出可用的角色部件：最大部件只覆盖画面 {coverage:.4%}"
+            f"（阈值 {self.MIN_PART_COVERAGE:.0%}），共 {len(layers)} 个部件。"
+            "上游很可能没有按提示词画出人物（例如返回了风景或抽象图）—— "
+            "请换一句更明确的人物描述重试，或在设置里改用已配置的图像服务。"
+        )
+
     def _ensure_min_height(self, image):
         """Scale a too-short input up to the Live2D canvas minimum, and say so.
 
@@ -358,6 +399,7 @@ class WorkflowEngine:
             layers_output = str(self.output_dir / f"layers_{timestamp}")
             layer_result = self.kmeans_layerer.layer(
                 optimized_img, output_dir=layers_output)
+            self._assert_layering_usable(layer_result, optimized_img.size)
             return (layer_result.get("output_dir", layers_output), layer_result)
 
         self._set_state("layering", "Semantic segmentation (SAM / ISNet)", 60)
@@ -388,6 +430,7 @@ class WorkflowEngine:
         ):
             log.warning("Semantic segmentation degraded to color heuristics "
                         f"({layer_result.get('method')}); keeping named layers")
+        self._assert_layering_usable(layer_result, optimized_img.size)
         return (layer_result.get("output_dir", layers_output), layer_result)
 
     def _record_layering_step(self, result: Dict, layers_output: str,
