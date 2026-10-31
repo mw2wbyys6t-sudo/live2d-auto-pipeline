@@ -41,7 +41,11 @@ func RecordLatestGeneration(cfg *config.Config, resp *models.GenerateImageRespon
 		"prompt_sent":      resp.PromptSent,
 		"prompt_lang":      resp.PromptLang,
 		"prompt_mismatch":  resp.PromptMismatch,
-		"created_at":       time.Now().Format(time.RFC3339),
+		// 占位图必须能在重开界面后仍然认得出来：只挂在当次响应上的话，
+		// 用户刷新一次左栏，那张假立绘就又变成一次"正常成功"了。
+		"fallback":        resp.Fallback,
+		"fallback_reason": resp.FallbackReason,
+		"created_at":      time.Now().Format(time.RFC3339),
 	}
 	writeLatestGeneration(cfg, record)
 	appendGenerationHistory(cfg, record)
@@ -148,6 +152,8 @@ func RecordLatestExport(cfg *config.Config, model3JSON, outputDir string, runtim
 	if data, err := os.ReadFile(latestGenerationPath(cfg)); err == nil {
 		_ = json.Unmarshal(data, &record)
 	}
+	// 先记下这条记录在历史里的身份，再动它。
+	identity := exportIdentity(record)
 	record["model3_json"] = model3JSON
 	record["output_dir"] = outputDir
 	record["model_dir"] = filepath.Dir(model3JSON)
@@ -157,6 +163,54 @@ func RecordLatestExport(cfg *config.Config, model3JSON, outputDir string, runtim
 		record["created_at"] = time.Now().Format(time.RFC3339)
 	}
 	writeLatestGeneration(cfg, record)
+	// 历史条目必须一起改，否则它停在「没有模型」的状态：前端按
+	// [layers_dir, model3_json, output_dir, image_path] 算作品 id，两份记录的
+	// id 因此不同，左栏同一件作品出现两条（一条带「模型」徽章一条不带），
+	// 而 latest 里那份还可能挂着**上一个**作品的 model3 —— 预览/导出就被
+	// 标成已完成，点进去却是空作品。实测（2026-10-30 安装包）：
+	// /api/generations 报 6 条，左栏显示 7 件作品。
+	mergeIntoGenerationHistory(cfg, identity, map[string]interface{}{
+		"model3_json":   model3JSON,
+		"output_dir":    outputDir,
+		"model_dir":     filepath.Dir(model3JSON),
+		"model3_url":    OutputURLFor(cfg, model3JSON),
+		"runtime_ready": runtimeReady,
+	})
+}
+
+// exportIdentity 取一条记录里**不会因导出而变**的字段，用来在历史里找回同一次作品。
+//
+// 刻意不用 historyEntryKey：导出会把 output_dir / model3_json 从空变成有值，
+// 键跟着变，「更新同一条」就退化成「新增一条」。
+func exportIdentity(record map[string]interface{}) string {
+	for _, field := range []string{"image_path", "layers_dir"} {
+		if v, ok := record[field].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// mergeIntoGenerationHistory 把导出结果就地并进历史里的同一条记录。
+// 找不到对应条目时什么都不做（不新增、不猜测），宁可少更新也不要造出第二条。
+func mergeIntoGenerationHistory(cfg *config.Config, identity string, fields map[string]interface{}) {
+	if cfg == nil || identity == "" {
+		return
+	}
+	history := readGenerationHistory(cfg)
+	for _, item := range history {
+		if item == nil {
+			continue
+		}
+		if exportIdentity(item) != identity {
+			continue
+		}
+		for key, value := range fields {
+			item[key] = value
+		}
+		writeGenerationHistory(cfg, history)
+		return
+	}
 }
 
 // ListExportedModels 列出 output 目录下全部已导出的 model3.json（按时间倒序），

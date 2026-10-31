@@ -692,6 +692,8 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
             effectivePrompt: '',
             promptLang: '',
             promptMismatch: false,
+            fallback: false,
+            fallbackReason: '',
             createdAt: new Date().toISOString(),
           };
       upsertWork(nextWork);
@@ -731,6 +733,8 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
         effectivePrompt: '',
         promptLang: '',
         promptMismatch: false,
+        fallback: false,
+        fallbackReason: '',
         createdAt: new Date().toISOString(),
       };
       upsertWork(work);

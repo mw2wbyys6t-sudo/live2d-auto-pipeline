@@ -38,8 +38,47 @@ def _seeded_palette(seed: int):
     return pastel(hue(0), 0.35, 0.96), pastel(hue(1), 0.35, 0.86), pastel(hue(2)), pastel(hue(3))
 
 
+#: 能画中文的字体候选。占位图的水印要把用户的中文提示词原样画出来，
+#: 而 PIL 默认字体没有 CJK 字形 —— 实测安装包上画出来是一排豆腐块，
+#: 「如实标注」这句承诺在中文下就作废了。
+_CJK_FONT_CANDIDATES = (
+    r"C:\Windows\Fonts\msyh.ttc",
+    r"C:\Windows\Fonts\msyhbd.ttc",
+    r"C:\Windows\Fonts\simhei.ttf",
+    r"C:\Windows\Fonts\Dengxian.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/System/Library/Fonts/PingFang.ttc",
+)
+
+
+def _label_font(size: int = 16):
+    """返回第一个可用的中文字体；一个都没有时返回 ``None``。"""
+    from PIL import ImageFont
+
+    for path in _CJK_FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    return None
+
+
+def _placeholder_label(seed: int, prompt: str, has_cjk_font: bool) -> str:
+    """拼占位图水印。没有中文字体时**不画**中文提示词。
+
+    拆成纯函数是为了可测：豆腐块（缺字形时的方框）只有在真渲染时才看得见，
+    而这条规则本身跟 Pillow 无关。
+    """
+    head = "LOCAL-PLACEHOLDER · seed={}".format(seed)
+    snippet = (prompt or "").strip().replace("\n", " ")[:72]
+    if snippet and not has_cjk_font and not snippet.isascii():
+        snippet = ""
+    return f"{head} · {snippet}" if snippet else head
+
+
 def _draw(width: int, height: int, seed: int, prompt: str) -> "Image.Image":
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
 
     top, bottom, primary, accent = _seeded_palette(seed)
     img = Image.new("RGBA", (width, height))
@@ -82,12 +121,10 @@ def _draw(width: int, height: int, seed: int, prompt: str) -> "Image.Image":
         )
 
     # 提示词水印（截断），保证占位来源一目了然
-    label = "LOCAL-PLACEHOLDER · seed={}".format(seed)
-    snippet = (prompt or "").strip().replace("\n", " ")[:72]
-    if snippet:
-        label = f"{label} · {snippet}"
+    font = _label_font()
+    label = _placeholder_label(seed, prompt, font is not None)
     draw.rectangle([0, height - 28, width, height], fill=(0, 0, 0, 140))
-    draw.text((8, height - 22), label, fill=(255, 255, 255, 230))
+    draw.text((8, height - 22), label, fill=(255, 255, 255, 230), font=font)
     return img
 
 

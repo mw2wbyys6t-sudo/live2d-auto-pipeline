@@ -29,6 +29,9 @@ export interface Workpiece {
   effectivePrompt: string;
   promptLang: string;
   promptMismatch: boolean;
+  /** 立绘是本地占位图（非 AI 生成）；左栏与生成页都要按它如实标注。 */
+  fallback: boolean;
+  fallbackReason: string;
   createdAt: string;
 }
 
@@ -87,6 +90,8 @@ export function workFromRecord(record: GenerationRecord | LatestGeneration): Wor
     effectivePrompt: ('effective_prompt' in record && record.effective_prompt) || '',
     promptLang: record.prompt_lang || '',
     promptMismatch: !!record.prompt_mismatch,
+    fallback: !!record.fallback,
+    fallbackReason: record.fallback_reason || '',
     createdAt: record.created_at || '',
   };
 }
@@ -112,6 +117,8 @@ export function workFromResult(result: GenerationResult, prompt: string): Workpi
     effectivePrompt: result.effectivePrompt || '',
     promptLang: result.promptLang || '',
     promptMismatch: !!result.promptMismatch,
+    fallback: !!result.fallback,
+    fallbackReason: result.fallbackReason || '',
     createdAt: result.createdAt || new Date().toISOString(),
   };
 }

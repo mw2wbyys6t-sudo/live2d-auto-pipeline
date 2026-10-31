@@ -74,6 +74,9 @@ func applyDesktopRoot(cfg *Config, resDir string, configProvided bool) {
 	// ---- 用户数据（可写）----
 	dataRoot := envOr("LIVE2D_DATA_DIR", appDataRoot())
 	docsRoot := envOr("LIVE2D_DOCS_DIR", documentsRoot())
+	// 暴露出去：Python 子进程要靠它落日志与保险库（见 services 注入的
+	// LIVE2D_DATA_DIR），自检页也要照它报真实日志目录，不能各写各的字符串。
+	cfg.DataDir = dataRoot
 
 	cfg.Python.HfCache = filepath.Join(dataRoot, "hf-cache")
 	// 内置模型权重目录（只读，程序本体）：<res>/models。

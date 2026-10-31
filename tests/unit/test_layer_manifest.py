@@ -7,10 +7,12 @@ import pytest
 
 from core.segment_engine.layer_manifest import (
     MANIFEST_FILENAME,
+    REQUIRED_FOR_PREVIEW,
     SCHEMA_VERSION,
     SOURCE_COLOR_CLUSTER,
     SOURCE_SEMANTIC,
     build_manifest,
+    is_hollow,
     load_manifest,
     resolve_part,
     validate_manifest,
@@ -170,3 +172,28 @@ def test_partial_depth_falls_back_to_static_order() -> None:
 
     assert data["order_source"] == "static"
     assert any("缺少深度" in w for w in data["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# is_hollow：导出闸门的判据
+#
+# 线画在"一个必需部件都没认出来"，不是 preview_ready=false —— 实测本机 14 个
+# 真实分层目录里 10 个 preview_ready=false（生产默认的 semantic 路径只缺一个
+# mouth 也算），拿后者当闸门会把用户已经做好的作品全部拦死。
+# ---------------------------------------------------------------------------
+
+def test_hollow_only_when_no_required_part_survives() -> None:
+    assert is_hollow(list(REQUIRED_FOR_PREVIEW)) is True
+    # 只要还剩一个，就是"不完美"而不是"空心"。
+    assert is_hollow([p for p in REQUIRED_FOR_PREVIEW if p != "hair_back"]) is False
+
+
+def test_hollow_ignores_ids_outside_the_required_vocabulary() -> None:
+    """missing_preview 里混进表外 id 时不得被数成"全缺"。
+
+    判据必须按必需部件逐个核对，用 len(missing) >= len(required) 会被
+    清单里多出来的未知部件名骗到，把正常分层判成空心。
+    """
+    leftovers = [p for p in REQUIRED_FOR_PREVIEW if p != "mouth"]
+    assert is_hollow(leftovers + ["背景", "shadow", "unknown_part"]) is False
+

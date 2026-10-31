@@ -17,7 +17,7 @@ import json
 import os
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 # 与真实图层同目录、但不是图层的整图预览文件。
 NON_LAYER_FILES: Set[str] = {"preview", "composite_preview"}
@@ -28,6 +28,8 @@ __all__ = [
     "load_export_inputs",
     "load_export_layer_inputs",
     "load_layers_for_export",
+    "parts_blocker_message",
+    "read_parts_readiness",
 ]
 
 
@@ -45,6 +47,20 @@ class ExportLayerInputs:
     draw_index: Dict[str, float] = field(default_factory=dict)
     # draw_index 与权威层序表冲突、被表纠正过：如实报告，不静默改用户的顺序。
     normalized: bool = False
+    # 分层清单对本批部件的结论：False = 连 ``REQUIRED_FOR_PREVIEW`` 都不齐。
+    # 这是**如实报告**，不是拒绝依据 —— 实测生产默认路径只缺一个 mouth 也算
+    # False（本机 14 个真实分层里 10 个为 False），拿它当闸门会拦死正常作品。
+    # None = 该目录没有 ``layer_manifest.json``（用户导入的 PSD/PNG 就没有），
+    # 此时**不据此拒绝** —— 没有部件词表依据，判它缺什么等于凭空断言。
+    parts_ready: Optional[bool] = None
+    # ``parts_ready is False`` 时缺的那些部件 id（用于把原因说给用户听）。
+    missing_preview: List[str] = field(default_factory=list)
+    # 一个必需部件都没认出来 = 空心。这才是拒绝构建的硬线（空集边界，
+    # 不依赖拍脑袋的阈值）；理由与判据见 ``layer_manifest.is_hollow``。
+    parts_hollow: bool = False
+    # 清单里的分层来源原样带出：``color_cluster`` 与「上游没画出人」的
+    # 拒绝理由不一样，混成一句话用户就没法照着做。
+    parts_source: str = ""
 
 
 def load_export_inputs(layers_dir: str) -> ExportLayerInputs:
@@ -85,13 +101,81 @@ def load_export_inputs(layers_dir: str) -> ExportLayerInputs:
     tail = float(len(draw_index) + 1)
     guide_order = sorted(paths, key=lambda n: (draw_index.get(n, tail), n))
     ordered_names = _by_standard_order(guide_order)
+    readiness = read_parts_readiness(layers_dir)
+    missing = list((readiness or {}).get("missing_preview") or [])
+    # 与 _by_standard_order 同一做法：词表与判据都住在清单模块里，这里只调用。
+    from core.segment_engine.layer_manifest import is_hollow
     return ExportLayerInputs(
         paths=OrderedDict((name, paths[name]) for name in ordered_names),
         order_source="layer_guide" if draw_index else "filename",
         unknown=unknown,
         draw_index=draw_index,
         normalized=ordered_names != guide_order,
+        parts_ready=None if readiness is None else bool(readiness.get("preview_ready")),
+        missing_preview=missing,
+        parts_hollow=readiness is not None and is_hollow(missing),
+        parts_source=str((readiness or {}).get("source") or ""),
     )
+
+
+def parts_blocker_message(missing_preview: List[str], source: str = "") -> str:
+    """把"一个部件都没认出来"翻译成用户能照着做的一句话。
+
+    两条导出路径（Go 导出桥、Go 阶段事件桥）共用它：拒绝理由此前只写在
+    ``layer_manifest.json`` 里，用户在界面上看到的是一句「导出成功」。
+    分来源说：颜色聚类本来就没有部件身份（换提示词没用，得换分层方式），
+    而语义分层交出空结果通常是上游图里根本没有人。
+    """
+    from core.segment_engine.layer_manifest import PART_SPECS
+
+    labels = [str((PART_SPECS.get(pid) or {}).get("name_zh") or pid)
+              for pid in missing_preview]
+    head = (
+        "分层没有认出任何角色部件"
+        f"（{'、'.join(labels) if labels else '清单未列出'}），已拒绝构建模型。"
+    )
+    why = {
+        "color_cluster": "这次用的是颜色聚类，它只按颜色分块、不认部位，"
+                         "清单本身也标注「仅可预览，不可用于 Live2D 绑定」。",
+        "semantic_hsv_fallback": "没拿到前景分割模型，已退化成纯颜色启发式，"
+                                 "结果不认部位。",
+    }.get(source, "立绘里可能根本没有可辨认的人物（上游未按提示词出图）。")
+    return (
+        head + why +
+        "官方内核只会证明一个 moc3 能被加载，不证明它是有眼有嘴的角色，"
+        "所以这里宁可不出货。请换一句更明确的人物描述重新生成并分层，"
+        "换用「语义分层」，或在「分层」阶段导入自己的 PSD/PNG。"
+    )
+
+
+def read_parts_readiness(layers_dir: str) -> Optional[Dict[str, Any]]:
+    """读 ``layer_manifest.json`` 里部件齐不齐的结论；没有清单返回 ``None``。
+
+    为什么要有这一步：清单本来就是分层侧对自己产物的判定（``preview_ready`` =
+    ``REQUIRED_FOR_PREVIEW`` 那 5 个部件是否都在），但导出侧此前完全没读它，
+    于是同一个分层目录可以一边写着「缺少必要部件，无法进入预览」，一边在导出
+    响应里拿到 ``runtime_ready=true``。``runtime_ready`` 只证明官方内核肯加载
+    这个 moc3，不证明它是个有眼有嘴的角色。
+
+    清单读不到 / 解析失败一律返回 ``None``（= 不判定），而不是返回"不合格"：
+    用户导入的 PSD/PNG 目录没有清单，那 5 个部件 id 对我们的命名约定并不成立，
+    判它缺东西是凭空断言。
+    """
+    from core.segment_engine.layer_manifest import MANIFEST_FILENAME
+
+    path = os.path.join(layers_dir, MANIFEST_FILENAME)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("preview_ready"), bool):
+        return None
+    return {
+        "preview_ready": data["preview_ready"],
+        "missing_preview": list(data.get("missing_preview") or []),
+        "source": str(data.get("source") or ""),
+    }
 
 
 def _by_standard_order(names: List[str]) -> List[str]:

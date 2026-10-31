@@ -19,10 +19,15 @@ func defaultPythonPath() string {
 }
 
 type Config struct {
-	Server        ServerConfig        `json:"server"`
-	SDWebUI       SDWebUIConfig       `json:"sd_webui"`
-	Python        PythonConfig        `json:"python"`
-	Output        OutputConfig        `json:"output"`
+	Server  ServerConfig  `json:"server"`
+	SDWebUI SDWebUIConfig `json:"sd_webui"`
+	Python  PythonConfig  `json:"python"`
+	Output  OutputConfig  `json:"output"`
+	// DataDir 是**用户可写**的数据根（%APPDATA%\PygmalionStudio 一类）。
+	// 空 = 开发环境，日志沿用项目根（老行为）。桌面版由 applyDesktopLayout 填入。
+	// 存在的理由：日志与密钥此前跟着 ScriptsDir 走，也就是**安装目录** ——
+	// 装在 Program Files 下写不进去，卸载还会把诊断证据与保险库一起删掉。
+	DataDir       string              `json:"data_dir"`
 	ComfyUI       ComfyUIConfig       `json:"comfyui"`
 	Cache         CacheConfig         `json:"cache"`
 	LLM           LLMConfig           `json:"llm"`
@@ -388,4 +393,19 @@ func (c *Config) GetExportTimeout() time.Duration {
 		return write - write/10
 	}
 	return timeout
+}
+
+// LogsDir 返回日志目录，与 core/logger.py 的取值规则**必须一致**：
+// 有可写数据根就用它，否则退回项目根（开发环境的老行为）。
+// 自检页把它原样显示给用户 —— 之前页面上写死的路径在本机根本不存在，
+// 用户按提示去找日志只会一无所获。
+func (c *Config) LogsDir() string {
+	if c.DataDir != "" {
+		return filepath.Join(c.DataDir, "logs")
+	}
+	root := c.Python.ScriptsDir
+	if root == "" {
+		root = c.Output.BaseDir
+	}
+	return filepath.Join(root, "logs")
 }

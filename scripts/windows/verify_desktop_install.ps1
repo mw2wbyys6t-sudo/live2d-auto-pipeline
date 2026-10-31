@@ -1,5 +1,5 @@
 # =====================================================================
-#  Live2D Master Agent - post-install acceptance check (Windows)
+#  Pygmalion Studio - post-install acceptance check (Windows)
 #
 #  WHAT IT DOES
 #    Inspects the installed app, runs the bundled Python interpreter,
@@ -13,7 +13,7 @@
 #  USAGE
 #    powershell -NoProfile -ExecutionPolicy Bypass -File verify_desktop_install.ps1
 #    powershell -NoProfile -ExecutionPolicy Bypass -File verify_desktop_install.ps1 -Launch
-#    powershell -NoProfile -ExecutionPolicy Bypass -File verify_desktop_install.ps1 -InstallDir "D:\Apps\Live2D Master Agent"
+#    powershell -NoProfile -ExecutionPolicy Bypass -File verify_desktop_install.ps1 -InstallDir "D:\Apps\Pygmalion Studio"
 #
 #  -Launch   starts the app, waits up to 40s for http://127.0.0.1:8080,
 #            then runs the API checks. Close the app when you are done.
@@ -51,7 +51,7 @@ function Check {
 }
 
 Add-Line '====================================================================='
-Add-Line ' Live2D Master Agent - post-install acceptance'
+Add-Line ' Pygmalion Studio - post-install acceptance'
 Add-Line (" Time: {0}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 Add-Line '====================================================================='
 Add-Line ''
@@ -59,24 +59,73 @@ Add-Line ''
 # ---------------------------------------------------------------------
 Add-Line '--- 1. installation ---'
 # ---------------------------------------------------------------------
-# The Tauri shell keeps the Cargo package name (live2d-master-agent.exe);
-# some builds used the product name instead. Accept either.
+# ---------------------------------------------------------------------
+# Shell exe name history: the Tauri shell used to carry the Cargo package
+# name (live2d-master-agent.exe); the product was renamed to Pygmalion
+# Studio, so current builds ship pygmalion-studio.exe. Accept every name
+# any installed build actually used -- checking for one fixed literal made
+# this script report a false FAIL against a perfectly good install
+# (measured 2026-10-30 against the installed v0.10.10).
+$script:ShellNames = @(
+    'pygmalion-studio.exe',
+    'Pygmalion Studio.exe',
+    'live2d-master-agent.exe',
+    'Live2D Master Agent.exe'
+)
+
 function Get-ShellExe {
     param([string]$Dir)
-    foreach ($name in @('live2d-master-agent.exe', 'Live2D Master Agent.exe')) {
+    if (-not $Dir) { return $null }
+    foreach ($name in $script:ShellNames) {
         $candidate = Join-Path $Dir $name
         if (Test-Path $candidate) { return $candidate }
     }
     return $null
 }
 
-if (-not $InstallDir) {
-    $candidates = @(
-        (Join-Path $env:LOCALAPPDATA 'Live2D Master Agent'),
-        (Join-Path $env:ProgramFiles 'Live2D Master Agent')
+# Ask the uninstall registry instead of guessing install paths: the installer
+# honours a user-chosen location (this machine has it on F:\), which no
+# %LOCALAPPDATA% / %ProgramFiles% guess would ever find.
+function Get-InstalledLocation {
+    $needles = @('Pygmalion Studio', 'Live2D Master Agent')
+    $roots = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
     )
-    if (${env:ProgramFiles(x86)}) {
-        $candidates += (Join-Path ${env:ProgramFiles(x86)} 'Live2D Master Agent')
+    foreach ($root in $roots) {
+        $items = Get-ItemProperty -Path $root -ErrorAction SilentlyContinue
+        foreach ($i in $items) {
+            # NSIS writes InstallLocation wrapped in quotes (measured on the
+            # installed v0.10.10: '"F:\Pygmalion Studio"'), and Test-Path then
+            # fails on a path that plainly exists. Strip quotes and any
+            # trailing separator before using it.
+            $loc = '' + $i.InstallLocation
+            $loc = $loc.Trim().Trim('"').TrimEnd('\')
+            if (-not $loc) { continue }
+            foreach ($n in $needles) {
+                if ($i.DisplayName -like "*$n*") { return $loc }
+            }
+        }
+    }
+    return ''
+}
+
+if (-not $InstallDir) {
+    $InstallDir = Get-InstalledLocation
+    if ($InstallDir) {
+        Add-Line ("install dir from registry uninstall table: " + $InstallDir)
+    }
+}
+
+if (-not $InstallDir) {
+    $candidates = @()
+    foreach ($n in @('Pygmalion Studio', 'Live2D Master Agent')) {
+        $candidates += (Join-Path $env:LOCALAPPDATA $n)
+        $candidates += (Join-Path $env:ProgramFiles $n)
+        if (${env:ProgramFiles(x86)}) {
+            $candidates += (Join-Path ${env:ProgramFiles(x86)} $n)
+        }
     }
     foreach ($p in $candidates) {
         if (Get-ShellExe $p) { $InstallDir = $p; break }
@@ -116,7 +165,7 @@ if ($InstallDir) {
         if (-not (Test-Path (Join-Path $InstallDir $n))) { $missing += $n }
     }
     $shell = Get-ShellExe $InstallDir
-    if (-not $shell) { $missing += 'live2d-master-agent.exe' }
+    if (-not $shell) { $missing += 'shell exe (pygmalion-studio.exe)' }
 
     if ($missing.Count -eq 0) {
         Check ("bundled files ({0})" -f ($need.Count + 1)) 'OK' 'all present'

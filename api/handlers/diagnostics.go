@@ -80,6 +80,10 @@ func (h *Handler) GetDiagnostics(c *gin.Context) {
 			"checks":      checks,
 			"python_path": cfg.Python.PythonPath,
 			"output_dir":  cfg.Output.BaseDir,
+			// 自检页照这个值显示日志位置。此前页面写死
+			// "%APPDATA%\PygmalionStudio\logs"，而实测本机日志在别处 ——
+			// 用户按提示去找 live2d.log 会一无所获，反馈问题时也带不上证据。
+			"log_dir": cfg.LogsDir(),
 		},
 	})
 }

@@ -61,3 +61,45 @@ func TestBothExportScriptsReportSameDiagnosticFields(t *testing.T) {
 		}
 	}
 }
+
+// 空心分层的拒绝必须在**两条**导出路径上都存在。
+//
+// 背景（实测，2026-10-30，已安装的 v0.10.10）：一张纯色无结构图分层出 4 个色块，
+// layer_manifest.json 写着 preview_ready=false、缺 12 个必要部件，
+// /api/export/live2d 却返回 runtime_ready=true 并产出 moc3 —— 用户拿到一个
+// 没有眼嘴的"角色"，而界面上没有任何地方说这件事。
+// 生产导出走的是阶段事件桥那份脚本，所以只给一份加闸门等于没加。
+func TestBothExportScriptsRefuseHollowLayering(t *testing.T) {
+	stage := exportStagePythonCode("/root", "/root/layers", "/root/out", "char", "job-1")
+	for name, code := range map[string]string{
+		"生产导出脚本": stage,
+		"导出桥脚本":   bridgeExportLive2DScript,
+	} {
+		// 必须断言"闸门那一行"，不能只断言标识符出现过：
+		// inputs.parts_hollow 同样出现在 build_meta 的落盘块里，只查子串的话
+		// 把 if 改成 if False 测试照样绿（变异实测踩过）。
+		if !strings.Contains(code, "if inputs.parts_hollow:") {
+			t.Errorf("%s没有空心分层闸门（缺 `if inputs.parts_hollow:`）", name)
+		}
+		if !strings.Contains(code, "parts_blocker_message(inputs.missing_preview,") {
+			t.Errorf("%s的拒绝理由没有把分层来源一起传进 parts_blocker_message（颜色聚类与上游没画出人，下一步不一样）", name)
+		}
+	}
+}
+
+// 部件结论必须落盘：runtime_ready 只证明内核肯加载，不证明是个有眼有嘴的角色。
+// 落盘后下载闸门与前端读的是同一份事实，不用重新分层才能知道。
+func TestBothExportScriptsRecordPartsVerdict(t *testing.T) {
+	stage := exportStagePythonCode("/root", "/root/layers", "/root/out", "char", "job-1")
+	for name, code := range map[string]string{
+		"生产导出脚本": stage,
+		"导出桥脚本":   bridgeExportLive2DScript,
+	} {
+		for _, key := range []string{`meta["parts"]`, `"missing_preview": list(inputs.missing_preview)`} {
+			if !strings.Contains(code, key) {
+				t.Errorf("%s没有把部件结论写进 build_meta.json（缺 %q）", name, key)
+			}
+		}
+	}
+}
+

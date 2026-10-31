@@ -66,6 +66,10 @@ export default function HealthPage() {
     const lines = [
       `${APP_NAME} ${report.version} (${report.os})`,
       `监听: ${report.host}:${report.port}`,
+      // 路径必须进剪贴板：反馈问题时最常被追问的就是"日志在哪、产物写到哪"，
+      // 只带 checks 列表的话，对方仍然不知道去哪找 live2d.log。
+      `日志目录: ${report.log_dir || '(未上报)'}`,
+      `产物目录: ${report.output_dir || '(未上报)'}`,
       ...report.checks.map((c) =>
         `${c.ok ? '✅' : '❌'} ${c.label}${c.detail ? ` — ${c.detail}` : ''}${c.issues?.length ? ` [${c.issues.join('; ')}]` : ''}`,
       ),
@@ -215,8 +219,12 @@ export default function HealthPage() {
             <span className="font-medium">日志目录</span>
           </div>
           <p className="text-xs text-gray-400 break-all">
-            Windows: <code>%APPDATA%\PygmalionStudio\logs</code>（出问题时把
-            live2d.log 与下方诊断信息一并反馈）
+            {/* 路径来自后端：写死过一次，结果在本机指向一个不存在的目录，
+                用户照着提示找不到 live2d.log。 */}
+            {report?.log_dir
+              ? <code>{report.log_dir}</code>
+              : <code>（未取到日志目录，请点「复制诊断信息」把 log_dir 一并发回）</code>}
+            （出问题时把 live2d.log 与下方诊断信息一并反馈）
           </p>
           <p className="text-[11px] text-gray-500 leading-relaxed">
             首次安装若弹 SmartScreen「Windows 已保护你的电脑」：点「更多信息」→「仍要运行」

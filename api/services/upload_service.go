@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"live2d-api/config"
 )
@@ -24,7 +25,11 @@ var allowedImageExt = map[string]bool{
 	".bmp":  true,
 }
 
-// sanitizeUploadName 只保留文件名中的安全字符，其余折叠为下划线。
+// sanitizeUploadName 保留文件名里安全的字符，其余折叠为下划线。
+//
+// 「安全」指的是不能参与路径构造：分隔符、点、控制字符一律折掉。
+// 它**不等于** ASCII —— 之前只放行 ASCII 字母数字，结果用户中文文件名
+// `少女立绘.png` 存成 `____.png`，回看时完全认不出是哪张图。
 func sanitizeUploadName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -33,15 +38,19 @@ func sanitizeUploadName(name string) string {
 	var b strings.Builder
 	for _, r := range name {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+		case r == '-' || r == '_':
 			b.WriteRune(r)
 		default:
 			b.WriteByte('_')
 		}
 	}
 	out := b.String()
-	if len(out) > 64 {
-		out = out[len(out)-64:]
+	// 按码点裁剪，不按字节：64 字节会把汉字切成半个 UTF-8 序列，
+	// 落盘得到非法字节，左栏标题也就跟着变乱码。
+	if runes := []rune(out); len(runes) > 64 {
+		out = string(runes[len(runes)-64:])
 	}
 	return out
 }

@@ -24,24 +24,24 @@ type GenerateImageRequest struct {
 
 // 图片生成响应
 type GenerateImageResponse struct {
-	ImagePath    string            `json:"image_path"`
-	ImageURL     string            `json:"image_url"`
-	Seed         int               `json:"seed"`
-	Width        int               `json:"width"`
-	Height       int               `json:"height"`
-	Source       string            `json:"source"`
-	Features     map[string]string `json:"features,omitempty"`
-	CreatedAt    time.Time         `json:"created_at"`
+	ImagePath string            `json:"image_path"`
+	ImageURL  string            `json:"image_url"`
+	Seed      int               `json:"seed"`
+	Width     int               `json:"width"`
+	Height    int               `json:"height"`
+	Source    string            `json:"source"`
+	Features  map[string]string `json:"features,omitempty"`
+	CreatedAt time.Time         `json:"created_at"`
 	// v0.10.1: 完整工作流产物
-	LayersDir    string            `json:"layers_dir,omitempty"`
-	PSDPath      string            `json:"psd_path,omitempty"`
-	Model3JSON   string            `json:"model3_json,omitempty"`
-	OutputDir    string            `json:"output_dir,omitempty"`
-	CharacterID  string            `json:"character_id,omitempty"`
-	Success      bool              `json:"success"`
-	Error        string            `json:"error,omitempty"`
+	LayersDir   string `json:"layers_dir,omitempty"`
+	PSDPath     string `json:"psd_path,omitempty"`
+	Model3JSON  string `json:"model3_json,omitempty"`
+	OutputDir   string `json:"output_dir,omitempty"`
+	CharacterID string `json:"character_id,omitempty"`
+	Success     bool   `json:"success"`
+	Error       string `json:"error,omitempty"`
 	// 各步骤产物路径
-	Steps        map[string]interface{} `json:"steps,omitempty"`
+	Steps map[string]interface{} `json:"steps,omitempty"`
 	// 提示词链路：用户原文 → 合并角色一致性 → 真正发给上游（含风格标签）。
 	// 前端用它展示「实际发送了什么」，中文提示词出问题时不必靠猜。
 	PromptUser      string `json:"prompt_user,omitempty"`
@@ -49,6 +49,14 @@ type GenerateImageResponse struct {
 	PromptSent      string `json:"prompt_sent,omitempty"`
 	PromptLang      string `json:"prompt_lang,omitempty"`
 	PromptMismatch  bool   `json:"prompt_mismatch,omitempty"`
+	// Fallback：这张图不是模型画出来的，是本地兜底生成的几何占位图。
+	// 为什么不能靠 source 判断：source 一直是 "local_generator_v3"，但前端
+	// 从来没读它 —— 实测（2026-10-30 安装包）用户拿到占位图时界面显示的是
+	// 一次正常成功，连「非 AI 生成」四个字都没出现。
+	// FallbackReason 是被兜底吞掉的那条真实错误（例如免密上游 402 配额耗尽）：
+	// GenerateWithCharacter 此前只把它写到 stderr，界面上只剩一张假立绘。
+	Fallback       bool   `json:"fallback,omitempty"`
+	FallbackReason string `json:"fallback_reason,omitempty"`
 }
 
 // PSD分层请求
@@ -125,41 +133,41 @@ type TaskStatus struct {
 
 // CharacterCard 角色卡片 - 与 Python CharacterCard 对应
 type CharacterCard struct {
-	CharacterID string       `json:"character_id"`
-	Name        string       `json:"name"`
-	CreatedAt   string       `json:"created_at"`
-	UpdatedAt   string       `json:"updated_at"`
-	Face        FaceParams   `json:"face"`
-	Hair        HairParams   `json:"hair"`
-	Body        BodyParams   `json:"body"`
+	CharacterID string        `json:"character_id"`
+	Name        string        `json:"name"`
+	CreatedAt   string        `json:"created_at"`
+	UpdatedAt   string        `json:"updated_at"`
+	Face        FaceParams    `json:"face"`
+	Hair        HairParams    `json:"hair"`
+	Body        BodyParams    `json:"body"`
 	Palette     PaletteParams `json:"palette"`
-	Outfit      OutfitParams `json:"outfit"`
-	References  RefPaths     `json:"references"`
-	Embedding   []float64    `json:"embedding,omitempty"`
-	Persona     PersonaInfo  `json:"persona"`
-	Style       StyleInfo    `json:"style"`
+	Outfit      OutfitParams  `json:"outfit"`
+	References  RefPaths      `json:"references"`
+	Embedding   []float64     `json:"embedding,omitempty"`
+	Persona     PersonaInfo   `json:"persona"`
+	Style       StyleInfo     `json:"style"`
 }
 
 // FaceParams 面部参数
 type FaceParams struct {
-	Shape          string  `json:"shape"`
-	EyeShape       string  `json:"eye_shape"`
-	EyeColor       string  `json:"eye_color"`
-	EyeSize        float64 `json:"eye_size"`
-	EyebrowShape   string  `json:"eyebrow_shape"`
-	NoseType       string  `json:"nose_type"`
-	MouthType      string  `json:"mouth_type"`
-	FaceWidthRatio float64 `json:"face_width_ratio"`
+	Shape           string  `json:"shape"`
+	EyeShape        string  `json:"eye_shape"`
+	EyeColor        string  `json:"eye_color"`
+	EyeSize         float64 `json:"eye_size"`
+	EyebrowShape    string  `json:"eyebrow_shape"`
+	NoseType        string  `json:"nose_type"`
+	MouthType       string  `json:"mouth_type"`
+	FaceWidthRatio  float64 `json:"face_width_ratio"`
 	FaceHeightRatio float64 `json:"face_height_ratio"`
 }
 
 // HairParams 头发参数
 type HairParams struct {
-	Color          string  `json:"color"`
-	Style          string  `json:"style"`
-	Length         float64 `json:"length"`
-	BangsStyle     string  `json:"bangs_style"`
-	HighlightsColor string `json:"highlights_color"`
+	Color           string  `json:"color"`
+	Style           string  `json:"style"`
+	Length          float64 `json:"length"`
+	BangsStyle      string  `json:"bangs_style"`
+	HighlightsColor string  `json:"highlights_color"`
 }
 
 // BodyParams 身体参数
@@ -198,56 +206,56 @@ type PersonaInfo struct {
 
 // StyleInfo 风格约束
 type StyleInfo struct {
-	Constraints   string `json:"constraints"`
+	Constraints    string `json:"constraints"`
 	NegativePrompt string `json:"negative_prompt"`
 }
 
 // CharacterRequest 创建/更新角色请求
 type CharacterRequest struct {
-	Name        string       `json:"name" binding:"required"`
-	Face        FaceParams   `json:"face,omitempty"`
-	Hair        HairParams   `json:"hair,omitempty"`
-	Body        BodyParams   `json:"body,omitempty"`
-	Palette     PaletteParams `json:"palette,omitempty"`
-	Outfit      OutfitParams `json:"outfit,omitempty"`
-	Persona     PersonaInfo  `json:"persona,omitempty"`
-	Style       StyleInfo    `json:"style,omitempty"`
-	RefImage    string       `json:"ref_image,omitempty"`
+	Name     string        `json:"name" binding:"required"`
+	Face     FaceParams    `json:"face,omitempty"`
+	Hair     HairParams    `json:"hair,omitempty"`
+	Body     BodyParams    `json:"body,omitempty"`
+	Palette  PaletteParams `json:"palette,omitempty"`
+	Outfit   OutfitParams  `json:"outfit,omitempty"`
+	Persona  PersonaInfo   `json:"persona,omitempty"`
+	Style    StyleInfo     `json:"style,omitempty"`
+	RefImage string        `json:"ref_image,omitempty"`
 }
 
 // CharacterListResponse 角色列表项
 type CharacterListResponse struct {
-	CharacterID  string  `json:"character_id"`
-	Name         string  `json:"name"`
-	CreatedAt    string  `json:"created_at"`
-	UpdatedAt    string  `json:"updated_at"`
-	HasEmbedding bool    `json:"has_embedding"`
-	HairColor    string  `json:"hair_color,omitempty"`
-	EyeColor     string  `json:"eye_color,omitempty"`
+	CharacterID  string `json:"character_id"`
+	Name         string `json:"name"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+	HasEmbedding bool   `json:"has_embedding"`
+	HairColor    string `json:"hair_color,omitempty"`
+	EyeColor     string `json:"eye_color,omitempty"`
 }
 
 // GenerateRequest 增强版生成请求（含角色一致性）
 type GenerateRequest struct {
-	Prompt        string `json:"prompt" binding:"required"`
-	Width         int    `json:"width,omitempty"`
-	Height        int    `json:"height,omitempty"`
-	Seed          int    `json:"seed,omitempty"`
-	ModelID       string `json:"model_id,omitempty"`
-	CharacterID   string `json:"character_id,omitempty"`
-	UseSemantic   bool   `json:"use_semantic,omitempty"`
-	ExportLive2D  bool   `json:"export_live2d,omitempty"`
-	UseTracking   bool   `json:"use_tracking,omitempty"`
+	Prompt         string `json:"prompt" binding:"required"`
+	Width          int    `json:"width,omitempty"`
+	Height         int    `json:"height,omitempty"`
+	Seed           int    `json:"seed,omitempty"`
+	ModelID        string `json:"model_id,omitempty"`
+	CharacterID    string `json:"character_id,omitempty"`
+	UseSemantic    bool   `json:"use_semantic,omitempty"`
+	ExportLive2D   bool   `json:"export_live2d,omitempty"`
+	UseTracking    bool   `json:"use_tracking,omitempty"`
 	NegativePrompt string `json:"negative_prompt,omitempty"`
-	DeployDesktop bool   `json:"deploy_desktop,omitempty"`
+	DeployDesktop  bool   `json:"deploy_desktop,omitempty"`
 }
 
 // ChatRequest LLM聊天请求
 type ChatRequest struct {
-	CharacterID string `json:"character_id,omitempty"`
-	Message     string `json:"message" binding:"required"`
-	History     []ChatMessage `json:"history,omitempty"`
-	Stream      bool   `json:"stream,omitempty"`
-	SystemPrompt string `json:"system_prompt,omitempty"`
+	CharacterID  string        `json:"character_id,omitempty"`
+	Message      string        `json:"message" binding:"required"`
+	History      []ChatMessage `json:"history,omitempty"`
+	Stream       bool          `json:"stream,omitempty"`
+	SystemPrompt string        `json:"system_prompt,omitempty"`
 }
 
 // ChatMessage 单条聊天消息
@@ -266,7 +274,7 @@ type ChatResponse struct {
 
 // ChatStreamChunk SSE流式响应块
 type ChatStreamChunk struct {
-	Type     string `json:"type"`     // "token", "emotion", "action", "done", "error"
+	Type     string `json:"type"` // "token", "emotion", "action", "done", "error"
 	Content  string `json:"content,omitempty"`
 	Emotion  string `json:"emotion,omitempty"`
 	Action   string `json:"action,omitempty"`
@@ -279,21 +287,21 @@ type ChatStreamChunk struct {
 
 // TrackingRequest 人脸追踪WebSocket请求
 type TrackingRequest struct {
-	Type      string  `json:"type"`       // "face", "blendshape", "audio"
-	Timestamp int64   `json:"timestamp"`
+	Type      string             `json:"type"` // "face", "blendshape", "audio"
+	Timestamp int64              `json:"timestamp"`
 	Data      map[string]float64 `json:"data,omitempty"`
 }
 
 // WSMessage WebSocket通用消息
 type WSMessage struct {
-	Type    string      `json:"type"`    // "progress", "tracking", "chat", "error", "ping"
-	TaskID  string      `json:"task_id,omitempty"`
-	Stage   string      `json:"stage,omitempty"`
-	Progress int        `json:"progress,omitempty"`
-	Message string      `json:"message,omitempty"`
-	Data    interface{} `json:"data,omitempty"`
-	Error   string      `json:"error,omitempty"`
-	Time    int64       `json:"time,omitempty"`
+	Type     string      `json:"type"` // "progress", "tracking", "chat", "error", "ping"
+	TaskID   string      `json:"task_id,omitempty"`
+	Stage    string      `json:"stage,omitempty"`
+	Progress int         `json:"progress,omitempty"`
+	Message  string      `json:"message,omitempty"`
+	Data     interface{} `json:"data,omitempty"`
+	Error    string      `json:"error,omitempty"`
+	Time     int64       `json:"time,omitempty"`
 }
 
 // ExportModelRequest 导出Live2D模型请求

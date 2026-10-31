@@ -25,7 +25,7 @@ import atexit
 from pathlib import Path
 from typing import Mapping, Optional, Dict
 
-from core.app_paths import APP_DIR_NAME, LEGACY_DIR_NAMES
+from core.app_paths import APP_DIR_NAME, LEGACY_DIR_NAMES, vault_file_path
 
 # P0-4 FIX: Require cryptography at import time with clear error message
 try:
@@ -332,8 +332,7 @@ class SecureStorage:
         return True
 
     def _default_key_path(self) -> str:
-        root = os.environ.get("LIVE2D_PROJECT_ROOT", str(Path.home()))
-        return str(Path(root) / ".env.encrypted")
+        return str(vault_file_path())
 
 
 class EncryptedConfig:
@@ -343,8 +342,7 @@ class EncryptedConfig:
         _require_crypto()
         self._storage = storage or SecureStorage()
         self._cache: Dict[str, str] = {}
-        root = os.environ.get("LIVE2D_PROJECT_ROOT")
-        self._file = Path(root) / ".env.encrypted" if root else Path(__file__).parent.parent / ".env.encrypted"
+        self._file = vault_file_path()
         # 首次启动即把旧版确定性密钥加密的保险库迁移到随机主密钥；
         # 失败不阻塞启动（读路径仍有旧密钥回退）。
         try:

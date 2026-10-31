@@ -126,12 +126,17 @@ def run_round(round_no: int):
     r = requests.delete(f"{BASE}/api/characters/{cid}", timeout=15)
     check("删除角色", r.status_code == 200)
 
-    # 8. 生成（离线 → 本地兜底占位图，链路不断）
+    # 8. 生成：两条分支都必须说实话 —— 真出图就要有分层产物，
+    #    拿不到图就必须自报"这是占位图"并给出原因（不许冒充一次成功）。
     r = requests.post(f"{BASE}/api/generate/character", json={
         "prompt": "a cheerful anime girl with silver hair",
         "width": 512, "height": 512, "export_live2d": True}, timeout=900).json()
-    gen_ok = r.get("success") and (r["data"].get("layers_dir") or r["data"].get("steps"))
-    check("generate/character 全链路（含兜底）", bool(gen_ok), str(r)[:200])
+    data = r.get("data") or {}
+    check("generate/character 返回成功", bool(r.get("success")), str(r)[:200])
+    if data.get("fallback"):
+        check("兜底路径自报占位并给出原因", bool(data.get("fallback_reason")), str(data)[:200])
+    else:
+        check("真实生成产出分层目录", bool(data.get("layers_dir")), str(data)[:200])
 
     # 9. 边界与安全
     r = requests.post(f"{BASE}/api/upload", files={"file": ("evil.exe", b"MZ...", "application/x-msdownload")}, timeout=15)

@@ -113,3 +113,26 @@ func TestResolveDataRootFreshUnixUsesDotName(t *testing.T) {
 		t.Fatalf("Unix 空机器应落在 %s，实际 %s", appDirNameUnix, got)
 	}
 }
+
+// LogsDir 的取值必须与 core/app_paths.writable_data_root() 一致：
+// 有可写数据根用它，没有则退回项目根（开发环境日志留在仓库里）。
+// 两边规则一旦分叉，自检页报的路径就又指向一个不存在的地方。
+func TestLogsDirFollowsDataRoot(t *testing.T) {
+	root := t.TempDir()
+	withData := &Config{DataDir: filepath.Join(root, "AppData", "PygmalionStudio"),
+		Python: PythonConfig{ScriptsDir: filepath.Join(root, "install", "app")}}
+	if got, want := withData.LogsDir(), filepath.Join(withData.DataDir, "logs"); got != want {
+		t.Errorf("桌面版 LogsDir = %q，应为 %q（安装目录不可写，卸载还会带走日志）", got, want)
+	}
+
+	dev := &Config{Python: PythonConfig{ScriptsDir: filepath.Join(root, "repo")}}
+	if got, want := dev.LogsDir(), filepath.Join(root, "repo", "logs"); got != want {
+		t.Errorf("开发环境 LogsDir = %q，应为 %q（不该悄悄搬去用户目录）", got, want)
+	}
+
+	// ScriptsDir 也为空时退回产物目录，至少报一个真实存在概念的位置。
+	empty := &Config{Output: OutputConfig{BaseDir: filepath.Join(root, "out")}}
+	if got, want := empty.LogsDir(), filepath.Join(root, "out", "logs"); got != want {
+		t.Errorf("无 ScriptsDir 时 LogsDir = %q，应为 %q", got, want)
+	}
+}

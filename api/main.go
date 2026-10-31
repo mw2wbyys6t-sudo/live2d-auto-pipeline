@@ -49,6 +49,16 @@ func main() {
 	// 目录解析到安装资源目录与 %APPDATA%/文档（ADR-010）。开发源码树不触发。
 	config.ApplyDesktopLayout(cfg, *configPath != "")
 
+	// 把可写数据根交给所有 Python 子进程。core/logger.py 与 core/secure_storage.py
+	// 用它决定日志与保险库落在哪；不注入时它们退回 LIVE2D_PROJECT_ROOT，也就是
+	// **安装目录** —— 装在 Program Files 下写不进去，卸载还会把诊断证据与密钥
+	// 一起删掉。这里在进程级设一次，而不是在 8 个 exec 调用点各 append 一遍：
+	// cmd.Env 未显式赋值时子进程继承父环境，显式赋值的那些也是从 os.Environ()
+	// 起步，两条路都覆盖到；逐点拼接迟早漏一处（本仓库为这类漂移付过代价）。
+	if cfg.DataDir != "" {
+		_ = os.Setenv("LIVE2D_DATA_DIR", cfg.DataDir)
+	}
+
 	// 环境变量覆盖默认配置（部署场景，如 Docker/LAN）；命令行参数优先级最高。
 	// LIVE2D_API_HOST 是 README 文档化的主变量，GO_API_HOST 为容器镜像的兼容变量。
 	if envHost := hostFromEnv(os.Getenv); envHost != "" {
@@ -558,8 +568,17 @@ func allowedHostMiddleware(allowed map[string]struct{}) gin.HandlerFunc {
 //     本地 vendor 缺失时浏览器端面捕不会全功能失效；
 //   - img-src/media-src blob:：摄像头帧经 createObjectURL 后是 blob: URL；
 //   - frame-ancestors 'none'：防嵌入（与 _headers 部署侧保持一致）。
+//
+// worker-src 必须单独列，不能靠 script-src 带过去：worker-src 未设时浏览器
+// 回退到 script-src，而 script-src 里没有 blob:（也不该为渲染器把它加进去，
+// 那等于允许任意 blob 脚本当页面脚本跑），于是 Pixi 渲染器创建的 blob worker
+// 被拦，内嵌 UI 的 Live2D 预览彻底不出几何
+// （0 FPS / 三角面 0 / 「网格几何 缺失」，且 model3.json 之后不再有 .moc3 请求）。
+// 该缺陷只在 Go 内嵌 UI 下出现——dev 与 standalone 走 Next，不发这个头。
+// 放宽只给 worker-src，script-src 保持不含 blob:。
 const securityCSP = "default-src 'self'; " +
 	"script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+	"worker-src 'self' blob:; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data: blob:; " +
 	"media-src 'self' blob:; " +

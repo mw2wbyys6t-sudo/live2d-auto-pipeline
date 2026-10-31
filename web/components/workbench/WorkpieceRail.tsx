@@ -6,6 +6,7 @@ import {
   RefreshCw,
   Box,
   Check,
+  AlertTriangle,
 } from 'lucide-react';
 import { useWorkbench } from '../../lib/workbench-context';
 import { formatWorkTime, promptExcerpt } from '../../lib/workbench';
@@ -103,6 +104,14 @@ export default function WorkpieceRail({ className = '', onNavigate }: WorkpieceR
                     {work.model3Url && (
                       <span className="inline-flex items-center gap-0.5">
                         <Box className="w-2.5 h-2.5 text-blue-400" /> 模型
+                      </span>
+                    )}
+                    {work.fallback && (
+                      <span
+                        className="inline-flex items-center gap-0.5 text-amber-400"
+                        title={work.fallbackReason || '本地占位图，非 AI 生成'}
+                      >
+                        <AlertTriangle className="w-2.5 h-2.5" /> 占位图
                       </span>
                     )}
                   </div>

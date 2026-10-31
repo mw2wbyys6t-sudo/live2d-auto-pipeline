@@ -39,7 +39,8 @@ func (g *ImageGenerator) GenerateImage(req models.GenerateImageRequest) (*models
 		req.Seed = rand.Intn(999999999)
 	}
 
-	return g.generateWithLocalGenerator(req)
+	return g.generateWithLocalGenerator(req,
+		"没有可用的图像服务：这是本地几何占位图，不是 AI 画出的人物。")
 }
 
 // GenerateWithCharacter 使用角色一致性和语义分割生成（v0.10.0）
@@ -74,7 +75,11 @@ func (g *ImageGenerator) GenerateWithCharacter(req models.GenerateRequest) (*mod
 		Seed:    req.Seed,
 		ModelID: req.ModelID,
 	}
-	return g.generateWithLocalGenerator(legacyReq)
+	// 真实原因必须跟着产物走，不能只写 stderr：实测（2026-10-30 安装包）
+	// 免密上游 402 时用户看到的是一次正常成功 + 一张占位图，
+	// 而"为什么没生成"只在服务端日志里。
+	return g.generateWithLocalGenerator(legacyReq,
+		fmt.Sprintf("生成链路失败，已回退本地占位图：%v", err))
 }
 
 // pythonWorkflowResult 对应 Python WorkflowEngine.run() 返回的 JSON 结构
@@ -299,8 +304,12 @@ func min(a, b int) int {
 	return b
 }
 
-// generateWithLocalGenerator 使用自研本地生成器生成图片
-func (g *ImageGenerator) generateWithLocalGenerator(req models.GenerateImageRequest) (*models.GenerateImageResponse, error) {
+// generateWithLocalGenerator 使用自研本地生成器生成图片。
+//
+// fallbackReason 说明**为什么**拿到的是占位图（没配图像服务 / 上游失败），
+// 它会随响应与历史记录一起落盘：占位图本身是有意为之的离线兜底，
+// 但把它当成一次正常成功展示才是缺陷 —— 调用方必须交代原因。
+func (g *ImageGenerator) generateWithLocalGenerator(req models.GenerateImageRequest, fallbackReason string) (*models.GenerateImageResponse, error) {
 	scriptPath := filepath.Join(g.cfg.Python.ScriptsDir, "local_image_generator.py")
 
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
@@ -385,7 +394,10 @@ func (g *ImageGenerator) generateWithLocalGenerator(req models.GenerateImageRequ
 		// 这条路径已经产出了图片文件，success 必须为 true：前端（web/lib/api-client.ts
 		// 的 mapLegacyResponse）按 data.success 判断成败，漏赋值会把「生成成功」
 		// 显示成失败。
-		Success: true,
+		// 但 success=true 不等于「拿到了 AI 立绘」——占位与否由下面这两个字段说。
+		Success:        true,
+		Fallback:       true,
+		FallbackReason: fallbackReason,
 	}, nil
 }
 

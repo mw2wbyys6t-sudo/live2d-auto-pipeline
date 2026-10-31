@@ -74,7 +74,16 @@ export default function GenerateStage() {
             {generation.message && <p className="text-[10px] text-gray-600">{generation.message}</p>}
           </div>
         ) : imageUrl ? (
-          <div className="w-full h-full flex items-center justify-center p-3">
+          <div className="relative w-full h-full flex items-center justify-center p-3">
+            {/* 占位图必须显眼地自报身份：后端 success=true 只说明"跑完了"，
+                不说明"画出了人物"。实测安装包把本地几何占位图当正常立绘展示。 */}
+            {current?.fallback && (
+              <div className="absolute top-3 left-3 right-3 z-10 rounded-lg border border-amber-500/40 bg-amber-950/85 px-3 py-2 text-[11px] leading-relaxed text-amber-200">
+                <span className="font-medium">离线占位图 —— 这不是 AI 生成的人物。</span>
+                {current.fallbackReason ? ` ${current.fallbackReason}` : ''}
+                <span> 在「设置」里配置可用的图像服务后重试。</span>
+              </div>
+            )}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={imageUrl}

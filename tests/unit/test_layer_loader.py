@@ -193,3 +193,128 @@ def test_readme_of_behaviour_no_inline_glob_left_behind():
             offenders.append(f"api_server.py: {code.strip()[:70]}")
 
     assert offenders == [], f"这些调用点又内联了选层逻辑: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# 部件齐不齐：导出侧必须读分层清单自己的结论
+#
+# 实测（2026-10-30，已安装的 v0.10.10）：一张纯色无结构图分层后
+# ``layer_manifest.json`` 写着 ``preview_ready=false`` + 缺 mouth/neck/... 与
+# 警告「缺少必要部件，无法进入预览/分层检查」，而 ``/api/export/live2d`` 仍返回
+# ``runtime_ready=true`` 并产出 moc3。两份结论同时成立 = 产品在自相矛盾地报成功。
+# ---------------------------------------------------------------------------
+
+def _write_manifest(directory, payload):
+    (directory / "layer_manifest.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def test_manifest_says_unusable_and_export_inputs_carry_it(tmp_path):
+    """清单判定部件连预览都不够时，导出入参必须带上这个结论与缺项。"""
+    for name in ("hair_back", "body"):
+        _write_layer(tmp_path, name)
+    _write_manifest(tmp_path, {
+        "preview_ready": False,
+        "missing_preview": ["face_base", "mouth", "neck", "clothes_top"],
+    })
+
+    inputs = load_export_inputs(str(tmp_path))
+
+    assert inputs.parts_ready is False
+    assert inputs.missing_preview == ["face_base", "mouth", "neck", "clothes_top"]
+    # 但**不算空心**：hair_back 认出来了，这是"不完美"而不是"根本没认出人"。
+    # 实测生产默认的 semantic 路径只缺 mouth 也落在这个区间（本机 14 个真实
+    # 分层里 10 个 preview_ready=false），拿它拒绝出货会拦死正常作品。
+    assert inputs.parts_hollow is False
+
+
+def test_manifest_with_no_part_recognized_is_hollow(tmp_path):
+    """5 个必需部件一个都没认出来 = 空心，这才是拒绝构建的那条线。"""
+    _write_layer(tmp_path, "色块_1")
+    _write_manifest(tmp_path, {
+        "preview_ready": False,
+        "source": "color_cluster",
+        "missing_preview": ["hair_back", "face_base", "mouth", "neck", "clothes_top"],
+    })
+
+    inputs = load_export_inputs(str(tmp_path))
+
+    assert inputs.parts_hollow is True
+    assert inputs.parts_source == "color_cluster"
+
+
+def test_blocker_message_names_parts_and_route():
+    """拒绝理由必须说清缺什么、为什么、下一步做什么 —— 而且要分来源。"""
+    from live2d_builder.layer_loader import parts_blocker_message
+    from core.segment_engine.layer_manifest import REQUIRED_FOR_PREVIEW
+
+    hollow = parts_blocker_message(list(REQUIRED_FOR_PREVIEW), "color_cluster")
+    assert "头发_后" in hollow, "部件要用中文名说，不是把 id 甩给用户"
+    assert "颜色聚类" in hollow, "颜色聚类的成因要说出口（换提示词没用）"
+    assert "语义分层" in hollow and "导入" in hollow, "要给可执行的下一步"
+
+    upstream = parts_blocker_message(list(REQUIRED_FOR_PREVIEW), "semantic")
+    assert "颜色聚类" not in upstream, "语义分层空心不该怪到颜色聚类头上"
+    assert "未按提示词" in upstream
+
+
+def test_blocker_message_is_not_used_for_imperfect_layering(tmp_path):
+    """只有空心才该被拒；"缺一个 mouth" 的分层仍然要能导出。
+
+    这条是防误伤的边界：闸门一旦收紧到 preview_ready，用户已有的作品就全废了。
+    """
+    _write_layer(tmp_path, "hair_back")
+    _write_manifest(tmp_path, {
+        "preview_ready": False,
+        "missing_preview": ["face_base", "mouth", "neck", "clothes_top"],
+    })
+    assert load_export_inputs(str(tmp_path)).parts_hollow is False
+
+
+
+def test_manifest_says_usable_export_inputs_agree(tmp_path):
+    """第三向：清单说齐了就得报齐，否则闸门只会永远红。"""
+    _write_layer(tmp_path, "hair_back")
+    _write_manifest(tmp_path, {"preview_ready": True, "missing_preview": []})
+
+    inputs = load_export_inputs(str(tmp_path))
+
+    assert inputs.parts_ready is True
+    assert inputs.missing_preview == []
+
+
+def test_no_manifest_is_not_judged(tmp_path):
+    """没有清单（用户导入的 PSD/PNG）= 不判定，绝不能当成"不合格"。
+
+    那 5 个部件 id 是对我们自己分层词表的约定，对用户起的图层名不成立；
+    据此拒绝会把导入→导出这条路整个堵死。
+    """
+    _write_layer(tmp_path, "我的图层")
+
+    inputs = load_export_inputs(str(tmp_path))
+
+    assert inputs.parts_ready is None
+    assert inputs.missing_preview == []
+
+
+@pytest.mark.parametrize("payload", [
+    {},                                     # 缺 preview_ready
+    {"preview_ready": "false"},             # 类型不对（字符串不算布尔）
+    {"preview_ready": None},
+])
+def test_unreadable_manifest_is_not_judged(tmp_path, payload):
+    """清单在但读不出结论：按"不判定"处理，而不是猜一个方向。"""
+    _write_layer(tmp_path, "hair_back")
+    (tmp_path / "layer_manifest.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    assert load_export_inputs(str(tmp_path)).parts_ready is None
+
+
+def test_corrupt_manifest_json_is_not_judged(tmp_path):
+    """清单是坏 JSON：不得因为读不出就判不合格，也不得抛出去打断导出。"""
+    _write_layer(tmp_path, "hair_back")
+    (tmp_path / "layer_manifest.json").write_text("{not json", encoding="utf-8")
+
+    assert load_export_inputs(str(tmp_path)).parts_ready is None
+

@@ -141,6 +141,10 @@ export interface GenerationResult {
   promptSent?: string;
   promptLang?: string;
   promptMismatch?: boolean;
+  /** 后端如实声明「这张图是本地占位图，不是 AI 生成的」。 */
+  fallback?: boolean;
+  /** 为什么退到占位图（免密上游配额耗尽 / 没配图像服务）。 */
+  fallbackReason?: string;
 }
 
 // ---------- Layers ----------

@@ -30,19 +30,45 @@
 > 把软件形态真正做成「工作台」，并让中文提示词端到端可用（详见下）。
 >
 > **状态诚实说明**：以下所有数字都是本机（RTX 2060；随包口径按 cp312 wheel 核对）
-> 当场跑出来的。产物级验收已在本机完成（2026-10-28）：
+> 当场跑出来的。产物级验收曾在本机完成（2026-10-28）：
 > `Pygmalion Studio_0.10.10_x64-setup.exe` 337,552,975 B（321.92 MiB），
 > SHA256 `2ee9210fe69aa4801b342e3d3387cb5b239b528c84f77061356b67aa31280d9a`；
 > 静默安装（currentUser，落盘 936MB）→ 启动 → `/api/gpu` 返回
 > `recommendation.device=dml`、`runtime.onnxruntime_providers` 含 `DmlExecutionProvider`，
 > `/api/diagnostics` 九项全 true、`python_path` 指向安装目录内 `python\pythonw.exe`，
 > 前端页以 Pygmalion Studio 品牌提供 → 静默卸载后安装目录、卸载表项与开始菜单
-> 快捷方式均清空。**"已发布"仍不成立**：tag/Release/CI 产物尚未产生。
+> 快捷方式均清空。
 >
-> **验收覆盖范围提醒**：上面那次产物级验收（2026-10-28）打的是**只含 GPU 与改名**的包；
-> 本节的工作台形态、中文提示词链路与层序/导出修复是其后并入同一版本号的改动，
-> **尚未进入任何安装包**。发布前必须重新构建并再跑一遍产物级验收，否则那串哈希与
-> 「九项全 true」描述的已不是本版产物。
+> **上面那串哈希已经对不上本机文件了**：版本号没变，2026-10-31 重新出包时
+> 同名产物被覆盖（`desktop/target/release/bundle/nsis/` 只按 版本号+架构 命名）。
+> 已发布到 GitHub Release 的那份仍在远端，本机这份不是它。
+> 新包：338,975,666 B（323.27 MiB），
+> SHA256 `fb74ab3ea9b27998b8e0c463df557627dcf21a7afd68848e2fb696c7f83bf5c3`。
+>
+> **「尚未进入任何安装包」这句提醒已作废**（两处都错）：实测本机已安装的
+> v0.10.10（`BUILD-INFO.created_utc 2026-10-29T13:08:20Z`）**就是**含工作台的构建
+> —— 内嵌 UI 标题为「Pygmalion Studio · 工作台」、`/api/generations/latest` 已回传
+> `prompt_sent`；它与当时的仓库 HEAD 只差 `1a900133` 改的两个文件。
+> 定代次要靠文件哈希，不能靠版本号或日期推断。
+>
+> **本包的验收状态**：进包的 `live2d-api.exe` 与构建产物 SHA256 一致（`9640add2…`）。
+> 产物级验收已在本机完成（2026-10-31，覆盖安装到 `F:\Pygmalion Studio`）：
+> 静默安装 → `/api/health` `python_ok=true` → `/api/diagnostics` 九项全 true →
+> CSP 响应头含 `worker-src 'self' blob:` → 工作台预览真实立绘模型
+> **137 FPS、网格几何就绪、三角面 1,088、图层 34 / 参数 28**（同一模型在
+> 10-29 那份包里是 0 FPS / 网格几何缺失）→ 触发一次 Python 分层，日志写进
+> `%APPDATA%\Live2DMasterAgent\logs\`，安装目录内 `app\logs\` 未被写入。
+>
+> **出包与装机踩到的两个坑（都记下来）**：
+> ① 版本号没变，同名产物被覆盖 —— 上面 2026-10-28 那串哈希在本机已无对应文件
+> （远端 GitHub Release 那份仍在）。同版本重复出包必须换目录或改版本号。
+> ② Tauri NSIS 的卸载键名是 **`Pygmalion Studio`**（产品名），不是 `com.pygmalion.studio`
+> （标识符）；两次安装共用同一个键，所以「装到旁边验证」会覆盖原安装的
+> `InstallLocation`，卸载时又把共享键连同开始菜单快捷方式一起删掉。
+> 并且 `/D=` 参数含空格时，PowerShell 里写成 `'\"/D=…\"'` 会传入字面反斜杠，
+> NSIS 收到畸形参数后**退出码仍是 0 但什么都没装** —— 必须让引号由
+> PowerShell 自己加（`'/D=F:\Pygmalion Studio'`），并且**装完要回读目标文件
+> 的时间戳/大小来确认**，不能只看退出码。
 
 ### ✨ 新增
 
@@ -188,6 +214,78 @@
 - **品牌字面量检查配合 `NEXT_DIST_DIR` 会误报**：排除名单写死 `.next`，构建输出改到
   `.next-dev` 后编译产物里的品牌字面量被当成「第二处来源」。改为排除所有点目录，
   并做变异检查（往组件里注入字面量确实会失败）。
+- **打包版预览一张图都渲不出来（CSP 掐死 blob worker）**：内嵌 UI 的 CSP 只写了
+  `script-src`，没写 `worker-src`；浏览器按 `script-src` 回退判定 worker，而 `script-src`
+  里没有 `blob:`，于是 Pixi 渲染器创建的 blob worker 被拦 —— 预览阶段 `0 FPS`、三角面 0、
+  「网格几何 缺失」，`model3.json` 拿到 200 之后再没有 `.moc3` 请求。dev 与 standalone
+  走 Next 不发这个头，所以此前所有浏览器实跑都测不到。补 `worker-src 'self' blob:`，
+  `script-src` 保持不含 `blob:`（否则等于允许任意 blob 页面脚本）。回归测试改为**按指令
+  解析** CSP：原来那句「CSP 含 `blob:`」是拿整条头做子串匹配，`media-src` 里本来就有
+  `blob:`，所以 worker 被拦时它照样绿。三个变异（删 `worker-src`、把 `blob:` 挪进
+  `script-src`、`worker-src *`）全部判红；构建内嵌 UI 的二进制后实测 `网格几何 就绪`、
+  三角面 1,088、图层 34，角色完整渲染。
+- **离线占位图冒充一次成功生成**：`GenerateWithCharacter` 在工作流失败时回退
+  本地生成器，但只把真实错误写进 stderr，然后返回 `success=true` —— 实测
+  （2026-10-30 安装包）免密上游 402 时用户看到的是一次正常成功 + 一张几何占位图，
+  界面上连「非 AI 生成」都没出现，刷新左栏后连那条 stderr 也看不到了。现在
+  `fallback` / `fallback_reason` 是一等公民字段，随响应与 `latest_generation.json`
+  一起落盘，工作台生成页顶部显示琥珀色横幅、左栏条目挂「占位图」徽章。
+  顺带修掉占位图水印的中文：PIL 默认字体没有 CJK 字形，实测画出来是一排豆腐块
+  —— 这块水印存在的唯一理由就是「绝不冒充 AI 生成结果」，中文下它反而最难读。
+  现在按系统字体候选解析（实测落 `msyh.ttc`），找不到中文字体时**不写**中文提示词
+  而不是画豆腐块。
+- **分层空心仍被导出报成功**：一张纯色无结构图分层出 5 个色块，
+  `layer_manifest.json` 写着 `preview_ready=false`、缺 12 个必要部件、警告
+  「缺少必要部件，无法进入预览/分层检查」，`/api/export/live2d` 却返回
+  `runtime_ready=true` 并产出 moc3。导出侧此前完全没读分层清单自己的结论。
+  **闸门线画在「一个必需部件都没认出来」（0/5），不是 `preview_ready=false`**：
+  实测本机 14 个真实分层目录里 10 个 `preview_ready=false`（生产默认的 `semantic`
+  路径只缺一个 `mouth` 也算），拿它当硬闸门会把用户已经做好的作品全部拦死；
+  而 0/5 是另一种性质 —— 不是「部件不完美」，是「根本没认出这是人」。
+  空集边界不依赖任何拍脑袋的阈值。清单缺失（用户导入的 PSD/PNG）不判定：
+  那 5 个部件 id 不约束用户的命名。部件结论同时写进 `build_meta.json` 的
+  `parts` 块，`runtime_ready=true` 不再是无条件声明。
+  实测：纯色图 → 422 + 中文原因（列出缺哪些部件、为什么、下一步做什么，
+  并按分层来源区分「颜色聚类本来就不认部位」与「上游没画出人」）；
+  用户真实的 34 层与「只缺 mouth」的 16 层目录 → 仍 200 + `runtime_ready=true`。
+  两条导出路径（导出桥、阶段事件桥）都加闸门，并做源码级契约测试
+  （变异实测：只断言 `inputs.parts_hollow` 出现过会被 `build_meta` 里的同名字段
+  蒙过，必须断言 `if inputs.parts_hollow:` 这一行；`is_hollow` 改成按数量比较
+  也会被表外 id 骗过，两条都有对应用例）。
+- **导出后左栏把同一件作品显示成两条，预览/导出被标成已完成**：
+  `RecordLatestExport` 只写 `latest_generation.json`，从不回写
+  `generations_history.json`。前端按 `[layers_dir, model3_json, output_dir,
+  image_path]` 算作品 id，于是同一次生成的两份记录算出两个 id —— 实测
+  `/api/generations` 返回 6 条、左栏显示「7 件作品」，两条同名、一条带
+  「模型」徽章一条不带；带徽章那份的 model3 其实属于**上一个**作品，
+  阶段条因此把预览/导出画成绿勾，而分层那一格还写着「0 层」。
+  现在导出按 `image_path`/`layers_dir` 这些**不会因导出而变**的字段找回历史条目
+  并就地更新；找不到对应条目时什么都不做（宁可少更新也不造第二条）。
+- **日志与 API Key 密文写进安装目录，自检页还指着不存在的路径**：
+  `LIVE2D_PROJECT_ROOT` 被同时当两件事用 —— `core/config.py` 拿它找 `.env`
+  （确实需要项目根），`core/logger.py` 与 `core/secure_storage.py` 拿它决定
+  往哪写（需要**用户可写**目录）。桌面版里前者就是安装目录：实测日志落在
+  `F:\Pygmalion Studio\app\logs\live2d.log`，而自检页写死
+  `%APPDATA%\PygmalionStudio\logs`（本机根本不存在），用户照提示找不到日志、
+  反馈时也带不上证据；装在 Program Files 下还会直接写不进去，卸载连诊断证据
+  一起删。现在 Go 启动时进程级注入 `LIVE2D_DATA_DIR`（8 个 Python 调用点
+  逐个拼接迟早漏一处），Python 侧新增 `writable_data_root()` 优先读它；
+  **没有该变量时完全沿用旧行为**，开发者日志仍留在仓库里。密文按
+  「复制到新位置、旧文件保留」搬迁，复制失败就继续在旧位置读写 ——
+  绝不让已配置的 Key 凭空消失。自检页改为显示后端上报的 `log_dir`，
+  「复制诊断信息」也把日志/产物路径带进剪贴板。
+- **上传文件的中文名被抹成下划线**：`sanitizeUploadName` 只放行 ASCII 字母数字，
+  实测用户历史文件全是 `upload_1792410534611_________.png`，回看认不出是哪张图。
+  清洗的目的是不让文件名参与路径构造，不是把非 ASCII 当危险字符 —— 改为放行
+  任意文字的字母与数字，分隔符/点/控制字符照旧折叠。顺带修掉按**字节**裁 64
+  的截断：会把汉字切成半个 UTF-8 序列（与提示词按字节截断同一类缺陷），
+  改成按码点裁并断言结果仍是合法 UTF-8。
+- **产物级验收脚本对当前安装包判假红**：`verify_desktop_install.ps1` 只认
+  `live2d-master-agent.exe`，改名后的壳是 `pygmalion-studio.exe`，于是
+  `RESULT: FAIL` 且 `-Launch` 永远走不到。安装目录改为优先读卸载表的
+  `InstallLocation`（本机装在 `F:\`，任何 `%LOCALAPPDATA%`/`%ProgramFiles%`
+  猜测都找不到），并剥掉 NSIS 写进去的引号 —— 这条是实跑发现的：
+  注册表值形如 `"F:\Pygmalion Studio"`，带着引号 `Test-Path` 直接失败。
 
 ### 📐 实测（同一 ISNet 权重、同一张 600×900 立绘、逐次取最小值）
 

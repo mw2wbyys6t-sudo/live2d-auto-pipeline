@@ -168,3 +168,192 @@ func TestGenerationHistoryIsJSONSerializable(t *testing.T) {
 		t.Fatalf("历史文件条目 = %d", len(decoded))
 	}
 }
+
+// 占位图标记必须随记录落盘。
+//
+// 实测（2026-10-30，已安装的 v0.10.10）：免密上游 402 时 GenerateWithCharacter
+// 把真实错误写进 stderr、改用本地占位图，然后返回 success=true；界面上是
+// 一次正常成功，左栏重开之后连那条 stderr 都看不到了。
+// 所以 fallback 不能只挂在当次响应上，必须进 latest_generation.json 与历史。
+func TestFallbackFlagSurvivesIntoHistory(t *testing.T) {
+	cfg := historyTestConfig(t)
+	dir := filepath.Join(cfg.Output.BaseDir, "characters", "char_1")
+	resp := sampleGeneration(t, cfg, dir, filepath.Join(dir, "image.png"), "银发少女，赛璐璐画风")
+	resp.Fallback = true
+	resp.FallbackReason = "生成链路失败，已回退本地占位图：HTTP 402 配额耗尽"
+	RecordLatestGeneration(cfg, resp)
+
+	read := func(file string) map[string]interface{} {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(cfg.Output.BaseDir, file))
+		if err != nil {
+			t.Fatalf("读 %s 失败: %v", file, err)
+		}
+		if file == generationsHistoryFileName {
+			var items []map[string]interface{}
+			if err := json.Unmarshal(data, &items); err != nil {
+				t.Fatalf("历史不是合法 JSON: %v", err)
+			}
+			if len(items) != 1 {
+				t.Fatalf("历史条目 = %d", len(items))
+			}
+			return items[0]
+		}
+		var one map[string]interface{}
+		if err := json.Unmarshal(data, &one); err != nil {
+			t.Fatalf("latest 不是合法 JSON: %v", err)
+		}
+		return one
+	}
+
+	for _, file := range []string{latestGenerationFileName, generationsHistoryFileName} {
+		record := read(file)
+		if got, _ := record["fallback"].(bool); !got {
+			t.Errorf("%s: fallback 应为 true，实得 %v", file, record["fallback"])
+		}
+		if reason, _ := record["fallback_reason"].(string); reason == "" {
+			t.Errorf("%s: fallback_reason 为空，用户就不知道为什么只拿到占位图", file)
+		}
+	}
+}
+
+// 反方向：正常的工作流成功不得被标成占位图，否则这个标记很快就没人信了。
+func TestRealGenerationIsNotMarkedFallback(t *testing.T) {
+	cfg := historyTestConfig(t)
+	dir := filepath.Join(cfg.Output.BaseDir, "characters", "char_1")
+	RecordLatestGeneration(cfg, sampleGeneration(t, cfg, dir, filepath.Join(dir, "image.png"), "少女"))
+
+	data, err := os.ReadFile(filepath.Join(cfg.Output.BaseDir, latestGenerationFileName))
+	if err != nil {
+		t.Fatalf("latest 未落盘: %v", err)
+	}
+	var record map[string]interface{}
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatalf("latest 不是合法 JSON: %v", err)
+	}
+	if got, ok := record["fallback"].(bool); !ok || got {
+		t.Fatalf("fallback = %v（真实生成必须显式为 false）", record["fallback"])
+	}
+}
+
+// 导出必须把历史条目一起改掉，否则左栏会把同一件作品显示成两条。
+//
+// 实测（2026-10-30，已安装的 v0.10.10）：/api/generations 返回 6 条，
+// 左栏却显示「7 件作品」，其中两条同名、一条带「模型」徽章一条不带；
+// 带徽章那条的 model3 其实属于**上一个**作品，于是阶段条把预览/导出
+// 标成已完成，点进去后端记录里 model3_json 与 layers_dir 都是空的。
+// 机制：RecordLatestExport 只写 latest_generation.json，
+// 而前端按 [layers_dir, model3_json, output_dir, image_path] 算作品 id ——
+// 两份记录算出两个 id。
+func TestExportUpdatesHistoryEntryInPlace(t *testing.T) {
+	cfg := historyTestConfig(t)
+	dir := filepath.Join(cfg.Output.BaseDir, "characters", "char_1")
+	resp := sampleGeneration(t, cfg, dir, filepath.Join(dir, "image.png"), "银发少女")
+	RecordLatestGeneration(cfg, resp)
+
+	model3 := filepath.Join(cfg.Output.BaseDir, "live2d_exports", "char_1", "char_1.model3.json")
+	if err := os.MkdirAll(filepath.Dir(model3), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	RecordLatestExport(cfg, model3, filepath.Dir(model3), true)
+
+	readAll := func(file string) []map[string]interface{} {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(cfg.Output.BaseDir, file))
+		if err != nil {
+			t.Fatalf("读 %s 失败: %v", file, err)
+		}
+		if file == generationsHistoryFileName {
+			var items []map[string]interface{}
+			if err := json.Unmarshal(data, &items); err != nil {
+				t.Fatalf("历史不是合法 JSON: %v", err)
+			}
+			return items
+		}
+		var one map[string]interface{}
+		if err := json.Unmarshal(data, &one); err != nil {
+			t.Fatalf("latest 不是合法 JSON: %v", err)
+		}
+		return []map[string]interface{}{one}
+	}
+
+	history := readAll(generationsHistoryFileName)
+	if len(history) != 1 {
+		t.Fatalf("历史条目 = %d，导出应就地更新而不是新增一条", len(history))
+	}
+	if got, _ := history[0]["model3_json"].(string); got != model3 {
+		t.Errorf("历史条目的 model3_json = %q，应为 %q", got, model3)
+	}
+	if ready, _ := history[0]["runtime_ready"].(bool); !ready {
+		t.Error("历史条目没有同步 runtime_ready")
+	}
+
+	// 前端用这四个字段算作品 id：两边必须一致，否则同一件作品会出现两份。
+	latest := readAll(latestGenerationFileName)[0]
+	for _, field := range []string{"layers_dir", "model3_json", "output_dir", "image_path"} {
+		if history[0][field] != latest[field] {
+			t.Errorf("%s 在历史与 latest 之间不一致（%v vs %v）—— 作品 id 会算成两个",
+				field, history[0][field], latest[field])
+		}
+	}
+}
+
+// 反方向：历史里找不到对应条目时不要凭空新增一条。
+func TestExportWithoutMatchingHistoryAddsNothing(t *testing.T) {
+	cfg := historyTestConfig(t)
+	model3 := filepath.Join(cfg.Output.BaseDir, "live2d_exports", "x", "x.model3.json")
+	RecordLatestExport(cfg, model3, filepath.Dir(model3), false)
+
+	if _, err := os.ReadFile(filepath.Join(cfg.Output.BaseDir, generationsHistoryFileName)); err == nil {
+		data, _ := os.ReadFile(filepath.Join(cfg.Output.BaseDir, generationsHistoryFileName))
+		var items []map[string]interface{}
+		_ = json.Unmarshal(data, &items)
+		if len(items) != 0 {
+			t.Fatalf("没有对应生成记录时不该造历史条目，实得 %d 条", len(items))
+		}
+	}
+}
+
+// 只有 image_path 能认出的那条路 —— 实测坏掉的就是它。
+//
+// 离线兜底生成的记录 layers_dir 与 output_dir 都是空的，导出后 output_dir
+// 才从无变有。若按"会变的字段"（output_dir 优先）去找历史条目，导出前那条
+// 记录的键是空的 → 匹配不上 → 历史永远停在"没有模型"，左栏于是出现两份
+// 同一作品（一份带模型徽章、一份不带）。
+func TestExportMatchesHistoryByStableFieldWhenOthersEmpty(t *testing.T) {
+	cfg := historyTestConfig(t)
+	dir := filepath.Join(cfg.Output.BaseDir, "characters", "char_2")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	img := filepath.Join(dir, "image.png")
+	if err := os.WriteFile(img, []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	RecordLatestGeneration(cfg, &models.GenerateImageResponse{
+		ImagePath:  img,
+		ImageURL:   "/output/characters/char_2/image.png",
+		Success:    true,
+		PromptUser: "银发少女，赛璐璐画风",
+		Width:      512,
+		Height:     512,
+	})
+
+	model3 := filepath.Join(cfg.Output.BaseDir, "live2d_exports", "char_2", "char_2.model3.json")
+	RecordLatestExport(cfg, model3, filepath.Dir(model3), true)
+
+	data, err := os.ReadFile(filepath.Join(cfg.Output.BaseDir, generationsHistoryFileName))
+	if err != nil {
+		t.Fatalf("历史未落盘: %v", err)
+	}
+	var items []map[string]interface{}
+	if err := json.Unmarshal(data, &items); err != nil {
+		t.Fatalf("历史不是合法 JSON: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("历史条目 = %d，应为 1（就地更新）", len(items))
+	}
+	if got, _ := items[0]["model3_json"].(string); got != model3 {
+		t.Errorf("历史条目的 model3_json = %q，导出结果没并进去", got)
+	}
+}

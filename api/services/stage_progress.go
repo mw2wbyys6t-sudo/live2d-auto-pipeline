@@ -499,6 +499,17 @@ if not layers:
                       "图层目录内没有可用 PNG: " + layers_dir}, ensure_ascii=False))
     raise SystemExit(0)
 
+# 分层清单判定"一个必需部件都没认出来"时拒绝构建。线画在空心而不是
+# preview_ready=false：实测生产默认的 semantic 路径只缺一个 mouth 也算 False
+# （本机 14 个真实分层里 10 个为 False），拿它当闸门会把用户做好的作品全拦死。
+# 清单缺失（用户导入的 PSD/PNG）不在此列：那套部件 id 不约束用户的命名。
+if inputs.parts_hollow:
+    from live2d_builder.layer_loader import parts_blocker_message
+    print(json.dumps({"success": False, "message":
+                      parts_blocker_message(inputs.missing_preview,
+                                            inputs.parts_source)}, ensure_ascii=False))
+    raise SystemExit(0)
+
 # 必须走完整构建：只有它生成网格、编译 .moc3 并用官方 Cubism Core 验收。
 # 早期版本直接调用 Model3Exporter.export(meshes={})，产物里根本没有 moc3。
 builder = Live2DBuilder(output_dir=out_dir, character_name=%q)
@@ -527,6 +538,15 @@ if meta_file.is_file():
             # 分层目录的 draw_index 与权威表冲突、被表纠正过：如实落盘，
             # 别把「已纠正」和「本来就对」混成同一个 issue_count=0。
             "normalized": bool(inputs.normalized),
+        }
+        # 部件结论同样落盘：runtime_ready=true 只说明内核肯加载，不说明这是
+        # 一个有眼有嘴的角色。缺 mouth/neck 这种"不完美"不拒绝出货（实测会
+        # 误伤大量正常作品），但必须看得见，否则用户装进桌宠才发现没嘴。
+        meta["parts"] = {
+            "ready": inputs.parts_ready,
+            "hollow": bool(inputs.parts_hollow),
+            "missing_preview": list(inputs.missing_preview),
+            "source": inputs.parts_source,
         }
         meta_file.write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")

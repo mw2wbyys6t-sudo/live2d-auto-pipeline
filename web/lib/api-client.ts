@@ -429,6 +429,8 @@ export class APIClient {
       promptSent: data.prompt_sent || '',
       promptLang: data.prompt_lang || '',
       promptMismatch: !!data.prompt_mismatch,
+      fallback: !!data.fallback,
+      fallbackReason: data.fallback_reason || '',
     };
   }
 
@@ -1009,6 +1011,8 @@ export interface DiagnosticsReport {
   checks: DiagnosticCheck[];
   python_path: string;
   output_dir: string;
+  /** 后端报出的真实日志目录；页面照它显示，不再写死。 */
+  log_dir?: string;
 }
 
 export interface OptionalModel {
@@ -1057,6 +1061,9 @@ export interface LatestGeneration {
   prompt_sent?: string;
   prompt_lang?: string;
   prompt_mismatch?: boolean;
+  /** 占位图标记：见 GenerationRecord。 */
+  fallback?: boolean;
+  fallback_reason?: string;
 }
 
 /** 作品历史接口 /api/generations 返回的单条记录（与 latest_generation 同契约）。 */

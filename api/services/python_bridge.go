@@ -857,6 +857,15 @@ except FileNotFoundError as exc:
 layers = OrderedDict((name, Image.open(path).convert("RGBA"))
                      for name, path in inputs.paths.items())
 
+# 分层清单判定"一个必需部件都没认出来"时拒绝构建 —— 与阶段事件桥同一份判据、
+# 同一句拒绝理由，不在此处再抄一遍逻辑。
+if inputs.parts_hollow:
+    from live2d_builder.layer_loader import parts_blocker_message
+    print(json.dumps({"success": False, "message":
+                      parts_blocker_message(inputs.missing_preview,
+                                            inputs.parts_source)}, ensure_ascii=False))
+    raise SystemExit(0)
+
 # 必须走完整构建：只有它生成网格、编译 .moc3 并用官方 Cubism Core 验收。
 # 早期版本直接调用 Model3Exporter.export(meshes={})，产物里根本没有 moc3。
 builder = Live2DBuilder(output_dir=out_dir, character_name=character_id)
@@ -887,6 +896,15 @@ if meta_file.is_file():
             # 分层目录的 draw_index 与权威表冲突、被表纠正过：如实落盘，
             # 别把「已纠正」和「本来就对」混成同一个 issue_count=0。
             "normalized": bool(inputs.normalized),
+        }
+        # 部件结论同样落盘：runtime_ready=true 只说明内核肯加载，不说明这是
+        # 一个有眼有嘴的角色。缺 mouth/neck 这种"不完美"不拒绝出货（实测会
+        # 误伤大量正常作品），但必须看得见。
+        meta["parts"] = {
+            "ready": inputs.parts_ready,
+            "hollow": bool(inputs.parts_hollow),
+            "missing_preview": list(inputs.missing_preview),
+            "source": inputs.parts_source,
         }
         meta_file.write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")

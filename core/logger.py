@@ -21,6 +21,8 @@ from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from typing import Optional, Dict, Any, List
 
+from core.app_paths import writable_data_root as _writable_data_root
+
 # Sensitive key names for structured data redaction
 _SENSITIVE_PATTERNS = [
     "api_key", "apikey", "secret", "password", "token",
@@ -153,8 +155,7 @@ class Live2DLogger:
     def _setup_file_handler(self, log_dir: Optional[str] = None):
         """Set up rotating file handler."""
         if log_dir is None:
-            root = os.environ.get("LIVE2D_PROJECT_ROOT", str(Path.home()))
-            log_dir = str(Path(root) / "logs")
+            log_dir = str(Path(_writable_data_root()) / "logs")
         os.makedirs(log_dir, exist_ok=True)
         log_file = str(Path(log_dir) / "live2d.log")
         # 每个命名 logger 都会走到这里，但同一个日志文件只能有一个句柄：
@@ -217,8 +218,7 @@ class Live2DLogger:
     def flush_telemetry(self, filepath: Optional[str] = None):
         """Flush telemetry events to a JSON file."""
         if filepath is None:
-            root = os.environ.get("LIVE2D_PROJECT_ROOT", str(Path.home()))
-            filepath = str(Path(root) / "logs" / "telemetry.jsonl")
+            filepath = str(Path(_writable_data_root()) / "logs" / "telemetry.jsonl")
         os.makedirs(str(Path(filepath).parent), exist_ok=True)
         with open(filepath, "a", encoding="utf-8") as f:
             for event in self._telemetry_events:

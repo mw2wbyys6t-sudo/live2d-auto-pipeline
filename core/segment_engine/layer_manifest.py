@@ -461,6 +461,20 @@ def write_manifest(output_dir: str, manifest: LayerManifest) -> str:
     return str(path.resolve())
 
 
+def is_hollow(missing_preview: Iterable[str]) -> bool:
+    """分层是否「空心」：``REQUIRED_FOR_PREVIEW`` 里没有一个部件被认出来。
+
+    为什么线画在这里而不是 ``preview_ready``：实测（本机 14 个真实分层目录 +
+    两张受控输入）``preview_ready=false`` 覆盖 10/14 —— 生产默认的 ``semantic``
+    路径只缺一个 ``mouth`` 也被判 False，拿它当硬闸门会把用户已经做好的作品
+    全部拦死。而 0/5 是另一个性质：不是「部件不完美」，是「根本没认出这是人」
+    （纯色图分层 = 0/5；K-means 颜色聚类 = 0/5，清单自己也写着「仅用于预览，
+    不可用于 Live2D 绑定」）。空集边界不依赖任何拍脑袋的阈值。
+    """
+    missing = set(missing_preview)
+    return all(part in missing for part in REQUIRED_FOR_PREVIEW)
+
+
 def validate_manifest(data: Dict[str, Any]) -> List[str]:
     """Return contract violations; empty list means valid."""
     errors: List[str] = []
