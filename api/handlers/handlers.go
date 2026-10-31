@@ -423,8 +423,11 @@ func (h *Handler) ServeOutput(c *gin.Context) {
 		return
 	}
 
-	// 添加缓存控制头
-	c.Header("Cache-Control", "public, max-age=3600")
+	// 产物目录是可变的：重新导出会就地覆盖同名文件（singer_demo/motions/
+	// singer_idle_00.motion3.json 每次都重写）。此前给 1 小时 max-age，实测
+	// 重新构建后点「重载」拿到的仍是旧动作 —— 头部曲线三条轴一模一样。
+	// no-cache 只要求每次带 If-Modified-Since 复验，未变的文件走 304。
+	c.Header("Cache-Control", "no-cache")
 	c.File(filePath)
 }
 
