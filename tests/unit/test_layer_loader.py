@@ -127,6 +127,32 @@ def test_guide_already_matching_the_table_is_left_alone(tmp_path):
     assert inputs.normalized is False
 
 
+def test_psd_index_prefix_is_stripped_from_layer_names(tmp_path):
+    """PSD 导入的 ``NNN_`` 序号前缀不得进入层名。
+
+    序号只表示画序，不带语义；而下游（变形器目标、网格键形、参数带）全部按语义名
+    精确比对。实测（2026-11-01，singer 那批 34 张分层）：无前缀 = 11 个变形器 /
+    27 个可驱动参数，加 ``000_`` 前缀 = 0 个变形器 / 6 个可驱动参数 —— 而构建照样
+    报 valid，成片是「不闭嘴、不眨眼、不呼吸」却一句错都不报。
+    """
+    for index, name in enumerate(("hair_back", "face", "mouth")):
+        _write_layer(tmp_path, f"{index:03d}_{name}")
+
+    inputs = load_export_inputs(str(tmp_path))
+
+    assert sorted(inputs.paths) == ["face", "hair_back", "mouth"]
+
+
+def test_stripping_never_merges_two_layers(tmp_path):
+    """去掉前缀后撞名时保留原名：宁可这一层匹配不上，也不能少画一层。"""
+    _write_layer(tmp_path, "000_hair_back")
+    _write_layer(tmp_path, "010_hair_back")
+
+    inputs = load_export_inputs(str(tmp_path))
+
+    assert list(inputs.paths) == ["000_hair_back", "010_hair_back"]
+
+
 def test_empty_directory_raises_instead_of_silently_returning_nothing(tmp_path):
     """只有预览图 / 空目录时必须明确失败，不能返回空模型。"""
     _write_layer(tmp_path, "preview")

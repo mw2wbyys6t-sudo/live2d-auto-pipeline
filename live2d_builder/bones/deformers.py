@@ -562,17 +562,21 @@ class BoneHierarchy:
 
     @staticmethod
     def _normalise(name: str) -> str:
-        """Normalise a layer name for lookup.
+        return normalise_layer_name(name)
 
-        lower-case + separators to underscores, and strip a leading numeric
-        index prefix. Layer PNGs are exported as ``NNN_part.png``
-        (``000_arms``, ``005_face``), so without the prefix strip every
-        lookup falls through to the default bone and all layers end up
-        parented to ``Face`` — which silently disables parameter keyforms.
-        """
-        norm = name.strip().lower().replace(" ", "_").replace("-", "_")
-        norm = re.sub(r"^\d+_", "", norm)
-        return norm
+
+def normalise_layer_name(name: str) -> str:
+    """Normalise a layer name for lookup.
+
+    lower-case + separators to underscores, and strip a leading numeric
+    index prefix. Layer PNGs are exported as ``NNN_part.png``
+    (``000_arms``, ``005_face``), so without the prefix strip every
+    lookup falls through to the default bone and all layers end up
+    parented to ``Face`` — which silently disables parameter keyforms.
+    """
+    norm = name.strip().lower().replace(" ", "_").replace("-", "_")
+    norm = re.sub(r"^\d+_", "", norm)
+    return norm
 
 
 # ======================================================================
@@ -715,7 +719,10 @@ class DeformerHierarchy:
         available = set(layer_names or [])
         if not available and meshes:
             available = set(meshes.keys())
-        available_norm = {n.strip().lower().replace(" ", "_") for n in available}
+        # 必须与 ``_normalise`` 同一套规则（含去序号前缀）：骨骼查找一直在用它，
+        # 这里曾自写一份只做大小写的，于是 PSD 导入的 ``000_hair_back`` 一个目标
+        # 都命中不了 —— 实测同一批图 11 个 warp 变形器 → 0 个，构建照样报 valid。
+        available_norm = {normalise_layer_name(n) for n in available}
 
         def _matched_targets(spec: Dict) -> List[str]:
             """目标里真的存在的层名（**大小写不敏感**）。
@@ -726,7 +733,7 @@ class DeformerHierarchy:
             这里保留原始写法返回，下游 ``build_deformers`` 用 ``_norm`` 匹配网格。
             """
             return [t for t in spec["targets"]
-                    if t.strip().lower().replace(" ", "_") in available_norm]
+                    if normalise_layer_name(t) in available_norm]
 
         self._deformers = []
         self._by_name = {}

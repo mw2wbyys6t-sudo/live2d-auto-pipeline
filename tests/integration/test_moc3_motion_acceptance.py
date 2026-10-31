@@ -58,7 +58,8 @@ def _package(tmp_path: Path, *, indent: bool = True) -> Path:
         parameters=[ParameterSpec(_PARAM, minimum=-30.0, maximum=30.0,
                                   default=0.0)],
         canvas_width=512.0, canvas_height=512.0, pixels_per_unit=100.0)
-    document = Motion3Builder(duration=6.0).build_idle({_PARAM: _KEYS})
+    # 扫掠诊断形态：曲线必须打满键形两端，才能逐帧判断内核跟没跟文件
+    document = Motion3Builder(duration=6.0, full_range=True).build_idle({_PARAM: _KEYS})
     assert document is not None, "三个键值必须能生成曲线"
 
     folder = tmp_path / "motionpkg"

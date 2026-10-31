@@ -1268,7 +1268,8 @@ def _attach_capabilities(output_dir: str, character_name: str,
 
 
 def write_idle_motion(output_dir: str, character_name: str,
-                      driven: Dict[str, List[float]]) -> List[str]:
+                      driven: Dict[str, List[float]],
+                      defaults: Optional[Dict[str, float]] = None) -> List[str]:
     """按**编译后**的权威可驱动集合生成 idle 动作，并回写清单。
 
     为什么必须在 moc3 编译之后、而不是在导出 model3.json 时顺手生成：
@@ -1286,6 +1287,10 @@ def write_idle_motion(output_dir: str, character_name: str,
     ['ParamBodySway', 'ParamHairSwing']`` —— 内核先按 motion 写值、物理再覆写，
     实测值对不上文件值。这两个参数本来就该由物理驱动（头发/裙摆的惯性摆动），
     它们的输入 AngleX/AngleY/BodyAngleY 已由 motion 排了曲线，摆动链是完整的。
+
+    ``defaults`` 是参数声明里的默认值，用来定曲线绕哪个值摆。静止姿态不能按
+    「离 0 最近的键」猜：眼睑的默认值是 1.0（睁开），猜成 0.0 时整段待机都是
+    闭眼（实测 2026-11-01 重导 singer 的曲线是 0..0.2）。
     """
     from live2d_builder.motion.motion3 import Motion3Builder
 
@@ -1309,7 +1314,7 @@ def write_idle_motion(output_dir: str, character_name: str,
             log.info(f"physics 负责的参数不排 motion 曲线（避免双写）：{skipped}")
 
     builder = Motion3Builder()
-    document = builder.build_idle(animatable)
+    document = builder.build_idle(animatable, defaults=defaults)
     if document is None:
         # 没有任何可驱动参数：不产出 motion 文件，清单里的 Motions 保持空。
         # 给动不了的参数排曲线会得到「文件齐全但画面一动不动」的假产物。
@@ -1414,7 +1419,9 @@ def compile_export_moc3(
         log.warning("bindings.json 未写出：前端只能静态展示，参数拨了不会变形")
 
     # motion 必须在拿到权威集合之后生成，且在下面的 motion 验收之前落盘。
-    result["motion_files"] = write_idle_motion(output_dir, character_name, driven)
+    result["motion_files"] = write_idle_motion(
+        output_dir, character_name, driven,
+        defaults={p.parameter_id: p.default for p in spec.parameters})
 
     try:
         doc = compile_static_rig(spec)

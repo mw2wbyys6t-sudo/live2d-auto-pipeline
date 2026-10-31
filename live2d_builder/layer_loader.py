@@ -7,7 +7,8 @@
 ``draw_index`` 排序（退回文件名字母序会让 ``mouth_cavity`` 排到 ``mouth`` 之前，
 口腔盖住嘴唇）。另 2 处副本没有这两项，其中一份就是**生产导出走的路**。
 
-调用方只传路径；本模块负责「读哪些 PNG、按什么顺序、顺序取自哪」。
+调用方只传路径；本模块负责「读哪些 PNG、按什么顺序、顺序取自哪」，以及把 PSD
+导入加的画序前缀（``000_hair_back.png``）去掉、还原成下游认的语义层名。
 """
 
 from __future__ import annotations
@@ -15,12 +16,17 @@ from __future__ import annotations
 import glob
 import json
 import os
-from collections import OrderedDict
+import re
+from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 # 与真实图层同目录、但不是图层的整图预览文件。
 NON_LAYER_FILES: Set[str] = {"preview", "composite_preview"}
+
+# PSD 导入写盘时加的画序前缀（``000_hair_back.png``），见
+# ``api_server.import_psd`` 与 ``api/services/python_bridge.go``。
+_INDEX_PREFIX = re.compile(r"^\d+_")
 
 __all__ = [
     "NON_LAYER_FILES",
@@ -100,17 +106,20 @@ def load_export_inputs(layers_dir: str) -> ExportLayerInputs:
 
     tail = float(len(draw_index) + 1)
     guide_order = sorted(paths, key=lambda n: (draw_index.get(n, tail), n))
-    ordered_names = _by_standard_order(guide_order)
+    guide_names = _strip_index_prefixes(guide_order)
+    ordered_names = _by_standard_order(guide_names)
+    # 序号在排位之后再去：``draw_index`` 与权威表都是按原始文件名写的。
+    path_by_name = dict(zip(guide_names, (paths[raw] for raw in guide_order)))
     readiness = read_parts_readiness(layers_dir)
     missing = list((readiness or {}).get("missing_preview") or [])
     # 与 _by_standard_order 同一做法：词表与判据都住在清单模块里，这里只调用。
     from core.segment_engine.layer_manifest import is_hollow
     return ExportLayerInputs(
-        paths=OrderedDict((name, paths[name]) for name in ordered_names),
+        paths=OrderedDict((name, path_by_name[name]) for name in ordered_names),
         order_source="layer_guide" if draw_index else "filename",
         unknown=unknown,
         draw_index=draw_index,
-        normalized=ordered_names != guide_order,
+        normalized=ordered_names != guide_names,
         parts_ready=None if readiness is None else bool(readiness.get("preview_ready")),
         missing_preview=missing,
         parts_hollow=readiness is not None and is_hollow(missing),
@@ -176,6 +185,23 @@ def read_parts_readiness(layers_dir: str) -> Optional[Dict[str, Any]]:
         "missing_preview": list(data.get("missing_preview") or []),
         "source": str(data.get("source") or ""),
     }
+
+
+def _strip_index_prefixes(names: List[str]) -> List[str]:
+    """去掉 PSD 导入画的 ``NNN_`` 序号，返回与入参**等长同序**的语义名。
+
+    序号只表示画序，不含语义；而下游（``DeformerHierarchy`` 的目标匹配、
+    ``moc3_pipeline._norm`` 的网格查找、参数带）全部按语义名精确比对，带着前缀
+    就是全部落空。实测（2026-11-01，singer 那批 34 张分层）：无前缀 11 个变形器 /
+    27 个可驱动参数，加前缀 0 个 / 6 个，构建与官方内核验收**都照样报通过** ——
+    用户拿到的是一张不闭嘴、不眨眼、不呼吸的模型，而日志里没有一条警告。
+
+    撞名（``000_hair_back`` 与 ``010_hair_back``）时两者都保留原名：宁可某一层
+    匹配不上，也不能把用户的两层合并成一层而少画东西。
+    """
+    stripped = [_INDEX_PREFIX.sub("", n) for n in names]
+    counts = Counter(stripped)
+    return [s if counts[s] == 1 else raw for raw, s in zip(names, stripped)]
 
 
 def _by_standard_order(names: List[str]) -> List[str]:

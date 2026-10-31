@@ -1,17 +1,18 @@
 """motion3.json 生成器的结构不变量。
 
 「能不能被内核播放」由 tests/integration/test_moc3_motion_acceptance.py 用真实
-运行时判定；这里只钉住文件自身的算术：段布局与 Meta 自洽、扫满键形区间、
-可无缝循环，以及官方样例实测出来的那条写法约束（带缩进，不能压单行）。
+运行时判定；这里只钉住文件自身的算术：段布局与 Meta 自洽、行程与幅度落在键形
+区间内、可无缝循环，以及官方样例实测出来的那条写法约束（带缩进，不能压单行）。
 
 这里的段解码是测试自己写的一份，故意不复用产物代码 —— 否则「编码错 + 解码
 跟着错」会在测试里互相掩护。
 """
 import json
+import re
 
 import pytest
 
-from live2d_builder.motion.motion3 import Motion3Builder
+from live2d_builder.motion.motion3 import Motion3Builder, dumps_motion
 
 # 段类型 -> 点数（官方 Haru 六个动作文件与 Meta 计数 6/6 对账实测）
 SEGMENT_POINTS = {0: 1, 1: 3, 2: 1, 3: 1}
@@ -52,11 +53,51 @@ def test_segments_are_type_prefixed_linear_triples():
     assert times[2] == pytest.approx(2 / 30, abs=1e-6)
 
 
-def test_curve_spans_the_keyed_range_exactly():
-    doc = Motion3Builder(duration=6.0).build_idle({"ParamA": [-30.0, 0.0, 30.0]})
+def test_full_range_sweeps_the_keyed_range_exactly():
+    """扫掠诊断模式（内核验收用）：曲线必须打到键形两端。"""
+    doc = Motion3Builder(duration=6.0, full_range=True).build_idle(
+        {"ParamA": [-30.0, 0.0, 30.0]})
     values = [v for _t, v in points_of(doc["Curves"][0])]
     assert max(values) == pytest.approx(30.0)
     assert min(values) == pytest.approx(-30.0)
+
+
+def test_default_idle_moves_but_stays_well_inside_the_keyed_range():
+    """出厂 idle 要动，但只走一小段 —— 全行程播放实测像抽搐。"""
+    keys = {"ParamAngleZ": [-30.0, 0.0, 30.0], "ParamMouthOpenY": [0.0, 0.5, 1.0]}
+    doc = Motion3Builder(duration=6.0).build_idle(keys)
+    for curve in doc["Curves"]:
+        values = [v for _t, v in points_of(curve)]
+        low, high = min(keys[curve["Id"]]), max(keys[curve["Id"]])
+        assert max(values) - min(values) > 1e-2, f"{curve['Id']} 一动不动"
+        assert low - 1e-9 <= min(values) and max(values) <= high + 1e-9
+    angle = next(c for c in doc["Curves"] if c["Id"] == "ParamAngleZ")
+    values = [v for _t, v in points_of(angle)]
+    # 转头幅度按语义收窄：±30° 的行程只走其中一小部分
+    assert max(abs(v) for v in values) <= 30.0 * 0.30
+
+
+def test_symmetric_pairs_share_one_waveform():
+    """左右眼睑必须同步：两条相位不同的曲线看起来就是在抽动。"""
+    keys = {"ParamEyeLOpen": [0.0, 1.0], "ParamEyeROpen": [0.0, 1.0]}
+    defaults = {"ParamEyeLOpen": 1.0, "ParamEyeROpen": 1.0}
+    doc = Motion3Builder().build_idle(keys, defaults=defaults)
+    segments = {c["Id"]: c["Segments"] for c in doc["Curves"]}
+    assert segments["ParamEyeLOpen"] == segments["ParamEyeROpen"]
+
+
+def test_parameters_with_same_key_range_get_distinct_waveforms():
+    """回归：ParamBreath 与 ParamMouthOpenY 曾生成逐值相同的曲线，读起来像喘气。
+
+    两者键形都是 [0, 0.5, 1]、排序索引同余 4，所以除了相位还要有幅度差异，
+    否则任何一组「同键形 + 同索引」的参数都会同步摆动。
+    """
+    doc = Motion3Builder().build_idle({
+        "ParamBreath": [0.0, 0.5, 1.0],
+        "ParamMouthOpenY": [0.0, 0.5, 1.0],
+    })
+    by_id = {c["Id"]: c["Segments"] for c in doc["Curves"]}
+    assert by_id["ParamBreath"] != by_id["ParamMouthOpenY"]
 
 
 def test_curve_is_seamlessly_loopable():
@@ -71,6 +112,18 @@ def test_asymmetric_range_never_leaves_the_keyed_interval():
     doc = Motion3Builder().build_idle({"ParamMouthOpenY": [0.0, 1.0]})
     values = [v for _t, v in points_of(doc["Curves"][0])]
     assert min(values) >= -1e-9 and max(values) <= 1.0 + 1e-9
+
+
+def test_rest_pose_comes_from_the_parameter_declaration():
+    """眼睑的静止值是 1.0（睁开）；按「离 0 最近的键」会取到 0.0，待机一直闭眼。"""
+    doc = Motion3Builder().build_idle(
+        {"ParamEyeLOpen": [0.0, 1.0]}, defaults={"ParamEyeLOpen": 1.0})
+    values = [v for _t, v in points_of(doc["Curves"][0])]
+    assert min(values) >= 0.8 - 1e-9 and max(values) <= 1.0 + 1e-9
+    # 没有声明默认值时才退回离 0 最近的键（对以 0 为静止值的参数成立）
+    fallback = Motion3Builder().build_idle({"ParamEyeLOpen": [0.0, 1.0]})
+    values = [v for _t, v in points_of(fallback["Curves"][0])]
+    assert max(values) <= 0.2 + 1e-9
 
 
 def test_rest_value_is_the_key_closest_to_zero():
@@ -105,6 +158,19 @@ def test_no_drivable_parameter_produces_no_document():
     assert Motion3Builder().build_idle({"ParamA": [5.0, 5.0]}) is None
 
 
+def test_tiny_values_never_serialize_with_exponent_notation():
+    """官方内核的 JSON 解析器不认 ``5.3e-05`` —— 实测整份 motion 被拒。
+
+    待机幅度收窄后曲线必然出现 <1e-4 的值；``json.dumps`` 会对它们输出指数
+    写法，内核随即 ``Json parse error``，参数一动不动。序列化层必须展开。
+    """
+    document = {"a": [5.3e-05, -2.0e-06, 0.0, 1.0]}
+    text = dumps_motion(document)
+    assert json.loads(text) == document
+    assert re.search(r"\d[eE][+-]\d", text) is None, text
+    assert "0.000053" in text and "-0.000002" in text
+
+
 def test_exported_file_is_indented_like_the_editor(tmp_path):
     """必须像 Cubism Editor 那样带缩进写：紧凑单行会被加载路径直接拒绝。
 
@@ -120,6 +186,8 @@ def test_exported_file_is_indented_like_the_editor(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "\n\t" in text, "motion 文件必须带缩进换行，不能压成单行"
     assert json.loads(text)["Meta"]["CurveCount"] == 1
+    # 出厂 idle 的采样值里有大量接近 0 的小数，一个指数写法就足以让内核拒收
+    assert re.search(r"\d[eE][+-]\d", text) is None
     # 淡入淡出走 Editor 默认值，与官方 Haru 的 model3.json 写法一致
     assert entry["FadeInTime"] == 0.5 and entry["FadeOutTime"] == 0.5
 
