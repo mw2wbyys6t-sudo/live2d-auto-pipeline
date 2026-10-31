@@ -1382,6 +1382,8 @@ def compile_export_moc3(
         "deformers_static": [],
         # 真正被绑定的参数 -> 键值序列（写进 model3.json 的 Capabilities）
         "driven_parameters": {},
+        # 前端形变用的绑定表；None = 没写出来，预览只能静态展示
+        "bindings_path": None,
     }
 
     try:
@@ -1401,6 +1403,16 @@ def compile_export_moc3(
     driven = driven_parameters(spec)
     result["driven_parameters"] = driven
     _attach_capabilities(output_dir, character_name, driven)
+
+    # 前端要按参数摆顶点，就得不只看得到 moc3 —— 绑定表与 model3.json 同目录，
+    # 由清单的 FileReferences.Bindings 指过去。写失败只降级预览（前端退回静态
+    # 几何），不影响 moc3 部署，所以不拦验收，但必须留下路径或原因。
+    from live2d_builder.exporter.bindings_export import write_bindings
+    bindings_path = write_bindings(spec, output_dir, character_name)
+    result["bindings_path"] = str(bindings_path) if bindings_path else None
+    if bindings_path is None:
+        log.warning("bindings.json 未写出：前端只能静态展示，参数拨了不会变形")
+
     # motion 必须在拿到权威集合之后生成，且在下面的 motion 验收之前落盘。
     result["motion_files"] = write_idle_motion(output_dir, character_name, driven)
 
@@ -1482,6 +1494,8 @@ def summarize_for_meta(result: Dict[str, Any]) -> Dict[str, Any]:
         "deformers_static": result.get("deformers_static") or [],
         "motion_verified": result.get("motion_verified"),
         "physics_verified": result.get("physics_verified"),
+        # 前端形变数据是否可用：moc3 能部署不代表浏览器里能按参数变形
+        "bindings": result.get("bindings_path"),
         "official_core_consistent": bool(
             (result.get("consistency") or {}).get("ok")),
     }

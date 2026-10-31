@@ -1010,3 +1010,34 @@ def test_motion_verified_true_only_when_motion_exists(tmp_path):
             "说明验收发生在 motion 写出之前")
     else:
         pytest.fail(f"motion_verified 意外取值: {compiled['motion_verified']!r}")
+
+
+def test_bindings_cover_every_mesh_and_are_referenced_from_the_manifest(tmp_path):
+    """bindings.json 必须覆盖全部网格，且从 model3.json 找得到。
+
+    moc3 能部署不等于浏览器能按参数变形：自研渲染器只消费这份绑定表，
+    少一个网格就是屏幕上少一块皮，而 moc3 侧看不出任何异常。
+    """
+    builder_result = _builder_result()
+    _, export_result = _export(tmp_path, builder_result)
+    compiled = compile_export_moc3(
+        builder_result=builder_result,
+        atlas_uvs=export_result["atlas_uvs"],
+        output_dir=export_result["output_dir"],
+        character_name="web_preview",
+    )
+    assert compiled["bindings_path"], compiled["blocker"]
+
+    manifest_path = Path(export_result["model3_json"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    reference = (manifest.get("FileReferences") or {}).get("Bindings")
+    assert reference, "清单里没有 FileReferences.Bindings，前端发现不了绑定表"
+
+    path = manifest_path.parent / reference
+    assert path.is_file(), reference
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    assert {m["id"] for m in doc["meshes"]} == set(builder_result["meshes"])
+    for mesh in doc["meshes"]:
+        source = builder_result["meshes"][mesh["id"]]
+        assert len(mesh["vertices"]) == len(source["vertices"]) * 2
+        assert len(mesh["indices"]) == len(source["indices"]) * 3
