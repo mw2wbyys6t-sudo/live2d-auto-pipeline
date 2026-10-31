@@ -8,6 +8,15 @@ import time
 
 import requests
 
+# 打印失败明细的语句本身不该有第二条失败路径。实测：GBK 控制台上
+# print("  ✗", ...) 抛 UnicodeEncodeError，整个汇总连同所有失败项一起丢失 ——
+# 脚本跑出一堆问题，却在看结果时崩掉。遇到编不出的字符就替换，不要崩。
+try:
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
+except (AttributeError, ValueError):  # pragma: no cover - 被重定向到管道时
+    pass
+
 BASE = os.environ.get("DESKTOP_E2E_BASE", "http://127.0.0.1:8080")
 PASS, FAIL = 0, 0
 FAILURES = []
@@ -160,7 +169,8 @@ def main():
             check(f"第 {i} 轮异常", False, repr(e))
     print(f"\n========== 汇总: {PASS} passed, {FAIL} failed ==========")
     for f in FAILURES:
-        print("  ✗", f)
+        # 用 ASCII 标记：✗ 在 GBK 控制台上会被替换成 '?'，失败清单就没了行首标记。
+        print("  [x]", f)
     sys.exit(1 if FAIL else 0)
 
 

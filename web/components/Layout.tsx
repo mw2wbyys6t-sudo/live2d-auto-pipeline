@@ -1,8 +1,10 @@
 import { ReactNode, useState } from 'react';
 import Link from 'next/link';
+import Head from 'next/head';
 import { Menu, Settings } from 'lucide-react';
 import Sidebar from './Sidebar';
 import ConnectionStatus from './ConnectionStatus';
+import { APP_NAME } from '../lib/brand';
 
 interface LayoutProps {
   children: ReactNode;
@@ -15,6 +17,14 @@ export default function Layout({ children, title, actions }: LayoutProps) {
 
   return (
     <div className="min-h-screen bg-[#0f0f13] text-white flex">
+      {/* title 此前只渲染成页内 <h2>，不碰文档标题 —— 实测装机版除工作台外
+          的每一页（环境自检 / 角色库 / AI 对话）浏览器标签页都是空的。
+          只有 Workbench 自己用 next/head 设过，所以这个缺口一直没被发现。 */}
+      {title && (
+        <Head>
+          <title>{`${APP_NAME} · ${title}`}</title>
+        </Head>
+      )}
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="flex-1 flex flex-col min-w-0">

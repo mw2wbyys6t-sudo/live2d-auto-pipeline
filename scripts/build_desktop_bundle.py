@@ -185,6 +185,36 @@ def sha256_file(path: Path, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
+def source_provenance() -> dict:
+    """记录这一版是从哪个提交出的、工作树脏不脏。
+
+    为什么必须有：BUILD-INFO 此前只有 created_utc 与体积，没有源码版本。
+    实测为了判断「已装的那份 v0.10.10 到底是哪一代」，只能拿已装包里的
+    每个 .py 与仓库 HEAD 逐个比哈希（140 同 / 4 异）才反推出它等于哪个提交。
+    版本号在同版本重复出包时完全不动，所以日期和版本号都定不了代次。
+
+    git 不可用（浅克隆、无 .git、超时）时返回空字典：溯源信息缺失不该让
+    一次可用的构建失败。
+    """
+    def git(*args: str) -> str:
+        try:
+            out = subprocess.run(("git", *args), cwd=ROOT, capture_output=True,
+                                 text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return out.stdout.strip() if out.returncode == 0 else ""
+
+    commit = git("rev-parse", "HEAD")
+    if not commit:
+        return {}
+    return {
+        "git_commit": commit,
+        "git_describe": git("describe", "--tags", "--always"),
+        # 脏 = 产物里有未提交的改动，出问题时不能假定它等于那个 commit。
+        "git_dirty": bool(git("status", "--porcelain")),
+    }
+
+
 def run(cmd: list) -> None:
     printable = " ".join(str(c) for c in cmd)
     print(f"  $ {printable}")
@@ -757,6 +787,7 @@ def main() -> int:
         "sha256": record,
         "sizes_bytes": sizes,
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        **source_provenance(),
     }
     (dest / "BUILD-INFO.json").write_text(
         json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -766,6 +797,12 @@ def main() -> int:
     for k in ("python", "app", "models", "total"):
         print(f"   {k:8} {human(sizes[k])}")
     print(f" BUILD-INFO.json 已写入 {dest / 'BUILD-INFO.json'}")
+    if info.get("git_commit"):
+        print(f" 源码：{info['git_commit'][:12]}"
+              f"（{info.get('git_describe') or '无 tag'}）"
+              f"{' ⚠ 工作树有未提交改动' if info.get('git_dirty') else ''}")
+    else:
+        print("  ⚠ 取不到 git 信息，BUILD-INFO 里没有源码版本 —— 这份产物日后无法定代次。")
     missing = [k for k in ("python-embed", "yunet-onnx", "onnxruntime-dll",
                            "face-landmarker-task", "isnet-anime-onnx")
                if not hashes.get(k)]

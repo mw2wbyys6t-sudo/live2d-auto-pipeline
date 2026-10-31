@@ -52,6 +52,13 @@ func (h *Handler) GetDiagnostics(c *gin.Context) {
 	h.pythonBridge.InvalidateGPUProbe()
 	gpuCheck := gpuDiagnosticCheck(h.pythonBridge.ProbeGPU(c.Request.Context()))
 
+	// 图像上游：自检页的副标题承诺「全部通过即可正常生成与导出」，那么当唯一
+	// 可用通道是免密上游时不能报绿 —— 实测（2026-10-30 装机版）九项全绿、
+	// 页面写着「环境就绪，可以开始生成」，而唯一的 pollinations 每次返回 402，
+	// 用户最后拿到的是一张几何占位图，且界面上没有任何地方说这件事。
+	providers, _, provErr := h.pythonBridge.ListImageProviders(c.Request.Context())
+	imgCheck := imageProviderCheck(providers, provErr)
+
 	checks := []models.DiagnosticCheck{
 		{Key: "backend", Label: "Go 后端", OK: true, Detail: Version},
 		{Key: "python", Label: "Python 解释器", OK: pyOK,
@@ -61,10 +68,9 @@ func (h *Handler) GetDiagnostics(c *gin.Context) {
 		{Key: "output_dir", Label: "产物目录可写", OK: outputWritable,
 			Detail: cfg.Output.BaseDir, Issues: noteIf(outputNote)},
 		{Key: "tracker_exe", Label: "面捕程序", OK: trackerExe, Detail: trackerPath},
-		{Key: "tracker_model", Label: "YuNet 人脸模型", OK: trackerModel,
-			Detail: "缺失时回退肤色检测（精度更低）"},
-		{Key: "tracker_dll", Label: "ONNX Runtime 运行库", OK: trackerDll,
-			Detail: "缺失时回退肤色检测（精度更低）"},
+		assetCheck("tracker_model", "YuNet 人脸模型", trackerModel),
+		assetCheck("tracker_dll", "ONNX Runtime 运行库", trackerDll),
+		imgCheck,
 		gpuCheck,
 		{Key: "bind_loopback", Label: "仅本机回环监听", OK: isLoopback(cfg.Server.Host),
 			Detail: cfg.Server.Host},
@@ -94,6 +100,61 @@ func dirExists(p string) bool {
 	}
 	st, err := os.Stat(p)
 	return err == nil && st.IsDir()
+}
+
+// assetCheck 面捕随包资源的诊断行。
+//
+// 此前 Detail 无论通过与否都写「缺失时回退肤色检测（精度更低）」——
+// 实测装机版自检页上，YuNet 与 ONNX 两行是绿的却带着这句失败解释，
+// 用户读到的是一行报错。通过就说通过，缺失才把后果讲清楚。
+func assetCheck(key, label string, present bool) models.DiagnosticCheck {
+	if present {
+		return models.DiagnosticCheck{Key: key, Label: label, OK: true, Detail: "已就位"}
+	}
+	return models.DiagnosticCheck{Key: key, Label: label, OK: false,
+		Detail: "未找到",
+		Issues: []string{"面捕将回退肤色检测（精度更低），或无法启动"}}
+}
+
+// imageProviderCheck 图像上游是否**可靠可用**。
+//
+// 判据是「有没有一个需要密钥、因此已被用户配置好的上游」，不是「有没有任何
+// 上游」：免密通道按配额放行、随时 402/429，而本地占位图根本不是生成结果。
+// 只有这两类时自检页不该说「环境就绪，可以开始生成」—— 实测装机版正是这样，
+// 九项全绿却每次只出占位图。
+//
+// 取不到上游列表（Python 侧失败）也判不通过：诊断页不能把"查不到"说成"没问题"。
+func imageProviderCheck(available []map[string]interface{}, err error) models.DiagnosticCheck {
+	const label = "图像上游"
+	if err != nil || len(available) == 0 {
+		detail := "查不到可用上游"
+		if err != nil {
+			log.Printf("[config] 图像上游查询失败: %v", err)
+		}
+		return models.DiagnosticCheck{Key: "image_provider", Label: label, OK: false,
+			Detail: detail,
+			Issues: []string{"生成会失败或只得到本地占位图；请检查网络，或在设置里配置图像服务"}}
+	}
+	names := make([]string, 0, len(available))
+	configured := 0
+	for _, p := range available {
+		name, _ := p["name"].(string)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+		if needsKey, _ := p["requires_key"].(bool); needsKey {
+			configured++
+		}
+	}
+	joined := strings.Join(names, ", ")
+	if configured == 0 {
+		return models.DiagnosticCheck{Key: "image_provider", Label: label, OK: false,
+			Detail: "仅免密通道: " + joined,
+			Issues: []string{"免密通道按配额放行，随时可能 402/429；要稳定出图请在设置里配置 Seedream / SenseNova / OpenAI 兼容端点"}}
+	}
+	return models.DiagnosticCheck{Key: "image_provider", Label: label, OK: true,
+		Detail: fmt.Sprintf("%d 个已配置上游（当前可用: %s）", configured, joined)}
 }
 
 func noteIf(s string) []string {

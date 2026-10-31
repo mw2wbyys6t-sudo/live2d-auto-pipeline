@@ -1078,8 +1078,12 @@ func (pb *PythonBridge) GetPythonScripts() []map[string]string {
 		Name string
 		Desc string
 	}{
-		{"core/workflow.py", "完整工作流引擎 v0.10.2（图像生成→QA→分割→绑定→PSD→Live2D导出）"},
-		{"core/cli.py", "交互式命令行工具 v0.10.2"},
+		// 描述里不写版本号：这里是纯展示文案，写死过一次就再没人同步
+		// （实测装机版仍显示 "v0.10.2"，而产品已是 v0.10.10）。
+		// 注意 core/workflow.py 的 source 字段 "workflow_v0.10.2" 是线上契约，
+		// 不在此列 —— 见 tests/unit/test_release_version_single_source.py。
+		{"core/workflow.py", "完整工作流引擎（图像生成→QA→分割→绑定→PSD→Live2D导出）"},
+		{"core/cli.py", "交互式命令行工具"},
 		{"install.py", "项目安装脚本（依赖+模型）"},
 		{"install.sh", "Linux/macOS 一键安装脚本"},
 	}

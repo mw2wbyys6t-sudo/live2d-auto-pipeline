@@ -93,7 +93,7 @@ export default function HealthPage() {
           <div>
             <h2 className="text-xl font-bold">运行环境检查</h2>
             <p className="text-sm text-gray-400 mt-1">
-              逐项核对本机解释器、产物目录与面捕组件，全部通过即可正常生成与导出。
+              逐项核对本机解释器、产物目录、面捕组件与图像上游，全部通过即可正常生成与导出。
             </p>
           </div>
           <button

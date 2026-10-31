@@ -201,6 +201,12 @@ func DefaultConfig() *Config {
 				// v0.10.3: 桌面便携版常见布局 —— exe 同级 runtime/ 子目录
 				// 打包了完整 Python 工程，单独追加这个候选避免遗漏。
 				candidates = append(candidates, filepath.Join(exeDir, "runtime"))
+				// 桌面安装包布局：<exe 同级>/app/core/workflow.py
+				// （ApplyDesktopLayout 之后会把它写进 scripts_dir）。
+				// 漏了这条会让安装包每次启动都打一句「未在任何候选目录找到
+				// Python 工程」，而 /api/diagnostics 的 scripts_dir 又报 OK ——
+				// 实测（已安装的 v0.10.10）这条自相矛盾的告警让用户以为装坏了。
+				candidates = append(candidates, filepath.Join(exeDir, "app"))
 			}
 			candidates = append(candidates, "/workspace", "/app", "/repo", "/project")
 			found := false
