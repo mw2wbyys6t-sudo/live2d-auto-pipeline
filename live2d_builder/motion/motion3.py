@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import zlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -31,8 +32,7 @@ HARMONIC_SETS = (
 
 # 出厂 idle 的幅度：占「静止值 → 该侧键形端」行程的比例，按参数语义定。
 # 依据是播放观感：全行程时头部每 6 秒甩到 ±30°、眼睛每秒完全闭合一次，
-# 实测看下来是抽搐而不是待机。前缀按**最长优先**匹配，同时决定相位与波形：
-# 同一语义组的参数共用一条曲线（左右眼要一起眨、左右眉要一起动），组间再错开。
+# 实测看下来是抽搐而不是待机。前缀按**最长优先**匹配。
 _IDLE_AMPLITUDE_PREFIXES = (
     ("ParamEyeBall", 0.25),   # 眼球游移，幅度可比眼睑大
     ("ParamBreath", 0.60),    # 呼吸要看得出来，接近全行程
@@ -50,21 +50,33 @@ _DEFAULT_IDLE_AMPLITUDE = 0.20
 # 黄金分割比的小数部分：相邻组相位差异最大、且不落在 2π 的有理倍数上。
 _IDLE_PHASE_STEP = 0.6180339887498949
 
+# 左右侧别标记：``ParamEyeLOpen`` / ``ParamBrowLY`` / ``ParamTearsL`` / ``ParamShoulderL``。
+# 只换左右、不换轴向 —— ``ParamAngleX`` 与 ``ParamAngleY`` 不共用波形。
+_SIDE_MARKER = re.compile(r"(?<=[a-z])[LR](?=[A-Z0-9]|$)")
 
-def idle_profile(parameter_id: str) -> tuple:
-    """该参数在出厂 idle 里的 (组序号, 幅度)。
 
-    组序号决定相位与谐波：组内完全同步（左右眼/左右眉），组间彼此错开。
+def idle_group(parameter_id: str) -> str:
+    """同一条波形的判据：左右对称件共用，不同轴向各自一条。
+
+    曾按「前缀」分组，于是 ``ParamAngleX`` / ``Y`` / ``Z`` 拿到同一条曲线 ——
+    实测（2026-11-01，工作台预览 singer）三条曲线的 min/max/首末值逐位相同，
+    头只是在同一平面里来回摆。左右眼/左右眉却必须共用，否则看起来在抽动。
     """
-    for index, (prefix, amplitude) in enumerate(_IDLE_AMPLITUDE_PREFIXES):
-        if parameter_id.startswith(prefix):
-            return index, amplitude
-    return len(_IDLE_AMPLITUDE_PREFIXES), _DEFAULT_IDLE_AMPLITUDE
+    return _SIDE_MARKER.sub("*", parameter_id)
+
+
+def idle_group_index(parameter_id: str) -> int:
+    """组序号 → 相位与谐波。用内容哈希而不是排序下标：加一个参数不该让
+    所有既有曲线换相位（那样每次导出动画都会整体变样）。"""
+    return zlib.crc32(idle_group(parameter_id).encode("utf-8")) % 997
 
 
 def idle_amplitude(parameter_id: str) -> float:
     """该参数在出厂 idle 里走行程的几成。"""
-    return idle_profile(parameter_id)[1]
+    for prefix, amplitude in _IDLE_AMPLITUDE_PREFIXES:
+        if parameter_id.startswith(prefix):
+            return amplitude
+    return _DEFAULT_IDLE_AMPLITUDE
 
 
 
@@ -192,7 +204,7 @@ class Motion3Builder:
                 continue      # 单键形没有可插值的行程
             if max(keys) == min(keys):
                 continue      # 键形全等 = 这个参数形变不出位移，排进曲线只会是噪声
-            group, amplitude = idle_profile(parameter_id)
+            group, amplitude = idle_group_index(parameter_id), idle_amplitude(parameter_id)
             if self.full_range:
                 # 扫掠诊断只关心「打满键形两端」，因此统一用同一组无相位偏移的
                 # 谐波：相位一错开，采样网格就不再落在极值点上，量到的行程会比

@@ -86,6 +86,33 @@ def test_symmetric_pairs_share_one_waveform():
     assert segments["ParamEyeLOpen"] == segments["ParamEyeROpen"]
 
 
+def test_different_axes_of_the_same_part_get_distinct_waveforms():
+    """同部件的不同轴向必须各走一条曲线。
+
+    实测（2026-11-01，工作台预览 singer）：按「前缀分组」时 ``ParamAngleX`` /
+    ``Y`` / ``Z`` 三条曲线的 min/max/首值/末值逐位相同 —— 头只是在同一个平面里
+    来回摆，读起来像抽搐而不是待机。左右对称件共用波形，轴向不能共用。
+    """
+    keys = {"ParamAngleX": [-30.0, 30.0], "ParamAngleY": [-30.0, 30.0],
+            "ParamAngleZ": [-30.0, 30.0]}
+    doc = Motion3Builder().build_idle(keys)
+    segments = {c["Id"]: c["Segments"] for c in doc["Curves"]}
+    assert len({tuple(v) for v in segments.values()}) == 3
+
+
+def test_gaze_axes_and_mouth_axes_are_not_locked_together():
+    """眼球 X/Y 与嘴的开合/形状也不能走同一条曲线（同键形时最容易撞）。"""
+    keys = {"ParamEyeBallX": [-1.0, 1.0], "ParamEyeBallY": [-1.0, 1.0]}
+    doc = Motion3Builder().build_idle(keys)
+    segments = {c["Id"]: c["Segments"] for c in doc["Curves"]}
+    assert segments["ParamEyeBallX"] != segments["ParamEyeBallY"]
+
+    keys = {"ParamMouthOpenY": [0.0, 1.0], "ParamMouthForm": [0.0, 1.0]}
+    doc = Motion3Builder().build_idle(keys)
+    segments = {c["Id"]: c["Segments"] for c in doc["Curves"]}
+    assert segments["ParamMouthOpenY"] != segments["ParamMouthForm"]
+
+
 def test_parameters_with_same_key_range_get_distinct_waveforms():
     """回归：ParamBreath 与 ParamMouthOpenY 曾生成逐值相同的曲线，读起来像喘气。
 
