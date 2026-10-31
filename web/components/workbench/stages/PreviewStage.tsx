@@ -100,6 +100,10 @@ export default function PreviewStage() {
             modelUrl={rt.modelUrl}
             onReady={(player) => {
               rt.playerRef.current = player;
+              // 播放器是命令式实例：加载完成后要把 UI 当前状态推给它，
+              // 否则待机动作与表情只在下一次点按钮时才生效。
+              player.setIdle(rt.idle);
+              player.setExpression(rt.expression);
             }}
             onFrame={() => {
               const now = performance.now();

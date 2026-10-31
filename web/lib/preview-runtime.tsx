@@ -131,10 +131,20 @@ export function PreviewProvider({ children }: { children: ReactNode }) {
 
   const applyExpression = useCallback((emotion: Emotion) => {
     setExpression(emotion);
-    playerRef.current?.setExpression(emotion);
+    const player = playerRef.current;
+    player?.setExpression(emotion);
+    // 产物自带 exp3 时以它为准；只有模型里没有这个表情才退回内置参数表，
+    // 否则内置表会盖掉真实表情，看起来「点了没反应」。
+    if (player && player.expressionNames.includes(emotion)) return;
     const mapped = EXPRESSION_PARAMS[emotion] || {};
-    playerRef.current?.setParameters(mapped);
+    player?.setParameters(mapped);
     setParams((prev) => ({ ...prev, ...mapped }));
+  }, []);
+
+  /** 待机开关同时改 UI 状态与播放器：只改 React state 不会让模型动。 */
+  const toggleIdle = useCallback((next: boolean) => {
+    setIdle(next);
+    playerRef.current?.setIdle(next);
   }, []);
 
   const stopNativeTracking = useCallback(() => {
@@ -258,7 +268,7 @@ export function PreviewProvider({ children }: { children: ReactNode }) {
       bg,
       setBg,
       idle,
-      setIdle,
+      setIdle: toggleIdle,
       params,
       publishParams,
       fps,

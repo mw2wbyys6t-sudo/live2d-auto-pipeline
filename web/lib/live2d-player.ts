@@ -25,6 +25,22 @@ import {
   type BindingsDocument,
   type BindingsMesh,
 } from './live2d-bindings';
+import { MotionPlayback, parseMotion, type MotionFile } from './live2d-motion';
+import { PhysicsEngine, parsePhysics3, type ParameterRange } from './live2d-physics';
+
+/** exp3.json 里一条参数项；Blend 决定它是叠加、乘算还是覆盖。 */
+interface ExpressionParameter {
+  id: string;
+  value: number;
+  blend: 'Add' | 'Multiply' | 'Overwrite';
+}
+
+interface ExpressionSpec {
+  name: string;
+  parameters: ExpressionParameter[];
+  fadeIn: number;
+  fadeOut: number;
+}
 
 export type PartGroup = 'hair' | 'face' | 'eyes' | 'mouth' | 'body' | 'other';
 
@@ -135,8 +151,20 @@ export class Live2DPlayer {
   private resolvedParams: ParameterDef[] = STANDARD_PARAMS.map((p) => ({ ...p }));
   /** 可安全夹取的区间；只收可信来源，未知参数保持不夹取。 */
   private bounds: Map<string, ParameterBounds> = resolveBounds(null);
-  private expressions: Map<string, Record<string, number>> = new Map();
+  private expressions: Map<string, ExpressionSpec> = new Map();
   private currentExpression = 'default';
+  /** 表情淡入淡出权重（0 = 不生效，1 = 完全生效）。 */
+  private expressionWeight = 0;
+  private expressionTargetWeight = 0;
+  private expressionFadeRate = 2;
+  /** 表情生效前的目标值，用于每帧重新叠加（不累加）。 */
+  private expressionBase = new Map<string, number>();
+  /** 动作组 → 已解析的动作文件。 */
+  private motionGroups: Map<string, MotionFile[]> = new Map();
+  private motion: MotionPlayback | null = null;
+  private idleEnabled = false;
+  private physics: PhysicsEngine | null = null;
+  private physicsDiagnostics = { chains: 0, loaded: false };
   private running = false;
   private frameCallbacks: Array<() => void> = [];
   private tickerFn: ((dt: number) => void) | null = null;
@@ -245,6 +273,13 @@ export class Live2DPlayer {
     this.targetParams.clear();
     this.expressions.clear();
     this.currentExpression = 'default';
+    this.expressionWeight = 0;
+    this.expressionTargetWeight = 0;
+    this.expressionBase.clear();
+    this.motionGroups.clear();
+    this.motion = null;
+    this.physics = null;
+    this.physicsDiagnostics = { chains: 0, loaded: false };
     this.resolvedParams = STANDARD_PARAMS.map((p) => ({ ...p }));
     this.bounds = resolveBounds(null);
     this.model3 = null;
@@ -267,6 +302,8 @@ export class Live2DPlayer {
     }
     this.model3 = model3;
     this._applyModelParameters(model3);
+    await this.loadRuntimeAssets(model3, baseUrl, generation);
+    if (generation !== this._generation) return;
 
     const cx = (app.renderer.width / (this.options.resolution || 1)) / 2;
     const cy = (app.renderer.height / (this.options.resolution || 1)) / 2;
@@ -655,20 +692,265 @@ export class Live2DPlayer {
   }
 
   setExpression(name: string): void {
+    this.restoreExpressionBase();
     this.currentExpression = name;
-    const exp = this.expressions.get(name);
-    if (!exp) return;
-    for (const [k, v] of Object.entries(exp)) {
-      this.targetParams.set(k, clampToBounds(v, this.bounds.get(k)));
+    const spec = this.expressions.get(name);
+    if (!spec) {
+      this.expressionTargetWeight = 0;
+      return;
     }
+    this.expressionTargetWeight = 1;
+    this.expressionFadeRate = spec.fadeIn > 0 ? 1 / spec.fadeIn : 30;
   }
 
   get currentExpressionName(): string {
     return this.currentExpression;
   }
 
-  registerExpression(name: string, params: Record<string, number>): void {
-    this.expressions.set(name, params);
+  /** 当前已从产物里载入的表情名（不含手工注册的）。 */
+  get expressionNames(): string[] {
+    return Array.from(this.expressions.keys());
+  }
+
+  /**
+   * 手工注册表情。传 Record 时按 exp3 的 Add 语义叠加；传数组时按各自 Blend。
+   */
+  registerExpression(
+    name: string,
+    params: Record<string, number> | ExpressionParameter[],
+  ): void {
+    const parameters = Array.isArray(params)
+      ? params
+      : Object.entries(params).map(([id, value]) => ({ id, value, blend: 'Add' as const }));
+    this.expressions.set(name, {
+      name, parameters, fadeIn: 0.5, fadeOut: 0.5,
+    });
+  }
+
+  // --- 动作 / 表情 / 物理 -------------------------------------------------
+
+  /** 只附带说明：动作组名用于 UI 展示，物理链数用于验收页。 */
+  get motionGroupNames(): string[] {
+    return Array.from(this.motionGroups.keys());
+  }
+
+  get motionCount(): number {
+    let count = 0;
+    for (const files of this.motionGroups.values()) count += files.length;
+    return count;
+  }
+
+  get physicsChains(): number {
+    return this.physicsDiagnostics.chains;
+  }
+
+  get physicsLoaded(): boolean {
+    return this.physicsDiagnostics.loaded;
+  }
+
+  get idlePlaying(): boolean {
+    return this.idleEnabled && this.motion !== null;
+  }
+
+  /** 待机动作开关：开启后循环播 idle 组，关闭后停在当前姿态。 */
+  setIdle(enabled: boolean): void {
+    this.idleEnabled = enabled;
+    if (enabled) {
+      if (!this.motion) this.startIdleMotion();
+    } else if (this.motion && this.motion.group === 'idle') {
+      this.motion = null;
+    }
+  }
+
+  /** 手动播一个动作组；返回是否找到该动作。 */
+  playMotion(group: string, index = 0): boolean {
+    const files = this.motionGroups.get(group);
+    if (!files || !files[index]) return false;
+    this.motion = new MotionPlayback(files[index], group, index);
+    return true;
+  }
+
+  stopMotion(): void {
+    this.motion = null;
+  }
+
+  private startIdleMotion(): void {
+    const files = this.motionGroups.get('idle') || this.motionGroups.values().next().value;
+    if (!files || !files.length) return;
+    this.motion = new MotionPlayback(files[0], 'idle', 0);
+  }
+
+  private paramDefault(name: string): number {
+    return this.resolvedParams.find((p) => p.id === name)?.default ?? 0;
+  }
+
+  private physicsRange(name: string): ParameterRange | undefined {
+    const bounds = this.bounds.get(name);
+    if (!bounds) return undefined;
+    return { min: bounds.min, default: this.paramDefault(name), max: bounds.max };
+  }
+
+  private async loadRuntimeAssets(
+    model3: Model3Json,
+    baseUrl: string,
+    generation: number,
+  ): Promise<void> {
+    const refs = model3.FileReferences;
+    const tasks: Array<Promise<void>> = [];
+    if (refs.Physics) {
+      tasks.push(this.loadPhysics(`${baseUrl}${refs.Physics}`, generation));
+    }
+    for (const entry of refs.Expressions || []) {
+      tasks.push(this.loadExpression(`${baseUrl}${entry.File}`, entry.Name, generation));
+    }
+    for (const [group, list] of Object.entries(refs.Motions || {})) {
+      for (let i = 0; i < list.length; i++) {
+        tasks.push(this.loadMotionFile(`${baseUrl}${list[i].File}`, group, list[i], generation));
+      }
+    }
+    await Promise.all(tasks);
+  }
+
+  private async loadPhysics(url: string, generation: number): Promise<void> {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const document = parsePhysics3(await res.json());
+      if (generation !== this._generation) return;
+      this.physics = new PhysicsEngine(document);
+      this.physicsDiagnostics = { chains: document.settings.length, loaded: true };
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('physics3.json 加载失败，物理不生效:', err);
+    }
+  }
+
+  private async loadExpression(url: string, name: string, generation: number): Promise<void> {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (generation !== this._generation) return;
+      const parameters = (json.Parameters || [])
+        .filter((p: any) => p && typeof p.Id === 'string')
+        .map((p: any): ExpressionParameter => ({
+          id: p.Id,
+          value: typeof p.Value === 'number' && Number.isFinite(p.Value) ? p.Value : 0,
+          blend: p.Blend === 'Multiply' ? 'Multiply' : p.Blend === 'Overwrite' ? 'Overwrite' : 'Add',
+        }));
+      this.expressions.set(name, {
+        name,
+        parameters,
+        fadeIn: Number.isFinite(json.FadeInTime) ? json.FadeInTime : 0.5,
+        fadeOut: Number.isFinite(json.FadeOutTime) ? json.FadeOutTime : 0.5,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`表情 ${name} 加载失败:`, err);
+    }
+  }
+
+  private async loadMotionFile(
+    url: string,
+    group: string,
+    entry: { File: string; FadeInTime?: number; FadeOutTime?: number },
+    generation: number,
+  ): Promise<void> {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const file = parseMotion(await res.json(), {
+        fadeIn: entry.FadeInTime,
+        fadeOut: entry.FadeOutTime,
+      });
+      if (generation !== this._generation) return;
+      const list = this.motionGroups.get(group) || [];
+      list.push(file);
+      this.motionGroups.set(group, list);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`动作 ${group}/${entry.File} 加载失败:`, err);
+    }
+  }
+
+  /** 每帧推进动作，把采样值写进目标参数；淡入权重决定它与当前目标的比例。 */
+  private updateMotion(dt: number): void {
+    if (!this.motion && this.idleEnabled) this.startIdleMotion();
+    const playback = this.motion;
+    if (!playback) return;
+    playback.advance(dt);
+    const weight = playback.weight;
+    playback.sample().forEach((value, id) => {
+      const target = clampToBounds(value, this.bounds.get(id));
+      if (weight >= 1) {
+        this.targetParams.set(id, target);
+      } else {
+        const current = this.targetParams.get(id) ?? target;
+        this.targetParams.set(id, current + (target - current) * weight);
+      }
+    });
+    // 表情与动作都改目标参数：动作每帧覆盖，表情在下一步叠加。
+    if (playback.finished) this.motion = null;
+  }
+
+  /**
+   * 表情以 exp3 的 Blend 语义叠在当前目标参数上，按淡入/淡出权重插值。
+   * 叠加要基于「表情生效前的值」，否则每帧累加会一路漂走。
+   */
+  private updateExpression(dt: number): void {
+    if (this.expressionWeight < this.expressionTargetWeight) {
+      this.expressionWeight = Math.min(
+        this.expressionTargetWeight,
+        this.expressionWeight + this.expressionFadeRate * dt,
+      );
+    } else if (this.expressionWeight > this.expressionTargetWeight) {
+      this.expressionWeight = Math.max(
+        this.expressionTargetWeight,
+        this.expressionWeight - this.expressionFadeRate * dt,
+      );
+    }
+    const spec = this.expressions.get(this.currentExpression);
+    if (!spec || this.expressionWeight <= 0) {
+      this.restoreExpressionBase();
+      return;
+    }
+    const weight = this.expressionWeight;
+    for (const p of spec.parameters) {
+      if (!this.expressionBase.has(p.id)) {
+        this.expressionBase.set(p.id, this.targetParams.get(p.id) ?? this.paramDefault(p.id));
+      }
+      const base = this.expressionBase.get(p.id) ?? 0;
+      let value: number;
+      if (p.blend === 'Multiply') {
+        value = base * (1 + (p.value - 1) * weight);
+      } else if (p.blend === 'Overwrite') {
+        value = base + (p.value - base) * weight;
+      } else {
+        value = base + p.value * weight;
+      }
+      this.targetParams.set(p.id, clampToBounds(value, this.bounds.get(p.id)));
+    }
+  }
+
+  private restoreExpressionBase(): void {
+    for (const [id, value] of this.expressionBase) {
+      this.targetParams.set(id, value);
+    }
+    this.expressionBase.clear();
+  }
+
+  /** 物理读的是平滑后的参数，写回直接落到 params + targetParams，避免下一帧被拉回。 */
+  private stepPhysics(dt: number): void {
+    const engine = this.physics;
+    if (!engine) return;
+    engine.step(dt, {
+      read: (name) => this.params.get(name) ?? 0,
+      range: (name) => this.physicsRange(name),
+      write: (name, value) => {
+        this.params.set(name, value);
+        this.targetParams.set(name, clampToBounds(value, this.bounds.get(name)));
+      },
+    });
   }
 
   getParameter(name: string): number {
@@ -764,12 +1046,19 @@ export class Live2DPlayer {
 
   private update(deltaFrames: number): void {
     const dt = deltaFrames / 60;
+    // 顺序：动作写目标 → 表情叠在目标上 → 插值 → 物理（物理读平滑值、
+    // 直接写回），这样次级运动总是滞后于主动作，和内核一致。
+    this.updateMotion(dt);
+    this.updateExpression(dt);
+
     // lerp toward targets
     this.targetParams.forEach((target, key) => {
       const current = this.params.get(key) ?? target;
       const next = current + (target - current) * Math.min(1, this.lerpSpeed * 60 * dt);
       this.params.set(key, next);
     });
+
+    this.stepPhysics(dt);
 
     if (this.artMeshes.length > 0) {
       this.updateArtMeshes();
