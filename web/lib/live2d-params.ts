@@ -53,7 +53,13 @@ export function resolveParameters(model3: Model3Json | null | undefined): Parame
       name: std?.name ?? raw.Id,
       min: typeof raw.Min === 'number' ? raw.Min : std?.min ?? -1,
       max: typeof raw.Max === 'number' ? raw.Max : std?.max ?? 1,
-      default: typeof raw.Default === 'number' ? raw.Default : std?.default ?? 0,
+      // Cubism 的字段名是 ``Value``；读 ``Default`` 会让声明值整列失效，
+      // 退回标准表（实测 singer 的 ParamBreath 声明 0.5，却按 0 起播）。
+      default: typeof raw.Value === 'number'
+        ? raw.Value
+        : typeof raw.Default === 'number'
+          ? raw.Default
+          : std?.default ?? 0,
       group: std?.group ?? 'Other',
     };
   });

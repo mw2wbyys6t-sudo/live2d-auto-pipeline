@@ -667,15 +667,18 @@ export class Live2DPlayer {
   }
 
   /**
-   * 用模型声明的参数刷新清单与夹取区间。
-   * 调用方在载入前设过的值会保留（用 has 判断），避免覆盖用户已拖动的滑块。
+   * 用模型声明的参数刷新清单、夹取区间与**静止姿态**。
+   *
+   * ``loadModel`` 会先用标准表预置同名参数（``ParamBreath`` = 0），所以这里必须
+   * 按模型声明覆写，不能只在「缺键」时填默认值：否则声明值永远进不来，待机淡入
+   * 的 0.5 秒里胸口从 0 抬到 0.5，静止预览更是整段停在吸气姿态。
    */
   private _applyModelParameters(model3: Model3Json | null): void {
     this.resolvedParams = resolveParameters(model3);
     this.bounds = resolveBounds(model3);
     for (const p of this.resolvedParams) {
-      if (!this.params.has(p.id)) this.params.set(p.id, p.default);
-      if (!this.targetParams.has(p.id)) this.targetParams.set(p.id, p.default);
+      this.params.set(p.id, p.default);
+      this.targetParams.set(p.id, p.default);
     }
   }
 

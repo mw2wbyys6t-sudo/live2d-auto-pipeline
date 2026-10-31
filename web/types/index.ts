@@ -229,7 +229,8 @@ export interface Model3Json {
   }>;
   HitAreas?: Array<{ Id: string; Name: string }>;
   Layout?: Record<string, number>;
-  Parameters?: Array<{ Id: string; Min?: number; Max?: number; Default?: number }>;
+  /** ``Value`` 是 Cubism 语义里的静止姿态（导出端写的就是它）。 */
+  Parameters?: Array<{ Id: string; Min?: number; Max?: number; Value?: number; Default?: number }>;
   Deformers?: Array<Record<string, unknown>>;
   PreviewLayers?: Array<{
     Name: string;
