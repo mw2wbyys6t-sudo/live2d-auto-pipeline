@@ -64,6 +64,8 @@ def _mesh_entry(mesh, off_x: float, off_y: float) -> Dict[str, Any]:
         "indices": [int(i) for tri in mesh.triangles for i in tri],
         "drawOrder": float(mesh.draw_order),
         "opacity": float(mesh.opacity),
+        # 图集页号：前端要把每个网格贴到正确的贴图上，缺了它整张脸会贴错页。
+        "texture": int(mesh.texture_index),
         "deformer": str(mesh.deformer_id or ""),
     }
     axes = _axes_of(mesh)
@@ -81,9 +83,78 @@ def _mesh_entry(mesh, off_x: float, off_y: float) -> Dict[str, Any]:
     return entry
 
 
+def _bracket(keys: Sequence[float], value: float) -> tuple:
+    """升序键值表中 value 的夹取区间：(低下标, 高下标, 高键权重)。"""
+    n = len(keys)
+    if n <= 1 or value <= keys[0]:
+        return 0, 0, 0.0
+    if value >= keys[-1]:
+        return n - 1, n - 1, 0.0
+    lo, hi = 0, n - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if keys[mid] <= value:
+            lo = mid
+        else:
+            hi = mid
+    span = keys[hi] - keys[lo]
+    return lo, hi, ((value - keys[lo]) / span if span else 0.0)
+
+
+def _grid_at_defaults(deformer: WarpDeformerSpec,
+                      defaults: Dict[str, float]) -> Sequence[Sequence[float]]:
+    """按默认参数值插值出的变形器网格（前端据此换算 (u, v) 的静止矩形）。
+
+    不能直接拿 ``grids[0]``：那是**第一个键**的网格，不是静止姿态。实测
+    （singer 的 ShoulderLift_R：键 -1/0/1）用它当基准，默认姿态下每个顶点都
+    被平移约 57px —— 角色一站上去就是歪的。
+    """
+    if len(deformer.grids) == 1:
+        return deformer.grids[0].points
+    axes = [list(axis) for axis in deformer.axes_spec]
+    if not axes:
+        return deformer.grids[0].points
+
+    brackets = []
+    for pid, keys in axes:
+        value = float(defaults.get(str(pid), 0.0))
+        brackets.append(_bracket([float(k) for k in keys], value))
+
+    corners: List[tuple] = []
+    strides: List[int] = []
+    stride = 1
+    for _pid, keys in axes:
+        strides.append(stride)
+        stride *= len(keys)
+
+    def walk(axis: int, index: int, weight: float) -> None:
+        if weight <= 0:
+            return
+        if axis == len(axes):
+            corners.append((index, weight))
+            return
+        lo, hi, w = brackets[axis]
+        step = strides[axis]
+        walk(axis + 1, index + lo * step, weight * (1.0 - w))
+        if hi != lo:
+            walk(axis + 1, index + hi * step, weight * w)
+
+    walk(0, 0, 1.0)
+    points = deformer.grids[0].points
+    out = [[0.0, 0.0] for _ in points]
+    for index, weight in corners:
+        grid = deformer.grids[index] if index < len(deformer.grids) else None
+        if grid is None:
+            continue
+        for k, (x, y) in enumerate(grid.points):
+            out[k][0] += float(x) * weight
+            out[k][1] += float(y) * weight
+    return out
+
+
 def _deformer_entry(deformer: WarpDeformerSpec, off_x: float,
-                    off_y: float) -> Dict[str, Any]:
-    rest = deformer.grids[0].points
+                    off_y: float, defaults: Dict[str, float]) -> Dict[str, Any]:
+    rest = _grid_at_defaults(deformer, defaults)
     xs = [float(p[0]) for p in rest]
     ys = [float(p[1]) for p in rest]
     return {
@@ -115,6 +186,7 @@ def build_bindings_document(spec: RigSpec) -> Dict[str, Any]:
     if skipped_rotation:
         log.info(f"rotation 变形器不导出到 bindings（当前全为静态姿态）："
                  f"{skipped_rotation}")
+    defaults = {str(p.parameter_id): float(p.default) for p in spec.parameters}
 
     return {
         "version": BINDINGS_VERSION,
@@ -129,7 +201,7 @@ def build_bindings_document(spec: RigSpec) -> Dict[str, Any]:
             for p in spec.parameters
         ],
         "meshes": [_mesh_entry(m, off_x, off_y) for m in spec.meshes],
-        "deformers": [_deformer_entry(d, off_x, off_y) for d in warps],
+        "deformers": [_deformer_entry(d, off_x, off_y, defaults) for d in warps],
         "skippedRotationDeformers": skipped_rotation,
     }
 

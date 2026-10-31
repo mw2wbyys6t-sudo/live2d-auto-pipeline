@@ -28,6 +28,7 @@ def _mouth_mesh() -> MeshSpec:
         triangles=[[0, 1, 2], [0, 2, 3]],
         uvs=[[0.1, 0.2], [0.3, 0.2], [0.3, 0.4], [0.1, 0.4]],
         draw_order=2.0,
+        texture_index=1,
         part_id="Part_mouth",
         deformer_id="MouthOpen",
         keyform_axes=[("ParamMouthOpenY", (0.0, 1.0))],
@@ -96,6 +97,8 @@ def test_bindings_are_written_in_layer_image_coordinates(tmp_path):
     assert mesh["uvs"] == [0.1, 0.2, 0.3, 0.2, 0.3, 0.4, 0.1, 0.4]
     assert mesh["indices"] == [0, 1, 2, 0, 2, 3]
     assert mesh["drawOrder"] == 2.0
+    # 缺了图集页号，前端只有 UV 不知道该把网格贴到哪张贴图上。
+    assert mesh["texture"] == 1
     assert mesh["deformer"] == "MouthOpen"
 
     refs = json.loads(manifest.read_text(encoding="utf-8"))["FileReferences"]
@@ -131,6 +134,41 @@ def test_deformer_rest_rect_comes_from_the_rest_grid(tmp_path):
         [100.0, 60.0, 150.0, 60.0, 100.0, 100.0, 150.0, 100.0],
         [100.0, 60.0, 150.0, 60.0, 100.0, 110.0, 150.0, 110.0],
     ]
+
+
+def test_deformer_rest_comes_from_the_default_pose_not_the_first_key(tmp_path):
+    """静止矩形必须按**默认参数值**插值：拿 grids[0] 会把默认姿态整体搬走。
+
+    实测依据：singer 的 ShoulderLift_R 键值为 -1/0/1，用 grids[0]（-1 那个）当
+    基准时，默认姿态下网格被平移约 57px，角色一站上去就是歪的。
+    """
+    _manifest(tmp_path)
+    shifted = DeformerGrid(-1.0, [[0.0, 0.0], [50.0, 0.0],
+                                  [0.0, 40.0], [50.0, 40.0]])
+    rest = DeformerGrid(0.0, [[0.0, 10.0], [50.0, 10.0],
+                              [0.0, 50.0], [50.0, 50.0]])
+    lifted = DeformerGrid(1.0, [[0.0, 20.0], [50.0, 20.0],
+                                [0.0, 60.0], [50.0, 60.0]])
+    deformer = WarpDeformerSpec(
+        deformer_id="ShoulderLift_R",
+        rows=1, cols=1,
+        grids=[shifted, rest, lifted],
+        axes=(("ParamShoulderR", (-1.0, 0.0, 1.0)),),
+    )
+    spec = _spec(deformers=[deformer])
+    spec = RigSpec(
+        meshes=spec.meshes,
+        parameters=[ParameterSpec("ParamMouthOpenY", 0.0, 1.0, 0.0),
+                    ParameterSpec("ParamShoulderR", -1.0, 1.0, 0.0)],
+        canvas_width=200.0,
+        canvas_height=100.0,
+        deformers=spec.deformers,
+    )
+    doc = json.loads(
+        write_bindings(spec, str(tmp_path), "char").read_text(encoding="utf-8"))
+
+    # 默认键是 0 那个网格：rest = (100,60)-(150,100)（加半画布平移）
+    assert doc["deformers"][0]["rest"] == [100.0, 60.0, 150.0, 100.0]
 
 
 def test_rotation_deformers_are_not_exported(tmp_path):

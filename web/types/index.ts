@@ -219,6 +219,8 @@ export interface Model3Json {
     Physics?: string;
     Expressions?: Array<{ Name: string; File: string }>;
     Motions?: Record<string, Array<{ File: string; FadeInTime?: number; FadeOutTime?: number }>>;
+    /** 编译后绑定表（自研渲染器的形变数据源）。 */
+    Bindings?: string;
   };
   Groups?: Array<{
     Target: string;

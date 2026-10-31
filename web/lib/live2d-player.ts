@@ -1,4 +1,13 @@
-import { Application, Container, Mesh, MeshMaterial, PlaneGeometry, Texture, Assets } from 'pixi.js';
+import {
+  Application,
+  Container,
+  Mesh,
+  MeshGeometry,
+  MeshMaterial,
+  PlaneGeometry,
+  Texture,
+  Assets,
+} from 'pixi.js';
 import type { Model3Json, ParameterDef } from '../types';
 import {
   STANDARD_PARAMS,
@@ -7,6 +16,15 @@ import {
   resolveParameters,
   type ParameterBounds,
 } from './live2d-params';
+import {
+  applyDeformerChain,
+  blendFlat,
+  blendScalar,
+  keyformTerms,
+  type BindingsDeformer,
+  type BindingsDocument,
+  type BindingsMesh,
+} from './live2d-bindings';
 
 export type PartGroup = 'hair' | 'face' | 'eyes' | 'mouth' | 'body' | 'other';
 
@@ -38,6 +56,46 @@ interface LayerEntry {
   contentBounds: ContentBounds | null;
 }
 
+/** 一个美术网格：绑定表里的一条 meshes 记录 + 它自己的顶点缓冲。 */
+interface ArtMeshEntry {
+  id: string;
+  mesh: Mesh;
+  geometry: MeshGeometry;
+  /** 实时顶点（局部坐标，画布中心为原点）。 */
+  positions: Float32Array;
+  /** 静止顶点（局部坐标）。 */
+  rest: Float32Array;
+  /** 键形顶点（局部坐标），与 `keyforms.axes` 一一对应。 */
+  keyformVertices: Float32Array[] | null;
+  keyformOpacities: number[] | null;
+  axes: Array<[string, number[]]>;
+  baseOpacity: number;
+  deformerId: string;
+  /** 每帧复用的顶点混合缓冲，避免抖动回收。 */
+  scratch: Float32Array | null;
+}
+
+interface WarpEntry {
+  spec: BindingsDeformer;
+  /** 键形控制点（局部坐标）。 */
+  grids: Float32Array[];
+  axes: Array<[string, number[]]>;
+  /** 每帧复用的网格混合缓冲。 */
+  scratch: Float32Array | null;
+  /** 本帧求值结果。 */
+  current: Float32Array | null;
+}
+
+/** 扁平 [x,y,...] 图像坐标 -> 局部坐标 Float32Array（减去画布半宽/半高）。 */
+function offsetFlat(values: readonly number[], dx: number, dy: number): Float32Array {
+  const out = new Float32Array(values.length);
+  for (let i = 0; i + 1 < values.length; i += 2) {
+    out[i] = values[i] + dx;
+    out[i + 1] = values[i + 1] + dy;
+  }
+  return out;
+}
+
 export interface Live2DPlayerOptions {
   backgroundColor?: number;
   backgroundAlpha?: number;
@@ -51,12 +109,13 @@ export interface Live2DPlayerOptions {
 const PLANE_SEGMENTS = 5;
 
 /**
- * Browser-side Live2D-like player using PixiJS.
+ * Browser-side Live2D player using PixiJS.
  *
- * Layers are rendered as deformable 4x4 {@link PlaneGeometry} meshes (not
- * flat sprites), so head turn and mouth open/smile are driven by real
- * vertex displacement each frame. This is a lightweight preview/debug
- * renderer rather than the full Cubism SDK runtime.
+ * 两种渲染模式：
+ * - **绑定模式**（有 `FileReferences.Bindings`）：按导出期的真实美术网格、
+ *   多轴键形与 warp 变形器逐帧摆顶点，参数与官方内核用的是同一份绑定表；
+ * - **预览层兜底**（老产物没有 bindings.json）：每层一张整画布平面 + 手写启发
+ *   形变，只能看个大概。兜底保留是为了旧包还能打开，不是为了替代前者。
  */
 export class Live2DPlayer {
   private app: Application | null = null;
@@ -66,6 +125,10 @@ export class Live2DPlayer {
   private readonly options: Live2DPlayerOptions;
   private root: Container | null = null;
   private layers: LayerEntry[] = [];
+  private artMeshes: ArtMeshEntry[] = [];
+  private warps: Map<string, WarpEntry> = new Map();
+  /** 绑定模式的画布尺寸（图像坐标原点的换算基准）。 */
+  private canvasSize: { width: number; height: number } | null = null;
   private params: Map<string, number> = new Map();
   private targetParams: Map<string, number> = new Map();
   /** 参数清单：模型声明优先，缺失时退回标准表（供 UI / 校验页读取）。 */
@@ -100,52 +163,57 @@ export class Live2DPlayer {
   }
 
   async loadModel(modelUrl: string): Promise<void> {
-    this.destroy();
     this._generation++;
-    // destroy() 会清空参数表；重新载入后必须恢复标准参数默认值，
+    // 只清场景，**不销毁 renderer**：一个 <canvas> 只能有一个 WebGL 上下文，
+    // 销毁后在同一个 canvas 上重建会拿到失效上下文（checkMaxIfStatementsInShader(0)），
+    // 预览从此永久空白。换模型换的是舞台内容，不是渲染器。
+    this.clearScene();
+    // clearScene() 会清空参数表；重新载入后必须恢复标准参数默认值，
     // 否则 update() 的插值循环没有可动参数，角色只会停在静止姿态。
     for (const p of STANDARD_PARAMS) {
       this.params.set(p.id, p.default);
       this.targetParams.set(p.id, p.default);
     }
     const generation = this._generation;
-    let app: Application;
-    try {
-      const viewW =
-        this.canvas.clientWidth || this.canvas.width || 512;
-      const viewH =
-        this.canvas.clientHeight || this.canvas.height || 512;
-      app = new Application({
-        view: this.canvas,
-        width: viewW,
-        height: viewH,
-        backgroundColor: this.options.backgroundColor,
-        backgroundAlpha: this.options.backgroundAlpha,
-        antialias: this.options.antialias,
-        resolution: this.options.resolution,
-        autoDensity: true,
-        autoStart: false,
-      });
-    } catch (err) {
-      throw new Error(
-        `WebGL is not available in this browser, cannot initialise the renderer: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
+    const viewW = this.canvas.clientWidth || this.canvas.width || 512;
+    const viewH = this.canvas.clientHeight || this.canvas.height || 512;
+    let app = this.app;
     if (!app || !app.renderer) {
-      throw new Error('PixiJS renderer failed to initialise (no WebGL context).');
+      try {
+        app = new Application({
+          view: this.canvas,
+          width: viewW,
+          height: viewH,
+          backgroundColor: this.options.backgroundColor,
+          backgroundAlpha: this.options.backgroundAlpha,
+          antialias: this.options.antialias,
+          resolution: this.options.resolution,
+          autoDensity: true,
+          autoStart: false,
+        });
+      } catch (err) {
+        throw new Error(
+          `WebGL is not available in this browser, cannot initialise the renderer: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      if (!app || !app.renderer) {
+        throw new Error('PixiJS renderer failed to initialise (no WebGL context).');
+      }
+      this.app = app;
+    } else if (viewW > 0 && viewH > 0) {
+      app.renderer.resize(viewW, viewH);
     }
-    this.app = app;
     this.root = new Container();
     app.stage.addChild(this.root);
 
     try {
       await this.loadModel3(modelUrl);
     } catch (err) {
-      // Clean up the half-initialised app on failure so destroy()/retry work.
+      // 失败时只清场景：renderer 留着，重试或换模型还能用同一个上下文。
       if (generation === this._generation) {
-        this.destroy();
+        this.clearScene();
       }
       throw err;
     }
@@ -158,6 +226,30 @@ export class Live2DPlayer {
     }
   }
 
+  /**
+   * 清空当前模型的舞台与内部状态，保留 renderer。
+   * 贴图交给 Assets 缓存管理，这里不销毁，否则同一 canvas 换模型时会重复解码。
+   */
+  private clearScene(): void {
+    this.stop();
+    if (this.root) {
+      this.root.destroy({ children: true });
+      this.root = null;
+    }
+    this.app?.stage.removeChildren();
+    this.layers = [];
+    this.artMeshes = [];
+    this.warps.clear();
+    this.canvasSize = null;
+    this.params.clear();
+    this.targetParams.clear();
+    this.expressions.clear();
+    this.currentExpression = 'default';
+    this.resolvedParams = STANDARD_PARAMS.map((p) => ({ ...p }));
+    this.bounds = resolveBounds(null);
+    this.model3 = null;
+  }
+
   private async loadModel3(modelUrl: string): Promise<void> {
     const app = this.app;
     if (!app || !app.renderer) {
@@ -168,11 +260,35 @@ export class Live2DPlayer {
     const res = await fetch(modelUrl);
     if (!res.ok) throw new Error(`Failed to load model3.json: ${res.status}`);
     const model3 = (await res.json()) as Model3Json;
+    // 每个 await 之后都要重新确认自己还是当前这一代：React 严格模式的双挂载
+    // 或快速换模型会在 fetch 期间 destroy()，此时 app/renderer 已经是 null。
+    if (generation !== this._generation || !this.app || !this.app.renderer) {
+      return;
+    }
     this.model3 = model3;
     this._applyModelParameters(model3);
 
     const cx = (app.renderer.width / (this.options.resolution || 1)) / 2;
     const cy = (app.renderer.height / (this.options.resolution || 1)) / 2;
+
+    // 绑定模式优先：只有它能让参数真的驱动几何。预览层兜底在老产物（无
+    // bindings.json）上仍可用，但那是整画布平面的近似形变，不是模型本身。
+    const bindingsFile = model3.FileReferences.Bindings;
+    if (bindingsFile) {
+      try {
+        await this.loadBindingsModel(model3, baseUrl, bindingsFile, cx, cy);
+        if (generation !== this._generation) return;
+        if (this.artMeshes.length > 0) {
+          this._fitLayers();
+          return;
+        }
+        // eslint-disable-next-line no-console
+        console.warn('bindings.json 里没有可用网格，退回预览层渲染');
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('绑定渲染初始化失败，退回预览层渲染:', err);
+      }
+    }
 
     // Prefer per-layer preview textures (full-canvas PNGs that stack into a
     // coherent character and can be deformed per part). Fall back to the
@@ -234,6 +350,143 @@ export class Live2DPlayer {
   }
 
   /**
+   * 绑定模式：按 `{name}.bindings.json` 建真实美术网格。
+   *
+   * 顶点换到**局部坐标**（画布中心为原点）后一次性算好；键形与变形器网格同样
+   * 换算。逐帧只做插值 + 写缓冲，不再碰坐标换算。
+   */
+  private async loadBindingsModel(
+    model3: Model3Json,
+    baseUrl: string,
+    bindingsFile: string,
+    cx: number,
+    cy: number,
+  ): Promise<void> {
+    const url = bindingsFile.startsWith('http')
+      ? bindingsFile
+      : baseUrl + bindingsFile;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to load bindings.json: ${res.status}`);
+    const doc = (await res.json()) as BindingsDocument;
+    if (!doc || doc.version !== 1) {
+      throw new Error(`Unsupported bindings version: ${doc?.version}`);
+    }
+    if (!Array.isArray(doc.meshes) || doc.meshes.length === 0) return;
+    if (!this.app || !this.root) return;
+
+    const canvasW = doc.canvas?.width || 1;
+    const canvasH = doc.canvas?.height || 1;
+    const halfW = canvasW / 2;
+    const halfH = canvasH / 2;
+    this.canvasSize = { width: canvasW, height: canvasH };
+
+    // bindings 能驱动但 model3.json 没声明的参数，用绑定表里的默认值补齐。
+    for (const p of doc.parameters || []) {
+      if (!this.params.has(p.id)) {
+        this.params.set(p.id, p.default);
+        this.targetParams.set(p.id, p.default);
+      }
+    }
+
+    const textureFiles = model3.FileReferences.Textures || [];
+    const pages: Texture[] = [];
+    for (const file of textureFiles) {
+      const texUrl = file.startsWith('http') ? file : baseUrl + file;
+      pages.push((await Assets.load(texUrl)) as Texture);
+      if (!this.app || !this.root) return;
+    }
+    if (pages.length === 0) {
+      throw new Error('bindings 渲染需要至少一张图集贴图');
+    }
+
+    for (const spec of doc.deformers || []) {
+      // rest 决定顶点在网格里的 u/v；控制点已经搬到局部坐标，rest 不跟着搬
+      // 就会把所有点算到网格外，整张网格塌成一个点。
+      const localSpec: BindingsDeformer = {
+        ...spec,
+        rest: [
+          spec.rest[0] - halfW,
+          spec.rest[1] - halfH,
+          spec.rest[2] - halfW,
+          spec.rest[3] - halfH,
+        ],
+      };
+      this.warps.set(spec.id, {
+        spec: localSpec,
+        grids: spec.grids.map((g) => offsetFlat(g, -halfW, -halfH)),
+        axes: spec.axes || [],
+        scratch: null,
+        current: null,
+      });
+    }
+
+    // 层序以 drawOrder 为准：图集网格不是按目录顺序画出来的。
+    const ordered = doc.meshes
+      .map((m, index) => ({ m, index }))
+      .sort((a, b) => a.m.drawOrder - b.m.drawOrder || a.index - b.index);
+    const root = this.root;
+    if (!root) return;
+    for (const { m } of ordered) {
+      const entry = this.createArtMesh(m, pages, cx, cy, halfW, halfH);
+      root.addChild(entry.mesh);
+      this.artMeshes.push(entry);
+    }
+  }
+
+  /** 一条 meshes 记录 -> 一个可逐帧改顶点的 Pixi Mesh。 */
+  private createArtMesh(
+    spec: BindingsMesh,
+    pages: Texture[],
+    cx: number,
+    cy: number,
+    halfW: number,
+    halfH: number,
+  ): ArtMeshEntry {
+    const rest = offsetFlat(spec.vertices, -halfW, -halfH);
+    const positions = new Float32Array(rest);
+    const uvs = new Float32Array(spec.uvs);
+    let maxIndex = 0;
+    for (const i of spec.indices) if (i > maxIndex) maxIndex = i;
+    const indices =
+      maxIndex > 65535
+        ? new Uint32Array(spec.indices)
+        : new Uint16Array(spec.indices);
+    // Pixi v7 的 Buffer 类型早于 TS 5.7 的 ArrayBuffer 泛型，直接传 TypedArray
+    // 会报类型不符；这里必须传**同一份**数组本体（不能转成普通数组，否则
+    // 逐帧改动的位置写不进 GPU 缓冲）。
+    const geometry = new MeshGeometry(
+      positions as unknown as ArrayBuffer,
+      uvs as unknown as ArrayBuffer,
+      indices as unknown as ArrayBuffer,
+    );
+    const page = pages[spec.texture] ?? pages[0];
+    const material = new MeshMaterial(page ?? Texture.WHITE);
+    const mesh = new Mesh(geometry, material);
+    mesh.x = cx;
+    mesh.y = cy;
+    mesh.alpha = typeof spec.opacity === 'number' ? spec.opacity : 1;
+
+    const keyforms = spec.keyforms;
+    return {
+      id: spec.id,
+      mesh,
+      geometry,
+      positions,
+      rest,
+      keyformVertices: keyforms
+        ? keyforms.vertices.map((v) => offsetFlat(v, -halfW, -halfH))
+        : null,
+      keyformOpacities: keyforms?.opacities
+        ? keyforms.opacities.slice()
+        : null,
+      axes: (keyforms?.axes ?? []) as Array<[string, number[]]>,
+      baseOpacity: typeof spec.opacity === 'number' ? spec.opacity : 1,
+      deformerId: spec.deformer || '',
+      scratch: null,
+    };
+  }
+
+  /**
    * Uniformly scale all layer meshes so the composed character fits the
    * canvas. Layer textures are full-canvas (often larger than the viewport),
    * so without this the character would overflow. Scaling is applied to the
@@ -241,19 +494,28 @@ export class Live2DPlayer {
    * and therefore scale consistently.
    */
   private _fitLayers(): void {
-    if (!this.layers.length || !this.app) return;
+    if (!this.app) return;
+    if (!this.layers.length && !this.artMeshes.length) return;
     const viewW = this.app.renderer.width / (this.options.resolution || 1);
     const viewH = this.app.renderer.height / (this.options.resolution || 1);
     let maxW = 0;
     let maxH = 0;
-    for (const l of this.layers) {
-      maxW = Math.max(maxW, l.texWidth);
-      maxH = Math.max(maxH, l.texHeight);
+    if (this.canvasSize) {
+      maxW = this.canvasSize.width;
+      maxH = this.canvasSize.height;
+    } else {
+      for (const l of this.layers) {
+        maxW = Math.max(maxW, l.texWidth);
+        maxH = Math.max(maxH, l.texHeight);
+      }
     }
     if (maxW <= 0 || maxH <= 0) return;
     const fit = Math.min(viewW / maxW, viewH / maxH) * 0.95;
     for (const l of this.layers) {
       l.mesh.scale.set(fit, fit);
+    }
+    for (const a of this.artMeshes) {
+      a.mesh.scale.set(fit, fit);
     }
   }
 
@@ -432,12 +694,16 @@ export class Live2DPlayer {
   // --- Validation introspection (used by the Validate tab) ---
 
   get layersLoaded(): number {
-    return this.layers.length;
+    return this.artMeshes.length || this.layers.length;
   }
 
   get hasMeshGeometry(): boolean {
-    // This renderer always uses PlaneGeometry meshes.
-    return this.layers.length > 0;
+    return this.artMeshes.length > 0 || this.layers.length > 0;
+  }
+
+  /** 当前是否跑在真实绑定（美术网格 + 键形 + 变形器）模式。 */
+  get usesBindings(): boolean {
+    return this.artMeshes.length > 0;
   }
 
   get paramsCount(): number {
@@ -452,6 +718,12 @@ export class Live2DPlayer {
         count += idx.length / 3;
       }
     }
+    for (const art of this.artMeshes) {
+      const idx = art.geometry.indexBuffer?.data;
+      if (idx && idx.length) {
+        count += idx.length / 3;
+      }
+    }
     return Math.floor(count);
   }
 
@@ -462,6 +734,10 @@ export class Live2DPlayer {
     for (const layer of this.layers) {
       layer.baseX = width / 2;
       layer.baseY = height / 2;
+    }
+    for (const art of this.artMeshes) {
+      art.mesh.x = width / 2;
+      art.mesh.y = height / 2;
     }
     this._fitLayers();
   }
@@ -495,6 +771,115 @@ export class Live2DPlayer {
       this.params.set(key, next);
     });
 
+    if (this.artMeshes.length > 0) {
+      this.updateArtMeshes();
+    } else {
+      this.updatePreviewLayers();
+    }
+
+    this._frames++;
+    const now = performance.now();
+    if (now - this._lastFpsTime >= 1000) {
+      this._fps = Math.round(
+        (this._frames * 1000) / (now - this._lastFpsTime),
+      );
+      this._frames = 0;
+      this._lastFpsTime = now;
+    }
+
+    for (const cb of this.frameCallbacks) {
+      try {
+        cb();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('Frame callback error:', err);
+      }
+    }
+  }
+
+  /**
+   * 真实形变：先按参数把键形插值成顶点，再让每个点穿过它所属的 warp 变形器
+   * 链，最后写进 GPU 缓冲。参数缺省为 0 与内核一致；越界由 bracketKeys 夹边。
+   */
+  private updateArtMeshes(): void {
+    const resolve = (id: string): number => this.params.get(id) ?? 0;
+    const point = { x: 0, y: 0 };
+
+    // 变形器一帧只求一次：同一张网格可能被多个美术网格共享。
+    for (const warp of this.warps.values()) {
+      const rest = warp.grids[0];
+      if (!rest) continue;
+      const terms = keyformTerms(warp.axes, resolve);
+      if (!warp.current || warp.current.length !== rest.length) {
+        warp.current = new Float32Array(rest.length);
+      }
+      if (terms.length === 0) {
+        warp.current.set(rest);
+      } else if (terms.length === 1) {
+        warp.current.set(warp.grids[terms[0].index] ?? rest);
+      } else {
+        if (!warp.scratch || warp.scratch.length !== rest.length) {
+          warp.scratch = new Float32Array(rest.length);
+        }
+        blendFlat(terms, warp.grids, warp.current);
+      }
+    }
+    const deformerById = (id: string): BindingsDeformer | undefined =>
+      this.warps.get(id)?.spec;
+    const gridOf = (d: BindingsDeformer): Float32Array =>
+      this.warps.get(d.id)?.current ?? new Float32Array(0);
+
+    for (const entry of this.artMeshes) {
+      const positions = entry.positions;
+      const terms =
+        entry.keyformVertices && entry.axes.length
+          ? keyformTerms(entry.axes, resolve)
+          : [];
+
+      if (terms.length === 0 || !entry.keyformVertices) {
+        positions.set(entry.rest);
+      } else if (terms.length === 1) {
+        positions.set(entry.keyformVertices[terms[0].index] ?? entry.rest);
+      } else {
+        if (!entry.scratch || entry.scratch.length !== positions.length) {
+          entry.scratch = new Float32Array(positions.length);
+        }
+        blendFlat(terms, entry.keyformVertices, positions);
+      }
+
+      const warp = entry.deformerId
+        ? this.warps.get(entry.deformerId)
+        : undefined;
+      if (warp) {
+        for (let i = 0; i < positions.length; i += 2) {
+          applyDeformerChain(
+            positions[i],
+            positions[i + 1],
+            warp.spec,
+            deformerById,
+            gridOf,
+            point,
+          );
+          positions[i] = point.x;
+          positions[i + 1] = point.y;
+        }
+      }
+
+      entry.mesh.alpha =
+        entry.keyformOpacities && terms.length
+          ? blendScalar(terms, entry.keyformOpacities)
+          : entry.baseOpacity;
+
+      const buffer = entry.geometry.getBuffer('aVertexPosition');
+      buffer.update();
+    }
+  }
+
+  /**
+   * 预览层兜底：整画布平面 + 手写启发式形变。只有老产物（没有 bindings.json）
+   * 会走到这里，参数拨动时只是近似位移，不代表模型真实绑定。
+   */
+  private updatePreviewLayers(): void {
     const angleX = this.params.get('ParamAngleX') ?? 0;
     const angleY = this.params.get('ParamAngleY') ?? 0;
     const angleZ = this.params.get('ParamAngleZ') ?? 0;
@@ -593,25 +978,6 @@ export class Live2DPlayer {
 
       geometry.getBuffer('aVertexPosition').update();
     }
-
-    this._frames++;
-    const now = performance.now();
-    if (now - this._lastFpsTime >= 1000) {
-      this._fps = Math.round(
-        (this._frames * 1000) / (now - this._lastFpsTime),
-      );
-      this._frames = 0;
-      this._lastFpsTime = now;
-    }
-
-    for (const cb of this.frameCallbacks) {
-      try {
-        cb();
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('Frame callback error:', err);
-      }
-    }
   }
 
   onFrame(callback: () => void): void {
@@ -625,25 +991,16 @@ export class Live2DPlayer {
 
   destroy(): void {
     this._generation++;
-    this.stop();
     // frameCallbacks 属于播放器持有者（ModelCanvas 在构造时注册一次），
-    // 而 destroy() 也会被 loadModel 当作「换模型前的复位」调用。
-    // 在这里清空会让 onFrame 在首次加载后静默失效（帧率恒为 0）。
-    this.layers = [];
-    this.params.clear();
-    this.targetParams.clear();
-    this.expressions.clear();
-    this.resolvedParams = STANDARD_PARAMS.map((p) => ({ ...p }));
-    this.bounds = resolveBounds(null);
+    // 这里不清空：清掉会让 onFrame 在首次加载后静默失效（帧率恒为 0）。
+    this.clearScene();
     if (this.app) {
-      // removeView=false：<canvas> 由 React 持有，Pixi 不能把它从 DOM 里摘走；
-      // 也不强制丢上下文 —— 否则换模型时在同一个 canvas 上重建渲染器会拿到
-      // 一个失效上下文（WebGL 初始化报 checkMaxIfStatementsInShader(0)）。
+      // removeView=false：<canvas> 由 React 持有，Pixi 不能把它从 DOM 里摘走。
+      // 实例销毁后这个 canvas 上的 WebGL 上下文不再复用 —— 调用方要么换新
+      // canvas，要么保留同一个 player（loadModel 会复用 renderer）。
       this.app.destroy(false, { children: true, texture: true, baseTexture: true });
       this.app = null;
     }
-    this.root = null;
-    this.model3 = null;
   }
 
   get stage(): Container | null {
