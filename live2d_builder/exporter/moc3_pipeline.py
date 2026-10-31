@@ -1267,6 +1267,88 @@ def _attach_capabilities(output_dir: str, character_name: str,
                     encoding="utf-8")
 
 
+def write_idle_motion(output_dir: str, character_name: str,
+                      driven: Dict[str, List[float]]) -> List[str]:
+    """按**编译后**的权威可驱动集合生成 idle 动作，并回写清单。
+
+    为什么必须在 moc3 编译之后、而不是在导出 model3.json 时顺手生成：
+    导出期只有编译前的 :func:`drivable_parameters`，它只认「单轴 Z 网格键形」，
+    看不见 warp 变形器的参数带。实测（2026-10-31，本机 singer 包）因此
+    moc3 自称能驱动 27 个参数、idle 却只给 `ParamBodyAngleZ` 排了 1 条曲线 ——
+    角色在播放器里只摆身子，没有呼吸、没有发摆、没有口型。
+
+    写在这里还保住一条不变式：本函数跑在 motion 验收**之前**，而验收读的是
+    磁盘上的清单（:func:`_declares_motions`），所以「verified=True」背书的就是
+    最终交付的那份 motion，不是一份已被替换的旧文件。
+
+    physics3 的**输出**参数一律排除。实测（2026-10-31 重导 singer）把它们也排进
+    曲线时，官方内核逐帧对账直接判失败：``动到的参数 27/27，逐帧超限的曲线
+    ['ParamBodySway', 'ParamHairSwing']`` —— 内核先按 motion 写值、物理再覆写，
+    实测值对不上文件值。这两个参数本来就该由物理驱动（头发/裙摆的惯性摆动），
+    它们的输入 AngleX/AngleY/BodyAngleY 已由 motion 排了曲线，摆动链是完整的。
+    """
+    from live2d_builder.motion.motion3 import Motion3Builder
+
+    out = Path(output_dir)
+    manifest_path = out / f"{character_name}.model3.json"
+    if not manifest_path.is_file():
+        return []
+
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        log.warning(f"回写 motion 清单失败（读不到 model3.json）: {exc}")
+        return []
+
+    physics_outputs = _physics_output_parameters(out, data)
+    animatable = {pid: values for pid, values in (driven or {}).items()
+                  if pid not in physics_outputs}
+    if physics_outputs and len(animatable) != len(driven or {}):
+        skipped = sorted(set(driven or {}) - set(animatable))
+        if skipped:
+            log.info(f"physics 负责的参数不排 motion 曲线（避免双写）：{skipped}")
+
+    builder = Motion3Builder()
+    document = builder.build_idle(animatable)
+    if document is None:
+        # 没有任何可驱动参数：不产出 motion 文件，清单里的 Motions 保持空。
+        # 给动不了的参数排曲线会得到「文件齐全但画面一动不动」的假产物。
+        return []
+    manifest = builder.export_to_directory(str(out), character_name, {"idle": document})
+
+    data.setdefault("FileReferences", {})["Motions"] = manifest
+    manifest_path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                             encoding="utf-8")
+    files = [str(out / entry["File"])
+             for entries in manifest.values() for entry in entries]
+    if files:
+        log.success(f"idle 动作已按权威可驱动集合生成："
+                    f"{len((document.get('Curves') or []))} 条曲线 -> {len(files)} 个文件")
+    return files
+
+
+def _physics_output_parameters(output_dir: Path, manifest_doc: Dict[str, Any]) -> set:
+    """清单引用的 physics3 里所有**输出**参数 id。
+
+    读不到文件就返回空集：宁可多排几条曲线让验收去拦，也不要静默少排 ——
+    少排的表现是「角色一动不动」，和当初 27 个参数只动 1 个是同一个病。
+    """
+    physics_file = ((manifest_doc.get("FileReferences") or {}).get("Physics") or "")
+    if not physics_file:
+        return set()
+    try:
+        physics = json.loads((output_dir / physics_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    outputs = set()
+    for setting in physics.get("PhysicsSettings") or []:
+        for out in setting.get("Output") or []:
+            dest = out.get("Destination") or {}
+            if dest.get("Target") == "Parameter" and dest.get("Id"):
+                outputs.add(str(dest["Id"]))
+    return outputs
+
+
 def compile_export_moc3(
     builder_result: Dict[str, Any],
     atlas_uvs: Dict[str, Dict[str, float]],
@@ -1319,6 +1401,8 @@ def compile_export_moc3(
     driven = driven_parameters(spec)
     result["driven_parameters"] = driven
     _attach_capabilities(output_dir, character_name, driven)
+    # motion 必须在拿到权威集合之后生成，且在下面的 motion 验收之前落盘。
+    result["motion_files"] = write_idle_motion(output_dir, character_name, driven)
 
     try:
         doc = compile_static_rig(spec)

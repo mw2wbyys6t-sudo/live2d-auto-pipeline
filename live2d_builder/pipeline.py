@@ -176,14 +176,14 @@ class Live2DBuilder:
             "physics3": self._physics3,
             "layer_opacity": dict(layer_opacity or {}),
         }
-        from live2d_builder.exporter.moc3_pipeline import drivable_parameters
-
         export_result = self.exporter.export(
             builder_result=builder_result,
             output_dir=str(self.output_dir),
             character_name=self.character_name,
-            # motion 只排真有键形驱动的参数，与第 9b 步实际编译出的键形保持一致
-            drivable_parameters=drivable_parameters(builder_result),
+            # motion 不在这里生成：导出期只有编译前的可驱动集合，看不见 warp
+            # 变形器的参数带（实测 singer 包 27 个可驱动参数只排了 1 条曲线）。
+            # 现在由第 9b 步 compile_export_moc3 按权威集合生成，且生成在
+            # motion 验收之前 —— 验收对象等于交付物。
         )
 
         # Step 9b: Compile real moc3 and gate it on official Core acceptance

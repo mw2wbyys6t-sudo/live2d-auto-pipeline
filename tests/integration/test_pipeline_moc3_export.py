@@ -924,3 +924,89 @@ def test_mouth_cavity_shows_when_the_mouth_opens(tmp_path):
     assert closed["ok"] and opened["ok"], (closed["blocker"], opened["blocker"])
     assert opened["opaque_pixels"] > closed["opaque_pixels"], (opened, closed)
     assert opened["alpha_bbox"][1] < closed["alpha_bbox"][1]
+
+
+def _animated_parameters(model3_path: Path) -> set:
+    """读包里 idle 动作真的排了曲线的参数集合。
+
+    清单声明了 motion 但文件缺失/读不动，一律按「没排曲线」处理 —— 那正是
+    我们要防的假产物。
+    """
+    manifest = Path(model3_path)
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    motions = (document.get("FileReferences") or {}).get("Motions") or {}
+    ids = set()
+    for entries in motions.values():
+        for entry in entries:
+            path = manifest.parent / entry["File"]
+            if not path.is_file():
+                continue
+            curve_doc = json.loads(path.read_text(encoding="utf-8"))
+            for curve in curve_doc.get("Curves") or []:
+                if curve.get("Target") == "Parameter":
+                    ids.add(str(curve.get("Id")))
+    return ids
+
+
+def test_idle_motion_covers_every_driven_parameter(tmp_path):
+    """模型自称能驱动的参数，idle 动作必须真的为它们排曲线。
+
+    实测（2026-10-31，本机 singer 包）：moc3 声明 **27** 个可驱动参数，
+    idle 只给 `ParamBodyAngleZ` 排了 **1** 条曲线。根因是排曲线用的是编译前的
+    `drivable_parameters()`（只看单轴 Z 网格键形），漏掉 `driven_parameters()`
+    的第二个来源 —— warp 变形器的参数带。后果：哪怕换上官方内核播放，
+    这个角色也只摆身子，没有呼吸、没有头发摆、没有口型。
+
+    这里用 _expression_rig 造出同一个形状：三个参数全部由 warp 变形器驱动、
+    没有任何单轴网格键形 —— 正是 singer 缺的那一类。
+    """
+    builder_result = _expression_rig(
+        [("ParamMouthOpenY", 0, 1, 0), ("ParamMouthForm", -1, 1, 0),
+         ("ParamMouthSize", -1, 1, 0)],
+        "MouthOpen", "mouth")
+    _, export_result = _export(tmp_path, builder_result)
+    compiled = compile_export_moc3(
+        builder_result=builder_result,
+        atlas_uvs=export_result["atlas_uvs"],
+        output_dir=export_result["output_dir"],
+        character_name="web_preview",
+    )
+
+    driven = set(compiled["driven_parameters"])
+    assert driven == {"ParamMouthOpenY", "ParamMouthForm", "ParamMouthSize"}, (
+        f"夹具前提不成立：模型自称可驱动的参数是 {driven}")
+
+    animated = _animated_parameters(Path(export_result["model3_json"]))
+    assert animated == driven, (
+        f"idle 只排了 {sorted(animated)}，模型却自称能驱动 {sorted(driven)} —— "
+        "这些参数在播放器里一动不动")
+
+
+def test_motion_verified_true_only_when_motion_exists(tmp_path):
+    """motion_verified 必须是对**最终交付的**那份 motion 做的验收。
+
+    验收读的是磁盘上的清单，所以 motion 一旦在验收之后被改写，
+    「verified=True」就只是在为一份已经不存在的文件背书。
+    """
+    builder_result = _expression_rig(
+        [("ParamMouthOpenY", 0, 1, 0), ("ParamMouthForm", -1, 1, 0),
+         ("ParamMouthSize", -1, 1, 0)],
+        "MouthOpen", "mouth")
+    _, export_result = _export(tmp_path, builder_result)
+    compiled = compile_export_moc3(
+        builder_result=builder_result,
+        atlas_uvs=export_result["atlas_uvs"],
+        output_dir=export_result["output_dir"],
+        character_name="web_preview",
+    )
+    assert compiled["moc3_written"] is True, compiled["blocker"]
+
+    animated = _animated_parameters(Path(export_result["model3_json"]))
+    if compiled["motion_verified"] is True:
+        assert animated, "motion_verified=True 却没有任何参数曲线，验收对象不存在"
+    elif compiled["motion_verified"] is None:
+        assert not animated, (
+            f"清单里有 {sorted(animated)} 条曲线却被判「无 motion 可验」，"
+            "说明验收发生在 motion 写出之前")
+    else:
+        pytest.fail(f"motion_verified 意外取值: {compiled['motion_verified']!r}")

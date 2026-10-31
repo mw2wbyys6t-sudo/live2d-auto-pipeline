@@ -1,4 +1,6 @@
 """桥接层：管线数据 -> RigSpec 的坐标/UV/参数映射。"""
+import json
+
 import pytest
 
 from live2d_builder.exporter import moc3_pipeline
@@ -539,3 +541,62 @@ def test_build_rig_spec_attaches_keyforms_from_pipeline_data():
     mesh = spec.meshes[0]
     assert mesh.keyform_parameter_id == "ParamAngleZ"
     assert [s.key_value for s in mesh.keyform_shapes] == [-30.0, 0.0, 30.0]
+
+
+def _write_manifest(tmp_path, physics_file="char.physics3.json"):
+    manifest = tmp_path / "char.model3.json"
+    manifest.write_text(json.dumps({
+        "FileReferences": {"Physics": physics_file},
+    }), encoding="utf-8")
+    return manifest
+
+
+def _motion_curve_ids(tmp_path, manifest):
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    ids = set()
+    for entries in (document.get("FileReferences") or {}).get("Motions", {}).values():
+        for entry in entries:
+            curve_doc = json.loads(
+                (tmp_path / entry["File"]).read_text(encoding="utf-8"))
+            for curve in curve_doc.get("Curves") or []:
+                if curve.get("Target") == "Parameter":
+                    ids.add(str(curve.get("Id")))
+    return ids
+
+
+def test_idle_motion_skips_parameters_owned_by_physics(tmp_path):
+    """physics3 的输出参数不排 motion 曲线 —— 否则内核逐帧对账会判失败。
+
+    实测（2026-10-31 本机 singer 包）：27 条曲线全排上之后，官方内核报
+    ``逐帧超限的曲线 ['ParamBodySway', 'ParamHairSwing']``。机制是 motion 先写值、
+    physics 再覆写，观测值对不上文件值。这两个参数本来就该由物理摆动驱动。
+    """
+    manifest = _write_manifest(tmp_path)
+    (tmp_path / "char.physics3.json").write_text(json.dumps({
+        "PhysicsSettings": [{
+            "Output": [
+                {"Destination": {"Target": "Parameter", "Id": "ParamHairSwing"}},
+                # Target != Parameter 的行不是参数输出，不该被当成排除项
+                {"Destination": {"Target": "Model", "Id": "ParamAngleX"}},
+            ],
+        }],
+    }), encoding="utf-8")
+
+    driven = {"ParamAngleX": [-30.0, 0.0, 30.0],
+              "ParamHairSwing": [-1.0, 0.0, 1.0]}
+    moc3_pipeline.write_idle_motion(str(tmp_path), "char", driven)
+
+    animated = _motion_curve_ids(tmp_path, manifest)
+    assert animated == {"ParamAngleX"}, (
+        f"physics 输出的 ParamHairSwing 不该排曲线，实际排了 {sorted(animated)}")
+
+
+def test_idle_motion_covers_all_when_physics_is_unreadable(tmp_path):
+    """读不到 physics3 时宁可多排：少排的表现是角色一动不动，且没有报错。"""
+    manifest = _write_manifest(tmp_path, physics_file="missing.physics3.json")
+
+    driven = {"ParamAngleX": [-30.0, 0.0, 30.0],
+              "ParamHairSwing": [-1.0, 0.0, 1.0]}
+    moc3_pipeline.write_idle_motion(str(tmp_path), "char", driven)
+
+    assert _motion_curve_ids(tmp_path, manifest) == set(driven)

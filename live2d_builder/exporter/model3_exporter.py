@@ -32,7 +32,6 @@ from live2d_builder.exporter.moc3_model import DEFAULT_PIXELS_PER_UNIT
 from live2d_builder.exporter.texture_atlas import TextureAtlas
 from live2d_builder.blendshapes.parameters import ParameterSet
 from live2d_builder.blendshapes.expressions import ExpressionBuilder
-from live2d_builder.motion.motion3 import Motion3Builder
 from live2d_builder.physics.config import PhysicsBuilder, prune_physics_to_parameters
 
 log = get_logger("exporter.model3")
@@ -44,7 +43,6 @@ class Model3Exporter:
     def __init__(self, max_atlas_size: int = 2048) -> None:
         self.max_atlas_size = max_atlas_size
         self._atlas = TextureAtlas(max_size=max_atlas_size)
-        self.motion_files: List[str] = []
         self._params = ParameterSet()
         self._expressions = ExpressionBuilder()
         self._physics = PhysicsBuilder()
@@ -60,7 +58,6 @@ class Model3Exporter:
         character_name: str = "character",
         compress_webp: bool = False,
         webp_quality: int = 85,
-        drivable_parameters: Optional[Dict[str, List[float]]] = None,
     ) -> Dict[str, str]:
         """Export all model files to ``output_dir``.
 
@@ -141,10 +138,9 @@ class Model3Exporter:
             layers, out, character_name,
             rest_opacity=builder_result.get("layer_opacity") or {})
 
-        # 8. Motions. 曲线只覆盖真的有键形驱动的参数：给一个动不了的参数排
-        #    曲线会得到「文件齐全但画面一动不动」的假产物。
-        motions_manifest = self._export_motions(
-            out, character_name, drivable_parameters)
+        # 8. Motions 不在这里生成 —— 由 moc3 编译之后按权威可驱动集合写入
+        #    （见 moc3_pipeline.write_idle_motion）。在这里生成只能看到编译前的
+        #    单轴网格键形，会漏掉全部 warp 变形器参数。
 
         # 8b. Assemble model3.json
         file_refs = self._build_file_references(
@@ -152,7 +148,7 @@ class Model3Exporter:
             textures=texture_files,
             physics=physics_filename,
             expressions=expr_manifest,
-            motions=motions_manifest,
+            motions=None,
         )
         param_list = self._params.export_cubism_params()
 
@@ -193,8 +189,6 @@ class Model3Exporter:
             "texture_files": texture_files,
             "physics": str(out / physics_filename) if physics_filename else "",
             "expressions": expr_manifest,
-            "motions": motions_manifest,
-            "motion_files": self.motion_files,
             "mesh_data": str(mesh_data_path),
             "guide": str(guide_path),
         }
@@ -202,27 +196,6 @@ class Model3Exporter:
     # ------------------------------------------------------------------
     # Component builders
     # ------------------------------------------------------------------
-
-    def _export_motions(self, out: Path, character_name: str,
-                        drivable_parameters: Optional[Dict[str, List[float]]]
-                        ) -> Dict[str, List[dict]]:
-        """生成并写出 idle 动作。
-
-        没有可动参数就返回空清单（``Motions`` 保持 ``{}``）—— 给动不了的参数
-        排曲线会得到「文件齐全但画面一动不动」的假产物。
-        """
-        self.motion_files = []
-        if not drivable_parameters:
-            return {}
-        builder = Motion3Builder()
-        document = builder.build_idle(drivable_parameters)
-        if document is None:
-            return {}
-        manifest = builder.export_to_directory(
-            str(out), character_name, {"idle": document})
-        self.motion_files = [str(out / entry["File"])
-                             for entries in manifest.values() for entry in entries]
-        return manifest
 
     def _build_file_references(
         self,
