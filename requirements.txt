@@ -48,7 +48,7 @@ cryptography>=50.0.2
 
 # ====== Optional: API server (api_server.py, 与 Go API 并行的 Python 实现) ======
 fastapi>=0.110.0
-uvicorn>=0.27.0
+uvicorn>=0.54.0
 python-multipart>=0.0.32
 
 # ====== CLI Enhancement ======
