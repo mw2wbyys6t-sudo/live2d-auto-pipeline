@@ -74,7 +74,7 @@ onnxruntime>=1.31.0; sys_platform != "win32"
 # ====== Face Tracking (drivers/face_tracker) ======
 # 与 requirements.desktop.txt 保持同一条约束（此前两边不一致）：
 # 0.10.32 是本仓库实测通过的版本，1.x 换了 API。
-mediapipe>=0.10.30,<0.10.32
+mediapipe>=1.2.0,<1.2.1
 
 # ====== Audio Capture (drivers/audio) ======
 sounddevice>=0.5.6
