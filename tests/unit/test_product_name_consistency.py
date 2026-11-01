@@ -61,7 +61,10 @@ IDENTITY_FILES = {
 
 def _live_text_files() -> list[Path]:
     skip_dirs = {".git", "node_modules", ".next", "target", "output", ".cache",
-                 "bundle", "out"}
+                 "bundle", "out",
+                 # 工具产物（会话用量报告）里记的是**旧版已安装应用的数据目录**，
+                 # 不是本仓库的源码；它不是我们改名的对象。
+                 ".qoder-credits"}
     suffixes = {".py", ".go", ".rs", ".ts", ".tsx", ".js", ".json", ".toml", ".yml",
                 ".yaml", ".md", ".txt", ".iss", ".html", ".css", ".in"}
     out = []
