@@ -20,7 +20,7 @@ import json
 import math
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from core.logger import get_logger
 from live2d_builder.exporter.moc3_lint import lint_document
@@ -363,7 +363,8 @@ def head_angle_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
                         parameters_by_id: Dict[str, ParameterSpec],
                         standard_bones: Dict[str, Dict],
                         bone_positions: Dict[str, Any],
-                        width: float, height: float):
+                        width: float, height: float,
+                        head_span: Optional[tuple] = None):
     """头部网格 -> ``((X, Y, Z) 轴, 逐键形状)``；不适用时返回 ``((), [])``。
 
     条件：网格受**头部总成**中任一骨骼影响（``Head`` 及其后代，见
@@ -376,6 +377,11 @@ def head_angle_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
 
     顶点的形变量按其**在整个头部总成上的合计权重**线性混合，所以只绑 ``Face`` /
     ``Eye_L`` 等子骨骼的网格同样会跟着头动。
+
+    ``head_span`` 是整颗头的 (宽, 高)（模型坐标），由 ``head_assembly_span`` 统一算好
+    传进来：头部各部位刚性连在一起，形变尺度必须取整颗头。不传时退回网格自己的包围盒
+    —— 那条路让 10px 的嘴和 245px 的脸各用一套 shift/透视深度，``ParamAngleY = 30``
+    时嘴相对脸滑 35.6px（嘴本身才 10px 宽，等于被推出脸外）。
     """
     skin = mesh.get("weights") or {}
     bone_names = skin.get("bone_names") or []
@@ -395,10 +401,13 @@ def head_angle_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
         return (), []
 
     px, py = to_model_xy(joint[0], joint[1], width, height)
-    xs = [float(v[0]) for v in vertices]
-    ys = [float(v[1]) for v in vertices]
-    span_x = max(xs) - min(xs)
-    span_y = max(ys) - min(ys)
+    if head_span is None:
+        xs = [float(v[0]) for v in vertices]
+        ys = [float(v[1]) for v in vertices]
+        span_x = max(xs) - min(xs)
+        span_y = max(ys) - min(ys)
+    else:
+        span_x, span_y = float(head_span[0]), float(head_span[1])
     shift_x = span_x * HEAD_SHIFT_X
     shift_y = span_y * HEAD_SHIFT_Y
     depth = max(span_x, span_y, 1.0) * HEAD_DEPTH_SPANS
@@ -426,6 +435,51 @@ def head_angle_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
                                               weight_of[i])
                               for i, (x, y) in enumerate(vertices)]))
     return axes, shapes
+
+
+def head_assembly_span(meshes: Dict[str, Dict[str, Any]],
+                       parameters_by_id: Dict[str, ParameterSpec],
+                       standard_bones: Dict[str, Dict],
+                       bone_positions: Dict[str, Any]) -> Optional[tuple]:
+    """头部总成的**共享** (宽, 高)，模型坐标；没有可随头动的网格时返回 ``None``。
+
+    头部各部位是刚性连在一起的一块，形变尺度（弧位移 shift、透视深度 depth）必须
+    取**整颗头**。早先每个网格拿自己的包围盒：singer 样例里 10×9px 的嘴 shift 0.40px、
+    透视深度 40px，245×185px 的脸 shift 9.80px、深度 980px —— 同一空间点被两套参数各
+    算一遍，``ParamAngleY = 30`` 时嘴相对脸滑 35.6px。
+    """
+    joint = bone_positions.get("Head")
+    if joint is None:
+        return None
+    if any(parameters_by_id.get(pid) is None for pid in HEAD_ANGLE_AXES):
+        return None
+    assembly = _head_assembly(standard_bones)
+    lo = hi = None
+    for mesh in meshes.values():
+        skin = mesh.get("weights") or {}
+        bone_names = skin.get("bone_names") or []
+        per_vertex = skin.get("weights")
+        vertices = mesh.get("vertices")
+        if not bone_names or per_vertex is None or vertices is None or len(vertices) == 0:
+            continue
+        indices = [i for i, b in enumerate(bone_names) if b in assembly]
+        if not indices or _peak_influence(per_vertex, indices) <= _MIN_INFLUENCE:
+            continue
+        width = float(mesh.get("width") or 0)
+        height = float(mesh.get("height") or 0)
+        if width <= 0 or height <= 0:
+            continue
+        pts = [to_model_xy(float(v[0]), float(v[1]), width, height)
+               for v in vertices]
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        mesh_lo = (min(xs), min(ys))
+        mesh_hi = (max(xs), max(ys))
+        lo = mesh_lo if lo is None else (min(lo[0], mesh_lo[0]), min(lo[1], mesh_lo[1]))
+        hi = mesh_hi if hi is None else (max(hi[0], mesh_hi[0]), max(hi[1], mesh_hi[1]))
+    if lo is None:
+        return None
+    return (hi[0] - lo[0], hi[1] - lo[1])
 
 
 def _peak_influence(per_vertex, indices) -> float:
@@ -1016,6 +1070,9 @@ def build_rig_spec(
     bone_positions = builder_result.get("bone_positions") or {}
     from live2d_builder.bones.deformers import BoneHierarchy
     standard_bones = BoneHierarchy.STANDARD_BONES
+    # 整颗头的共享尺度：所有头部网格用同一组 shift / 透视深度，五官才跟着脸走。
+    head_span = head_assembly_span(meshes, params_by_id, standard_bones,
+                                   bone_positions)
     keyformed, multi_hit, eyes_tracked, head_tracked = [], [], [], []
     opacity_driven: List[str] = []
 
@@ -1079,7 +1136,7 @@ def build_rig_spec(
             eye_axes, eye_shapes = eye_track_keyforms(mesh, vertices, params_by_id)
             head_axes, head_shapes = head_angle_keyforms(
                 mesh, vertices, params_by_id, standard_bones,
-                bone_positions, width, height)
+                bone_positions, width, height, head_span=head_span)
             pid, shapes, candidates = rotation_keyforms(
                 mesh, params_by_id, bone_positions, standard_bones, width, height)
         else:

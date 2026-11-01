@@ -390,6 +390,37 @@ def test_mesh_weighted_to_a_head_child_bone_also_follows_the_head():
     assert len(mesh.keyform_shapes) == 27
 
 
+def test_head_parts_share_one_transform_scale():
+    """脸部与五官必须用同一套头部形变参数，否则转头时五官相对脸滑动。
+
+    尺度取网格**自己的**包围盒时：10px 的嘴 shift 0.4px、透视深度 40px，245px 的
+    脸 shift 9.8px、深度 980px —— 同一个空间点按两套参数算两遍。实测 singer 样例
+    在 ParamAngleY=±30° 时嘴相对脸滑 7px，而整张嘴只有 10px 宽。这里让鼻子的一角
+    与脸的一角重合，逐个键形比对：同一点必须落到同一处。
+    """
+    def quad(x0, y0, x1, y1):
+        verts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+        return {
+            "vertices": verts,
+            "vertices_norm": [[x / 400.0, y / 400.0] for x, y in verts],
+            "indices": [[0, 1, 2], [0, 2, 3]],
+            "width": 400.0, "height": 400.0,
+            "weights": {"bone_names": ["Head"], "weights": [[1.0]] * 4},
+        }
+
+    face = quad(0.0, 0.0, 300.0, 250.0)
+    nose = quad(290.0, 240.0, 300.0, 250.0)   # 2 号顶点 (300,250) 与脸的 2 号重合
+    result = _builder_result({"face": face, "nose": nose}, params=_HEAD_PARAMS)
+    result["bone_positions"] = {"Head": (0.0, -40.0)}
+    spec = build_rig_spec(result, {"face": _uv(), "nose": _uv()})
+    by_id = {m.mesh_id: m for m in spec.meshes}
+
+    face_spans = {i: by_id["face"].keyform_shapes[i].vertices[2] for i in range(27)}
+    for i, want in face_spans.items():
+        got = by_id["nose"].keyform_shapes[i].vertices[2]
+        assert got == pytest.approx(want), f"keyform {i} 上鼻子与脸的同一点分开了"
+
+
 def test_mesh_weighted_below_the_head_is_not_dragged_by_the_head():
     """Neck 属 ``body`` 组（躯干）—— 只绑它的网格不该被头部总成拖动。
 
