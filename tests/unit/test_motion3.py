@@ -146,11 +146,39 @@ def test_rest_pose_comes_from_the_parameter_declaration():
     doc = Motion3Builder().build_idle(
         {"ParamEyeLOpen": [0.0, 1.0]}, defaults={"ParamEyeLOpen": 1.0})
     values = [v for _t, v in points_of(doc["Curves"][0])]
-    assert min(values) >= 0.8 - 1e-9 and max(values) <= 1.0 + 1e-9
-    # 没有声明默认值时才退回离 0 最近的键（对以 0 为静止值的参数成立）
+    # 多数时间停在睁眼姿态，闭眼只是眨眼（下方 test_eye_idle_blinks... 判形状）
+    assert values[0] == pytest.approx(1.0)
+    assert sum(1 for v in values if v >= 0.99) >= len(values) * 0.8
+    # 没有声明默认值时，眼睑按「睁」为静止姿态：闭着待机是旧缺陷，不能回归
     fallback = Motion3Builder().build_idle({"ParamEyeLOpen": [0.0, 1.0]})
     values = [v for _t, v in points_of(fallback["Curves"][0])]
-    assert max(values) <= 0.2 + 1e-9
+    assert values[0] == pytest.approx(1.0)
+    assert max(values) == pytest.approx(1.0)
+
+
+def test_eye_idle_blinks_instead_of_squinting():
+    """眼睑要「睁开待着、偶尔眨一下」，不是 0.8~1.0 的持续眯眼。
+
+    实测（2026-11-01，工作台预览 singer）：按正弦收窄到 0.8 时，180 帧里每帧
+    眼睛都在微微开合，没有一次真正闭上 —— 读起来是眯眼抽动，不是眨眼。
+    """
+    doc = Motion3Builder(duration=6.0).build_idle(
+        {"ParamEyeLOpen": [0.0, 1.0], "ParamEyeROpen": [0.0, 1.0]},
+        defaults={"ParamEyeLOpen": 1.0, "ParamEyeROpen": 1.0})
+    by_id = {c["Id"]: c["Segments"] for c in doc["Curves"]}
+    assert by_id["ParamEyeLOpen"] == by_id["ParamEyeROpen"]
+    points = points_of(doc["Curves"][0])
+    values = [v for _t, v in points]
+    # 必须真的闭到底（键形另一端），否则不是眨眼
+    assert min(values) == pytest.approx(0.0)
+    # 首尾都停在睁眼，循环不跳变
+    assert values[0] == pytest.approx(1.0) and values[-1] == pytest.approx(1.0)
+    # 闭眼是离散事件：一闭一开算一次，6 秒里 1~3 次
+    episodes = sum(1 for prev, cur in zip(values, values[1:])
+                   if prev >= 0.5 > cur)
+    assert 1 <= episodes <= 3
+    # 大部分时间睁着：这才是「待机」，不是持续眯眼
+    assert sum(1 for v in values if v >= 0.99) >= len(values) * 0.85
 
 
 def test_rest_value_is_the_key_closest_to_zero():

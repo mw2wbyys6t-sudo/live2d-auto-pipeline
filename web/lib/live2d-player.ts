@@ -876,23 +876,39 @@ export class Live2DPlayer {
     }
   }
 
-  /** 每帧推进动作，把采样值写进目标参数；淡入权重决定它与当前目标的比例。 */
+  /** 当前生效表情覆盖的参数；这些参数留在「目标值 + 低通」的合成路径上。 */
+  private activeExpressionParameterIds(): Set<string> {
+    if (this.expressionWeight <= 0) return new Set();
+    const spec = this.expressions.get(this.currentExpression);
+    return new Set((spec?.parameters ?? []).map((p) => p.id));
+  }
+
+  /**
+   * 每帧推进动作，把采样值写进参数；淡入权重决定它与当前值的比例。
+   *
+   * 动作是它驱动的那批参数的**权威值**，因此这里同时写 `params`：再走
+   * `update()` 的 0.15 低通会把快速动作抹平 —— 实测（2026-11-01，工作台
+   * 预览 singer）动作文件里眼睑眨眼到 0，浏览器里最低只到 0.3345，看起来
+   * 只是眼皮抖一下。淡入仍按权重缓入，不会开局跳变。
+   */
   private updateMotion(dt: number): void {
     if (!this.motion && this.idleEnabled) this.startIdleMotion();
     const playback = this.motion;
     if (!playback) return;
     playback.advance(dt);
     const weight = playback.weight;
+    // 表情生效中的参数不直接落值：表情每帧叠在目标值上、再由 update() 的
+    // 低通收敛，直接写 params 会让动作每帧把它按回自己的值，表情只剩 15%。
+    const held = this.activeExpressionParameterIds();
     playback.sample().forEach((value, id) => {
       const target = clampToBounds(value, this.bounds.get(id));
-      if (weight >= 1) {
-        this.targetParams.set(id, target);
-      } else {
-        const current = this.targetParams.get(id) ?? target;
-        this.targetParams.set(id, current + (target - current) * weight);
-      }
+      const targetNow = this.targetParams.get(id) ?? target;
+      this.targetParams.set(
+        id, weight >= 1 ? target : targetNow + (target - targetNow) * weight);
+      if (held.has(id)) return;
+      const now = this.params.get(id) ?? target;
+      this.params.set(id, weight >= 1 ? target : now + (target - now) * weight);
     });
-    // 表情与动作都改目标参数：动作每帧覆盖，表情在下一步叠加。
     if (playback.finished) this.motion = null;
   }
 

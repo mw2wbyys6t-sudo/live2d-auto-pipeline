@@ -42,7 +42,7 @@ _IDLE_AMPLITUDE_PREFIXES = (
     ("ParamBodyAngle", 0.20),
     ("ParamMouth", 0.15),
     ("ParamBrow", 0.15),
-    ("ParamEye", 0.20),       # 眼睑：0.8~1.0，留出眨眼的余量
+    ("ParamEye", 0.20),       # 其余眼部参数；眼睑开合走 build_blink_curve
     ("ParamHair", 0.05),      # 头发主摆由物理驱动，这里只给一点偏移
 )
 _DEFAULT_IDLE_AMPLITUDE = 0.20
@@ -53,6 +53,14 @@ _IDLE_PHASE_STEP = 0.6180339887498949
 # 左右侧别标记：``ParamEyeLOpen`` / ``ParamBrowLY`` / ``ParamTearsL`` / ``ParamShoulderL``。
 # 只换左右、不换轴向 —— ``ParamAngleX`` 与 ``ParamAngleY`` 不共用波形。
 _SIDE_MARKER = re.compile(r"(?<=[a-z])[LR](?=[A-Z0-9]|$)")
+
+# 眼睑走离散眨眼，不走谐波（谐波只能做「一直半睁半闭」的眯眼）。
+# 时刻按循环比例给，避开谐波用的黄金分割相位；闭比睁快，接近真实眨眼。
+_EYE_OPEN_GROUP = "ParamEye*Open"
+_BLINK_AT = (0.29, 0.78)
+_BLINK_CLOSE_SECONDS = 0.10
+_BLINK_HOLD_SECONDS = 0.03
+_BLINK_OPEN_SECONDS = 0.21
 
 
 def idle_group(parameter_id: str) -> str:
@@ -180,6 +188,48 @@ class Motion3Builder:
             segments.append(round(value, 6))
         return segments
 
+    def build_blink_curve(self, keys: Sequence[float],
+                          rest: Optional[float] = None) -> List[float]:
+        """睁开待着、偶尔眨到底：眼睑不能走连续正弦。
+
+        实测（2026-11-01，工作台预览 singer）：正弦收窄到 0.8~1.0 时，180 帧里
+        每帧都在微微开合，一次也没闭到底 —— 读起来是眯眼抽动，不是眨眼。
+        ``rest`` 缺省取键形最大值（睁），闭眼端点取键形最小值（管线给眼睑的
+        键形是 [0, 1]，0 才是闭上）。
+        """
+        low, high = float(min(keys)), float(max(keys))
+        if not high > low:
+            raise ValueError(f"键形区间退化（{low}..{high}），无法生成眨眼曲线")
+        open_value = (float(rest) if rest is not None and low <= float(rest) <= high
+                      else high)
+        close = max(1e-3, _BLINK_CLOSE_SECONDS)
+        hold = max(0.0, _BLINK_HOLD_SECONDS)
+        reopen = max(1e-3, _BLINK_OPEN_SECONDS)
+        starts = [self.duration * frac for frac in _BLINK_AT]
+
+        def value_at(time: float) -> float:
+            for start in starts:
+                dt = time - start
+                if dt < 0.0:
+                    break
+                if dt < close:
+                    return open_value + (low - open_value) * (dt / close)
+                dt -= close
+                if dt < hold:
+                    return low
+                dt -= hold
+                if dt < reopen:
+                    return low + (open_value - low) * (dt / reopen)
+            return open_value
+
+        segments: List[float] = []
+        for time in self.sample_times():
+            if segments:
+                segments.append(0)            # 段类型：线性
+            segments.append(round(time, 6))
+            segments.append(round(value_at(time), 6))
+        return segments
+
     @staticmethod
     def rest_value(keys: Sequence[float]) -> float:
         """静止姿态 = 最接近 0 的那个键值（管线按 min/default/max 生成键形）。"""
@@ -204,22 +254,28 @@ class Motion3Builder:
                 continue      # 单键形没有可插值的行程
             if max(keys) == min(keys):
                 continue      # 键形全等 = 这个参数形变不出位移，排进曲线只会是噪声
-            group, amplitude = idle_group_index(parameter_id), idle_amplitude(parameter_id)
-            if self.full_range:
-                # 扫掠诊断只关心「打满键形两端」，因此统一用同一组无相位偏移的
-                # 谐波：相位一错开，采样网格就不再落在极值点上，量到的行程会比
-                # 键形区间短一截，验收判据也随之变松（实测 −29.5 vs −30.0）。
-                group, amplitude = 0, 1.0
-            curves.append({
-                "Target": "Parameter",
-                "Id": parameter_id,
-                "Segments": self.build_curve(
+            rest = (defaults or {}).get(parameter_id)
+            if not self.full_range and idle_group(parameter_id) == _EYE_OPEN_GROUP:
+                segments = self.build_blink_curve(keys, rest=rest)
+            else:
+                group = idle_group_index(parameter_id)
+                amplitude = idle_amplitude(parameter_id)
+                if self.full_range:
+                    # 扫掠诊断只关心「打满键形两端」，因此统一用同一组无相位偏移的
+                    # 谐波：相位一错开，采样网格就不再落在极值点上，量到的行程会比
+                    # 键形区间短一截，验收判据也随之变松（实测 −29.5 vs −30.0）。
+                    group, amplitude = 0, 1.0
+                segments = self.build_curve(
                     keys,
                     HARMONIC_SETS[group % len(HARMONIC_SETS)],
                     amplitude=1.0 if self.full_range else amplitude,
                     phase=(group * _IDLE_PHASE_STEP) % 1.0,
-                    rest=(defaults or {}).get(parameter_id),
-                ),
+                    rest=rest,
+                )
+            curves.append({
+                "Target": "Parameter",
+                "Id": parameter_id,
+                "Segments": segments,
             })
         if not curves:
             return None
