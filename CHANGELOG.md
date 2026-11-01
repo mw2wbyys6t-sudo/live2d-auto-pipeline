@@ -208,6 +208,46 @@ Core 验收（11 个变形器编译、`runtime_ready`、动作与物理逐帧对
 与 `output.base_dir`；把新增的祖先遍历注释掉后该测试失败（实测 `scripts_dir` 退回
 `<root>` 的父目录），恢复后通过。
 
+### 14. 修复：腮红与泪痕在任何头部姿势下原地不动
+
+扫完全部头部姿势后发现：`ParamAngleX/Y/Z = ±30` 下 `cheek` / `tear_left` / `tear_right`
+的位移是 **0px**（同一姿势脸移 13.15px、嘴 31.68px）。腮红和泪痕留在原地，脸转开就
+露出一块浮在半空的淡色 —— 静止时它们不透明度为 0 看不出来，一开 `ParamCheek` /
+`ParamTears` 就穿帮。
+
+原因不在头部变换：这三层用的是**不透明度**键形（`ParamCheek` 0→1、`ParamTears`
+0→1），网格的键形带被它占满，`head_angle_keyforms` 在这一层被 `continue` 跳过；
+一块网格又只能挂一个变形器，而它们没有任何变形器。头部三轴无论怎么转都到不了。
+
+现在新增 `head` profile：一条只含头部三轴（`ParamAngleX/Y/Z`）的 warp，头部变换与
+键形同源（同一个 `head_span`、同一个枢轴），挂成 `CheekFollow` / `TearFollow`
+（4×4 控制点、父级 `Face`）。头部信息不全（缺 Head 关节 / `head_span` / 角度参数）
+时**不假装能跟**：该层退回静态网格，跳过理由进构建日志与 `build_meta.json` 的
+`deformers_uncompiled`。
+
+浏览器内实跑（同一张导出件、同一个播放器；按**每个顶点**取最近 24 个脸部顶点拟合
+仿射后看残差，模型单位）：
+
+| 姿态 | `cheek` 位移 旧 → 新 | 残差 新（max） | `tear_left` 新（max） | `tear_right` 新（max） |
+| --- | --- | --- | --- | --- |
+| `ParamAngleY = +30` | 0 → **10.74px** | 0.284 | 0.264 | 0.215 |
+| `ParamAngleX = +30` | 0 → **1.18px** | 0.251 | 0.257 | 0.309 |
+| `ParamAngleZ = +30` | 0 → **25.60px** | 0.001 | 0.001 | 0.001 |
+
+同一次测量里键形驱动的 `nose` 是 0.263、`mouth` 0.202 —— 变形器版的腮红/泪痕
+落在同一水平，即**没有额外的滑动**。不透明度键形没有被挤掉：`ParamCheek = 1` 时
+cheek alpha = 1（静止 0），`ParamTears = 1` 时左右泪 alpha 都是 1；与 `ParamAngleY = 30`
+同时施加时 alpha 仍为 1、位移仍是 10.74px，两者互不覆盖。
+
+控制网格试过 8 列（腮红横跨 175px）：残差 max 0.211 / rms 0.151，4×4 是 max 0.285 /
+rms 0.120，差别在测量噪声内，所以留在 4×4。（此前用「整块取一个仿射」量到 2.5px，
+那是度量本身的仿射近似误差 —— 同一个度量在键形网格上也会给出同量级的数，已改用
+逐顶点拟合。）
+
+代价：`singer.moc3` 460 160 → 467 584 字节（+1.6%），变形器 11 → 13 个，
+`runtime_ready` / `official_core_consistent` / `motion_verified` / `physics_verified`
+全部通过、`moc3_dropped: []`。
+
 ---
 
 ## [v0.10.10] — 2026-10-28 — 代号「GPU Aware」（**2026-10-29 已发布**：tag `v0.10.10` + GitHub Release；安装包已构建并通过产物级验收）

@@ -774,20 +774,15 @@ def _mouth_cavity_deform(points, rect, mesh_rect, values, options):
     return [(x, top + (y - top) * stretch) for x, y in points]
 
 
-def _eye_head_deform(points, rect, mesh_rect, values, options):
-    """眨眼（眼球向上收拢）**叠加**整颗头的转头/点头/侧转。
-
-    眼睛网格的键形带已经被双眼球跟踪（``ParamEyeBallX/Y``）占用，头部三轴只能压在
-    变形器层；而一块网格只能挂一个变形器，所以眨眼与头部三轴必须合成同一条多轴带。
-    顺序 = 先眨眼再随头（与"先做表情、再整体转动头部"一致）。
+def _apply_head(points, values, options):
+    """把整颗头的转头/点头/侧转作用到点上（与头部网格键形同一套公式）。
 
     ``options["head"]`` 是 ``(px, py, shift_x, shift_y, depth)``，由
-    :func:`_eye_head_options` 按**整颗头的共享尺度**算出；缺失时只做眨眼。
+    :func:`_head_options` 按**整颗头的共享尺度**算出；缺失时原样返回。
     """
-    pulled = _eye_deform(points, rect, mesh_rect, values, options)
     head = options.get("head")
     if not head:
-        return pulled
+        return list(points)
     px, py, shift_x, shift_y, depth = head
     angles = options.get("head_angles") or {}
     ang = [math.radians(values.get(role, 0.0) * angles.get(role, 0.0))
@@ -796,7 +791,7 @@ def _eye_head_deform(points, rect, mesh_rect, values, options):
     sin_y, cos_y = math.sin(ang[1]), math.cos(ang[1])
     sin_z, cos_z = math.sin(ang[2]), math.cos(ang[2])
     out = []
-    for x, y in pulled:
+    for x, y in points:
         tx, ty = _head_transform(x, y, px, py, shift_x, shift_y,
                                  sin_x, cos_x, sin_y, cos_y, sin_z, cos_z,
                                  depth, 1.0)
@@ -804,18 +799,41 @@ def _eye_head_deform(points, rect, mesh_rect, values, options):
     return out
 
 
-def _eye_head_options(bone_positions: Dict[str, Any], width: float, height: float,
-                      head_span: Optional[tuple],
-                      parameters_by_id: Dict[str, ParameterSpec],
-                      param_ids: Sequence[str]) -> Optional[Dict[str, Any]]:
-    """``eye_head`` 需要的头部参数：枢轴、共享尺度、各轴的角度幅度。
+def _head_follow_deform(points, rect, mesh_rect, values, options):
+    """只跟随头部三轴。
 
-    缺任何一项都返回 ``None`` —— 调用方退回只眨眼的 ``eye`` profile，不交半套形变。
+    腮红 / 眼泪这类层用的是**不透明度**键形（``ParamCheek`` / ``ParamTears``），
+    网格键形带已被占满，头部三轴进不去；它们本来也没有别的变形器，所以用一条
+    只含头部三轴的 warp 接住（实测：``ParamAngleZ = 30`` 时脸转 13.15px，
+    cheek / tear 位移 0px，腮红和泪痕留在原地）。
+    """
+    return _apply_head(points, values, options)
+
+
+def _eye_head_deform(points, rect, mesh_rect, values, options):
+    """眨眼（眼球向上收拢）**叠加**整颗头的转头/点头/侧转。
+
+    眼睛网格的键形带已经被双眼球跟踪（``ParamEyeBallX/Y``）占用，头部三轴只能压在
+    变形器层；而一块网格只能挂一个变形器，所以眨眼与头部三轴必须合成同一条多轴带。
+    顺序 = 先眨眼再随头（与"先做表情、再整体转动头部"一致）。
+    """
+    return _apply_head(
+        _eye_deform(points, rect, mesh_rect, values, options), values, options)
+
+
+def _head_options(bone_positions: Dict[str, Any], width: float, height: float,
+                  head_span: Optional[tuple],
+                  parameters_by_id: Dict[str, ParameterSpec],
+                  angle_ids: Sequence[str]) -> Optional[Dict[str, Any]]:
+    """头部驱动需要的参数：枢轴、共享尺度、各轴的角度幅度。
+
+    缺任何一项都返回 ``None`` —— 调用方自行降级（``eye_head`` 退回只眨眼，
+    ``head`` 保持静态），不交半套形变。
     """
     joint = bone_positions.get("Head")
-    if joint is None or head_span is None or len(param_ids) != 4:
+    if joint is None or head_span is None or len(angle_ids) != 3:
         return None
-    specs = [parameters_by_id.get(pid) for pid in param_ids[1:]]
+    specs = [parameters_by_id.get(pid) for pid in angle_ids]
     if any(p is None for p in specs):
         return None
     span_x, span_y = float(head_span[0]), float(head_span[1])
@@ -840,6 +858,8 @@ DEFORMER_PROFILES: Dict[str, tuple] = {
     "eye": (("open",), _eye_deform),
     # 眨眼 + 头部三轴：眼睛网格的键形带被眼球跟踪占用，只能压在变形器这一层。
     "eye_head": (("open", "angle_x", "angle_y", "angle_z"), _eye_head_deform),
+    # 只有头部三轴：给键形带被不透明度（表情）占满的层用。
+    "head": (("angle_x", "angle_y", "angle_z"), _head_follow_deform),
     "brow": (("y", "angle", "form"), _brow_deform),
     "hair_sway": (("swing",), _hair_sway_deform),
     "torso": (("angle_x", "angle_y", "sway", "breath"), _torso_deform),
@@ -991,18 +1011,28 @@ def build_deformers(specs: List[MeshSpec],
             profile = str(entry.get("profile") or "")
             param_ids = _profile_parameter_ids(entry)
             options = dict(entry)
-            if profile == "eye_head":
-                head_options = _eye_head_options(
+            missing_head = False
+            if profile in ("eye_head", "head"):
+                angle_ids = param_ids[1:] if profile == "eye_head" else param_ids
+                head_options = _head_options(
                     bone_positions or {}, width, height, head_span,
-                    parameters_by_id or {}, param_ids)
+                    parameters_by_id or {}, angle_ids)
                 if head_options is None:
-                    # 头部信息不全：退回只眨眼，别把眨眼一起丢掉
-                    profile, param_ids = "eye", param_ids[:1]
+                    if profile == "eye_head":
+                        # 头部信息不全：退回只眨眼，别把眨眼一起丢掉
+                        profile, param_ids = "eye", param_ids[:1]
+                    else:
+                        missing_head = True
                 else:
                     options.update(head_options)
             bound_param = ""
             axes: tuple = ()
-            if profile in DEFORMER_PROFILES and param_ids:
+            if missing_head:
+                # 只剩空壳的「跟随头部」会让成员网格白占一个变形器名额，
+                # 静态网格 + 如实记录才是本来的行为。
+                skipped.append(f"{name}(头部信息不全：缺 Head 关节 / head_span / 角度参数)")
+                axes, grids = (), [DeformerGrid(0.0, _lattice(rect, n_cols, n_rows))]
+            elif profile in DEFORMER_PROFILES and param_ids:
                 axes, grids = _profile_grids(
                     profile, param_ids, rect, n_cols, n_rows, mesh_rect,
                     parameters_by_id or {}, options)

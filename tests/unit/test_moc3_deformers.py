@@ -718,3 +718,58 @@ class TestEyeFollowsHead:
         deformer = warps[0]
         assert [pid for pid, _keys in deformer.axes_spec] == ["ParamEyeLOpen"]
         assert len(deformer.grids) == 2
+
+
+class TestExpressionLayersFollowHead:
+    """腮红 / 眼泪这类**不透明度**键形层也必须随头转。
+
+    它们的网格键形带被 ParamCheek / ParamTears 占满，头部三轴进不去；实测
+    ``ParamAngleZ = 30`` 时脸转 13.15px、cheek / tear 位移 0px，腮红和泪痕
+    留在原地滑出脸外。修法是一条只含头部三轴的 warp（``head`` profile）。
+    """
+
+    _PARAMS = [
+        ParameterSpec("ParamAngleX", -30.0, 30.0, 0.0),
+        ParameterSpec("ParamAngleY", -30.0, 30.0, 0.0),
+        ParameterSpec("ParamAngleZ", -30.0, 30.0, 0.0),
+    ]
+
+    @classmethod
+    def _build(cls, bone_positions, head_span):
+        meshes = [_patch("cheek", 0.0, 0.0, 40.0, 20.0)]
+        return build_deformers(
+            meshes,
+            [_entry("CheekFollow",
+                    ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
+                    "head", ["cheek"], rows=3, cols=3)],
+            400.0, 400.0,
+            {p.parameter_id: p for p in cls._PARAMS},
+            bone_positions, head_span=head_span)
+
+    def test_cheek_follows_the_same_head_rule_as_keyforms(self):
+        warps, skipped, _static = self._build({"Head": (200.0, 60.0)},
+                                              (300.0, 200.0))
+        assert skipped == []
+        deformer = warps[0]
+        assert [pid for pid, _keys in deformer.axes_spec] == [
+            "ParamAngleX", "ParamAngleY", "ParamAngleZ"]
+        rest = _grid_by_keys(deformer, [0.0, 0.0, 0.0])
+        turned = _grid_by_keys(deformer, [0.0, 30.0, 0.0])
+
+        px, py = to_model_xy(200.0, 60.0, 400.0, 400.0)
+        sin_y, cos_y = math.sin(math.radians(30.0)), math.cos(math.radians(30.0))
+        want = [_head_transform(x, y, px, py,
+                                300.0 * HEAD_SHIFT_X, 200.0 * HEAD_SHIFT_Y,
+                                0.0, 1.0, sin_y, cos_y, 0.0, 1.0,
+                                300.0 * HEAD_DEPTH_SPANS, 1.0)
+                for x, y in rest.points]
+        _assert_points(turned.points, want)
+
+    def test_without_head_information_the_layer_stays_static(self):
+        """没有 Head 关节时不装会动：变形器保留（网格仍指向它）但如实记为静态。"""
+        warps, skipped, _static = self._build({}, (300.0, 200.0))
+        assert skipped and "头部信息不全" in skipped[0]
+        deformer = warps[0]
+        assert deformer.axes == ()
+        assert not deformer.is_keyformed
+        assert len(deformer.grids) == 1

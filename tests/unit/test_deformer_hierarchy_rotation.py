@@ -81,3 +81,27 @@ def test_no_rotation_skips_are_reported_when_all_targets_match():
     """全部命中时不留噪音：rotation_skipped 为空列表，不是缺键。"""
     out = _build(REAL_LAYER_NAMES + ["eyeball_l", "eyeball_r"])
     assert out["rotation_skipped"] == []
+
+
+def test_expression_fade_layers_get_head_follow_deformers():
+    """腮红 / 眼泪的网格键形带被不透明度占满，头部三轴只能走变形器。
+
+    实测（2026-11-01，singer 分层导出件）：这两类层没有 warp 变形器时，
+    ``ParamAngleX/Y/Z = ±30`` 下 ``cheek`` / ``tear_left`` / ``tear_right``
+    位移 **0px**，同姿势脸移 13.15px —— 腮红与泪痕留在原地滑出脸外。
+    """
+    names = REAL_LAYER_NAMES + ["cheek", "tear_left", "tear_right"]
+    out = _build(names)
+    warp = {d["name"]: d for d in out["deformers"] if d["type"] == "warp"}
+    assert warp["CheekFollow"]["profile"] == "head"
+    assert warp["TearFollow"]["profile"] == "head"
+    for name in ("CheekFollow", "TearFollow"):
+        assert warp[name]["parameters"] == [
+            "ParamAngleX", "ParamAngleY", "ParamAngleZ"]
+
+
+def test_absent_expression_layers_do_not_create_their_deformers():
+    """层不存在就别建空壳变形器：否则会白占一个名额并出现在统计里。"""
+    out = _build(REAL_LAYER_NAMES)
+    names = [d["name"] for d in out["deformers"]]
+    assert "CheekFollow" not in names and "TearFollow" not in names

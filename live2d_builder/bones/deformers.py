@@ -667,6 +667,20 @@ class DeformerHierarchy:
          "type": "warp", "profile": "brow", "mirror": True,
          "parameters": ["ParamBrowRY", "ParamBrowRAngle", "ParamBrowRForm"],
          "targets": ["eyebrow_R", "brow_R", "brow_right"]},
+        # ---- 表情淡入层也要随头转 ----
+        #
+        # 腮红 / 眼泪用的是**不透明度**键形（ParamCheek / ParamTears），网格键形带
+        # 被它占满，头部三轴进不去，而它们又没有别的变形器 —— 实测 ParamAngleZ=30
+        # 时脸转 13.15px、cheek / tear 位移 0px，腮红和泪痕留在原地滑出脸外。
+        # 用一条只含头部三轴的 warp 接住（与 eye_head 同一套头变换、同一个 head_span）。
+        {"name": "CheekFollow", "parent": "Face", "rows": 4, "cols": 4,
+         "type": "warp", "profile": "head",
+         "parameters": ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
+         "targets": ["cheek", "cheek_blush", "blush"]},
+        {"name": "TearFollow", "parent": "Face", "rows": 4, "cols": 4,
+         "type": "warp", "profile": "head",
+         "parameters": ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
+         "targets": ["tear_left", "tear_right", "tear_l", "tear_r", "tears"]},
         # ---- 肩部抬落 ----
         #
         # 没有独立的肩部图层，只能抬整条上臂（Live2D 里肩参数本来也会带上臂）。
