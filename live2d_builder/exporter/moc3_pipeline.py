@@ -514,22 +514,103 @@ def _norm(name: str) -> str:
     return str(name).strip().lower().replace(" ", "_").replace("-", "_")
 
 
+def _rest_rect(members: List[MeshSpec]) -> tuple:
+    """成员网格**静止姿态**顶点的并集范围（不含键形摆动）。
+
+    形变量要按它算，否则嘴/眼会被含键形的外包框放大好几倍（见 ``_open_down_grids``）。
+    """
+    return (
+        min(float(x) for m in members for x, _ in m.vertices),
+        min(float(y) for m in members for _, y in m.vertices),
+        max(float(x) for m in members for x, _ in m.vertices),
+        max(float(y) for m in members for _, y in m.vertices),
+    )
+
+
+def _all_rect(members: List[MeshSpec]) -> tuple:
+    """成员网格连同**全部键形**的并集范围。"""
+    return (
+        min(float(x) for m in members
+            for shape in [m.vertices] + [s.vertices for s in m.keyform_shapes]
+            for x, _ in shape),
+        min(float(y) for m in members
+            for shape in [m.vertices] + [s.vertices for s in m.keyform_shapes]
+            for _, y in shape),
+        max(float(x) for m in members
+            for shape in [m.vertices] + [s.vertices for s in m.keyform_shapes]
+            for x, _ in shape),
+        max(float(y) for m in members
+            for shape in [m.vertices] + [s.vertices for s in m.keyform_shapes]
+            for _, y in shape),
+    )
+
+
 def _member_rect(members: List[MeshSpec]) -> tuple:
     """成员网格（含全部键形）的并集范围再留 5% 余量，作为静止形网格的范围。
 
     余量是必需的：键形把顶点推出静止形网格会被内核按边界裁剪，画面就变形了。
     """
-    xs: List[float] = []
-    ys: List[float] = []
-    for mesh in members:
-        for shape in [mesh.vertices] + [s.vertices for s in mesh.keyform_shapes]:
-            for x, y in shape:
-                xs.append(float(x))
-                ys.append(float(y))
-    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    x0, y0, x1, y1 = _all_rect(members)
     margin_x = max((x1 - x0) * 0.05, 1e-3)
     margin_y = max((y1 - y0) * 0.05, 1e-3)
     return x0 - margin_x, y0 - margin_y, x1 + margin_x, y1 + margin_y
+
+
+#: 用「躯干倾摆」这套形变的 profile。它们必须共用同一个尺度，见
+#: :func:`_body_lean_rect`。
+BODY_LEAN_PROFILES = ("torso", "lift_lean")
+
+
+def _resolve_warp_members(specs: List[MeshSpec],
+                          entries: List[Dict]) -> Dict[str, List[MeshSpec]]:
+    """按 ``entries`` 的**声明顺序**解析每个变形器的成员网格。
+
+    一个网格只能挂一个变形器，所以先到先得。变形器名 -> 成员；没有命中任何网格的
+    变形器不在表里。:func:`build_deformers` 与 :func:`_body_lean_rect` 共用这一份解析，
+    共享尺度算出来的范围才跟真正挂上去的成员一致。
+    """
+    by_norm = {_norm(m.mesh_id): m for m in specs}
+    taken: Dict[str, str] = {}
+    members_by_name: Dict[str, List[MeshSpec]] = {}
+    for entry in entries:
+        if str(entry.get("type")) not in ("warp", "rotation"):
+            continue
+        name = str(entry.get("name") or "")
+        picked: List[MeshSpec] = []
+        for target in entry.get("targets") or []:
+            mesh = by_norm.get(_norm(target))
+            if mesh is not None and mesh.mesh_id not in taken:
+                picked.append(mesh)
+                taken[mesh.mesh_id] = name
+        if picked:
+            members_by_name[name] = picked
+    return members_by_name
+
+
+def _body_lean_rect(entries: List[Dict],
+                    members_by_name: Dict[str, List[MeshSpec]]) -> Optional[tuple]:
+    """所有「随躯干倾摆」的网格合起来的 (x0, y0, x1, y1) —— 倾摆的**共享尺度**。
+
+    倾摆量按 ``宽度 × 深度`` 算，而深度是「该点离胯部多远 / 躯干总高」。每个变形器各用
+    自己成员的范围当尺度时，同一张图上的两块网格算出来的位移并不相同：实测（singer，
+    ``ParamBodyAngleY = 10``）领子横移 26.03px、上身衣服 14.67px，而挂在另一条变形器上
+    的手臂与脖子位移 **0px** —— 衣服整件从脖子上滑走。
+
+    共用一个尺度以后，同一个 (x, y) 无论落在哪块网格上都得到同一个位移（倾摆沿 y 线性，
+    2 行的控制网格能精确表示），手臂与领口就跟着躯干一起走。
+    """
+    rects = [
+        _rest_rect(members_by_name[str(entry.get("name") or "")])
+        for entry in entries
+        if str(entry.get("profile") or "") in BODY_LEAN_PROFILES
+        and str(entry.get("name") or "") in members_by_name
+    ]
+    if not rects:
+        return None
+    return (
+        min(r[0] for r in rects), min(r[1] for r in rects),
+        max(r[2] for r in rects), max(r[3] for r in rects),
+    )
 
 
 def _lattice(rect: tuple, n_cols: int, n_rows: int) -> List[List[float]]:
@@ -743,20 +824,55 @@ def _hair_sway_deform(points, rect, mesh_rect, values, options):
     return out
 
 
-def _torso_deform(points, rect, mesh_rect, values, options):
-    """躯干：侧倾/前后倾（越靠上位移越大，胯部不动）+ 呼吸抬升。"""
-    width = max(1e-6, float(mesh_rect[2]) - float(mesh_rect[0]))
-    height = max(1e-6, float(mesh_rect[3]) - float(mesh_rect[1]))
-    bottom = float(mesh_rect[3])
+def _torso_depth(mesh_rect, options):
+    """倾摆这套形变共用的 (宽度, 高度, 胯部 y)。
+
+    优先用 :func:`_body_lean_rect` 算出的**共享**尺度：各变形器各用自己的成员范围时，
+    同一张图上相邻的两块网格会滑开（实测 ``ParamBodyAngleY = 10`` 时领子横移 26.03px、
+    上身衣服 14.67px，而手臂与脖子 0px）。没有共享尺度（只有一个躯干变形器）时退回
+    自己的范围，行为与原来一致。
+    """
+    rect = options.get("body_rect") or mesh_rect
+    width = max(1e-6, float(rect[2]) - float(rect[0]))
+    height = max(1e-6, float(rect[3]) - float(rect[1]))
+    return width, height, float(rect[3])
+
+
+def _torso_lean(values, width, height, bottom, y):
+    """躯干倾摆在某个高度上的位移 ``(dx, dy)``：越靠上位移越大，胯部钉住。"""
+    depth = min(1.0, max(0.0, (bottom - y) / height))   # 0 = 胯部, 1 = 肩
     lean_x = values.get("angle_y", 0.0) * TORSO_LEAN_X + values.get("sway", 0.0) * TORSO_LEAN_X
     lean_y = values.get("angle_x", 0.0)
     breath = values.get("breath", 0.0)
+    return (lean_x * width * depth,
+            -lean_y * TORSO_LEAN_Y * height * depth
+            - breath * TORSO_BREATH * height * depth)
+
+
+def _torso_deform(points, rect, mesh_rect, values, options):
+    """躯干：侧倾/前后倾（越靠上位移越大，胯部不动）+ 呼吸抬升。"""
+    width, height, bottom = _torso_depth(mesh_rect, options)
     out = []
     for x, y in points:
-        depth = min(1.0, max(0.0, (bottom - y) / height))   # 0 = 胯部, 1 = 肩
-        out.append((x + lean_x * width * depth,
-                    y - lean_y * TORSO_LEAN_Y * height * depth
-                    - breath * TORSO_BREATH * height * depth))
+        dx, dy = _torso_lean(values, width, height, bottom, y)
+        out.append((x + dx, y + dy))
+    return out
+
+
+def _lift_lean_deform(points, rect, mesh_rect, values, options):
+    """肩部抬落 **叠加** 躯干的侧倾/前后倾/摆动/呼吸。
+
+    抬落按这条变形器自己的成员高度算（保持既有幅度：``ParamShoulderL = 1`` 抬 47.76px、
+    右侧 64.80px），倾摆按**共享尺度**算 —— 于是手臂与躯干在同一高度上位移逐点相同。
+    倾摆沿 y 线性，2 行控制网格能精确表示，不会因网格更粗而失真。
+    """
+    width, height, bottom = _torso_depth(mesh_rect, options)
+    lift_height = max(1e-6, float(mesh_rect[3]) - float(mesh_rect[1]))
+    lift_dy = -SHOULDER_LIFT * lift_height * values.get("lift", 0.0)
+    out = []
+    for x, y in points:
+        dx, dy = _torso_lean(values, width, height, bottom, y)
+        out.append((x + dx, y + lift_dy + dy))
     return out
 
 
@@ -864,6 +980,7 @@ DEFORMER_PROFILES: Dict[str, tuple] = {
     "hair_sway": (("swing",), _hair_sway_deform),
     "torso": (("angle_x", "angle_y", "sway", "breath"), _torso_deform),
     "lift": (("lift",), _lift_deform),
+    "lift_lean": (("lift", "angle_x", "angle_y", "sway", "breath"), _lift_lean_deform),
 }
 
 
@@ -971,8 +1088,14 @@ def build_deformers(specs: List[MeshSpec],
     官方参数时烘焙**逐键键形**，它真的会随参数转动；枢轴对不上任何已知转动骨骼时退回
     **单键形**并记入 ``deformers_static``（结构存在、不随参数动），不冒充会动的追踪。
     """
-    by_norm = {_norm(m.mesh_id): m for m in specs}
+    members_by_name = _resolve_warp_members(specs, entries)
+    # 躯干倾摆的共享尺度：所有「会随身体 X/Y 轴倾摆」的变形器（躯干本身 + 挂在手臂上的
+    # 肩部抬落）按同一块范围算位移，否则相邻两块网格会互相滑开（见 _body_lean_rect）。
+    body_rect = _body_lean_rect(entries, members_by_name)
     linked: Dict[str, str] = {}
+    for name, members in members_by_name.items():
+        for mesh in members:
+            linked[mesh.mesh_id] = name
     out: List = []
     static: List[str] = []
     bound: List[str] = []
@@ -987,12 +1110,7 @@ def build_deformers(specs: List[MeshSpec],
             # 变形器上，编译期直接报「引用了不存在的变形器」。
             skipped.append(f"{name}(type={dtype})")
             continue
-        members: List[MeshSpec] = []
-        for target in entry.get("targets") or []:
-            mesh = by_norm.get(_norm(target))
-            if mesh is not None and mesh.mesh_id not in linked:
-                members.append(mesh)
-                linked[mesh.mesh_id] = name
+        members = members_by_name.get(name) or []
         if not members:
             skipped.append(f"{name}(没有可挂的成员网格)")
             continue
@@ -1002,15 +1120,16 @@ def build_deformers(specs: List[MeshSpec],
             rect = _member_rect(members)
             # 成员网格**静止姿态**的并集范围（不含键形摆动）。形变量要按它算，
             # 否则嘴/眼会被含键形的外包框放大好几倍（见 _open_down_grids）。
-            mesh_rect = (
-                min(float(x) for m in members for x, _ in m.vertices),
-                min(float(y) for m in members for _, y in m.vertices),
-                max(float(x) for m in members for x, _ in m.vertices),
-                max(float(y) for m in members for _, y in m.vertices),
-            )
+            mesh_rect = _rest_rect(members)
             profile = str(entry.get("profile") or "")
             param_ids = _profile_parameter_ids(entry)
             options = dict(entry)
+            if profile in BODY_LEAN_PROFILES and body_rect is not None:
+                options["body_rect"] = body_rect
+            if profile == "lift_lean" and any(
+                    pid not in (parameters_by_id or {}) for pid in param_ids[1:]):
+                # 身体轴参数不全：退回「只抬肩」，别把抬肩一起丢掉
+                profile, param_ids = "lift", param_ids[:1]
             missing_head = False
             if profile in ("eye_head", "head"):
                 angle_ids = param_ids[1:] if profile == "eye_head" else param_ids

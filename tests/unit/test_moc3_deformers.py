@@ -149,6 +149,8 @@ from live2d_builder.exporter.moc3_pipeline import (  # noqa: E402
     HEAD_SHIFT_Y,
     MOUTH_CAVITY_STRETCH,
     MOUTH_OPEN_STRETCH,
+    SHOULDER_LIFT,
+    TORSO_LEAN_X,
     build_deformers,
     to_model_xy,
     _head_transform,
@@ -773,3 +775,97 @@ class TestExpressionLayersFollowHead:
         assert deformer.axes == ()
         assert not deformer.is_keyformed
         assert len(deformer.grids) == 1
+
+
+class TestSharedBodyLean:
+    """躯干倾摆要有一个**共享尺度**：同一高度上，手臂与衣服的位移必须逐点相同。
+
+    实测（2026-11-01，singer 导出件，``ParamBodyAngleY = 10``）领子横移 26.03px、
+    上身衣服 14.67px，而手臂与脖子 0px —— 衣服整件从脖子上滑走。根因是每条变形器
+    各用自己成员的范围算「宽度 × 深度」，两块网格算出来的从来不是同一个变换。
+    """
+
+    _PARAMS = [
+        ParameterSpec("ParamBodyAngleX", -10.0, 10.0, 0.0),
+        ParameterSpec("ParamBodyAngleY", -10.0, 10.0, 0.0),
+        ParameterSpec("ParamBodySway", -10.0, 10.0, 0.0),
+        ParameterSpec("ParamBreath", 0.0, 1.0, 0.5),
+        ParameterSpec("ParamShoulderL", -1.0, 1.0, 0.0),
+    ]
+    # 轴序 = profile 的角色序：torso = (angle_x, angle_y, sway, breath)，
+    # lift_lean = (lift, angle_x, angle_y, sway, breath)
+    _TORSO_REST = [0.0, 0.0, 0.0, 0.5]
+    _TORSO_Y10 = [0.0, 10.0, 0.0, 0.5]
+    _ARM_REST = [0.0, 0.0, 0.0, 0.0, 0.5]
+    _ARM_Y10 = [0.0, 0.0, 10.0, 0.0, 0.5]
+
+    def _build(self, params=None):
+        meshes = [_patch("clothes_top", 0.0, 0.0, 40.0, 10.0),   # 躯干 x 0..40
+                  _patch("arm_L", 60.0, 0.0, 80.0, 10.0)]        # 手臂 x 60..80
+        entries = [
+            _entry("BodySway", ["ParamBodyAngleX", "ParamBodyAngleY",
+                                "ParamBodySway", "ParamBreath"],
+                   "torso", ["clothes_top"], rows=3, cols=2),
+            _entry("ShoulderLift_L", ["ParamShoulderL", "ParamBodyAngleX",
+                                      "ParamBodyAngleY", "ParamBodySway",
+                                      "ParamBreath"],
+                   "lift_lean", ["arm_L"], rows=2, cols=2),
+        ]
+        warps, skipped, _static = build_deformers(
+            meshes, entries, 200.0, 200.0,
+            {p.parameter_id: p for p in (params or self._PARAMS)}, {})
+        return {w.deformer_id: w for w in warps}, skipped
+
+    @staticmethod
+    def _row_delta(deformer, rest_values, posed_values, want_top):
+        """静止形与倾摆形逐点相减，取最上（肩）或最下（胯）那一行的位移。
+
+        同一行所有控制点的位移必须相同 —— 否则说明形变里混进了横向梯度。
+        """
+        rest = _grid_by_keys(deformer, rest_values)
+        posed = _grid_by_keys(deformer, posed_values)
+        rows = {}
+        for (rx, ry), (px, py) in zip(rest.points, posed.points):
+            rows.setdefault(round(ry, 4), []).append((px - rx, py - ry))
+        key = min(rows) if want_top else max(rows)
+        deltas = rows[key]
+        for dx, dy in deltas:
+            assert abs(dx - deltas[0][0]) < 1e-9 and abs(dy - deltas[0][1]) < 1e-9
+        return deltas[0]
+
+    def test_arm_and_torso_lean_by_the_same_amount_at_the_same_height(self):
+        warps, skipped = self._build()
+        assert skipped == []
+        torso, arm = warps["BodySway"], warps["ShoulderLift_L"]
+        # 共享宽度 = 两块成员并集 0..80，不是各自的 40 / 20
+        want = 80.0 * TORSO_LEAN_X
+
+        assert self._row_delta(torso, self._TORSO_REST, self._TORSO_Y10,
+                               want_top=True)[0] == pytest.approx(want)
+        assert self._row_delta(arm, self._ARM_REST, self._ARM_Y10,
+                               want_top=True)[0] == pytest.approx(want)
+        # 胯部钉住：两条变形器在底行都不动
+        assert self._row_delta(torso, self._TORSO_REST, self._TORSO_Y10,
+                               want_top=False)[0] == pytest.approx(0.0)
+        assert self._row_delta(arm, self._ARM_REST, self._ARM_Y10,
+                               want_top=False)[0] == pytest.approx(0.0)
+
+    def test_shoulder_lift_amplitude_is_still_the_arm_s_own_height(self):
+        """叠加了倾摆轴，抬肩幅度不该跟着变（按成员静止高度 10 算）。"""
+        warps, _skipped = self._build()
+        arm = warps["ShoulderLift_L"]
+        dx, dy = self._row_delta(arm, self._ARM_REST,
+                                 [1.0, 0.0, 0.0, 0.0, 0.5], want_top=True)
+        assert dx == pytest.approx(0.0)
+        assert dy == pytest.approx(-SHOULDER_LIFT * 10.0)
+
+    def test_missing_body_axis_falls_back_to_plain_lift(self):
+        """身体轴参数不全时退回「只抬肩」，不能把抬肩一起变成静态。"""
+        params = [p for p in self._PARAMS if p.parameter_id != "ParamBodySway"]
+        warps, _skipped = self._build(params)
+        arm = warps["ShoulderLift_L"]
+        assert [pid for pid, _keys in arm.axes_spec] == ["ParamShoulderL"]
+        assert len(arm.grids) == 3
+        dx, dy = self._row_delta(arm, [0.0], [1.0], want_top=True)
+        assert dx == pytest.approx(0.0)
+        assert dy == pytest.approx(-SHOULDER_LIFT * 10.0)

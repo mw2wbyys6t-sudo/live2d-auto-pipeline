@@ -622,12 +622,17 @@ class DeformerHierarchy:
          "parameters": ["ParamHairSwing"],
          "targets": ["hair_back_right"]},
         # ---- 躯干：侧倾 / 前后倾 / 摆动 / 呼吸（胯部不动，越靠肩位移越大）----
+        #
+        # 脖子必须跟躯干挂在同一条变形器上：领口（``collar``）画在脖子上，只有领子
+        # 会倾摆而脖子不动，衣服就像从脖子上滑走。实测（singer，
+        # ``ParamBodyAngleY = 10``）领子横移 26.03px、上身衣服 14.67px，脖子 **0px**。
+        # 脖子的 ``ParamBodyAngleZ`` 键形带不受影响 —— 键形带与变形器是两层。
         {"name": "BodySway",       "parent": "Torso", "rows": 3, "cols": 2,
          "type": "warp", "profile": "torso",
          "parameters": ["ParamBodyAngleX", "ParamBodyAngleY",
                         "ParamBodySway", "ParamBreath"],
          "targets": ["clothes_top", "clothes_inner", "clothes_outer",
-                     "waistband", "collar", "chest", "body"]},
+                     "waistband", "collar", "chest", "body", "neck"]},
         {"name": "SkirtSway",      "parent": "Skirt", "rows": 4, "cols": 3,
          "type": "warp", "targets": ["skirt"]},
         # ---- 表情形变：参数写死在说明里（这些效果没有对应骨骼，无从推导）----
@@ -694,7 +699,7 @@ class DeformerHierarchy:
          "type": "warp", "profile": "head",
          "parameters": ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
          "targets": ["tear_left", "tear_right", "tear_l", "tear_r", "tears"]},
-        # ---- 肩部抬落 ----
+        # ---- 肩部抬落（叠加躯干倾摆）----
         #
         # 没有独立的肩部图层，只能抬整条上臂（Live2D 里肩参数本来也会带上臂）。
         # 幅度刻意小（上臂高度的 12%），避免看起来像"举手"。
@@ -703,14 +708,20 @@ class DeformerHierarchy:
         # 不跟着抬就会在腕口裂开。实测（singer，ParamShoulderL=1）手臂抬 38.40px、
         # cuff_L / hand_L 位移 0px；ParamShoulderR=1 时手臂 56.88px、cuff_R / hand_R
         # 0px。同一条变形器让三者共用同一个网格范围，位移逐点相同。
+        #
+        # 躯干的四个倾摆轴也要挂进来：手臂画在身子两侧，只有衣服倾摆而手臂不动，
+        # 肩窝处就会错开（实测 ``ParamBodyAngleY = 10`` 时上身衣服横移 14.67px、
+        # 手臂 0px）。抬落仍按这条变形器自己的成员高度算，幅度不变。
         {"name": "ShoulderLift_L", "parent": "ArmBack_L", "rows": 2, "cols": 2,
-         "type": "warp", "profile": "lift",
-         "parameters": ["ParamShoulderL"],
+         "type": "warp", "profile": "lift_lean",
+         "parameters": ["ParamShoulderL", "ParamBodyAngleX", "ParamBodyAngleY",
+                        "ParamBodySway", "ParamBreath"],
          "targets": ["arm_L", "upper_arm_back_left", "sleeve_L",
                      "cuff_L", "hand_L"]},
         {"name": "ShoulderLift_R", "parent": "ArmBack_R", "rows": 2, "cols": 2,
-         "type": "warp", "profile": "lift",
-         "parameters": ["ParamShoulderR"],
+         "type": "warp", "profile": "lift_lean",
+         "parameters": ["ParamShoulderR", "ParamBodyAngleX", "ParamBodyAngleY",
+                        "ParamBodySway", "ParamBreath"],
          "targets": ["arm_R", "upper_arm_back_right", "sleeve_R",
                      "cuff_R", "hand_R"]},
     ]

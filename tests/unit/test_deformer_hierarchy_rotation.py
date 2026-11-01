@@ -126,3 +126,24 @@ def test_shoulder_lift_targets_shrink_to_what_really_exists():
     warp = {d["name"]: d for d in out["deformers"] if d["type"] == "warp"}
     assert warp["ShoulderLift_L"]["targets"] == ["arm_L"]
     assert warp["ShoulderLift_R"]["targets"] == ["arm_R"]
+
+
+def test_neck_leans_with_the_torso():
+    """领口画在脖子上：只有领子倾摆、脖子不动，衣服就像从脖子上滑走。
+
+    实测（2026-11-01，singer，``ParamBodyAngleY = 10``）领子横移 26.03px、
+    上身衣服 14.67px，脖子 **0px**。
+    """
+    out = _build(REAL_LAYER_NAMES)
+    warp = {d["name"]: d for d in out["deformers"] if d["type"] == "warp"}
+    assert "neck" in warp["BodySway"]["targets"]
+
+
+def test_shoulder_lift_also_carries_the_body_lean():
+    """抬肩那条变形器要同时接住躯干的四个倾摆轴，手臂才会跟着身子一起摆。"""
+    out = _build(REAL_LAYER_NAMES)
+    warp = {d["name"]: d for d in out["deformers"] if d["type"] == "warp"}
+    assert warp["ShoulderLift_L"]["profile"] == "lift_lean"
+    assert warp["ShoulderLift_L"]["parameters"] == [
+        "ParamShoulderL", "ParamBodyAngleX", "ParamBodyAngleY",
+        "ParamBodySway", "ParamBreath"]
