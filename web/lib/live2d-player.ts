@@ -125,6 +125,14 @@ export interface Live2DPlayerOptions {
 const PLANE_SEGMENTS = 5;
 
 /**
+ * 外部输入（面捕 / 麦克风 / 滑杆）写完参数后，动作让位的秒数。
+ *
+ * 输入源是事件驱动的（摄像头 30 fps、麦克风按 rAF、鼠标按移动像素），不是每帧
+ * 都写；这个窗口让两次写入之间的空帧继续用外部值，输入一停又会自己交还给动作。
+ */
+const EXTERNAL_HOLD_SECONDS = 0.25;
+
+/**
  * Browser-side Live2D player using PixiJS.
  *
  * 两种渲染模式：
@@ -159,6 +167,8 @@ export class Live2DPlayer {
   private expressionFadeRate = 2;
   /** 表情生效前的目标值，用于每帧重新叠加（不累加）。 */
   private expressionBase = new Map<string, number>();
+  /** 外部输入刚写过的参数 → 剩余让位秒数（见 EXTERNAL_HOLD_SECONDS）。 */
+  private externalHold = new Map<string, number>();
   /** 动作组 → 已解析的动作文件。 */
   private motionGroups: Map<string, MotionFile[]> = new Map();
   private motion: MotionPlayback | null = null;
@@ -276,6 +286,7 @@ export class Live2DPlayer {
     this.expressionWeight = 0;
     this.expressionTargetWeight = 0;
     this.expressionBase.clear();
+    this.externalHold.clear();
     this.motionGroups.clear();
     this.motion = null;
     this.physics = null;
@@ -690,6 +701,7 @@ export class Live2DPlayer {
     for (const [k, v] of Object.entries(params)) {
       if (typeof v === 'number') {
         this.targetParams.set(k, clampToBounds(v, this.bounds.get(k)));
+        this.externalHold.set(k, EXTERNAL_HOLD_SECONDS);
       }
     }
   }
@@ -901,11 +913,12 @@ export class Live2DPlayer {
     // 低通收敛，直接写 params 会让动作每帧把它按回自己的值，表情只剩 15%。
     const held = this.activeExpressionParameterIds();
     playback.sample().forEach((value, id) => {
+      // 表情或外部输入正在驱动这个参数时不落值，否则每帧都会把它们按回动作自己的值。
+      if (held.has(id) || this.externalHold.has(id)) return;
       const target = clampToBounds(value, this.bounds.get(id));
       const targetNow = this.targetParams.get(id) ?? target;
       this.targetParams.set(
         id, weight >= 1 ? target : targetNow + (target - targetNow) * weight);
-      if (held.has(id)) return;
       const now = this.params.get(id) ?? target;
       this.params.set(id, weight >= 1 ? target : now + (target - now) * weight);
     });
@@ -1063,8 +1076,33 @@ export class Live2DPlayer {
     this.app.stop();
   }
 
+  /**
+   * 导出当前画面（PNG data URL）；渲染器没起来或画布被污染时返回 null。
+   *
+   * 必须先显式渲染一帧再读像素：WebGL 默认 `preserveDrawingBuffer: false`，
+   * 合成之后缓冲就被清空 —— 直接 `toDataURL()` 实测拿到的是 165×444 的
+   * **全透明**图（0 个不透明像素），而画面上模型明明在。
+   */
+  captureFrame(): string | null {
+    if (!this.app) return null;
+    try {
+      this.app.renderer.render(this.app.stage);
+      return this.canvas.toDataURL('image/png');
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('当前帧导出失败:', err);
+      return null;
+    }
+  }
+
   private update(deltaFrames: number): void {
     const dt = deltaFrames / 60;
+    // 外部输入的让位窗口按帧推进：过期就把参数交还给动作。
+    for (const [id, remain] of this.externalHold) {
+      const left = remain - dt;
+      if (left > 0) this.externalHold.set(id, left);
+      else this.externalHold.delete(id);
+    }
     // 顺序：动作写目标 → 表情叠在目标上 → 插值 → 物理（物理读平滑值、
     // 直接写回），这样次级运动总是滞后于主动作，和内核一致。
     this.updateMotion(dt);

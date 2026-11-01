@@ -46,16 +46,20 @@ export default function PreviewStage() {
   };
 
   const saveFrame = () => {
-    const canvas = containerRef.current?.querySelector('canvas');
-    if (!canvas) return;
-    try {
-      const link = document.createElement('a');
-      link.href = canvas.toDataURL('image/png');
-      link.download = `${current?.characterId || 'live2d'}-frame-${Date.now()}.png`;
-      link.click();
-    } catch {
-      rt.setError('当前帧无法导出：画布被跨域资源污染。');
+    const player = rt.playerRef.current;
+    if (!player) {
+      rt.setError('模型还没加载完成，暂时无法导出当前帧。');
+      return;
     }
+    const url = player.captureFrame();
+    if (!url) {
+      rt.setError('当前帧无法导出：画布被跨域资源污染。');
+      return;
+    }
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${current?.characterId || 'live2d'}-frame-${Date.now()}.png`;
+    link.click();
   };
 
   const modelName =
