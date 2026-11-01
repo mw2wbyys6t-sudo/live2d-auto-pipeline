@@ -248,6 +248,53 @@ rms 0.120，差别在测量噪声内，所以留在 4×4。（此前用「整块
 `runtime_ready` / `official_core_consistent` / `motion_verified` / `physics_verified`
 全部通过、`moc3_dropped: []`。
 
+### 15. 修复：肩抬起时腕口裂开、头顶的配件错位（都在 `deformers.py`）
+
+**a. 肩部升降只抬了上臂，袖口与手留在原地。** 手臂、袖口、手是三层独立图层；`ShoulderLift_L/R`
+的目标里只有 `arm_L/R`（以及本图集里不存在的 `sleeve_L/R`），袖口与手没有挂上任何变形器。实测
+（singer 导出件，物理关掉、`ParamShoulderL = 1`）：`arm_L` 抬 38.40px，`cuff_L` / `hand_L` 位移
+**0px**；`ParamShoulderR = 1` 时 `arm_R` 抬 56.88px，`cuff_R` / `hand_R` 0px —— 整条小臂被拉走，
+腕口裂开一道随参数变化的缝。现在袖口与手挂在**同一条**变形器上（同一条变形器共用同一个网格
+范围，逐顶点位移完全相同）。同一测量：`ParamShoulderL = 1` 时 arm / cuff / hand 都是
+**[0, −47.76]**，`ParamShoulderR = 1` 时是 **[0, −64.80]**，`ParamShoulderL = −1` 时都是
+**[0, +47.76]**。幅度比修复前大（L 38.40 → 47.76，R 56.88 → 64.80）是因为尺度取成员并集的
+包围盒：袖口与手在腕部以下，并集更高；12% 的抬升比例没有改。L/R 幅度差（47.76 vs 64.80）
+来自左右手臂成员的高度的差异，是既有的不对称，本轮不动。
+
+出厂 idle 的呼吸只驱动到 `ParamBreath` 0.33~0.80 → `ParamShoulderL/R` 0.069~−0.124，
+即抬落约 5~6px；修复前这 5~6px 的抬落里，袖口和手是一动不动的那一部分。
+
+**b. `accessories` 写死成 `Torso`，头顶的发片跟着躯干走。** 分层器把认不出的零件都塞进
+`accessories`，它是一个**通用桶**（可能是头饰、耳饰、项链、手链），写死骨骼必然会在某些
+图集上错。singer 里这一层是头顶 y 15..58 的一撮头发：`ParamBodyAngleZ = 10` 时它移
+**78.19px**（`ParamBodyAngleZ = 6` 时 47px），而同一张图上的脸与头发 0px —— 头顶浮着一块
+错位的补丁。现在这层交给位置推断（`_infer_from_centroid`）：质心落在头段就归头部总成，
+落在胸腰段就归躯干。同一测量：`ParamBodyAngleZ = 6 / 10` 下 accessories **0px**。
+
+写死移除后暴露一个副作用：它此前撑高了 `Torso` 的关节点。`get_bone_positions` 用「归到某骨骼
+名下的图层质心」当关节，图层表里 `accessories` 排在最后，于是 `Torso` 的关节被顶到了头顶
+(500.28, 40.40)，头发顶点按距离被大量分到 `Torso` 的权重上 —— 这就是修复前 `ParamAngleZ = 30`
+时 `hair_front` 只走 11.81px 的原因（脸 13.15px，两者对不上同一个旋转）。
+
+**位置推断的顶段因此必须判 `Hair_Top` 而不是 `Head`。** 中途一次改法是「顶段 → `Head`」，
+结果 `Head` 是头部转动的枢轴、被头顶图层质心顶到头皮：`ParamAngleZ = 30` 时脸被甩出
+**61.90px**（枢轴正确时 15.56px），整颗头绕头皮画圈。`Hair_Top` 与 `Head` 同属头部总成
+（键形带、权重完全一致），但不参与枢轴测量。回归测试：
+`test_top_layer_does_not_drag_the_head_pivot_to_the_scalp`。
+
+浏览器内实跑（同一张导出件、同一播放器，物理关掉逐姿态喂参数）：`ParamAngleZ = 30` 时
+accessories 移 [74.55, 20.75]、`hair_front` [56.90, −1.20]、脸 [15.56, 7.87]、`hair_back`
+[4.10, −71.64] —— 把脸的最小二乘仿射拟合出来再逐顶点看其余各层，accessories / 头发 / 五官 /
+腮红 / 泪痕的残差**全为 0.00px**，拟合矩阵各层都是 [0.866, −0.5; 0.5, 0.866]，即整颗头
+共用同一个 30° 刚体旋转。`ParamAngleY/X = 30` 的残差仍是 1~6px 的透视项（`hair_back` 最大
+16.39px，处于离脸最远的后发），属既有近似，本轮不动。
+
+**仍不成立的两处（测得，未修）**：`ParamBodyAngleZ` 只动脖子与躯干，头不跟（`= 10` 时脖子
+32.16px、脸 0）；`ParamBodyAngleX/Y` 只倾衣服，脖子与手臂不跟（`ParamBodyAngleY = 10` 时
+领子 26.03px、`clothes_top` 14.67px、脖子与手臂 0）。出厂 idle 里这两个参数的幅度只有
+±0.5 / ±2.0，折算到领口 ≤5.2px，画面读不出来；要修得给身体轴换成多轴键形/变形器，本轮
+没有证据支持先动它。
+
 ---
 
 ## [v0.10.10] — 2026-10-28 — 代号「GPU Aware」（**2026-10-29 已发布**：tag `v0.10.10` + GitHub Release；安装包已构建并通过产物级验收）

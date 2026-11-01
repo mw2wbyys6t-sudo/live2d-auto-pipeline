@@ -119,7 +119,6 @@ class TestComputeBoneWeights:
 
 # 真实管线（前景剪影 + 合成器拆分）在 demo 输入上产出的完整层名词表。
 PRODUCTION_LAYERS = {
-    "accessories": "Torso",
     "arm_L": "ArmBack_L",
     "arm_R": "ArmBack_R",
     "clothes_bottom": "Skirt",
@@ -192,6 +191,27 @@ class TestBoneResolution:
         info = BoneHierarchy.STANDARD_BONES[bone]
         assert info["group"] not in {"head", "face", "hair", "eyes", "brows"}
 
+    def test_generic_bucket_layers_are_left_to_position(self):
+        """``accessories`` 不写死骨骼：同一层名可能是头顶发饰、腰链或手持物。
+
+        实测（2026-11-01，singer）：这一层是头顶 15..58px 的一撮头发，写死成
+        ``Torso`` 后 ``ParamBodyAngleZ = 6`` 时它滑 47px，脸和头发纹丝不动 ——
+        头顶裂开一块。没有质心时只能兜底，给了质心就必须按位置判。
+        """
+        bone, reason = BoneHierarchy().resolve_bone("accessories")
+
+        assert reason == "default"
+        assert bone == BoneHierarchy.DEFAULT_BONE
+
+    def test_top_of_head_accessory_rides_with_the_head(self):
+        hierarchy = BoneHierarchy()
+        span = (0.0, 0.0, 600.0, 1000.0)
+
+        bone, reason = hierarchy.resolve_bone("accessories", (300.0, 40.0), span)
+
+        assert reason == "position"
+        assert bone == "Hair_Top"
+
     def test_side_suffix_selects_the_matching_limb(self):
         hierarchy = BoneHierarchy()
 
@@ -214,10 +234,32 @@ class TestBoneResolution:
         hierarchy = BoneHierarchy()
         span = (0.0, 0.0, 600.0, 1000.0)
 
-        assert hierarchy.resolve_bone("weird_top_thing", (300.0, 100.0), span)[0] == "Head"
+        # 最上面一段归 Hair_Top（同属头部总成），不能归 Head —— Head 是枢轴骨骼
+        assert hierarchy.resolve_bone("weird_top_thing", (300.0, 100.0), span)[0] == "Hair_Top"
         assert hierarchy.resolve_bone("weird_chest_thing", (300.0, 300.0), span)[0] == "Chest"
         assert hierarchy.resolve_bone("weird_waist_thing", (300.0, 550.0), span)[0] == "Waist"
         assert hierarchy.resolve_bone("weird_bottom_thing", (300.0, 800.0), span)[0].startswith("Leg_")
+
+    def test_top_layer_does_not_drag_the_head_pivot_to_the_scalp(self):
+        """头顶图层归到 ``Head`` 会把枢轴从颈根拽到头顶。
+
+        ``get_bone_positions`` 拿归到某骨骼名下的图层质心当该骨骼的关节点。
+        ``accessories``（singer 里是头顶 15..58px 的一撮头发）一度被位置推断
+        判成 ``Head``：实测 ``ParamAngleZ = 30`` 时脸被甩出 61.90px，而枢轴正确
+        时同一参数下脸只移 15.56px。位置推断改判 ``Hair_Top`` 后枢轴回到颈根。
+        """
+        hierarchy = BoneHierarchy()
+        span = (0.0, 0.0, 600.0, 1000.0)
+        base = {"face": (300.0, 150.0), "neck": (300.0, 300.0), "waist": (300.0, 500.0)}
+        base_positions = hierarchy.get_bone_positions(base)
+
+        with_top = dict(base)
+        with_top["accessories"] = (300.0, 40.0)
+        positions = hierarchy.get_bone_positions(with_top)
+
+        assert positions["Head"] == base_positions["Head"]
+        assert positions["Head"][1] == pytest.approx(base["neck"][1])
+        assert positions["Hair_Top"] == pytest.approx((300.0, 40.0))
 
 
 class TestBonePivots:

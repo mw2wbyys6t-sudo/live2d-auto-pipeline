@@ -185,7 +185,12 @@ class BoneHierarchy:
         "skirt_hem": "Skirt",
         "skirt_side": "Skirt",
         # ---- 配件 ----
-        "accessories": "Torso",
+        #
+        # ``accessories`` 是分层器的**通用兜底桶**，里面可能是头饰、耳饰、项链、
+        # 手链……写死成 ``Torso`` 会让头顶的头发碎片跟着躯干转：实测（singer，
+        # 该层实为头顶 15..58px 的一撮头发）``ParamBodyAngleZ = 10`` 时它移
+        # 78.19px，而同一张图上的头发 / 脸位移 0px —— 头顶出现一条错位的补丁。
+        # 交给 ``_infer_from_centroid`` 按位置判定：偏上就是头部，偏中就是胸腰。
         "objects": "Torso",
         "pendant": "Chest",
         "watch": "ForearmBack_L",
@@ -456,6 +461,14 @@ class BoneHierarchy:
         比例取七头身立绘的经验值：头 0~20%、肩胸 20~34%、躯干 34~50%、
         腰胯 50~68%、腿 68% 以下。猜错也只是"衣服跟躯干走"这种可接受的
         近似，远好过以前一律挂到 ``Face`` 上。
+
+        最上面一段返回 **``Hair_Top`` 而不是 ``Head``**：``Head`` 是头部转动的
+        枢轴，``get_bone_positions`` 会拿归到它名下的图层质心当关节点。头顶的
+        图层（如 ``accessories``）一旦归到 ``Head``，枢轴就从颈根窜到头顶 ——
+        实测 ``ParamAngleZ = 30`` 时脸被甩出 61.90px，而正确构建里同一参数下
+        脸只移 15.56px、整颗头各层共用同一个旋转矩阵。
+        ``Hair_Top`` 与 ``Head`` 同属头部总成（键形、权重完全一致），但不参与
+        枢轴测量。
         """
         if centroid is None or span is None:
             return None
@@ -463,7 +476,7 @@ class BoneHierarchy:
         height = max(1.0, y1 - y0)
         frac = (float(centroid[1]) - y0) / height
         if frac < 0.20:
-            return "Head"
+            return "Hair_Top"
         if frac < 0.34:
             return "Chest"
         if frac < 0.50:
@@ -685,14 +698,21 @@ class DeformerHierarchy:
         #
         # 没有独立的肩部图层，只能抬整条上臂（Live2D 里肩参数本来也会带上臂）。
         # 幅度刻意小（上臂高度的 12%），避免看起来像"举手"。
+        #
+        # 袖口 / 手必须跟手臂挂在**同一条**变形器上：它们是小臂末端的独立图层，
+        # 不跟着抬就会在腕口裂开。实测（singer，ParamShoulderL=1）手臂抬 38.40px、
+        # cuff_L / hand_L 位移 0px；ParamShoulderR=1 时手臂 56.88px、cuff_R / hand_R
+        # 0px。同一条变形器让三者共用同一个网格范围，位移逐点相同。
         {"name": "ShoulderLift_L", "parent": "ArmBack_L", "rows": 2, "cols": 2,
          "type": "warp", "profile": "lift",
          "parameters": ["ParamShoulderL"],
-         "targets": ["arm_L", "upper_arm_back_left", "sleeve_L"]},
+         "targets": ["arm_L", "upper_arm_back_left", "sleeve_L",
+                     "cuff_L", "hand_L"]},
         {"name": "ShoulderLift_R", "parent": "ArmBack_R", "rows": 2, "cols": 2,
          "type": "warp", "profile": "lift",
          "parameters": ["ParamShoulderR"],
-         "targets": ["arm_R", "upper_arm_back_right", "sleeve_R"]},
+         "targets": ["arm_R", "upper_arm_back_right", "sleeve_R",
+                     "cuff_R", "hand_R"]},
     ]
 
     # ---- rotation 变形器：当前**不会**被创建，保留定义只为标明意图 ----

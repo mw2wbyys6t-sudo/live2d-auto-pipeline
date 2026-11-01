@@ -105,3 +105,24 @@ def test_absent_expression_layers_do_not_create_their_deformers():
     out = _build(REAL_LAYER_NAMES)
     names = [d["name"] for d in out["deformers"]]
     assert "CheekFollow" not in names and "TearFollow" not in names
+
+
+def test_shoulder_lift_carries_cuff_and_hand_with_the_arm():
+    """袖口与手是小臂末端的独立图层，必须挂在同一条肩部变形器上。
+
+    实测（2026-11-01，singer 导出件）：``ParamShoulderL = 1`` 时 ``arm_L``
+    抬 38.40px，而 ``cuff_L`` / ``hand_L`` 位移 **0px**；``ParamShoulderR = 1``
+    时 ``arm_R`` 抬 56.88px，``cuff_R`` / ``hand_R`` 0px —— 腕口被拉开。
+    """
+    out = _build(REAL_LAYER_NAMES)
+    warp = {d["name"]: d for d in out["deformers"] if d["type"] == "warp"}
+    assert warp["ShoulderLift_L"]["targets"] == ["arm_L", "cuff_L", "hand_L"]
+    assert warp["ShoulderLift_R"]["targets"] == ["arm_R", "cuff_R", "hand_R"]
+
+
+def test_shoulder_lift_targets_shrink_to_what_really_exists():
+    """分层里没有袖口 / 手时不该凭空多出目标（命中过滤照常生效）。"""
+    out = _build(["arm_L", "arm_R"])
+    warp = {d["name"]: d for d in out["deformers"] if d["type"] == "warp"}
+    assert warp["ShoulderLift_L"]["targets"] == ["arm_L"]
+    assert warp["ShoulderLift_R"]["targets"] == ["arm_R"]
