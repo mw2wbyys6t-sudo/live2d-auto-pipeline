@@ -50,7 +50,7 @@ opencv-python-headless>=4.9.0.80
 #    后装的会静默覆盖前者（实测：装完 CPU 版后 DmlExecutionProvider 直接消失），
 #    而 pip 对此毫不知情。所以凡是钉着 onnxruntime 的包都不能进基础包。
 onnxruntime-directml>=1.24.4; sys_platform == "win32"
-onnxruntime>=1.31.0; sys_platform != "win32"
+onnxruntime>=1.31.1; sys_platform != "win32"
 # rembg **已移出基础包**（v0.10.10）：它钉着 CPU 版 onnxruntime，会把 Windows 的
 # DirectML 覆盖掉。它本来就是「应用内按需下载」的能力组
 # （api/services/capability_manager.go 的 capabilityPlans["rembg"]），

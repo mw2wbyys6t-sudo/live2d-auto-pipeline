@@ -66,7 +66,7 @@ opencv-python>=4.9.0.80
 # ⚠️ 不能同装：两个发行名共用 onnxruntime/ 目录，后装的会静默覆盖前装的，
 #    pip 不知情。因此任何钉着 onnxruntime 的包（如 rembg）都不能进基础清单。
 onnxruntime-directml>=1.24.4; sys_platform == "win32"
-onnxruntime>=1.31.0; sys_platform != "win32"
+onnxruntime>=1.31.1; sys_platform != "win32"
 # rembg 移出基础清单（v0.10.10）：它钉 CPU 版 onnxruntime，会覆盖 Windows 的
 # DirectML 运行时。分层主链路用 isnet_onnx 直连本地权重，不需要 rembg；
 # 要用 rembg 后端时装它：pip install "rembg[cpu]"（会失去 DirectML）。
