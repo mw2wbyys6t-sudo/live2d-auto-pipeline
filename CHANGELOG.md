@@ -191,6 +191,23 @@ Core 验收（11 个变形器编译、`runtime_ready`、动作与物理逐帧对
 `runtime_ready` / `official_core_consistent` / `motion_verified` / `physics_verified`
 全部通过。
 
+### 13. 修复：`npm run dev` 下后端把项目根解析到仓库上一级
+
+`DefaultConfig` 用 `filepath.Join("..", "..")` 推算项目根，前提是 cwd 在 `api/config`；
+而开发形态下 `go run .` 与 `./live2d-api` 都从 `api/` 启动，算出来的根是**仓库的上一级**。
+`go run` 的 exe 又在临时构建目录里，退回 exe 候选同样找不到，于是保持错误结果：
+
+- `/api/diagnostics` 报 `output_dir = F:\创造\output`、`log_dir = F:\创造\logs`；
+- 工作台所有 `/output/*` 请求 404（预览加载不出任何模型）；
+- Python 子进程 `No module named 'core'`（GPU 探测、图像上游查询全失败）。
+
+现在项目根的候选里先放 cwd 及其至多三层祖先，再退回 exe 位置与容器约定路径。
+实测同一启动方式下 `output_dir` 回到仓库 `output/`，`singer.model3.json` 从 404 变 200，
+页面 34 个 artMesh / 11 个变形器正常装配。新增 `api/config/dev_root_test.go`：
+用临时目录摆出 `<root>/core/workflow.py` + `<root>/api/` 再 `t.Chdir`，断言 `scripts_dir`
+与 `output.base_dir`；把新增的祖先遍历注释掉后该测试失败（实测 `scripts_dir` 退回
+`<root>` 的父目录），恢复后通过。
+
 ---
 
 ## [v0.10.10] — 2026-10-28 — 代号「GPU Aware」（**2026-10-29 已发布**：tag `v0.10.10` + GitHub Release；安装包已构建并通过产物级验收）

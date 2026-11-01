@@ -195,6 +195,22 @@ func DefaultConfig() *Config {
 			// 优先从 exe 自身位置向上找项目根（推荐把 exe 放在项目根目录，
 			// 或项目根的 dist/ 子目录），再退回容器约定路径。
 			candidates := []string{}
+			// 开发形态：``go run .`` / ``./live2d-api`` 都从 api/ 启动，
+			// ``filepath.Join("..","..")`` 会指到仓库的上一级；``go run`` 的
+			// exe 又在临时构建目录里，退回到 exe 候选同样找不到。实测后果是
+			// output 解析成 <仓库父目录>/output（/output/* 全 404）、scripts_dir
+			// 指错（Python 子进程报 No module named 'core'）。先从 cwd 向上找。
+			if wd, err := os.Getwd(); err == nil {
+				dir := wd
+				for i := 0; i < 4; i++ {
+					candidates = append(candidates, dir)
+					parent := filepath.Dir(dir)
+					if parent == dir {
+						break
+					}
+					dir = parent
+				}
+			}
 			if exe, err := os.Executable(); err == nil {
 				exeDir := filepath.Dir(exe)
 				candidates = append(candidates, exeDir, filepath.Dir(exeDir), filepath.Dir(filepath.Dir(exeDir)))
