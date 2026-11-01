@@ -181,6 +181,24 @@ def test_eye_idle_blinks_instead_of_squinting():
     assert sum(1 for v in values if v >= 0.99) >= len(values) * 0.85
 
 
+def test_body_side_sway_keeps_the_feet_planted():
+    """躯干侧摆必须收得比其他身体轴更紧，否则整个人在原地打滑。
+
+    实测（2026-11-01，工作台预览 singer @825×2220）：``ParamBodyAngleZ`` 绕 Body
+    枢轴转，枢轴到鞋 600px 力臂。按通用 0.20 幅度走 ±2° 时，12 帧里鞋的质心
+    左右摆 41.1px（占身高 1.9%），而脸的质心只动 6.6px —— 观感是脚在滑，不是
+    站着呼吸。收窄到 ±0.5° 后同一测量落到 10px 量级。
+    """
+    keys = {"ParamBodyAngleX": [-10.0, 0.0, 10.0],
+            "ParamBodyAngleY": [-10.0, 0.0, 10.0],
+            "ParamBodyAngleZ": [-10.0, 0.0, 10.0]}
+    doc = Motion3Builder(duration=6.0).build_idle(keys)
+    by_id = {c["Id"]: [v for _t, v in points_of(c)] for c in doc["Curves"]}
+    assert max(abs(v) for v in by_id["ParamBodyAngleZ"]) <= 0.6
+    assert (max(abs(v) for v in by_id["ParamBodyAngleZ"])
+            < max(abs(v) for v in by_id["ParamBodyAngleX"]))
+
+
 def test_rest_value_is_the_key_closest_to_zero():
     assert Motion3Builder.rest_value([-30.0, 0.0, 30.0]) == 0.0
     assert Motion3Builder.rest_value([0.2, 0.8]) == 0.2

@@ -17,6 +17,7 @@ import numpy as np
 from PIL import Image
 
 from core.logger import get_logger
+from live2d_builder.mesh.edge_bleed import EDGE_BLEED_PX, bleed_layers
 from live2d_builder.mesh.generator import MeshGenerator
 from live2d_builder.mesh.uv_unwrapper import UVUnwrapper
 from live2d_builder.bones.deformers import BoneHierarchy, DeformerHierarchy
@@ -114,6 +115,10 @@ class Live2DBuilder:
         """
         t0 = time.time()
         log.section(f"Building Live2D model: {self.character_name}")
+        # 每层沿轮廓外扩 1px：网格轮廓落在最外侧像素中心，不吃这一圈的话每个
+        # 部件沿轮廓少画约 1px，相邻部件之间漏出背景 —— 实测躯干 477/506/833
+        # 三行整行丢失，静止就是一条细亮缝，动画里随部件位移时隐时现。
+        layers = bleed_layers(layers, EDGE_BLEED_PX)
         # 静止不可见的层（腮红/眼泪）在网格阶段要走"铺满 bbox 的规则网格"，
         # 见 _generate_meshes 的说明。
         self._layer_opacity: Dict[str, float] = {

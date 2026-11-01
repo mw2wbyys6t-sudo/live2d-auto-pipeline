@@ -48,6 +48,18 @@ class MeshGenerator:
     #: Live2D 里这类五官本来就是一张四顶点面片，兜底直接给包围盒四边形。
     TINY_FEATURE_PIXELS = 400
 
+    #: 三角化时质心判定用的掩码向外放几像素。cv2 的轮廓顶点落在最外侧像素的
+    #: **中心**，紧贴边界的三角形质心必然落在掩码之外，被整片丢掉 —— 每个图层
+    #: 沿轮廓被蚀掉约 1px，相邻部件之间因此漏出背景（实测躯干 477/506/833 三行
+    #: 整行丢失）。放 1px 只影响边界那一圈三角形，掩码之外的像素本来也是透明的。
+    FILTER_PAD_PX = 1
+
+    #: 轮廓折线的弦高误差上限（px）。早先把 ``contour_spacing``（12px）直接当
+    #: approxPolyDP 的 epsilon，140×160 的矩形会被削成斜四边形：右边界从 x=170
+    #: 斜到 169，整列墨水落到网格外；有机轮廓的凹口同样被弦切掉。1px 是"看不出
+    #: 差别"的上限，把线段数交给 ``_subdivide_boundary`` 按间距补点控制。
+    CONTOUR_EPSILON_PX = 1.0
+
     def _tiny_feature_mesh(self, mask: np.ndarray, w: int, h: int) -> Dict:
         """小部件兜底：用 alpha 包围盒的 **3×2 面片**代替 Delaunay 网格。
 
@@ -456,9 +468,9 @@ class MeshGenerator:
             arclen = cv2.arcLength(cnt, True)
             if arclen <= 0:
                 continue
-            # approxPolyDP epsilon as fraction of perimeter
-            eps = spacing / arclen
-            approx = cv2.approxPolyDP(cnt, eps * arclen, True).squeeze()
+            # approxPolyDP 的 epsilon 是**像素**弦高，不是归一化比例
+            eps_px = min(float(spacing), self.CONTOUR_EPSILON_PX)
+            approx = cv2.approxPolyDP(cnt, eps_px, True).squeeze()
             if approx.ndim == 1:
                 approx = approx[np.newaxis, :]
             for pt in approx:
@@ -523,13 +535,19 @@ class MeshGenerator:
             return self._empty_mesh(w, h)
 
         # Keep only triangles whose centroid is inside mask
+        if self.FILTER_PAD_PX > 0:
+            k = 2 * self.FILTER_PAD_PX + 1
+            filter_mask = cv2.dilate(
+                np.asarray(mask).astype(np.uint8), np.ones((k, k), np.uint8))
+        else:
+            filter_mask = mask
         kept: List[Tuple[int, int, int]] = []
         for t in tri.simplices:
             cx = int(round(pts[t].mean(axis=0)[0]))
             cy = int(round(pts[t].mean(axis=0)[1]))
             cx = max(0, min(w - 1, cx))
             cy = max(0, min(h - 1, cy))
-            if mask[cy, cx] > 0:
+            if filter_mask[cy, cx] > 0:
                 kept.append((int(t[0]), int(t[1]), int(t[2])))
 
         # Normalise to [0,1]

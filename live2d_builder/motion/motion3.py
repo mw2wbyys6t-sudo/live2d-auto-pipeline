@@ -39,6 +39,11 @@ _IDLE_AMPLITUDE_PREFIXES = (
     ("ParamTears", 0.05),     # 眼泪只是「有点湿」，不该满格
     ("ParamCheek", 0.10),
     ("ParamAngle", 0.18),     # ±30° 的行程只走 ±5.4°
+    # 躯干侧摆要单独收窄：ParamBodyAngleZ 绕 Body 枢轴转整条下半身，枢轴到鞋
+    # 有 600px 的力臂。±10° 行程走 0.20（±2°）时实测鞋左右甩出 41px（2220px
+    # 高的渲染里 1.9% 身高），头只动 6.6px —— 读起来是脚在原地打滑，不是站着
+    # 呼吸。0.05 让摆动落到 ±0.5°、鞋子约 10px，图整体留在原位。
+    ("ParamBodyAngleZ", 0.05),
     ("ParamBodyAngle", 0.20),
     ("ParamMouth", 0.15),
     ("ParamBrow", 0.15),
