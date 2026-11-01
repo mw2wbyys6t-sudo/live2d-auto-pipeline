@@ -3,6 +3,8 @@
 这里的每条结构断言都对应一次官方 Cubism Core 实测（见
 tests/integration/test_moc3_deformer_acceptance.py 与 tools/probe_warp_st_identity.py）。
 """
+import math
+
 import pytest
 
 from live2d_builder.exporter import moc3_sections as ms
@@ -142,9 +144,14 @@ def test_deformer_count_without_specs_still_refused():
 
 from live2d_builder.exporter.moc3_pipeline import (  # noqa: E402
     EYE_CLOSED_SCALE,
+    HEAD_DEPTH_SPANS,
+    HEAD_SHIFT_X,
+    HEAD_SHIFT_Y,
     MOUTH_CAVITY_STRETCH,
     MOUTH_OPEN_STRETCH,
     build_deformers,
+    to_model_xy,
+    _head_transform,
     driven_parameters,
     _attach_capabilities,
     _band_indices,
@@ -636,3 +643,78 @@ class TestDrivenParameterReporting:
         import json as _json
         data = _json.loads(manifest.read_text(encoding="utf-8"))
         assert data["Capabilities"]["DrivableParameters"] == ["ParamMouthOpenY"]
+
+
+class TestEyeFollowsHead:
+    """眼球必须随头转：眨眼与头部三轴压在同一条变形器带上。
+
+    眼睛网格的键形带被双眼球跟踪占用，所以头部三轴只能走变形器层；一块网格又只能
+    挂一个变形器，于是眨眼与转头合成多轴带（``eye_head``）。这里锁住两件事：
+    转头时变形器给出的位移与头部网格键形**完全相同**，以及缺少头部信息时不会把
+    眨眼一起丢掉。
+    """
+
+    _PARAMS = [
+        ParameterSpec("ParamEyeLOpen", 0.0, 1.0, 1.0),
+        ParameterSpec("ParamAngleX", -30.0, 30.0, 0.0),
+        ParameterSpec("ParamAngleY", -30.0, 30.0, 0.0),
+        ParameterSpec("ParamAngleZ", -30.0, 30.0, 0.0),
+    ]
+
+    @classmethod
+    def _build(cls, bone_positions, head_span):
+        meshes = [_patch("eyewhite_left", 0.0, 0.0, 40.0, 20.0)]
+        return build_deformers(
+            meshes,
+            [_entry("EyeBlink_L",
+                    ["ParamEyeLOpen", "ParamAngleX", "ParamAngleY",
+                     "ParamAngleZ"],
+                    "eye_head", ["eyewhite_left"], cols=2)],
+            400.0, 400.0,
+            {p.parameter_id: p for p in cls._PARAMS},
+            bone_positions, head_span=head_span)
+
+    def test_the_head_rule_is_reproduced_point_by_point(self):
+        warps, skipped, _static = self._build({"Head": (200.0, 60.0)},
+                                              (300.0, 200.0))
+        assert skipped == []
+        deformer = warps[0]
+        rest = _grid_by_keys(deformer, [1.0, 0.0, 0.0, 0.0])
+        turned = _grid_by_keys(deformer, [1.0, 0.0, 30.0, 0.0])
+
+        # 期望值直接用头部网格键形的那套公式算，而不是复制一份常量
+        px, py = to_model_xy(200.0, 60.0, 400.0, 400.0)
+        shift_x = 300.0 * HEAD_SHIFT_X
+        shift_y = 200.0 * HEAD_SHIFT_Y
+        depth = 300.0 * HEAD_DEPTH_SPANS
+        sin_y, cos_y = math.sin(math.radians(30.0)), math.cos(math.radians(30.0))
+        want = [_head_transform(x, y, px, py, shift_x, shift_y,
+                                0.0, 1.0, sin_y, cos_y, 0.0, 1.0, depth, 1.0)
+                for x, y in rest.points]
+        _assert_points(turned.points, want)
+
+        # 而且确实动了：单点最大位移 > 5px（弧位移 6px 被透视压回来一点）
+        moved = max(math.hypot(a[0] - b[0], a[1] - b[1])
+                    for a, b in zip(turned.points, rest.points))
+        assert moved > 5.0
+
+    def test_blink_still_collapses_the_eye(self):
+        warps, _skipped, _static = self._build({"Head": (200.0, 60.0)},
+                                               (300.0, 200.0))
+        deformer = warps[0]
+        opened = _grid_by_keys(deformer, [1.0, 0.0, 0.0, 0.0])
+        closed = _grid_by_keys(deformer, [0.0, 0.0, 0.0, 0.0])
+
+        def span(grid):
+            ys = [p[1] for p in grid.points]
+            return max(ys) - min(ys)
+
+        assert span(closed) < span(opened) * 0.2
+
+    def test_without_head_information_blink_survives_alone(self):
+        """没有 Head 关节就退回单轴眨眼，绝不把眨眼也一起丢掉。"""
+        warps, skipped, _static = self._build({}, (300.0, 200.0))
+        assert skipped == []
+        deformer = warps[0]
+        assert [pid for pid, _keys in deformer.axes_spec] == ["ParamEyeLOpen"]
+        assert len(deformer.grids) == 2

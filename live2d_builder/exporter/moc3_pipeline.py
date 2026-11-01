@@ -774,6 +774,62 @@ def _mouth_cavity_deform(points, rect, mesh_rect, values, options):
     return [(x, top + (y - top) * stretch) for x, y in points]
 
 
+def _eye_head_deform(points, rect, mesh_rect, values, options):
+    """眨眼（眼球向上收拢）**叠加**整颗头的转头/点头/侧转。
+
+    眼睛网格的键形带已经被双眼球跟踪（``ParamEyeBallX/Y``）占用，头部三轴只能压在
+    变形器层；而一块网格只能挂一个变形器，所以眨眼与头部三轴必须合成同一条多轴带。
+    顺序 = 先眨眼再随头（与"先做表情、再整体转动头部"一致）。
+
+    ``options["head"]`` 是 ``(px, py, shift_x, shift_y, depth)``，由
+    :func:`_eye_head_options` 按**整颗头的共享尺度**算出；缺失时只做眨眼。
+    """
+    pulled = _eye_deform(points, rect, mesh_rect, values, options)
+    head = options.get("head")
+    if not head:
+        return pulled
+    px, py, shift_x, shift_y, depth = head
+    angles = options.get("head_angles") or {}
+    ang = [math.radians(values.get(role, 0.0) * angles.get(role, 0.0))
+           for role in ("angle_x", "angle_y", "angle_z")]
+    sin_x, cos_x = math.sin(ang[0]), math.cos(ang[0])
+    sin_y, cos_y = math.sin(ang[1]), math.cos(ang[1])
+    sin_z, cos_z = math.sin(ang[2]), math.cos(ang[2])
+    out = []
+    for x, y in pulled:
+        tx, ty = _head_transform(x, y, px, py, shift_x, shift_y,
+                                 sin_x, cos_x, sin_y, cos_y, sin_z, cos_z,
+                                 depth, 1.0)
+        out.append((tx, ty))
+    return out
+
+
+def _eye_head_options(bone_positions: Dict[str, Any], width: float, height: float,
+                      head_span: Optional[tuple],
+                      parameters_by_id: Dict[str, ParameterSpec],
+                      param_ids: Sequence[str]) -> Optional[Dict[str, Any]]:
+    """``eye_head`` 需要的头部参数：枢轴、共享尺度、各轴的角度幅度。
+
+    缺任何一项都返回 ``None`` —— 调用方退回只眨眼的 ``eye`` profile，不交半套形变。
+    """
+    joint = bone_positions.get("Head")
+    if joint is None or head_span is None or len(param_ids) != 4:
+        return None
+    specs = [parameters_by_id.get(pid) for pid in param_ids[1:]]
+    if any(p is None for p in specs):
+        return None
+    span_x, span_y = float(head_span[0]), float(head_span[1])
+    px, py = to_model_xy(joint[0], joint[1], width, height)
+    return {
+        "head": (px, py, span_x * HEAD_SHIFT_X, span_y * HEAD_SHIFT_Y,
+                 max(span_x, span_y, 1.0) * HEAD_DEPTH_SPANS),
+        "head_angles": {
+            role: max(abs(float(p.minimum)), abs(float(p.maximum)))
+            for role, p in zip(("angle_x", "angle_y", "angle_z"), specs)
+        },
+    }
+
+
 #: ``profile`` -> (角色名序列, 形变函数)。
 #:
 #: 入口用 ``parameters`` 按**同样顺序**给出参数 id；任一参数没在模型里声明就整条
@@ -782,6 +838,8 @@ DEFORMER_PROFILES: Dict[str, tuple] = {
     "mouth": (("open", "form", "size"), _mouth_deform),
     "mouth_cavity": (("open",), _mouth_cavity_deform),
     "eye": (("open",), _eye_deform),
+    # 眨眼 + 头部三轴：眼睛网格的键形带被眼球跟踪占用，只能压在变形器这一层。
+    "eye_head": (("open", "angle_x", "angle_y", "angle_z"), _eye_head_deform),
     "brow": (("y", "angle", "form"), _brow_deform),
     "hair_sway": (("swing",), _hair_sway_deform),
     "torso": (("angle_x", "angle_y", "sway", "breath"), _torso_deform),
@@ -883,7 +941,8 @@ def build_deformers(specs: List[MeshSpec],
                     width: float,
                     height: float,
                     parameters_by_id: Dict[str, ParameterSpec] | None = None,
-                    bone_positions: Dict[str, Any] | None = None) -> tuple:
+                    bone_positions: Dict[str, Any] | None = None,
+                    head_span: Optional[tuple] = None) -> tuple:
     """把管线的 warp / rotation 变形器编成规格，并把成员网格就地挂上（改写 specs）。
 
     返回 ``(变形器规格, 未编译说明, 静态变形器名)``。一个网格只能挂一个变形器。
@@ -931,12 +990,22 @@ def build_deformers(specs: List[MeshSpec],
             )
             profile = str(entry.get("profile") or "")
             param_ids = _profile_parameter_ids(entry)
+            options = dict(entry)
+            if profile == "eye_head":
+                head_options = _eye_head_options(
+                    bone_positions or {}, width, height, head_span,
+                    parameters_by_id or {}, param_ids)
+                if head_options is None:
+                    # 头部信息不全：退回只眨眼，别把眨眼一起丢掉
+                    profile, param_ids = "eye", param_ids[:1]
+                else:
+                    options.update(head_options)
             bound_param = ""
             axes: tuple = ()
             if profile in DEFORMER_PROFILES and param_ids:
                 axes, grids = _profile_grids(
                     profile, param_ids, rect, n_cols, n_rows, mesh_rect,
-                    parameters_by_id or {}, entry)
+                    parameters_by_id or {}, options)
                 if not grids:
                     missing = [pid for pid in param_ids
                                if pid not in (parameters_by_id or {})]
@@ -1211,7 +1280,8 @@ def build_rig_spec(
     deformers = (builder_result.get("deformer_tree") or {}).get("deformers") or []
     deformer_specs, uncompiled, static = build_deformers(
         specs, list(deformers), width, height,
-        parameters_by_id=params_by_id, bone_positions=bone_positions)
+        parameters_by_id=params_by_id, bone_positions=bone_positions,
+        head_span=head_span)
     warps = [d for d in deformer_specs if isinstance(d, WarpDeformerSpec)]
     if deformer_specs:
         linked = sum(1 for m in specs if m.deformer_id)

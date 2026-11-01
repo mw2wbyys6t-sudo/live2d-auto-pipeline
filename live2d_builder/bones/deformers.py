@@ -638,14 +638,25 @@ class DeformerHierarchy:
         # 轮廓上沿）。眼睛下面已经画好了「闭眼图」（脸层肤色 + 原画上睫毛，见
         # LayerComposer._synthesize_eyelid），收拢后露出来就是闭眼的样子。
         # 闭眼图是**静态**的，所以不占变形器：它由 EyeBlink 的收拢动作"让出来"。
-        {"name": "EyeBlink_L", "parent": "Eye_L", "rows": 2, "cols": 2,
-         "type": "warp", "profile": "eye",
-         "parameters": ["ParamEyeLOpen"],
+        #
+        # 同一条带还要带上头部三轴（``eye_head``）：眼球网格的键形带被双眼球跟踪
+        # （ParamEyeBallX/Y）占满，头部转动只能压在变形器层；而一块网格只能挂一个
+        # 变形器，所以眨眼与转头合成一条多轴带。此前眼球完全不随头转：实测
+        # ParamAngleY=30 时上眼睑移动 15.10px、眼球 0px，眼睛在眼眶里向后滑。
+        #
+        # 控制网格用 4×4 点（3 格）：1 格时透视项在 84px 宽的眼区上被双线性近似
+        # 掉 0.35px，3 格降到 0.07~0.15px，再加密（5 格）无改善。同步把
+        # moc3 从 453248 涨到 460160 字节。
+        {"name": "EyeBlink_L", "parent": "Eye_L", "rows": 4, "cols": 4,
+         "type": "warp", "profile": "eye_head",
+         "parameters": ["ParamEyeLOpen", "ParamAngleX", "ParamAngleY",
+                        "ParamAngleZ"],
          "targets": ["eyewhite_left", "irides_left", "eyelash_left",
                      "eyes_left", "eye_left"]},
-        {"name": "EyeBlink_R", "parent": "Eye_R", "rows": 2, "cols": 2,
-         "type": "warp", "profile": "eye",
-         "parameters": ["ParamEyeROpen"],
+        {"name": "EyeBlink_R", "parent": "Eye_R", "rows": 4, "cols": 4,
+         "type": "warp", "profile": "eye_head",
+         "parameters": ["ParamEyeROpen", "ParamAngleX", "ParamAngleY",
+                        "ParamAngleZ"],
          "targets": ["eyewhite_right", "irides_right", "eyelash_right",
                      "eyes_right", "eye_right"]},
         {"name": "BrowMove_L", "parent": "Brow_L", "rows": 2, "cols": 3,
