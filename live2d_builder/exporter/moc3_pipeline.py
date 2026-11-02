@@ -598,18 +598,26 @@ def _body_lean_rect(entries: List[Dict],
 
     共用一个尺度以后，同一个 (x, y) 无论落在哪块网格上都得到同一个位移（倾摆沿 y 线性，
     2 行的控制网格能精确表示），手臂与领口就跟着躯干一起走。
+
+    **锚点（y1 = 深度 0 的那条线）只按躯干本体（``torso`` profile）的成员取**，不跟着
+    手臂往下走：手臂垂到腰以下，把并集底拖到大腿。实测分层器切出来的衣服三段是
+    ``clothes_top`` 202..476 / ``waistband`` 477..505 / ``clothes_bottom`` 506..833 ——
+    **零重叠的硬接**，腰带下缘只要平移一点，腰线就裂开一道贯通的缝（``ParamBreath = 1``
+    时实测整条腰横穿背景）。锚点钉在腰带下缘以后，腰带在该处位移为 0，缝不再开。
     """
-    rects = [
-        _rest_rect(members_by_name[str(entry.get("name") or "")])
+    lean = [
+        (str(entry.get("profile") or ""),
+         _rest_rect(members_by_name[str(entry.get("name") or "")]))
         for entry in entries
         if str(entry.get("profile") or "") in BODY_LEAN_PROFILES
         and str(entry.get("name") or "") in members_by_name
     ]
-    if not rects:
+    if not lean:
         return None
+    torso = [r for profile, r in lean if profile == "torso"] or [r for _p, r in lean]
     return (
-        min(r[0] for r in rects), min(r[1] for r in rects),
-        max(r[2] for r in rects), max(r[3] for r in rects),
+        min(r[0] for _p, r in lean), min(r[1] for _p, r in lean),
+        max(r[2] for _p, r in lean), max(r[3] for r in torso),
     )
 
 

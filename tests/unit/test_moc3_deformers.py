@@ -799,9 +799,9 @@ class TestSharedBodyLean:
     _ARM_REST = [0.0, 0.0, 0.0, 0.0, 0.5]
     _ARM_Y10 = [0.0, 0.0, 10.0, 0.0, 0.5]
 
-    def _build(self, params=None):
+    def _build(self, params=None, arm_y1=10.0):
         meshes = [_patch("clothes_top", 0.0, 0.0, 40.0, 10.0),   # 躯干 x 0..40
-                  _patch("arm_L", 60.0, 0.0, 80.0, 10.0)]        # 手臂 x 60..80
+                  _patch("arm_L", 60.0, 0.0, 80.0, arm_y1)]      # 手臂 x 60..80
         entries = [
             _entry("BodySway", ["ParamBodyAngleX", "ParamBodyAngleY",
                                 "ParamBodySway", "ParamBreath"],
@@ -869,3 +869,25 @@ class TestSharedBodyLean:
         dx, dy = self._row_delta(arm, [0.0], [1.0], want_top=True)
         assert dx == pytest.approx(0.0)
         assert dy == pytest.approx(-SHOULDER_LIFT * 10.0)
+
+    def test_lean_is_pinned_at_the_waist_not_at_the_lowest_member(self):
+        """锚点必须是**躯干本体**的下缘，不是并集下缘。
+
+        分层器切出来的衣服是零重叠的硬接（singer：``clothes_top`` 202..476 /
+        ``waistband`` 477..505 / ``clothes_bottom`` 506..833）。手臂垂到腰以下会把并集
+        底拖到大腿，于是腰带下缘带着位移离开裙摆 —— ``ParamBreath = 1`` 时整条腰
+        裂开一道贯通背景的缝。锚点钉在腰线以后，腰带与裙摆在这一行都不动。
+        """
+        # 手臂垂到 y=30（躯干只到 y=10）
+        warps, _skipped = self._build(arm_y1=30.0)
+        torso, arm = warps["BodySway"], warps["ShoulderLift_L"]
+        # 躯干最下那一行（腰线附近）位移为 0：腰带不会从裙摆上滑开
+        assert self._row_delta(torso, self._TORSO_REST, self._TORSO_Y10,
+                               want_top=False)[0] == pytest.approx(0.0)
+        # 手臂垂到腰线以下的部分同样为 0
+        assert self._row_delta(arm, self._ARM_REST, self._ARM_Y10,
+                               want_top=False)[0] == pytest.approx(0.0)
+        # 而肩部仍然按同一个共享尺度一起摆（宽度 = 并集 0..80）
+        assert self._row_delta(torso, self._TORSO_REST, self._TORSO_Y10,
+                               want_top=True)[0] == pytest.approx(
+            80.0 * TORSO_LEAN_X, abs=1e-6)
