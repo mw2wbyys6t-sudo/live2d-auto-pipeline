@@ -119,7 +119,7 @@ tauri-build.yml 仅 bundle `desktop/bin/*`（live2d-api.exe + face_tracker.exe�
 | Method | Path | Handler | 用途 |
 |---|---|---|---|
 | GET | /api/health | HealthCheck | Python 探针（python --version + PIL/numpy），失败 503 |
-| GET | /api/status,/api/info,/api/models,/api/expressions | — | 状态/元信息（models 为硬编码列表） |
+| GET | /api/status,/api/info | — | 状态/元信息（`/api/models`、`/api/expressions` 已于 2026-11-02 删除：硬编码假清单；引擎可用性看 `GET /api/providers`） |
 | POST | /api/generate | GenerateImage | 旧版生图（本地生成器） |
 | POST | /api/generate/character | GenerateCharacter | **主链路**：workflow + WS 进度 |
 | POST | /api/segment | SegmentImage | 分层 |

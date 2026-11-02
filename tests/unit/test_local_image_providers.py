@@ -294,18 +294,21 @@ class TestRouterLocalMode:
         priority = ProviderRouter().effective_priority()
         assert priority[0] == "comfyui"
         assert priority[1] == "sd_webui"
-        assert priority[-1] == "local_placeholder"
+        # 占位图不在默认顺序里：新用户不该拿到一张几何假图
+        assert "local_placeholder" not in priority
 
     def test_local_only_filters_cloud_providers(self, monkeypatch):
         from core.image_gen.router import ProviderRouter
 
         monkeypatch.setenv("LIVE2D_LOCAL_ONLY", "1")
         priority = ProviderRouter().effective_priority()
-        assert priority == ["comfyui", "sd_webui", "local_placeholder"]
+        assert priority == ["comfyui", "sd_webui"]
         assert "pollinations" not in priority
 
     def test_local_only_never_calls_cloud(self, tmp_path, monkeypatch):
+        """本地模式下即使云端「可用」也不许被调用；本机引擎都没起来就如实失败。"""
         from core.image_gen import router as router_mod
+        from core.image_gen.base import GenerationError
         from core.image_gen.pollinations import PollinationsProvider
 
         monkeypatch.setenv("LIVE2D_LOCAL_ONLY", "1")
@@ -321,7 +324,9 @@ class TestRouterLocalMode:
 
         router = router_mod.ProviderRouter()
         out = tmp_path / "offline.png"
-        result = router.generate(prompt="离线模式", output_path=str(out),
-                                 width=256, height=256, seed=3)
-        assert result.success
-        assert result.provider == "local_placeholder"
+        with pytest.raises(GenerationError) as exc:
+            router.generate(prompt="离线模式", output_path=str(out),
+                            width=256, height=256, seed=3)
+        # 失败要能照着做，而不是 "Last error: None"
+        assert "设置" in str(exc.value)
+        assert not out.exists(), "失败时不该留下一张假图"

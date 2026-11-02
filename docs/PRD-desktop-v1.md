@@ -118,7 +118,7 @@ v1 不新增能力，只做**真实化**：能做的接通、做不了的标注�
 | D-10 | 分层页 PSD 下载 | `psd_path` 是目录，链接必 404 | **修**：只给文件链接，目录降级为"打开文件夹"或不展示 |
 | D-11 | 仪表盘 GPU / 延迟 | 写死 `false` / `0ms` | **改为"未探测"** 或真实探测 |
 | D-12 | `/api/info` features | 固定宣称人脸追踪、缓存等 | **改为按实际探测生成** |
-| D-13 | `/api/models`、`/api/expressions` | 硬编码且与模型无关 | **标注"内置示例"** 或按真实数据生成 |
+| D-13 | `/api/models`、`/api/expressions` | 硬编码且与模型无关 | ~~标注"内置示例"~~ → **2026-11-02 改为删除端点**（见 Q-04） |
 
 ### 4.5 安装与卸载（PKG）
 
@@ -161,7 +161,7 @@ v1 不新增能力，只做**真实化**：能做的接通、做不了的标注�
 | Q-01 | **删除** 生成页的 Provider / 风格 / Steps / CFG（已实施） |
 | Q-02 | **删除** Live2D 页的静态模型树、Physics 面板、Wireframe 开关（已实施） |
 | Q-03 | **仅 Go 后端为受支持形态**；Python 降级后端不承诺接口完整性（已实施：不再假报成功） |
-| Q-04 | 保留 `/api/models`、`/api/expressions`，但明确标注为「内置示例列表」（已实施） |
+| Q-04 | ~~保留 `/api/models`、`/api/expressions`，但明确标注为「内置示例列表」~~ → **2026-11-02 撤销**：两个端点连同硬编码清单一起删除。标注并没有解决问题 —— 新用户看到的仍是一份假清单，只是旁边写了一句"这是假的"。真表情由前端从产物自带的 exp3 读，可下载的增强模型走 `/api/models/optional` |
 
 ## 7. 实施状态（本轮）
 
@@ -179,7 +179,7 @@ v1 不新增能力，只做**真实化**：能做的接通、做不了的标注�
 | D-10 | 已修 | `core/psd/creator.py` 降级时 `psd_path` 为空并给出 `package_dir` |
 | D-11 | 已修 | `web/lib/api-client.ts` 真实测延迟；GPU 改为「未探测」 |
 | D-12 | 已修 | `api/handlers/handlers.go` `/api/info` features 按实际探测 + `notes` |
-| D-13 | 已标 | `/api/models`、`/api/expressions` 响应文案标注「内置示例」 |
+| D-13 | 已删 | 2026-11-02：`/api/models`、`/api/expressions` 与两份硬编码清单删除；`api/services/image_generator.go` 的 `GetAvailableModels`、`models.ExpressionInfo` 一并移除 |
 
 验证：`npx tsc --noEmit`、`NEXT_STATIC_EXPORT=1 next build`、`go build ./...`、
 `go test ./...`、`python -m py_compile` 全部通过。

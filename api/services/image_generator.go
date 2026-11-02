@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -82,6 +83,11 @@ func (g *ImageGenerator) GenerateWithCharacter(req models.GenerateRequest) (*mod
 		fmt.Sprintf("生成链路失败，已回退本地占位图：%v", err))
 }
 
+// ErrNoImageEngine 表示本机没有任何可用的图像引擎（没配 Key、也没起 ComfyUI /
+// SD WebUI）。这是**用户能自己解决**的失败，handler 必须把原文递出去，
+// 而不是并入「生成服务暂不可用，请稍后重试」——后者会让人白等。
+var ErrNoImageEngine = errors.New("没有可用的图像引擎")
+
 // pythonWorkflowResult 对应 Python WorkflowEngine.run() 返回的 JSON 结构
 type pythonWorkflowResult struct {
 	Success        bool                   `json:"success"`
@@ -92,6 +98,9 @@ type pythonWorkflowResult struct {
 	CharacterID    string                 `json:"character_id,omitempty"`
 	Error          string                 `json:"error,omitempty"`
 	ErrorState     string                 `json:"error_state,omitempty"`
+	// ErrorCode 是机器可读的失败原因（见 core/image_gen/base.GenerationError.code）。
+	// 只有它非空时，Error 的原文才允许直接递到用户面前。
+	ErrorCode      string                 `json:"error_code,omitempty"`
 	Steps          map[string]interface{} `json:"steps,omitempty"`
 	Prompt         *workflowPrompt        `json:"prompt,omitempty"`
 }
@@ -240,6 +249,11 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 		errMsg := pyResult.Error
 		if errMsg == "" {
 			errMsg = "unknown error"
+		}
+		// 「没配图像引擎」是用户照着就能修的失败，单独成类让 handler 给出
+		// 可操作的文案。上游错误原文仍不外泄（可能含内部 URL/路径）。
+		if pyResult.ErrorCode == "no_image_engine" {
+			return nil, ErrNoImageEngine
 		}
 		return nil, fmt.Errorf("工作流失败: %s (state: %s)", errMsg, pyResult.ErrorState)
 	}
@@ -467,68 +481,6 @@ func (g *ImageGenerator) CheckLocalGeneratorStatus() (bool, string) {
 	}
 
 	return true, "本地生成器就绪"
-}
-
-// GetAvailableModels 获取可用模型列表
-func (g *ImageGenerator) GetAvailableModels() []map[string]interface{} {
-	return []map[string]interface{}{
-		{
-			"id":      "Linaqruf/anything-v3.0",
-			"name":    "Anything V3",
-			"desc":    "通用动漫风格",
-			"size":    "约 4GB",
-			"type":    "sd15",
-			"quality": "standard",
-		},
-		{
-			"id":      "stablediffusionapi/anything-v5",
-			"name":    "Anything V5",
-			"desc":    "高质量动漫",
-			"size":    "约 4GB",
-			"type":    "sd15",
-			"quality": "high",
-		},
-		{
-			"id":      "gsdf/Counterfeit-V3.0",
-			"name":    "Counterfeit V3",
-			"desc":    "细腻画风",
-			"size":    "约 4GB",
-			"type":    "sd15",
-			"quality": "ultra",
-		},
-		{
-			"id":      "Meina/MeinaMix",
-			"name":    "MeinaMix",
-			"desc":    "萌系风格",
-			"size":    "约 4GB",
-			"type":    "sd15",
-			"quality": "high",
-		},
-		{
-			"id":      "andite/pastel-mix",
-			"name":    "Pastel Mix",
-			"desc":    "柔和色彩",
-			"size":    "约 4GB",
-			"type":    "sd15",
-			"quality": "high",
-		},
-		{
-			"id":      "WarriorMama777/OrangeMixs",
-			"name":    "AbyssOrangeMix",
-			"desc":    "丰富色彩",
-			"size":    "约 4GB",
-			"type":    "sd15",
-			"quality": "high",
-		},
-		{
-			"id":      "Vsukiyaki/ShiitakeMix",
-			"name":    "Shiitake-Mix",
-			"desc":    "SDXL高质量动漫",
-			"size":    "约 7GB",
-			"type":    "sdxl",
-			"quality": "ultra",
-		},
-	}
 }
 
 // findTopLevelJSON 在 stdout 中找到第一个最外层 JSON 对象的起止位置。

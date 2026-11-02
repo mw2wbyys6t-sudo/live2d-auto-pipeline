@@ -3,7 +3,6 @@ import type {
   CharacterCreate,
   ChatMessage,
   ExportFormat,
-  Expression,
   GenerationRequest,
   GenerationResult,
   GenerationStep,
@@ -623,20 +622,6 @@ export class APIClient {
     };
     const envelopeOk = (res as { success?: boolean } | null)?.success !== false;
     return { ...data, success: envelopeOk };
-  }
-
-  // ---------- expressions ----------
-
-  async getExpressions(characterId?: string): Promise<Expression[]> {
-    const q = characterId ? `?character_id=${encodeURIComponent(characterId)}` : '';
-    const res = await this.request<unknown>(`/api/expressions${q}`);
-    const data = extractData<any[]>(res);
-    return (Array.isArray(data) ? data : []).map(e => ({
-      name: e.name || e.Name || '',
-      file: e.file || e.File,
-      thumbnailUrl: e.thumbnail || e.ThumbnailUrl,
-      parameters: e.params || e.Parameters || [],
-    }));
   }
 
   // ---------- health ----------

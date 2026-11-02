@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -183,40 +184,6 @@ func TestGetAPIInfo(t *testing.T) {
 	}
 }
 
-func TestGetModels(t *testing.T) {
-	h := newTestHandler(t)
-	r := gin.New()
-	r.GET("/api/models", h.GetModels)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/models", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-	var resp models.Response
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if !resp.Success {
-		t.Error("expected success=true")
-	}
-}
-
-func TestGetExpressions(t *testing.T) {
-	h := newTestHandler(t)
-	r := gin.New()
-	r.GET("/api/expressions", h.GetExpressions)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/expressions", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-}
 
 func TestListCharacters_Empty(t *testing.T) {
 	h := newTestHandler(t)
@@ -463,4 +430,54 @@ func TestResponseShape(t *testing.T) {
 
 func contains(s, sub string) bool {
 	return bytes.Contains([]byte(s), []byte(sub))
+}
+
+// 没有可用图像引擎时，「该做什么」必须递到用户面前 —— 它不是「稍后重试」
+// 能好的故障。此前所有生成失败都被折叠成「生成服务暂不可用，请稍后重试」，
+// 新用户会一直等下去。
+func TestNoImageEngineReachesUserWithActionableText(t *testing.T) {
+	h := newTestHandler(t)
+	r := gin.New()
+	r.GET("/probe", func(c *gin.Context) {
+		if !h.userFacingGenerateError(c, fmt.Errorf("工作流失败: %w", services.ErrNoImageEngine)) {
+			t.Error("sentinel 没被识别，用户会拿到通用文案")
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("期望 400（客户端配置问题），得到 %d", w.Code)
+	}
+	var resp models.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if resp.Success {
+		t.Error("success 应为 false")
+	}
+	for _, want := range []string{"设置", "ComfyUI", "图像引擎"} {
+		if !strings.Contains(resp.Error, want) {
+			t.Errorf("文案缺少 %q：%s", want, resp.Error)
+		}
+	}
+}
+
+// 反向保险：其它错误仍然只回固定文案，不把上游原文（可能含内部 URL/路径）漏出去。
+func TestOtherGenerateErrorsStayGeneric(t *testing.T) {
+	h := newTestHandler(t)
+	err := fmt.Errorf("工作流失败: dial http://internal-upstream:7860 refused")
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	if h.userFacingGenerateError(c, err) {
+		t.Fatal("非 sentinel 错误不应被当成可操作提示直接应答")
+	}
+
+	w := httptest.NewRecorder()
+	c2, _ := gin.CreateTestContext(w)
+	h.serverError(c2, "图片生成", err)
+	if strings.Contains(w.Body.String(), "internal-upstream") {
+		t.Errorf("上游原文外泄：%s", w.Body.String())
+	}
 }

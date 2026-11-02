@@ -317,10 +317,3 @@ type ExportModelRequest struct {
 // 导出响应没有固定结构体：Handler 直接把 Python 构建结果（含摊平后的
 // runtime_ready / blocker）放进 models.Response.Data。
 
-// ExpressionInfo 表情信息
-type ExpressionInfo struct {
-	Name      string   `json:"name"`
-	ID        string   `json:"id"`
-	Params    []string `json:"params"`
-	Thumbnail string   `json:"thumbnail,omitempty"`
-}

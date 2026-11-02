@@ -329,8 +329,10 @@
   Go 侧一直是走 `models.Response` 的 —— 这是又一处 Go/Python 信封不一致。
 - `/api/health` 现在带 `data.python_ok`（安装验收脚本与 e2e checklist 的硬判据，缺字段会被判 FAIL）；
   依赖缺失时回 503 而不是「一切正常」。
-- `/api/status` 与 `/api/models` 的 `available` 改为**实测探测**（不再硬编码 true/false）：
-  服务可用性看真实探测结果，模型可用性看 `ProviderRouter` 的 provider 状态（配了 Key 就变 true）。
+- `/api/status` 的 `available` 改为**实测探测**（不再硬编码 true/false）：服务可用性看真实探测结果，
+  图像引擎可用性看 `GET /api/providers`（它读 `ProviderRouter` 的 provider 状态，配了 Key 就变 true）。
+  2026-11-02：`/api/models` 与 `/api/expressions` 连同两份硬编码清单**已删除** —— 之前只是给假清单
+  加了一句「内置示例」标注，新用户看到的仍是一份选不动的模型列表。
   `/api/info` 的 `features` 同样改为按探测给出：语义分层降级时如实标成
   「颜色启发式分层（已降级：…）」，不再一边写着「语义分层」一边跑的是另一条路。
 - 聊天会话存储为内存实现，**无 TTL/淘汰**。

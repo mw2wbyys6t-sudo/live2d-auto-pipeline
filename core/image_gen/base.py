@@ -20,11 +20,18 @@ import requests
 
 
 class GenerationError(Exception):
-    """Raised when image generation fails."""
-    def __init__(self, message: str, provider: str = "", retryable: bool = True):
+    """Raised when image generation fails.
+
+    ``code`` 是给上游（Go / 前端）看的机器可读原因。它存在的意义是**区分**
+    「用户能自己解决」与「服务内部故障」：前者要把原文递到人面前（例如没配
+    图像引擎），后者才折叠成「服务暂不可用」。
+    """
+    def __init__(self, message: str, provider: str = "", retryable: bool = True,
+                 code: str = ""):
         super().__init__(message)
         self.provider = provider
         self.retryable = retryable
+        self.code = code
 
 
 @dataclass

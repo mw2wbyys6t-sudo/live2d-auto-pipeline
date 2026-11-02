@@ -52,12 +52,14 @@ class ProviderRouter:
         # OpenAI Images API 兼容端点（官方/one-api 等网关/本地自建），
         # 使任意外部生成大模型都能接入上游路由。
         self.register_provider("openai", OpenAICompatProvider)
-        # 离线兜底：所有云端 provider 都不可用时（无 Key / 断网），
-        # 用确定性占位图保证「生成 → 分层 → 导出」主链路依然走通。
+        # 离线占位图：**只保留注册，不进默认顺序**。它画的是几何图形，曾经作为
+        # 兜底让「没配图像服务也能跑完主链路」，但代价是新用户第一次点生成就
+        # 拿到一张假立绘（哪怕界面上标了「占位图」）。现在没引擎就如实失败，
+        # 要跑离线链路请显式 --provider local_placeholder。
         self.register_provider("local_placeholder", LocalPlaceholderProvider)
 
-    # 统一的路由优先级：本机引擎优先，其次才是云端（付费 Key / 免费兜底），
-    # 最后是离线占位图。
+    # 统一的路由优先级：本机引擎优先，其次才是云端（付费 Key / 免费兜底）。
+    # ``local_placeholder`` 不在表内 —— 见 ``_register_defaults`` 的说明。
     PRIORITY = [
         "comfyui",
         "sd_webui",
@@ -65,7 +67,6 @@ class ProviderRouter:
         "sensenova",
         "openai",
         "pollinations",
-        "local_placeholder",
     ]
 
     # 只连本机、不发外网请求的 provider。
@@ -161,11 +162,13 @@ class ProviderRouter:
 
         last_error = None
         temp_files = set()
+        attempted = 0
 
         for prov_name in providers_to_try:
             p = self._get_provider(prov_name)
             if p is None or not p.is_available():
                 continue
+            attempted += 1
 
             # Track output for cleanup
             temp_files.add(output_path)
@@ -204,7 +207,16 @@ class ProviderRouter:
             if not auto_fallback:
                 break
 
-        # All providers failed
+        # 一个引擎都没试成过 vs 试了全部失败：前者要给出**能照做**的下一步，
+        # 不能只说 "Last error: None"。
+        if attempted == 0:
+            raise GenerationError(
+                "还没有可用的图像引擎。请在「设置」里配置 Seedream / SenseNova / "
+                "OpenAI 兼容端点的密钥，或在本机启动 ComfyUI / SD WebUI 后重试。",
+                provider="none",
+                retryable=False,
+                code="no_image_engine",
+            )
         raise GenerationError(
             f"All providers failed. Last error: {last_error}",
             provider="all",

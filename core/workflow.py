@@ -827,6 +827,11 @@ class WorkflowEngine:
             result["success"] = False
             result["error"] = str(e)
             result["error_state"] = failed_state
+            # 机器可读的失败原因：像「没配图像引擎」这种用户能自己解决的，
+            # 必须带着原文递到人面前，不能被上游折叠成「服务暂不可用」。
+            code = getattr(e, "code", "")
+            if code:
+                result["error_code"] = code
         finally:
             # P1-2: Clean up temporary files (but keep final outputs)
             self._cleanup_temp()

@@ -252,8 +252,9 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 		api.GET("/status", h.GetSystemStatus)
 		api.GET("/diagnostics", h.GetDiagnostics)
 		api.GET("/info", h.GetAPIInfo)
-		api.GET("/models", h.GetModels)
-		api.GET("/expressions", h.GetExpressions)
+		// /api/models 与 /api/expressions 已删除：两者返回写死的内置示例清单
+		// （SD 模型名 / 与当前模型无关的 10 条表情），新用户会误当成真实可选项。
+		// 可下载的增强模型走 /api/models/optional，真表情由前端从产物 exp3 读。
 
 		// 生成 & 导出
 		api.POST("/generate", h.GenerateImage)

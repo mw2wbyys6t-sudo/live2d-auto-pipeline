@@ -187,6 +187,9 @@ func (h *Handler) GenerateImage(c *gin.Context) {
 		var err error
 		result, err = h.imageGenerator.GenerateImage(req)
 		if err != nil {
+			if h.userFacingGenerateError(c, err) {
+				return
+			}
 			h.serverError(c, "图片生成", err)
 			return
 		}
@@ -247,6 +250,17 @@ func (h *Handler) GenerateCharacter(c *gin.Context) {
 	h.wsHub.BroadcastProgress(taskID, "generating", 40, "正在生成图片...")
 	result, err := h.imageGenerator.GenerateWithCharacter(req)
 	if err != nil {
+		if errors.Is(err, services.ErrNoImageEngine) {
+			// 不是「稍后重试」能好的故障：把该做什么直接说出来，
+			// WS 与 HTTP 两条通道用同一句文案。
+			log.Printf("[info] 生成被拒：无可用图像引擎")
+			h.wsHub.BroadcastProgress(taskID, "error", 0, noImageEngineMsg)
+			c.JSON(http.StatusBadRequest, models.Response{
+				Success: false,
+				Error:   noImageEngineMsg,
+			})
+			return
+		}
 		// 异常详情只进日志；推给浏览器/返回给客户端的是固定文案，
 		// 避免上游错误原文（可能含内部 URL/路径）经 WS 或 HTTP 外泄。
 		log.Printf("[error] 角色生成: %v", err)
@@ -280,16 +294,9 @@ func (h *Handler) Chat(c *gin.Context) {
 	c.JSON(http.StatusOK, models.Response{Success: true, Data: resp})
 }
 
-// GetModels 获取可用模型列表
-func (h *Handler) GetModels(c *gin.Context) {
-	availableModels := h.imageGenerator.GetAvailableModels()
-	c.JSON(http.StatusOK, models.Response{
-		Success: true,
-		// 诚实性标注：这份列表是内置示例，切换它不会改变本地生成结果。
-		Message: "内置示例模型列表（仅作展示；当前本地生成器不消费模型选择）",
-		Data:    availableModels,
-	})
-}
+// GetModels 端点已删除：它返回的是写死的 Stable Diffusion 模型清单，
+// 本地生成器根本不消费模型选择，新用户却会把它当成「可选的模型」。
+// 真正可下载的增强模型走 /api/models/optional。
 
 // CreatePSDPlan 创建 PSD 分层规划
 func (h *Handler) CreatePSDPlan(c *gin.Context) {
@@ -374,6 +381,27 @@ func (h *Handler) serverError(c *gin.Context, where string, err error) {
 		Success: false,
 		Error:   where + "服务暂不可用，请稍后重试",
 	})
+}
+
+// noImageEngineMsg 是「本机没有任何可用图像引擎」时给用户的原文。
+// 它不属于 serverError 要折叠的那一类：这不是「稍后重试」能好的故障，
+// 用户必须去配置一个引擎，所以文案要能照着做。
+const noImageEngineMsg = "还没有可用的图像引擎：请在「设置」里配置 Seedream / SenseNova / " +
+	"OpenAI 兼容端点的密钥，或在本机启动 ComfyUI / SD WebUI 后重试。"
+
+// userFacingGenerateError 应答「用户能自己解决」的生成失败。
+// 命中时返回 true（已写响应）；未命中返回 false，调用方继续走 serverError。
+// 上游错误原文仍然不外泄，这里返回的是本文件里的固定文案。
+func (h *Handler) userFacingGenerateError(c *gin.Context, err error) bool {
+	if !errors.Is(err, services.ErrNoImageEngine) {
+		return false
+	}
+	log.Printf("[info] 生成被拒：无可用图像引擎")
+	c.JSON(http.StatusBadRequest, models.Response{
+		Success: false,
+		Error:   noImageEngineMsg,
+	})
+	return true
 }
 
 // ServeOutput 提供输出文件访问（支持子目录，如 /output/layers_123/hair.png）
@@ -869,14 +897,12 @@ func (h *Handler) GetAPIInfo(c *gin.Context) {
 			"features":    features,
 			"notes": []string{
 				"See-through 抠图未实现：POST /api/see-through 返回 501",
-				"/api/models 与 /api/expressions 是内置示例列表，不代表当前加载的模型",
 			},
 			"endpoints": []map[string]string{
 				{"method": "GET", "path": "/api/health", "desc": "健康检查"},
 				{"method": "GET", "path": "/api/gpu", "desc": "本机 GPU 与推理运行时探测"},
 				{"method": "GET", "path": "/api/status", "desc": "系统状态"},
 				{"method": "GET", "path": "/api/info", "desc": "API信息"},
-				{"method": "GET", "path": "/api/models", "desc": "可用模型列表"},
 				{"method": "POST", "path": "/api/generate", "desc": "生成图片（兼容旧版）"},
 				{"method": "POST", "path": "/api/generate/character", "desc": "生成角色（含一致性）"},
 				{"method": "GET", "path": "/api/characters", "desc": "角色列表"},
@@ -888,7 +914,6 @@ func (h *Handler) GetAPIInfo(c *gin.Context) {
 				{"method": "POST", "path": "/api/chat/stream", "desc": "LLM聊天(SSE流式)"},
 				{"method": "GET", "path": "/api/ws", "desc": "WebSocket连接"},
 				{"method": "POST", "path": "/api/export/live2d", "desc": "导出Live2D模型"},
-				{"method": "GET", "path": "/api/expressions", "desc": "表情列表"},
 				{"method": "POST", "path": "/api/psd-plan", "desc": "PSD分层规划"},
 				{"method": "POST", "path": "/api/see-through", "desc": "See-through工作流"},
 			},
@@ -1507,24 +1532,6 @@ func (h *Handler) WSProgress(c *gin.Context) {
 	h.wsHub.HandleConnection(c)
 }
 
-// GetExpressions 获取可用表情列表
-func (h *Handler) GetExpressions(c *gin.Context) {
-	expressions := []models.ExpressionInfo{
-		{Name: "neutral", ID: "neutral", Params: []string{}},
-		{Name: "smile", ID: "smile", Params: []string{"ParamMouthForm"}},
-		{Name: "happy", ID: "happy", Params: []string{"ParamMouthForm", "ParamCheek"}},
-		{Name: "angry", ID: "angry", Params: []string{"ParamBrowLY", "ParamBrowRY"}},
-		{Name: "sad", ID: "sad", Params: []string{"ParamBrowLY", "ParamBrowRY", "ParamEyeLOpen"}},
-		{Name: "surprised", ID: "surprised", Params: []string{"ParamEyeLOpen", "ParamMouthOpenY"}},
-		{Name: "shy", ID: "shy", Params: []string{"ParamCheek"}},
-		{Name: "wink_left", ID: "wink_l", Params: []string{"ParamEyeLOpen"}},
-		{Name: "wink_right", ID: "wink_r", Params: []string{"ParamEyeROpen"}},
-		{Name: "blink", ID: "blink", Params: []string{"ParamEyeLOpen", "ParamEyeROpen"}},
-	}
-	c.JSON(http.StatusOK, models.Response{
-		Success: true,
-		// 诚实性标注：该列表与当前加载的模型无关，是内置示例。
-		Message: "内置示例表情列表（不随当前加载模型变化）",
-		Data:    expressions,
-	})
-}
+// GetExpressions 端点已删除：它返回写死的 10 条表情，与当前加载的模型无关。
+// 真表情来自产物自带的 exp3，由前端播放器从 model3.json 读（见
+// web/lib/preview-runtime.tsx —— 那里本来就是「产物优先，内置表只兜底」）。

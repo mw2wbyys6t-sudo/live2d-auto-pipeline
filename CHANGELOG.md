@@ -383,6 +383,46 @@ accessories 移 [74.55, 20.75]、`hair_front` [56.90, −1.20]、脸 [15.56, 7.8
 `edge_bleed.py` 现在只做 1px 的全向外扩），这属于分层输出的契约变更，需要单独设计与验收。
 
 
+### 18. 删掉首次使用就会看到的两份"假内容"（内置示例清单 + 离线占位图）
+
+**a. `/api/models` 与 `/api/expressions` 连同硬编码清单一起删除。**
+前者返回 8 个 Stable Diffusion 模型名（Anything V3/V5、Counterfeit、MeinaMix…），
+本地生成器根本不消费模型选择；后者返回 10 条与当前加载模型无关的表情。
+PRD 的 D-13 / Q-04 当初选的是「保留但标注内置示例」，实测这个决定没有解决问题：
+新用户看到的仍是一份选不动的清单，只是旁边多了一句"这是假的"。
+删掉后能力没有损失 —— 引擎可用性由 `GET /api/providers`（`ProviderRouter` 实测探测，
+配了 Key 就变 true）提供，真表情由前端从产物自带的 exp3 读
+（`web/lib/preview-runtime.tsx` 本来就是"产物优先、内置表只兜底"）。
+顺带移除 `services.ImageGenerator.GetAvailableModels` 与 `models.ExpressionInfo` 两个死代码出口。
+
+**b. 离线占位图退出默认生成路径。**
+`local_placeholder` 画的是几何图形，此前排在 `ProviderRouter.PRIORITY` 末位当"最终兜底"，
+代价是：**没配任何图像服务的新用户第一次点生成，会拿到一张假立绘**，
+界面只能再贴一条「离线占位图 —— 这不是 AI 生成的人物」的横幅（P1-a 加的诚实标注）。
+现在默认顺序里没有它：一个引擎都没配时如实失败，并说清该做什么 ——
+
+- Python：`GenerationError` 新增机器可读的 `code`（`no_image_engine`），
+  `core/workflow.py` 把它带进 `error_code`；
+- Go：`services.ErrNoImageEngine` 哨兵 + handler 映射成 **400 + 可操作文案**
+  （「请在『设置』里配置 Seedream / SenseNova / OpenAI 兼容端点的密钥，或在本机启动
+  ComfyUI / SD WebUI」），WS 与 HTTP 两条通道同一句；
+- 安全约定不变：其它错误仍然折叠成「服务暂不可用」，上游原文（可能含内部 URL/路径）
+  不外泄 —— 新增 `TestOtherGenerateErrorsStayGeneric` 钉住这条。
+
+「占位图」的前端标注**保留**：显式 `--provider local_placeholder` 仍然可用（离线冒烟、
+CI 跑通主链路），那种产物仍必须自报身份。
+
+**行为变化（要说清）**：没配图像引擎时，图形界面第一次生成现在会**直接失败**并给出配置指引，
+而不是画一张假图让流程继续走。要跑离线链路请显式指定引擎。
+
+测试口径：`test_router_priority_excludes_the_offline_placeholder`（不在默认顺序、但仍注册）、
+`test_router_priority_keeps_placeholder_for_explicit_use`（显式选择仍出图且如实标注）、
+`test_router_fails_with_actionable_message_when_no_engine_exists`（报错含"设置/ComfyUI"、
+**且失败时不留假图**）、`test_local_only_never_calls_cloud`（本地模式下云端仍不被调用，
+本机引擎没起来就失败）。两条 Go 测试覆盖新映射的正反两面。
+（注：想对 `userFacingGenerateError` 做变异验证时被安全策略拦下，因此"红"是由
+正反两条测试共同保证的，不是靠人为改坏代码演示出来的。）
+
 ---
 
 ## [v0.10.10] — 2026-10-28 — 代号「GPU Aware」（**2026-10-29 已发布**：tag `v0.10.10` + GitHub Release；安装包已构建并通过产物级验收）
