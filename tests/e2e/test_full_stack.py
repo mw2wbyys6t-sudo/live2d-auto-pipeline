@@ -69,20 +69,23 @@ class TestGoAPIDirect:
         ]:
             assert must in paths, f"缺少端点: {must}"
 
-    def test_models_list(self):
-        r = requests.get(f"{GO_API_URL}/api/models", timeout=5)
-        assert r.status_code == 200
-        data = r.json()
-        assert data["success"] is True
-        assert isinstance(data["data"], list)
-        assert len(data["data"]) > 0
+    # /api/models 与 /api/expressions 曾返回写死的内置示例清单（8 个 SD 模型名、
+    # 10 条与当前模型无关的表情）。加过「内置示例」标注仍不解决问题：新用户看到的
+    # 还是一份选不动的清单。2026-11-02 起两个端点删除，钉住"它们不会回来"。
+    def test_sample_lists_are_gone(self):
+        for path in ("/api/models", "/api/expressions"):
+            r = requests.get(f"{GO_API_URL}{path}", timeout=5)
+            assert r.status_code == 404, f"{path} 应已下线，得到 {r.status_code}"
 
-    def test_expressions_list(self):
-        r = requests.get(f"{GO_API_URL}/api/expressions", timeout=5)
+    def test_provider_probe_is_the_real_list(self):
+        """引擎可用性由实测探测提供：配了 Key 就出现在 available 里。"""
+        r = requests.get(f"{GO_API_URL}/api/providers", timeout=15)
         assert r.status_code == 200
         data = r.json()
         assert data["success"] is True
-        assert isinstance(data["data"], list)
+        body = data["data"]
+        assert isinstance(body.get("registered"), list) and body["registered"], (
+            "registered 应列出全部已注册引擎")
 
     def test_character_crud(self):
         """完整 CRUD 测试：Create → Get → Update → List → Delete"""
@@ -193,12 +196,12 @@ class TestWebFrontendProxy:
         data = r.json()
         assert data["success"] is True
 
-    def test_models_via_web(self):
-        r = requests.get(f"{WEB_URL}/api/models", timeout=5)
+    def test_providers_via_web(self):
+        """前端代理同样能拿到实测的引擎探测结果（旧的 /api/models 已下线）。"""
+        r = requests.get(f"{WEB_URL}/api/providers", timeout=15)
         assert r.status_code == 200
-        data = r.json()
-        assert data["success"] is True
-        assert len(data["data"]) > 0
+        assert r.json()["success"] is True
+        assert requests.get(f"{WEB_URL}/api/models", timeout=5).status_code == 404
 
     def test_character_crud_via_web(self):
         """通过前端代理的完整 CRUD"""

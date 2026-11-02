@@ -502,6 +502,15 @@ def install_wheels(requirements: Path, wheels_dir: Path, site_packages: Path) ->
 
 
 def copy_app_tree(app_dir: Path) -> None:
+    """把内核源码复制进随包的 ``app/``。
+
+    **先删后拷**：``copytree(dirs_exist_ok=True)`` 只合并、不清空，于是源码里
+    已删除或改名的模块会永远留在打包目录里随包分发，本机跑过一遍留下的
+    ``__pycache__`` 也一样带进去。``app/`` 的内容全部来自 ``APP_DIRS`` /
+    ``APP_FILES``，是纯生成物，整体重建才符合「包里只有当前源码」。
+    """
+    if app_dir.exists():
+        shutil.rmtree(app_dir)
     app_dir.mkdir(parents=True, exist_ok=True)
     ignore = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".pytest_cache")
     for name in APP_DIRS:

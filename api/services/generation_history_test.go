@@ -357,3 +357,67 @@ func TestExportMatchesHistoryByStableFieldWhenOthersEmpty(t *testing.T) {
 		t.Errorf("历史条目的 model3_json = %q，导出结果没并进去", got)
 	}
 }
+
+// 产物被清掉后，左栏不该留下点开的死条目。开发期清理 output/、用户自己删图片，
+// 都会让历史指向不存在的文件 —— 那时界面看起来是"坏掉的旧软件"而不是新软件。
+func TestListGenerationsDropsRecordsWhoseFilesAreGone(t *testing.T) {
+	cfg := historyTestConfig(t)
+	goodDir := filepath.Join(cfg.Output.BaseDir, "g_ok")
+	goodImg := filepath.Join(goodDir, "character.png")
+	goneDir := filepath.Join(cfg.Output.BaseDir, "g_gone")
+	goneImg := filepath.Join(goneDir, "character.png")
+
+	RecordLatestGeneration(cfg, sampleGeneration(t, cfg, goneDir, goneImg, "文件会被删掉的作品"))
+	RecordLatestGeneration(cfg, sampleGeneration(t, cfg, goodDir, goodImg, "留下来的作品"))
+
+	if err := os.Remove(goneImg); err != nil {
+		t.Fatalf("删除图片失败，前置条件不成立: %v", err)
+	}
+
+	items := ListGenerations(cfg, 0)
+	if len(items) != 1 {
+		t.Fatalf("应只剩 1 条活记录，得到 %d 条：%v", len(items), items)
+	}
+	if got := stringField(items[0], "prompt"); got != "留下来的作品" {
+		t.Fatalf("留下的应是活的那条，得到 prompt=%q", got)
+	}
+}
+
+// 反向保险：文件都还在时不得误删任何记录。
+func TestListGenerationsKeepsRecordsWhoseFilesExist(t *testing.T) {
+	cfg := historyTestConfig(t)
+	for _, name := range []string{"a", "b"} {
+		dir := filepath.Join(cfg.Output.BaseDir, "g_"+name)
+		RecordLatestGeneration(cfg, sampleGeneration(t, cfg, dir,
+			filepath.Join(dir, "character.png"), "作品"+name))
+	}
+	if items := ListGenerations(cfg, 0); len(items) != 2 {
+		t.Fatalf("两条记录都该留下，得到 %d", len(items))
+	}
+}
+
+// 工作台首加载读的是 latest_generation.json。清过产物（或用户删了图片）之后，
+// 这条记录仍指向不存在的文件 —— 首屏就会拿到一个打不开的"当前作品"。
+// 正确行为是回退去扫描真实存在的产物。
+func TestGetLatestGenerationFallsBackWhenRecordFilesAreGone(t *testing.T) {
+	cfg := historyTestConfig(t)
+	dir := filepath.Join(cfg.Output.BaseDir, "g_gone")
+	img := filepath.Join(dir, "character.png")
+	RecordLatestGeneration(cfg, sampleGeneration(t, cfg, dir, img, "文件会被删掉的作品"))
+
+	if err := os.Remove(img); err != nil {
+		t.Fatalf("删除图片失败，前置条件不成立: %v", err)
+	}
+
+	record, err := GetLatestGeneration(cfg)
+	if err != nil {
+		// 没有任何其它产物时报「尚未有生成记录」是诚实的空状态
+		if !os.IsExist(err) && record != nil {
+			t.Fatalf("既报错又返回记录：%v / %v", err, record)
+		}
+		return
+	}
+	if got := stringField(record, "prompt"); got == "文件会被删掉的作品" {
+		t.Fatal("仍返回指向已删文件的死记录，首屏会拿到打不开的作品")
+	}
+}

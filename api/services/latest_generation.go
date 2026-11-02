@@ -117,7 +117,7 @@ func enrichLatestGeneration(cfg *config.Config, record map[string]interface{}) {
 func GetLatestGeneration(cfg *config.Config) (map[string]interface{}, error) {
 	if data, err := os.ReadFile(latestGenerationPath(cfg)); err == nil {
 		var record map[string]interface{}
-		if json.Unmarshal(data, &record) == nil && len(record) > 0 {
+		if json.Unmarshal(data, &record) == nil && len(record) > 0 && recordFilesExist(record) {
 			enrichLatestGeneration(cfg, record)
 			return record, nil
 		}
@@ -344,21 +344,46 @@ func ListGenerations(cfg *config.Config, limit int) []map[string]interface{} {
 	if len(history) > limit {
 		history = history[:limit]
 	}
+	alive := history[:0]
 	for _, record := range history {
 		if record == nil {
 			continue
+		}
+		// 指向已被删除产物的记录不再列出：缩略图必然 404、整条也点不开。
+		// 开发期清理 output/ 或用户自己删图片之后，界面应该像一台新软件，
+		// 而不是排着一列坏掉的旧作品。
+		if path := stringField(record, "image_path"); path != "" {
+			if _, err := os.Stat(path); err != nil {
+				continue
+			}
 		}
 		enrichLatestGeneration(cfg, record)
 		if url := outputURLForPath(cfg, stringField(record, "image_path"), stringField(record, "image_url")); url != "" {
 			record["image_url"] = url
 		}
+		alive = append(alive, record)
 	}
-	return history
+	return alive
 }
 
 func stringField(record map[string]interface{}, field string) string {
 	v, _ := record[field].(string)
 	return v
+}
+
+// recordFilesExist 判断记录引用的产物是否还在盘上。
+// 只校验非空字段：老记录可能没有 model3_json（还没导出过），那不是"文件被删"。
+func recordFilesExist(record map[string]interface{}) bool {
+	for _, field := range []string{"image_path", "model3_json"} {
+		path := stringField(record, field)
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // findNewestModel3 递归查找 output 目录下 mtime 最新的 *.model3.json。

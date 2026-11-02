@@ -423,6 +423,46 @@ CI 跑通主链路），那种产物仍必须自报身份。
 （注：想对 `userFacingGenerateError` 做变异验证时被安全策略拦下，因此"红"是由
 正反两条测试共同保证的，不是靠人为改坏代码演示出来的。）
 
+### 19. 打包与历史：不把开发期残留留给用户
+
+**a. `copy_app_tree` 只合并不清空 → 旧构建的文件会一路留在包里。**
+`shutil.copytree(..., dirs_exist_ok=True)` 不删除目标里多出来的文件，所以：源码中
+已删除/改名的模块会继续随包分发；本机跑过一次内核留下的 `__pycache__` 也照抄进包
+（`ignore_patterns` 只挡住"新复制的"，挡不住"上次留下的"）。实测本机
+`desktop/bundle/app` 里就有 **19 个 `__pycache__` 目录**。
+现在 `app/` 先整体删除再复制 —— 它的内容全部来自 `APP_DIRS`/`APP_FILES`，是纯生成物。
+新增 `tests/unit/test_desktop_bundle_clean_copy.py` 两条断言（残留源码文件 / 残留字节码），
+先跑红再修绿。
+
+顺带确认过、**不是**问题的两件事：安装包资源只含 `desktop/bundle/`（`tauri.conf.json`
+的 `resources: {"bundle/": ""}`），仓库里 60MB 的 `output/`、`Work/` 测试产物既不进 git
+也不进包；CI 每次会 `Remove-Item api/webui/dist` 后从 `web/out` 重新拷，所以本地那个
+旧页面集的 `dist/` 只是本机残留，不会随包。已安装应用的 `%APPDATA%\Live2DMasterAgent\characters`
+也是空的。
+
+**b. 作品历史与"当前作品"不再列出指向已删产物的死条目。**
+`ListGenerations` 过去不校验文件是否还在，清过 `output/` 之后左栏会排着一列
+缩略图 404、点也点不开的旧作品 —— 界面看起来像"坏掉的旧软件"而不是新软件。
+现在按 `image_path` 实测存在性过滤。
+同一类问题在首加载路径上还有一份：`GetLatestGeneration` 直接信任
+`latest_generation.json`，记录里的图片被删之后仍把它当"当前作品"返回。
+现在记录里非空的 `image_path` / `model3_json` 必须真实存在才可信，否则回退去
+扫描盘上真实存在的产物（什么都没有时报「尚未有任何生成记录或可用的 Live2D 模型」，
+是诚实的空状态而不是坏掉的作品）。
+新增 4 条 Go 测试：历史只剩活记录 / 文件都在时一条都不能少 / 最近生成会回退 /
+以及 e2e 侧 `test_sample_lists_are_gone` 钉住旧端点不会回来。
+
+**c. 本机开发期产物已清**：`output/` 从 25 项 / ~60MB 降到 4 项 / 16MB（只留
+`singer_demo` 分层源与 `singer_head` 实测夹具，重建脚本依赖它们），
+删掉 3 个过期导出目录、2 个上传测试 PNG 与一批时间戳一次性产物；
+`desktop/bundle/app` 的 19 个 `__pycache__` 一并清掉。
+重启服务后实测：`/api/generations` `count=0`，`/api/generations/models` 只剩
+`singer_demo` / `singer_head` 两个模型。
+
+（排查中踩到一次假警报：`/api/generations/models` 用管道喂给 Python 时报
+`Invalid \escape`，实际服务端 JSON 是合法的 `F:\\创造\\...` —— 是 GBK 控制台
+把 UTF-8 路径读坏了，加 `PYTHONIOENCODING=utf-8` 即正常。）
+
 ---
 
 ## [v0.10.10] — 2026-10-28 — 代号「GPU Aware」（**2026-10-29 已发布**：tag `v0.10.10` + GitHub Release；安装包已构建并通过产物级验收）
