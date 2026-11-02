@@ -13,7 +13,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 #: 本轮正式版本（新增 GPU 探测 + 自动选卡 + Windows 默认 DirectML 运行时）。
-RELEASE_VERSION = "0.10.10"
+RELEASE_VERSION = "0.10.11"
 
 
 def _read(rel: str) -> str:

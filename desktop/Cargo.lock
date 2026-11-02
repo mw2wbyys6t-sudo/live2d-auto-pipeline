@@ -2335,7 +2335,7 @@ dependencies = [
 
 [[package]]
 name = "pygmalion-studio"
-version = "0.10.10"
+version = "0.10.11"
 dependencies = [
  "serde",
  "serde_json",
