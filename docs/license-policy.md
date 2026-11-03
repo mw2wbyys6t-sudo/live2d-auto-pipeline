@@ -188,14 +188,43 @@ CC-BY-NC-SA-4.0
 > GPL-3.0，也就走不到 §13 的互认路径），保持 Deny。`GPL-2.0-or-later` 理论上
 > 可经 GPL-3.0 中转，但组合链条复杂，按 Deny 处理、需要时单独评估。
 
-当前公共扫描有 **7 条 Denied**，但公共页不给出逐条映射，不能预设它们全是误报。维护者必须逐项核对：
+#### 3.2.1 那 7 条 Denied 的逐项复核（2026-11-03 完成）
 
-- 若强 copyleft 组件实际进入发行产物且与目标分发方式不兼容，替换或移除对应依赖；不要为了状态变绿而 Approve。
-- 若许可证只存在于上游源码包、对应组件未进入本仓库产物，在 issue 中记录产物清单证据后按该条处理。
-- 若 FOSSA 把双许可的 `OR` 分支误当成强制条件，记录实际选择的许可证后修正该条识别。
-- `JSON` 等含额外使用条件的许可证单独做合规审阅，不混入弱 copyleft 的批量放行。
+扫描对象 `main@8f1ad93d`（2026-10-29）。后台 Issues 页可逐条读出（登录态下
+`…/issues/licensing?page=1&count=50&grouping=issue`），7 条**全部是 CC-BY-SA**，
+分布与本地复算结果：
 
-验收判据：同一提交重扫后 License Compliance 为 0；若组织允许保留已批准例外，每条例外都必须能回读到上述证据。
+| 条目 | 复算到的载体 | 是否构成分发义务 |
+|---|---|---|
+| `CC-BY-SA-1.0/2.0/2.5/3.0 in golang.org/x/text v0.43.0`（4 条） | `cases/map_test.go:851/861/869/876` —— 那些 CC-BY-SA **URL 字符串本身是大小写折叠的测试输入**（`grep -rn creativecommons $GOMODCACHE/golang.org/x/text@v0.43.0`） | 否。`_test.go` 不参与编译，不进 Go 二进制 |
+| `CC-BY-SA-4.0/3.0 in numpy (2.4.6)`（2 条） | 判的是旧 pin 2.4.6；当前随包已是 **2.5.4**，且 `grep -rl "CC-BY-SA" bundle/python/Lib/site-packages` 只剩 `packaging/licenses/_spdx.py`（SPDX 标识表） | 否。重扫后这两条预计自动消失，属可验证预测而非既成结论 |
+| `CC-BY-SA-4.0 in next (16.4.3)`（1 条） | `next/dist/compiled/{glob,lodash.curry,postcss-preset-env}/LICENSE` 里的 CC 链接；`grep -rl "CC-BY-SA" web/node_modules` 命中 **0** | 否。next 只用于构建静态导出，不随安装包分发 |
+
+同批读出的其余两类：
+
+- **2 条 Vulnerabilities 是同一个 CVE**：CVE-2026-112366（picomatch ReDoS，CWE-1333，
+  High 8.7，EPSS 0.3%，FOSSA 标记 **No fix**）在 2.3.2 与 4.0.7 两个副本上各记一次。
+  锁文件里两者均为 `dev: true`，依赖方是 anymatch / micromatch / readdirp / tinyglobby
+  （`next build` 阶段），不进产物。
+- **5 条 Outdated** 全是 NPM 传递依赖：chokidar 3.6.0、postcss-nested 6.2.0、
+  commander 4.1.1、js-tokens 4.0.0、nanoid 3.3.20 —— 不是我们的直接依赖，随 next/tailwind 升级自然带走。
+
+两条与"我们自己"有关的：
+
+- `AGPL-3.0-only in live2d-auto-pipeline` 只是 **Flagged 而非 Denied**，说明后台策略
+  已经按 AGPL 双轨放开（§3.1 担心的旧策略卡 AGPL 没有发生）。
+- `Apache License 2.0 directly in code` 的载体是 `scripts/seedream_image_generate.py`
+  （火山引擎样例，版权头属上游，不能改成 AGPL）。它全仓库零引用，已 `git mv` 到
+  `tools/archive/vendor/`（`cddcacc4`），该目录被 `.fossa.yml` 的 `paths.exclude` 排除。
+
+**处理动作与限制**：逐条忽略要在后台 Issues 页勾选后走 Actions，或用 Ignore Rules；
+实测本机账号在 **Free 计划**，`Add Ignore Rule` 直接弹 Business 定价页 —— 自动忽略规则
+是付费功能。因此上面这张表就是复核结论的落盘处：重扫后若这些条目复现，照表处理，
+不必重新推导。
+
+验收判据（重扫 `main` 当前提交后核对）：Denied 归 0；Vulnerabilities 归 0；
+Licensing Active 由 65 降到 **57**（−7 条 Denied，−1 条 Apache-in-code）；
+其余 LGPL / MPL 的 Flagged **保留可见**，不为了状态变绿而批量 Approve。
 
 ### 3.3 一个待确认项
 
@@ -246,7 +275,8 @@ export FOSSA_API_KEY=<你复制的 key>
 | 分析范围收敛（排除归档/文档） | ✅ | — | 已完成：`.fossa.yml` 的 `paths.exclude` |
 | 许可策略的三档规则 | ❌ | ✅ | 只能后台建，仓库侧无法声明 |
 | 项目绑定哪个策略 | ❌ | ✅ | 官方明确：改 `.fossa.yml` 不生效 |
-| issue 明细逐条读取 | ❌ | ✅ | 公共页只给汇总；维护者可在后台逐项审阅 |
+| issue 明细逐条读取 | ❌ | ✅ | 登录态下 Issues 页可读全量（见 §3.2.1），无需企业 API |
+| 逐条 / 自动忽略规则 | ❌ | ✅ **Business 计划** | 实测 Free 计划点 `Add Ignore Rule` 直接弹定价页；自定义策略同样付费 |
 
 ---
 
