@@ -20,8 +20,11 @@
 > 12.8%，其中立绘 y≈1056..1076 那条带子占 57%，**尚未归因**；② 头部不随
 > `ParamBodyAngle*` 走；③ 物理是自研近似，不宣称与官方内核逐位一致。
 >
-> **打包状态**：版本号已定为 0.10.11 并通过版本单真源闸门；**安装包尚未构建**，
-> 构建与装机需另行确认（同版本号重打会覆盖旧哈希，见 v0.10.10 那节的教训）。
+> **打包状态**：**v0.10.11 安装包已于 2026-11-03 本地构建完成** ——
+> `desktop/target/release/bundle/nsis/Pygmalion Studio_0.10.11_x64-setup.exe`，
+> 334,483,938 B（318.99 MiB），SHA256 `d8cd9add3db47a37b7c636c5feca60f961dbd230456141b8c10bd133da0647fe`。
+> 随包 `BUILD-INFO.json` 记 `git_commit=48ecf39ca923`、`git_dirty=false`，包内 `app/`
+> 的 `__pycache__`/`.pyc` 实测 0/0。**装机尚未执行**（覆盖本机应用需另行确认）。
 
 ### 1. 预览不再是一张会平移的贴图
 
@@ -465,6 +468,22 @@ CI 跑通主链路），那种产物仍必须自报身份。
 现在 `app/` 先整体删除再复制 —— 它的内容全部来自 `APP_DIRS`/`APP_FILES`，是纯生成物。
 新增 `tests/unit/test_desktop_bundle_clean_copy.py` 两条断言（残留源码文件 / 残留字节码），
 先跑红再修绿。
+
+**a′. 上一条只对了一半：装配过程自己会把字节码写进 `app/`。**
+`smoke_test` 用**随包解释器** import 的正是 `app/` 里的源码树（`core.version`、
+`live2d_builder.pipeline`），解释器顺手就把 `__pycache__` 落在包里 —— 先删后拷
+只挡住了"上次留下的"，挡不住"这次生成的"。实测 v0.10.11 首次重新装配后
+`bundle/app` 仍有 **10 个 `__pycache__` / 34 个 `.pyc`**。两处收口：冒烟改为
+`python -B` + `PYTHONDONTWRITEBYTECODE=1`，并在冒烟之后调 `prune_bytecode` 兜底；
+它**刻意只清 `app/`**，`python/Lib/site-packages` 里 wheel 自带的字节码属于上游发布物，
+不在这一条修复范围内。第三条单测钉住这个边界（app 清空、site-packages 不动）。
+重跑装配实测：`bundle/app` 的 `__pycache__`/`.pyc` 计数 **0/0**，9 项必装全部可导入，
+`ort_providers` 仍是 `['DmlExecutionProvider', 'CPUExecutionProvider']`。
+
+（这一轮还踩到一次只有真装配才会暴露的低级错：上一条给 `smoke_test` 加了
+`os.environ`，而 `build_desktop_bundle.py` 从来没 `import os` —— 第 5 步直接
+`NameError` 退出。单测只覆盖 `prune_bytecode`，冒烟那段没有任何自动化能替它跑，
+所以「跑完一次装配」本身就是这一笔的验收，见 `48ecf39c`。）
 
 顺带确认过、**不是**问题的两件事：安装包资源只含 `desktop/bundle/`（`tauri.conf.json`
 的 `resources: {"bundle/": ""}`），仓库里 60MB 的 `output/`、`Work/` 测试产物既不进 git
