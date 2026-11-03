@@ -57,3 +57,30 @@ def test_copy_app_tree_leaves_no_bytecode(tmp_path):
     leftovers = sorted(p.name for p in (app_dir / "core").rglob("__pycache__"))
     assert leftovers == [], f"app/core 下仍有字节码缓存目录：{leftovers}"
     assert (app_dir / "core" / "config.py").is_file()
+
+
+def test_prune_bytecode_clears_app_but_not_site_packages(tmp_path):
+    """装配末尾收口：随包 `app/` 里的构建期字节码要清掉，第三方 wheel 自带的不动。
+
+    实测一次本地装配在 `app/` 里留下 10 个 `__pycache__` / 34 个 `.pyc` ——
+    来源是冒烟校验用**随包解释器** import 了 app 里的源码树（core.version、
+    live2d_builder.pipeline）。那些 .pyc 是这台机器这次构建的产物，跟着
+    安装包出去没有意义。
+    """
+    mod = _load()
+    app = tmp_path / "app"
+    cache = app / "core" / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "version.cpython-312.pyc").write_bytes(b"\x00\r\r\n")
+    (app / "core" / "stray.pyo").write_bytes(b"\x00")
+    # app 之外的第三方运行时字节码：不在本判据范围内
+    sp = tmp_path / "python" / "Lib" / "site-packages" / "numpy" / "__pycache__"
+    sp.mkdir(parents=True)
+    (sp / "core.cpython-312.pyc").write_bytes(b"\x00")
+
+    removed = mod.prune_bytecode(app)
+
+    assert removed >= 2, f"至少清掉 1 个目录 + 2 个文件，得到 {removed}"
+    assert list(app.rglob("__pycache__")) == []
+    assert list(app.rglob("*.pyc")) == [] and list(app.rglob("*.pyo")) == []
+    assert (sp / "core.cpython-312.pyc").exists(), "不该动 site-packages 里 wheel 自带的字节码"

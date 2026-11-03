@@ -501,6 +501,33 @@ def install_wheels(requirements: Path, wheels_dir: Path, site_packages: Path) ->
          "--no-cache-dir", "--upgrade", *pip_common_args(), "-r", str(resolved)])
 
 
+def prune_bytecode(app_dir: Path) -> int:
+    """删掉装配过程中在**随包源码树 app/** 里生成的字节码，返回删除条目数。
+
+    `app/` 只应该放源码：`.pyc` 是这台机器这次构建跑出来的产物，跟着安装包出去
+    没有意义（目标机会按自己的解释器重新生成），还让「包里的东西 == 当前源码」
+    这句话不成立。冒烟已经加了 `-B`，这里是第二层兜底。
+
+    刻意**只清 app/**，不动 python/Lib/site-packages —— 第三方 wheel 自带的字节码
+    是上游发布物的一部分，删不删是另一个决定，不该混在这一条修复里。
+    """
+    if not app_dir.is_dir():
+        return 0
+    removed = 0
+    for path in sorted(app_dir.rglob("__pycache__"), key=lambda p: -len(str(p))):
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            removed += 1
+    for path in list(app_dir.rglob("*.pyc")) + list(app_dir.rglob("*.pyo")):
+        if path.is_file():
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
+
+
 def copy_app_tree(app_dir: Path) -> None:
     """把内核源码复制进随包的 ``app/``。
 
@@ -581,8 +608,12 @@ def smoke_test(bundle: Path) -> dict:
         "print('__SMOKE__' + json.dumps(res))\n"
     )
     print("  [冒烟] 用随包解释器校验导入 ...")
-    proc = subprocess.run([str(py), "-c", code], capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", timeout=900)
+    # `-B` + PYTHONDONTWRITEBYTECODE：冒烟 import 的正是 app/ 里的源码树
+    # （core.version、live2d_builder.pipeline），不加这两个开关，解释器会把
+    # __pycache__ 写进**随包的 app/** —— 实测一次装配留下 10 个目录 / 34 个 .pyc。
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    proc = subprocess.run([str(py), "-B", "-c", code], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=900, env=env)
     line = ""
     for out in (proc.stdout, proc.stderr):
         for l in (out or "").splitlines():
@@ -779,6 +810,10 @@ def main() -> int:
     # ---- 5) 冒烟 + BUILD-INFO ----
     print("[5/5] 冒烟校验与 BUILD-INFO")
     smoke_info = {} if args.no_smoke_test else smoke_test(dest)
+    # 冒烟之后收口一次：随包源码树里不该有本机生成的字节码。
+    pruned = prune_bytecode(dest / "app")
+    if pruned:
+        print(f"  [prune] 清掉 app/ 内 {pruned} 项构建期字节码")
 
     sizes = {
         "python": dir_size(dest / "python"),
