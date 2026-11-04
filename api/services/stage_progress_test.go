@@ -317,7 +317,7 @@ func TestExportStagePythonCodeSharesBuildCallWithLegacyPath(t *testing.T) {
 
 	for _, frag := range []string{
 		`from live2d_builder.pipeline import Live2DBuilder`,
-		`result = builder.build(layers)`,
+		`result = builder.build(layers, layer_opacity=inputs.layer_opacity)`,
 		`summary["success"] = True`,
 		`summary["mesh_count"] = len(result.get("meshes") or {})`,
 		`print(json.dumps(summary, ensure_ascii=False, default=str))`,
