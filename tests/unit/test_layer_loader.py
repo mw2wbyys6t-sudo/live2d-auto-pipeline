@@ -66,17 +66,28 @@ def test_order_follows_draw_index_not_filename(tmp_path):
 
 
 def test_guide_rest_opacity_is_restored_for_export(tmp_path):
-    for name in ("face", "cheek", "tear_left"):
+    for name in ("000_tear_left", "001_face", "002_cheek"):
         _write_layer(tmp_path, name)
     (tmp_path / "layer_guide.json").write_text(json.dumps({"layers": [
-        {"name": "face", "draw_index": 0},
-        {"name": "cheek", "draw_index": 1, "rest_opacity": 0.0},
-        {"name": "tear_left", "draw_index": 2, "rest_opacity": 0.35},
+        {"name": "000_tear_left", "draw_index": 0, "rest_opacity": 0.35},
+        {"name": "001_face", "draw_index": 1},
+        {"name": "002_cheek", "draw_index": 2, "rest_opacity": 0},
     ]}), encoding="utf-8")
 
     inputs = load_export_inputs(str(tmp_path))
 
     assert inputs.layer_opacity == {"cheek": 0.0, "tear_left": 0.35}
+    assert list(inputs.layer_opacity) == ["cheek", "tear_left"]
+
+
+@pytest.mark.parametrize("value", [True, False, -0.1, 1.0, 1.1, "0.35", None])
+def test_guide_rest_opacity_rejects_non_numeric_and_out_of_range_values(tmp_path, value):
+    _write_layer(tmp_path, "face")
+    (tmp_path / "layer_guide.json").write_text(json.dumps({"layers": [
+        {"name": "face", "draw_index": 0, "rest_opacity": value},
+    ]}), encoding="utf-8")
+
+    assert load_export_inputs(str(tmp_path)).layer_opacity == {}
 
 
 def test_guide_without_rest_opacity_keeps_legacy_default(tmp_path):
