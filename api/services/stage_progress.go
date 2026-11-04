@@ -513,7 +513,7 @@ if inputs.parts_hollow:
 # 必须走完整构建：只有它生成网格、编译 .moc3 并用官方 Cubism Core 验收。
 # 早期版本直接调用 Model3Exporter.export(meshes={})，产物里根本没有 moc3。
 builder = Live2DBuilder(output_dir=out_dir, character_name=%q)
-result = builder.build(layers)
+result = builder.build(layers, layer_opacity=inputs.layer_opacity)
 
 # FF-2：权威表 vs moc3 渲染层序，落盘进 build_meta.json 供下载闸门读取。
 # 量的是**构建结果**的网格顺序（= 写进 moc3 的 draw_order），不是喂进去的

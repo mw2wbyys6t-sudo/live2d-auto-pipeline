@@ -103,3 +103,16 @@ func TestBothExportScriptsRecordPartsVerdict(t *testing.T) {
 	}
 }
 
+func TestBothExportScriptsPassRestOpacityToBuilder(t *testing.T) {
+	stage := exportStagePythonCode("/root", "/root/layers", "/root/out", "char", "job-1")
+	const call = "builder.build(layers, layer_opacity=inputs.layer_opacity)"
+	for name, code := range map[string]string{
+		"生产导出脚本": stage,
+		"导出桥脚本":   bridgeExportLive2DScript,
+	} {
+		if !strings.Contains(code, call) {
+			t.Errorf("%s没有把目录中的 rest_opacity 交给 Builder", name)
+		}
+	}
+}
+

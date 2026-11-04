@@ -123,6 +123,24 @@ def test_bridge_export_skips_full_canvas_previews(tmp_path):
     assert result["mesh_count"] == len(_LAYERS)
 
 
+def test_bridge_export_hides_zero_opacity_layer_at_rest(tmp_path):
+    layers_dir = _build_layers_dir(tmp_path, with_guide=True)
+    guide_path = layers_dir / "layer_guide.json"
+    guide = json.loads(guide_path.read_text(encoding="utf-8"))
+    for entry in guide["layers"]:
+        if entry["name"] == "mouth_cavity":
+            entry["rest_opacity"] = 0.0
+    guide_path.write_text(json.dumps(guide), encoding="utf-8")
+
+    result = _run_bridge(tmp_path, layers_dir, script=_extract_bridge_script())
+    model3 = json.loads(Path(result["model3_json"]).read_text(encoding="utf-8"))
+
+    assert "mouth_cavity" in result["layers_used"]
+    assert "mouth_cavity" not in {
+        entry["Name"] for entry in model3.get("PreviewLayers", [])
+    }
+
+
 def test_bridge_export_orders_layers_by_layer_guide(tmp_path):
     """层序取自 layer_guide.json 的 draw_index，而不是文件名字母序。"""
     layers_dir = _build_layers_dir(tmp_path, with_guide=True)

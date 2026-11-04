@@ -59,3 +59,17 @@ def test_preview_layers_reach_model3(tmp_path):
         assert (tmp_path / entry['Texture']).is_file()
         assert entry['Width'] == 16 and entry['Height'] == 16
         assert entry['Group'] in {'face', 'hair', 'body', 'mouth', 'other'}
+
+
+def test_python_fallback_export_forwards_rest_opacity(tmp_path):
+    from api_server import _build_live2d_model
+
+    layers = {
+        "face": Image.new("RGBA", (32, 32), "red"),
+        "cheek": Image.new("RGBA", (32, 32), "blue"),
+    }
+    result = _build_live2d_model(
+        layers, str(tmp_path), "hero", layer_opacity={"cheek": 0.0})
+    model3 = json.loads(Path(result["model3_json"]).read_text(encoding="utf-8"))
+
+    assert "cheek" not in {entry["Name"] for entry in model3["PreviewLayers"]}

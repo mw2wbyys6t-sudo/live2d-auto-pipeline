@@ -869,7 +869,7 @@ if inputs.parts_hollow:
 # 必须走完整构建：只有它生成网格、编译 .moc3 并用官方 Cubism Core 验收。
 # 早期版本直接调用 Model3Exporter.export(meshes={})，产物里根本没有 moc3。
 builder = Live2DBuilder(output_dir=out_dir, character_name=character_id)
-result = builder.build(layers)
+result = builder.build(layers, layer_opacity=inputs.layer_opacity)
 
 # FF-2：权威表 vs moc3 渲染层序。这条导出路径不产 PSD，故只比两份来源
 # （psd_order=None 表示该来源不可得，不当作通过）。层序错位要落盘，
