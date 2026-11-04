@@ -60,7 +60,7 @@ IDENTITY_FILES = {
 
 
 def _live_text_files() -> list[Path]:
-    skip_dirs = {".git", "node_modules", ".next", "target", "output", ".cache",
+    skip_dirs = {".git", ".qoder", "node_modules", ".next", "target", "output", ".cache",
                  "bundle", "out",
                  # 工具产物（会话用量报告）里记的是**旧版已安装应用的数据目录**，
                  # 不是本仓库的源码；它不是我们改名的对象。
@@ -79,7 +79,7 @@ def _live_text_files() -> list[Path]:
         # 一刀切会把这类真正需要核对的文件一起挡掉。
         if rel.startswith(("web/out/", "api/webui/dist/")):
             continue
-        if any(part in skip_dirs for part in p.parts):
+        if any(part in skip_dirs for part in p.relative_to(ROOT).parts):
             continue
         if rel.startswith(HISTORICAL) or rel in SELF_REFERENTIAL_TESTS:
             continue
@@ -87,6 +87,10 @@ def _live_text_files() -> list[Path]:
             continue
         out.append(p)
     return out
+
+
+def test_live_source_scan_includes_real_sources_from_worktree_root():
+    assert ROOT / "web/lib/brand.ts" in _live_text_files()
 
 
 def test_no_legacy_product_name_left_in_live_sources():
@@ -160,7 +164,10 @@ def test_brand_literal_has_a_single_frontend_source():
         # 构建产物里必然带品牌字面量，但它不是「第二处来源」。next.config.js
         # 允许用 NEXT_DIST_DIR 指到别的目录（如 .next-dev），所以按「点目录」
         # 整体排除，而不是写死 .next。
-        and not any(part.startswith(".") or part in {"node_modules", "out"} for part in p.parts)
+        and not any(
+            part.startswith(".") or part in {"node_modules", "out"}
+            for part in p.relative_to(ROOT).parts
+        )
     ]
     holders = [
         p.relative_to(ROOT).as_posix()
