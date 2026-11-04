@@ -267,7 +267,7 @@ class TestLayerComposer:
         layers = {
             "hair_back": {"name": "hair_back", "path": "/tmp/a.png", "bbox": (0,0,10,10),
                          "size": (10,10), "pixel_count": 100, "mean_color": (100,100,255),
-                         "occluded_by": [], "completed": False},
+                         "occluded_by": [], "completed": False, "rest_opacity": 0.0},
         }
         with tempfile.TemporaryDirectory() as tmpdir:
             path = composer.generate_layer_json(layers, str(Path(tmpdir) / "layers.json"))
@@ -276,6 +276,7 @@ class TestLayerComposer:
             data = json.loads(Path(path).read_text())
             assert "layers" in data
             assert data["layer_count"] == 1
+            assert data["layers"][0]["rest_opacity"] == 0.0
 
 
 class TestSynthesisedFaceGeometry:

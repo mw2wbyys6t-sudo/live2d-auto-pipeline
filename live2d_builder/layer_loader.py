@@ -51,6 +51,7 @@ class ExportLayerInputs:
     unknown: List[str] = field(default_factory=list)
     # 实际读到的 draw_index 表；fallback 路径为空 dict。
     draw_index: Dict[str, float] = field(default_factory=dict)
+    layer_opacity: Dict[str, float] = field(default_factory=dict)
     # draw_index 与权威层序表冲突、被表纠正过：如实报告，不静默改用户的顺序。
     normalized: bool = False
     # 分层清单对本批部件的结论：False = 连 ``REQUIRED_FOR_PREVIEW`` 都不齐。
@@ -108,6 +109,17 @@ def load_export_inputs(layers_dir: str) -> ExportLayerInputs:
     guide_order = sorted(paths, key=lambda n: (draw_index.get(n, tail), n))
     guide_names = _strip_index_prefixes(guide_order)
     ordered_names = _by_standard_order(guide_names)
+    rest_opacity = _read_rest_opacity(layers_dir)
+    opacity_by_name = {
+        name: rest_opacity[raw]
+        for raw, name in zip(guide_order, guide_names)
+        if raw in rest_opacity
+    }
+    ordered_opacity = {
+        name: opacity_by_name[name]
+        for name in ordered_names
+        if name in opacity_by_name
+    }
     # 序号在排位之后再去：``draw_index`` 与权威表都是按原始文件名写的。
     path_by_name = dict(zip(guide_names, (paths[raw] for raw in guide_order)))
     readiness = read_parts_readiness(layers_dir)
@@ -119,6 +131,7 @@ def load_export_inputs(layers_dir: str) -> ExportLayerInputs:
         order_source="layer_guide" if draw_index else "filename",
         unknown=unknown,
         draw_index=draw_index,
+        layer_opacity=ordered_opacity,
         normalized=ordered_names != guide_names,
         parts_ready=None if readiness is None else bool(readiness.get("preview_ready")),
         missing_preview=missing,
@@ -251,6 +264,28 @@ def _read_draw_index(layers_dir: str) -> Dict[str, float]:
         if name is not None and isinstance(idx, (int, float)):
             draw_index[str(name)] = float(idx)
     return draw_index
+
+
+def _read_rest_opacity(layers_dir: str) -> Dict[str, float]:
+    guide_path = os.path.join(layers_dir, "layer_guide.json")
+    try:
+        with open(guide_path, encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+    opacity: Dict[str, float] = {}
+    for entry in payload.get("layers") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        value = entry.get("rest_opacity", 1.0)
+        if (name is not None and isinstance(value, (int, float))
+                and not isinstance(value, bool)):
+            value = float(value)
+            if 0.0 <= value < 1.0:
+                opacity[str(name)] = value
+    return opacity
 
 
 def _warn(message: str) -> None:

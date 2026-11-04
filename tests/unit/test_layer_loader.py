@@ -65,6 +65,27 @@ def test_order_follows_draw_index_not_filename(tmp_path):
     assert list(inputs.paths).index("mouth_cavity") < list(inputs.paths).index("mouth")
 
 
+def test_guide_rest_opacity_is_restored_for_export(tmp_path):
+    for name in ("face", "cheek", "tear_left"):
+        _write_layer(tmp_path, name)
+    (tmp_path / "layer_guide.json").write_text(json.dumps({"layers": [
+        {"name": "face", "draw_index": 0},
+        {"name": "cheek", "draw_index": 1, "rest_opacity": 0.0},
+        {"name": "tear_left", "draw_index": 2, "rest_opacity": 0.35},
+    ]}), encoding="utf-8")
+
+    inputs = load_export_inputs(str(tmp_path))
+
+    assert inputs.layer_opacity == {"cheek": 0.0, "tear_left": 0.35}
+
+
+def test_guide_without_rest_opacity_keeps_legacy_default(tmp_path):
+    _write_layer(tmp_path, "face")
+    _write_guide(tmp_path, [("face", 0)])
+
+    assert load_export_inputs(str(tmp_path)).layer_opacity == {}
+
+
 def test_missing_guide_falls_back_to_filename_and_says_so(tmp_path):
     """缺 guide 时如实报告降级；但层序仍以权威表为准，不按字母序硬排。
 

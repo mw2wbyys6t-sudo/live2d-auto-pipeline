@@ -816,6 +816,7 @@ class LayerComposer:
                     "mean_color": list(info["mean_color"]),
                     "occluded_by": info.get("occluded_by", []),
                     "amodal_completed": bool(info.get("completed", False)),
+                    "rest_opacity": float(info.get("rest_opacity", 1.0)),
                 }
                 for idx, info in enumerate(ordered.values())
             ],
