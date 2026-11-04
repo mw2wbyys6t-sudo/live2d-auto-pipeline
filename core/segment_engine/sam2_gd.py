@@ -1000,6 +1000,7 @@ class Sam2GroundingDinoSegmenter:
                 "color": info.get("mean_color", (128, 128, 128)),
                 "mean_color": info.get("mean_color", (128, 128, 128)),
                 "bbox": info.get("bbox", (0, 0, 0, 0)),
+                "rest_opacity": float(info.get("rest_opacity", 1.0)),
                 "amodal_completed": bool(info.get("completed", False)),
             })
 

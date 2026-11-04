@@ -432,6 +432,38 @@ class TestLayerContract:
         assert result["missing_parts"] == sorted(set(SemanticSegmenter.STANDARD_PARTS) - {"face"})
         assert result["parts_report"]["face"]["coverage"] > 0
 
+    def test_layer_preserves_rest_opacity_for_composite_preview(self, monkeypatch, tmp_path):
+        from core.segment_engine.composer import LayerComposer
+
+        image = make_image()
+        face_path = tmp_path / "face.png"
+        cheek_path = tmp_path / "cheek.png"
+        Image.new("RGBA", image.size, (255, 0, 0, 255)).save(face_path)
+        Image.new("RGBA", image.size, (0, 255, 0, 255)).save(cheek_path)
+
+        def fake_compose(self, masks, original_image, output_dir, depth_map=None):
+            return {
+                "face": {"name": "face", "path": str(face_path), "size": image.size,
+                         "pixel_count": 1, "bbox": (0, 0, 1, 1),
+                         "mean_color": (255, 0, 0), "rest_opacity": 1.0},
+                "cheek": {"name": "cheek", "path": str(cheek_path), "size": image.size,
+                          "pixel_count": 1, "bbox": (0, 0, 1, 1),
+                          "mean_color": (0, 255, 0), "rest_opacity": 0.0},
+            }
+
+        monkeypatch.setattr(LayerComposer, "compose", fake_compose)
+        mask = np.zeros((160, 120), dtype=bool)
+        mask[20:80, 30:90] = True
+        seg = offline_segmenter(
+            monkeypatch, {"face": [det(30, 20, 90, 80)]}, {(30, 20, 90, 80): mask})
+
+        result = seg.layer(image, output_dir=str(tmp_path))
+        by_name = {entry["name"]: entry for entry in result["layers"]}
+
+        assert by_name["cheek"]["rest_opacity"] == 0.0
+        composite = np.array(Image.open(result["composite_preview"]).convert("RGBA"))
+        assert tuple(composite[0, 0]) == (255, 0, 0, 255)
+
     def test_layer_without_any_detection_reports_failure(self, monkeypatch, tmp_path):
         seg = offline_segmenter(monkeypatch, {})
         result = seg.layer(make_image(), output_dir=str(tmp_path))
