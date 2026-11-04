@@ -365,11 +365,15 @@ def head_angle_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
                         bone_positions: Dict[str, Any],
                         width: float, height: float,
                         head_span: Optional[tuple] = None):
-    """头部网格 -> ``((X, Y, Z) 轴, 逐键形状)``；不适用时返回 ``((), [])``。
+    """头部网格 -> ``((X, Y, Z) 轴, 逐键形状, 逐顶点头部权重)``；不适用时返回 ``((), [], [])``。
 
     条件：网格受**头部总成**中任一骨骼影响（``Head`` 及其后代，见
     ``_head_assembly``）、``Head`` **关节位置已知**、且 ``ParamAngleX/Y/Z``
     **三者都已声明**（缺任一则不生成）。
+
+    返回的第三个值是各顶点在头部总成上的合计权重，调用方把它交给
+    ``with_body_follow`` —— 躯干侧倾时头要跟着走，而跟多少必须和头自身的
+    形变用同一套权重，否则半权重顶点会比邻居家多跑一截。
 
     枢轴取 **Head 骨骼关节点**（贴近官方习惯），不是网格包围盒中心；骨骼位置是图像
     坐标，按与顶点同一换算（原点居中、y 向上）转到模型坐标。关节位置未知时**不生成**
@@ -387,18 +391,18 @@ def head_angle_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
     bone_names = skin.get("bone_names") or []
     per_vertex = skin.get("weights") or []
     if not bone_names or not per_vertex or not vertices:
-        return (), []
+        return (), [], []
     if any(parameters_by_id.get(pid) is None for pid in HEAD_ANGLE_AXES):
-        return (), []
+        return (), [], []
     joint = bone_positions.get("Head")
     if joint is None:
-        return (), []
+        return (), [], []
     assembly = _head_assembly(standard_bones)
     indices = [i for i, b in enumerate(bone_names) if b in assembly]
     if not indices:
-        return (), []
+        return (), [], []
     if _peak_influence(per_vertex, indices) <= _MIN_INFLUENCE:
-        return (), []
+        return (), [], []
 
     px, py = to_model_xy(joint[0], joint[1], width, height)
     if head_span is None:
@@ -434,7 +438,78 @@ def head_angle_keyforms(mesh: Dict[str, Any], vertices: List[List[float]],
                                               sin_z, cos_z, depth,
                                               weight_of[i])
                               for i, (x, y) in enumerate(vertices)]))
-    return axes, shapes
+    return axes, shapes, weight_of
+
+
+# 头组跟随躯干：``ParamBodyAngleZ`` 绕 Body 枢轴转整条上半身，头是挂在躯干上的，
+# 所以它必须一起吃这个旋转 —— 否则躯干侧倾时颈/领口跟着走、脸和头发原地不动。
+# 实测（singer，tools/bindings_gap_probe.py）：躯干 12 个网格解出同一个刚体
+# （θ=10.000°、中心 (455.2,1038.8)、非刚体残差 ≤0.001px），而头组完全不跟，
+# 于是 10° 侧倾时领口离脸 57px、15 参数复杂姿态最大撕开 137.8px。
+#
+# 这一条**并进任意一条既有键形带**（头部带 / 眼球带 / 淡入带）而不是只给头部带加轴：
+# 一个网格只能挂一条带，只补头部带的话眼皮会跟着躯干走、眼球却留在原地 —— 实测
+# 10° 侧倾时眼球相对眼皮滑 64px，比修之前更糟。
+BODY_FOLLOW_PARAM = "ParamBodyAngleZ"
+
+
+def _body_follow_axis(parameters_by_id: Dict[str, ParameterSpec],
+                      bone_positions: Dict[str, Any],
+                      width: float, height: float):
+    """身体跟随轴 ``((键值…), 枢轴(模型坐标), [(sin, cos)…])``；不可用时 ``None``。
+
+    枢轴取 `ROTATION_KEYFORM_PARAMS` 里该参数声明的转动骨骼，与躯干网格走的是
+    **同一个枢轴** —— 两个场只有共用枢轴和角度才真的重合，配对距离才不变。
+    参数没声明或枢轴未知时返回 None：宁可不跟，也不拿包围盒中心顶替一个说不清的枢轴。
+    """
+    spec = ROTATION_KEYFORM_PARAMS.get(BODY_FOLLOW_PARAM)
+    param = parameters_by_id.get(BODY_FOLLOW_PARAM)
+    if not spec or param is None:
+        return None
+    pivot = None
+    for bone_name in _bone_names(spec):
+        pivot = bone_positions.get(bone_name)
+        if pivot is not None:
+            break
+    if pivot is None:
+        return None
+    keys = tuple(_key_times(param))
+    bx, by = to_model_xy(pivot[0], pivot[1], width, height)
+    return keys, (bx, by), [_sincos(k) for k in keys]
+
+
+def with_body_follow(axes, shapes, vertices, parameters_by_id,
+                     bone_positions, width, height, weights=None):
+    """把 ``ParamBodyAngleZ`` 作为**最外层轴**并进一条既有键形带。
+
+    展平序里最后一个轴的步长等于前面所有轴的键数之积，所以新下标就是
+    ``原下标 + 原键形数 × 身体键下标`` —— 原带整体保持顺序，每个身体键复制一份。
+    ``weights`` 逐顶点给出跟随比例（默认 1.0 = 全跟）：与 ``_blend`` 同一套线性蒙皮。
+
+    身体参数没声明、枢轴未知、或带子是空的时候原样返回 —— 不因为缺一个参数就改语义。
+    """
+    if not axes or not shapes:
+        return axes, shapes
+    body = _body_follow_axis(parameters_by_id, bone_positions, width, height)
+    if body is None:
+        return axes, shapes
+    body_keys, (bx, by), body_trig = body
+    if weights is None:
+        weights = [1.0] * len(vertices)
+    merged = []
+    for i_b, key_b in enumerate(body_keys):
+        sin_b, cos_b = body_trig[i_b]
+        if key_b == 0.0:
+            # 身体角为 0 的那一档就是原带本身 —— 原样复用，别绕一圈旋转再转回来。
+            merged.extend(shapes)
+            continue
+        for shape in shapes:
+            merged.append(KeyformShape(
+                key_value=float(len(merged)),
+                vertices=[_blend(point[0], point[1], bx, by, cos_b, sin_b,
+                                 weights[i] if i < len(weights) else 1.0)
+                          for i, point in enumerate(shape.vertices)]))
+    return tuple(list(axes) + [(BODY_FOLLOW_PARAM, body_keys)]), merged
 
 
 def head_assembly_span(meshes: Dict[str, Dict[str, Any]],
@@ -1344,6 +1419,11 @@ def build_rig_spec(
                         if MESH_KEYFORMS_ENABLED else None)
         if opacity_spec is not None:
             opacity_axes, opacity_shapes = opacity_spec
+            # 淡入层画在脸上/眼角，躯干侧倾时它必须和头一起走，否则静止贴合的
+            # 腮红会在倾身时相对脸滑开。
+            opacity_axes, opacity_shapes = with_body_follow(
+                opacity_axes, opacity_shapes, vertices, params_by_id,
+                bone_positions, width, height)
             opacity_driven.append(
                 f"{name}={'×'.join(pid for pid, _keys in opacity_axes)}")
             specs.append(MeshSpec(
@@ -1360,9 +1440,17 @@ def build_rig_spec(
 
         if MESH_KEYFORMS_ENABLED:
             eye_axes, eye_shapes = eye_track_keyforms(mesh, vertices, params_by_id)
-            head_axes, head_shapes = head_angle_keyforms(
+            # 眼球带也要跟身体：一个网格只能挂一条带，只给头部带加身体轴的话
+            # 眼皮跟着走、眼球留在原地 —— 实测 10° 侧倾时眼球相对眼皮滑 64px。
+            eye_axes, eye_shapes = with_body_follow(
+                eye_axes, eye_shapes, vertices, params_by_id,
+                bone_positions, width, height)
+            head_axes, head_shapes, head_weights = head_angle_keyforms(
                 mesh, vertices, params_by_id, standard_bones,
                 bone_positions, width, height, head_span=head_span)
+            head_axes, head_shapes = with_body_follow(
+                head_axes, head_shapes, vertices, params_by_id,
+                bone_positions, width, height, weights=head_weights)
             pid, shapes, candidates = rotation_keyforms(
                 mesh, params_by_id, bone_positions, standard_bones, width, height)
         else:
