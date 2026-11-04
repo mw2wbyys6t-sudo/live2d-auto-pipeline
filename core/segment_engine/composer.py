@@ -306,17 +306,6 @@ class LayerComposer:
                     union = mask | occluded_mask
                     layer_arr[union, :3] = completed_arr[union, :3]
                     layer_arr[union, 3] = 255
-                    # But we must NOT steal visible pixels that are another
-                    # part's (those stay transparent on this layer).
-                    other_parts = np.zeros((h, w), dtype=bool)
-                    for name, other_mask in part_masks.items():
-                        if name == part:
-                            continue
-                        other_parts |= np.asarray(other_mask, dtype=bool)
-                    # Visible pixels of OTHER parts are transparent here
-                    # (except our own visible pixels)
-                    other_visible = other_parts & ~mask
-                    layer_arr[other_visible, 3] = 0
                     completed = True
                 except Exception as exc:
                     log.warning(f"Amodal completion failed for '{part}': {exc}")

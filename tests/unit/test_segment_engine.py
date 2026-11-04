@@ -160,6 +160,38 @@ class TestLayerComposer:
                 assert "path" in info
                 assert Path(info["path"]).exists()
 
+    def test_amodal_completion_preserves_occluded_alpha_and_static_composite(self):
+        composer = LayerComposer()
+        img = make_test_character()
+        original = np.array(img)
+        h, w = original.shape[:2]
+
+        hair_back = np.zeros((h, w), dtype=bool)
+        hair_back[10:80, 60:196] = True
+        hair_front = np.zeros((h, w), dtype=bool)
+        hair_front[10:20, 60:196] = True
+        face = np.zeros((h, w), dtype=bool)
+        face[60:140, 80:176] = True
+        masks = {"hair_back": hair_back, "hair_front": hair_front, "face_base": face}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = composer.compose(masks, img, tmpdir)
+            hair_arr = np.array(Image.open(result["hair_back"]["path"]).convert("RGBA"))
+            recomposite = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            for info in composer.reorder_layers(result).values():
+                with Image.open(info["path"]) as layer:
+                    recomposite.alpha_composite(layer.convert("RGBA"))
+            recomposite_arr = np.array(recomposite)
+
+        occluded = (face | hair_front) & ~hair_back
+        assert result["hair_back"]["completed"] is True
+        assert occluded.any()
+        assert np.all(hair_arr[occluded, 3] == 255)
+        assert np.array_equal(hair_arr[hair_back], original[hair_back])
+        assert result["hair_back"]["pixel_count"] == int((hair_back | occluded).sum())
+        visible = hair_back | hair_front | face
+        assert np.array_equal(recomposite_arr[visible], original[visible])
+
     def test_generate_occlusion_map(self):
         composer = LayerComposer()
         masks = {
