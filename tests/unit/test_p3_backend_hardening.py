@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -111,19 +112,23 @@ def test_export_download_zip_unique_named_and_cleaned_up(ws_client, tmp_path, mo
     layers = out / "layers_xyz"
     layers.mkdir()
     Image.new("RGBA", (8, 8), (0, 255, 0, 255)).save(layers / "body.png")
+    (layers / "layer_guide.json").write_text(json.dumps({"layers": [
+        {"name": "body", "draw_index": 0, "rest_opacity": 0.0},
+    ]}), encoding="utf-8")
+    received = {}
     monkeypatch.setattr(srv, "OUTPUT_DIR", out)
     # 跳过重构建：只验证打包/命名/清理链路。
     # 必须给出就绪标记 —— 打包闸门会（正确地）拒绝没有内核验收结论的产物，
     # 那是另一条测试的责任，不该在这里顺带触发。
-    monkeypatch.setattr(
-        srv,
-        "_build_live2d_model",
-        lambda layers_, output_dir, name: {
+    def fake_build(layers_, output_dir, name, layer_opacity=None):
+        received["layer_opacity"] = layer_opacity
+        return {
             "model3_json": "",
             "textures": [],
             "moc3": {"moc3_written": True, "runtime_ready": True, "moc3_blocker": None},
-        },
-    )
+        }
+
+    monkeypatch.setattr(srv, "_build_live2d_model", fake_build)
 
     r = ws_client.post(
         "/api/export/live2d",
@@ -138,6 +143,7 @@ def test_export_download_zip_unique_named_and_cleaned_up(ws_client, tmp_path, mo
     # 导出目录为 uuid 命名而非秒级时间戳
     export_dirs = [p.name for p in out.glob("export_*")]
     assert export_dirs and all(re.match(r"export_[0-9a-f]{12}$", n) for n in export_dirs)
+    assert received["layer_opacity"] == {"body": 0.0}
 
 
 # ---------- M7：/api/ws 通用通道连接上限 ----------

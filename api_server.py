@@ -1919,6 +1919,7 @@ def _resolve_export_source(req: "ExportLive2DRequest") -> str:
 
 def _load_layers_for_export(layers_dir: str):
     from live2d_builder.layer_loader import load_export_inputs
+    from PIL import Image
 
     inputs = load_export_inputs(layers_dir)
     layers = {
