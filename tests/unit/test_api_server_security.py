@@ -145,7 +145,8 @@ def test_cors_wildcard_force_disables_credentials():
         "print('WILDCARD_OK')"
     ) % str(PROJECT_ROOT)
     proc = __import__("subprocess").run(
-        [sys.executable, "-c", code], capture_output=True, text=True
+        [sys.executable, "-c", code], capture_output=True,
+        encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stderr
     assert "WILDCARD_OK" in proc.stdout
