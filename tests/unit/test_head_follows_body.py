@@ -222,9 +222,10 @@ class TestUpperTorsoEntersHeadField:
         moved = math.dist(face_out, neck_out)
         assert moved == pytest.approx(rest, abs=1e-6)
 
-    def test_transition_does_not_move_arms_or_legs(self):
+    def test_first_transition_slice_is_limited_to_neck_bones(self):
         point_model = [list(mxy(512.0, 242.0))]
-        for bone, parent in (("ArmBack_L", "Body"), ("Leg_L", "Waist")):
+        for bone, parent in (("Torso", "Body"), ("Chest", "Torso"),
+                             ("ArmBack_L", "Body"), ("Leg_L", "Waist")):
             mesh = torso_mesh([point_model[0]])
             mesh["weights"] = {"bone_names": [bone, parent],
                                "weights": [[0.6, 0.4]]}

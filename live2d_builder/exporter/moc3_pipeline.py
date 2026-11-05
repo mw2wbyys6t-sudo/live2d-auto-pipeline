@@ -512,7 +512,7 @@ def with_body_follow(axes, shapes, vertices, parameters_by_id,
     return tuple(list(axes) + [(BODY_FOLLOW_PARAM, body_keys)]), merged
 
 
-HEAD_BODY_TRANSITION_BONES = frozenset({"Body", "Torso", "Chest", "Neck"})
+HEAD_BODY_TRANSITION_BONES = frozenset({"Neck"})
 HEAD_BODY_TRANSITION_RATIO = 0.35
 
 

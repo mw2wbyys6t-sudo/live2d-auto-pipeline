@@ -105,8 +105,13 @@ def test_lower_torso_is_outside_transition_and_falls_back_to_body_only():
     assert axes == () and shapes == [] and weights == []
 
 
-def test_arms_and_legs_do_not_enter_head_transition():
+def test_only_neck_bones_enter_the_first_transition_slice():
     vertices = [mp.to_model_xy(512.0, 242.0, W, H)]
-    for bone, parent in (("ArmBack_L", "Body"), ("Leg_L", "Waist")):
+    for bone, parent in (("Torso", "Body"), ("Chest", "Torso"),
+                         ("ArmBack_L", "Body"), ("Leg_L", "Waist")):
         axes, shapes, weights = transition(vertices, bone=bone, parent=parent)
         assert axes == () and shapes == [] and weights == []
+
+    axes, shapes, weights = transition(vertices, bone="Neck", parent="Body")
+    assert [pid for pid, _keys in axes] == ["ParamAngleZ", "ParamBodyAngleZ"]
+    assert len(shapes) == 9
