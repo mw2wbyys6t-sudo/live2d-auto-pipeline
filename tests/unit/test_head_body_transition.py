@@ -34,12 +34,14 @@ def params():
     }
 
 
-def skin(bone, n):
-    return {"bone_names": [bone], "weights": [[1.0] for _ in range(n)]}
+def skin(bone, n, parent=None):
+    if parent is None:
+        return {"bone_names": [bone], "weights": [[1.0] for _ in range(n)]}
+    return {"bone_names": [bone, parent], "weights": [[0.6, 0.4] for _ in range(n)]}
 
 
-def transition(vertices, bone="Neck", head_bottom_y=None):
-    mesh = {"weights": skin(bone, len(vertices))}
+def transition(vertices, bone="Neck", head_bottom_y=None, parent=None):
+    mesh = {"weights": skin(bone, len(vertices), parent)}
     if head_bottom_y is None:
         head_bottom_y = mp.to_model_xy(*HEAD_BOTTOM_IMG, W, H)[1]
     return mp.head_body_transition_keyforms(
@@ -105,6 +107,6 @@ def test_lower_torso_is_outside_transition_and_falls_back_to_body_only():
 
 def test_arms_and_legs_do_not_enter_head_transition():
     vertices = [mp.to_model_xy(512.0, 242.0, W, H)]
-    for bone in ("ArmBack_L", "Leg_L"):
-        axes, shapes, weights = transition(vertices, bone=bone)
+    for bone, parent in (("ArmBack_L", "Body"), ("Leg_L", "Waist")):
+        axes, shapes, weights = transition(vertices, bone=bone, parent=parent)
         assert axes == () and shapes == [] and weights == []

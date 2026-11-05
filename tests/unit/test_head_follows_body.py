@@ -224,9 +224,10 @@ class TestUpperTorsoEntersHeadField:
 
     def test_transition_does_not_move_arms_or_legs(self):
         point_model = [list(mxy(512.0, 242.0))]
-        for bone in ("ArmBack_L", "Leg_L"):
+        for bone, parent in (("ArmBack_L", "Body"), ("Leg_L", "Waist")):
             mesh = torso_mesh([point_model[0]])
-            mesh["weights"] = {"bone_names": [bone], "weights": [[1.0]]}
+            mesh["weights"] = {"bone_names": [bone, parent],
+                               "weights": [[0.6, 0.4]]}
             axes, shapes, weights = mp.head_body_transition_keyforms(
                 mesh, point_model, params(), BONES, POSITIONS, W, H,
                 mxy(512.0, 242.0)[1])

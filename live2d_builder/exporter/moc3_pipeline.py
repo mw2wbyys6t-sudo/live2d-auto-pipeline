@@ -543,8 +543,9 @@ def head_body_transition_keyforms(
     per_vertex = skin.get("weights") or []
     if not bone_names or not per_vertex:
         return (), [], []
-    indices = [i for i, name in enumerate(bone_names)
-               if name in HEAD_BODY_TRANSITION_BONES and name in affected]
+    if bone_names[0] not in HEAD_BODY_TRANSITION_BONES:
+        return (), [], []
+    indices = [i for i, name in enumerate(bone_names) if name in affected]
     if not indices or _peak_influence(per_vertex, indices) <= _MIN_INFLUENCE:
         return (), [], []
 
@@ -640,7 +641,7 @@ def head_assembly_bottom(meshes: Dict[str, Dict[str, Any]],
         bone_names = skin.get("bone_names") or []
         per_vertex = skin.get("weights")
         vertices = mesh.get("vertices")
-        if not bone_names or per_vertex is None or not vertices:
+        if not bone_names or per_vertex is None or vertices is None or len(vertices) == 0:
             continue
         indices = [i for i, b in enumerate(bone_names) if b in assembly]
         if not indices or _peak_influence(per_vertex, indices) <= _MIN_INFLUENCE:
