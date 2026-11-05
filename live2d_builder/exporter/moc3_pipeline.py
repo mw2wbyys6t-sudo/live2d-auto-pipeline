@@ -1473,7 +1473,9 @@ def build_rig_spec(
     # 整颗头的共享尺度：所有头部网格用同一组 shift / 透视深度，五官才跟着脸走。
     head_span = head_assembly_span(meshes, params_by_id, standard_bones,
                                    bone_positions)
+    head_bottom_y = head_assembly_bottom(meshes, standard_bones, bone_positions)
     keyformed, multi_hit, eyes_tracked, head_tracked = [], [], [], []
+    transition_tracked: List[str] = []
     opacity_driven: List[str] = []
 
     for order, (name, mesh) in enumerate(meshes.items()):
@@ -1550,11 +1552,16 @@ def build_rig_spec(
             head_axes, head_shapes = with_body_follow(
                 head_axes, head_shapes, vertices, params_by_id,
                 bone_positions, width, height, weights=head_weights)
+            transition_axes, transition_shapes, _transition_weights = (
+                head_body_transition_keyforms(
+                    mesh, vertices, params_by_id, standard_bones,
+                    bone_positions, width, height, head_bottom_y))
             pid, shapes, candidates = rotation_keyforms(
                 mesh, params_by_id, bone_positions, standard_bones, width, height)
         else:
             # 见 MESH_KEYFORMS_ENABLED 的说明：网格键形会让内核在加载阶段崩溃。
             eye_axes = eye_shapes = head_axes = head_shapes = ()
+            transition_axes = transition_shapes = ()
             pid, shapes, candidates = "", [], []
 
         if eye_axes:
@@ -1584,6 +1591,19 @@ def build_rig_spec(
                 keyform_axes=head_axes,
             ))
             continue
+        if transition_axes:
+            transition_tracked.append(name)
+            specs.append(MeshSpec(
+                mesh_id=str(name),
+                vertices=vertices,
+                triangles=triangles,
+                uvs=uvs,
+                draw_order=float(order),
+                texture_index=page,
+                keyform_axes=transition_axes,
+                keyform_shapes=transition_shapes,
+            ))
+            continue
         if len(candidates) > 1:
             multi_hit.append((name, candidates))
         elif pid:
@@ -1606,6 +1626,9 @@ def build_rig_spec(
     if head_tracked:
         log.info(f"头部三轴复合已烘焙（{'+'.join(HEAD_ANGLE_AXES)}）："
                  f"{len(head_tracked)} 个网格 {head_tracked[:5]}")
+    if transition_tracked:
+        log.info("上身头部过渡场已烘焙（ParamAngleZ×ParamBodyAngleZ）："
+                 f"{len(transition_tracked)} 个网格 {transition_tracked[:5]}")
     if eyes_tracked:
         log.info(f"眼球跟随已烘焙（{'+'.join(EYE_TRACK_AXES)} 双轴）："
                  f"{len(eyes_tracked)} 个网格 {eyes_tracked[:5]}")

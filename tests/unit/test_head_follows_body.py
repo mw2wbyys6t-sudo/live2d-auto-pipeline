@@ -193,3 +193,41 @@ class TestHeadAndTorsoShareOneField:
                           mxy(*self.P_IMG)[1] - mxy(*self.Q_IMG)[1])
         moved = math.hypot(h[0][0] - t[1][0], h[0][1] - t[1][1])
         assert moved == pytest.approx(rest, abs=1e-6)
+
+
+class TestUpperTorsoEntersHeadField:
+    def test_boundary_pair_distance_is_preserved_for_head_only_pose(self):
+        """脸底与颈顶在只转头时必须仍是一对同场顶点。"""
+        face_img = [518.0, 242.0]
+        neck_img = [520.0, 242.0]
+        head_bottom_y = mp.to_model_xy(*face_img, W, H)[1]
+
+        face_mesh = head_mesh([list(mxy(*face_img))])
+        head_axes, head_shapes, head_weights = mp.head_angle_keyforms(
+            face_mesh, face_mesh["vertices"], params(), BONES, POSITIONS,
+            W, H, head_span=SPAN)
+        head_axes, head_shapes = mp.with_body_follow(
+            head_axes, head_shapes, face_mesh["vertices"], params(), POSITIONS,
+            W, H, weights=head_weights)
+        face_out = head_shapes[index_of(1, 1, 2, 1)].vertices[0]
+
+        neck_model = [list(mxy(*neck_img))]
+        neck_mesh = torso_mesh(neck_img)
+        _axes, shapes, _weights = mp.head_body_transition_keyforms(
+            neck_mesh, neck_model, params(), BONES, POSITIONS, W, H,
+            head_bottom_y)
+        neck_out = shapes[2 + 3 * 1].vertices[0]
+
+        rest = math.dist(face_mesh["vertices"][0], neck_model[0])
+        moved = math.dist(face_out, neck_out)
+        assert moved == pytest.approx(rest, abs=1e-6)
+
+    def test_transition_does_not_move_arms_or_legs(self):
+        point_model = [list(mxy(512.0, 242.0))]
+        for bone in ("ArmBack_L", "Leg_L"):
+            mesh = torso_mesh([point_model[0]])
+            mesh["weights"] = {"bone_names": [bone], "weights": [[1.0]]}
+            axes, shapes, weights = mp.head_body_transition_keyforms(
+                mesh, point_model, params(), BONES, POSITIONS, W, H,
+                mxy(512.0, 242.0)[1])
+            assert axes == () and shapes == [] and weights == []

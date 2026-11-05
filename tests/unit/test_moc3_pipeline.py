@@ -574,6 +574,22 @@ def test_build_rig_spec_attaches_keyforms_from_pipeline_data():
     assert [s.key_value for s in mesh.keyform_shapes] == [-30.0, 0.0, 30.0]
 
 
+def test_build_rig_spec_uses_two_axis_transition_for_upper_torso():
+    result = _builder_result({
+        "face": _rotated_mesh("Face"),
+        "neck": _rotated_mesh("Neck"),
+    }, params=[
+        {"Id": "ParamAngleZ", "Min": -30.0, "Max": 30.0, "Value": 0.0},
+        {"Id": "ParamBodyAngleZ", "Min": -10.0, "Max": 10.0, "Value": 0.0},
+    ])
+    result["bone_positions"] = {"Head": (64.0, 30.0), "Body": (64.0, 100.0)}
+    spec = build_rig_spec(result, {"face": _uv(), "neck": _uv()})
+    neck = next(m for m in spec.meshes if m.mesh_id == "neck")
+    assert [pid for pid, _keys in neck.keyform_axes] == [
+        "ParamAngleZ", "ParamBodyAngleZ"]
+    assert len(neck.keyform_shapes) == 9
+
+
 def _write_manifest(tmp_path, physics_file="char.physics3.json"):
     manifest = tmp_path / "char.model3.json"
     manifest.write_text(json.dumps({
