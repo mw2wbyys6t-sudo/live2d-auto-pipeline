@@ -111,6 +111,8 @@ output-*/
 .aider*
 # 编辑器/代理生成的本地报告（画布与 report.json，非项目代码）
 .qoder-credits/
+# 隔离工作区（git worktree 的检出，绝不能被 git add -A 扫进仓库）
+.qoder/worktrees/
 
 # --- 本地缓存（增量） ---
 .venv-*/
