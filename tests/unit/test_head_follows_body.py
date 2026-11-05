@@ -223,13 +223,11 @@ class TestUpperTorsoEntersHeadField:
         assert moved == pytest.approx(rest, abs=1e-6)
 
     def test_transition_falloff_excludes_shoulders_and_limbs(self):
-        head_x, head_y = mxy(518.0, 242.0)
-        body_y = mxy(BODY_PIVOT[0], BODY_PIVOT[1])[1]
-        radius = ((body_y - head_y) * mp.HEAD_BODY_TRANSITION_RATIO
-                  * mp.HEAD_BODY_HORIZONTAL_RADIUS_RATIO)
+        head_x, head_y = mxy(HEAD_JOINT[0], 242.0)
         for point, bone, parent in (
+            ((head_x, head_y), "Neck", "Body"),
             ((head_x, head_y), "Torso", "Body"),
-            ((head_x + 3 * radius, head_y), "Torso", "Body"),
+            ((head_x, head_y), "Chest", "Torso"),
             ((head_x, head_y), "ArmBack_L", "Body"),
             ((head_x, head_y), "Leg_L", "Waist"),
         ):
@@ -238,7 +236,7 @@ class TestUpperTorsoEntersHeadField:
                                "weights": [[0.6, 0.4]]}
             axes, shapes, weights = mp.head_body_transition_keyforms(
                 mesh, [list(point)], params(), BONES, POSITIONS, W, H, head_y)
-            if bone == "Torso" and point[0] == head_x:
+            if bone == "Neck":
                 assert len(shapes) == 9
             else:
                 assert axes == () and shapes == [] and weights == []

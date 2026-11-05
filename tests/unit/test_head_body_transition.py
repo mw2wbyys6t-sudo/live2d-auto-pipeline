@@ -118,18 +118,18 @@ def test_lower_torso_is_outside_transition_and_falls_back_to_body_only():
     assert axes == () and shapes == [] and weights == []
 
 
-def test_2d_falloff_includes_torso_center_and_excludes_shoulders():
+def test_first_transition_only_uses_neck_bones():
     y = mp.to_model_xy(*HEAD_BOTTOM_IMG, W, H)[1]
     center = [(HEAD_X_MODEL, y)]
-    axes, shapes, weights = transition(center, bone="Torso", parent="Body")
+    axes, shapes, weights = transition(center, bone="Neck", parent="Body")
     assert [pid for pid, _keys in axes] == ["ParamAngleZ", "ParamBodyAngleZ"]
     assert weights == [1.0]
     assert len(shapes) == 9
 
-    shoulder_x = HEAD_X_MODEL + 3 * horizontal_radius()
-    axes, shapes, weights = transition([(shoulder_x, y)], bone="Torso",
-                                       parent="Body")
-    assert axes == () and shapes == [] and weights == []
+    for bone, parent in (("Torso", "Body"), ("Chest", "Torso"),
+                         ("ArmBack_L", "Body"), ("Leg_L", "Waist")):
+        axes, shapes, weights = transition(center, bone=bone, parent=parent)
+        assert axes == () and shapes == [] and weights == []
 
 
 def test_arms_and_legs_do_not_enter_head_transition():
