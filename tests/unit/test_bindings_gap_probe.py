@@ -109,10 +109,12 @@ def _stored_warps(doc, spec):
             "rows/cols 必须是 1：那时「矩形线性映射」才严格等于内核的双线性采样")
     ids = doc.get("deformer.ids")
     parents = doc.get("deformer.parent_deformer_indices")
+    assert ids == [d.deformer_id for d in warps], (
+        "这条参考实现假设变形器表全是 warp 且顺序一致（deformers 与 warps 同一张表）")
     begins = doc.get("warp_deformer_keyform.keyform_position_begin_indices")
     counts = doc.get("warp_deformer.keyform_counts")
     xs = doc.get("keyform_position.xys")
-    lattices, begin_of = {}, {}
+    lattices = {}
     running = 0
     for index, deformer in enumerate(warps):
         lattices[deformer.deformer_id] = []
@@ -121,7 +123,6 @@ def _stored_warps(doc, spec):
             flat = xs[begin:begin + 2 * deformer.vertex_count]
             lattices[deformer.deformer_id].append(
                 [(flat[k], flat[k + 1]) for k in range(0, len(flat), 2)])
-        begin_of[deformer.deformer_id] = running
         running += counts[index]
     mesh_began = doc.get("art_mesh_keyform.keyform_position_begin_indices")
     mesh_counts = doc.get("art_mesh.position_index_counts")   # = 唯一顶点数
