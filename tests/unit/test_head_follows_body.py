@@ -200,7 +200,7 @@ class TestUpperTorsoEntersHeadField:
         """脸底与颈顶在只转头时必须仍是一对同场顶点。"""
         face_img = [HEAD_JOINT[0], 242.0]
         neck_img = [HEAD_JOINT[0], 242.0]
-        head_bottom_y = mp.to_model_xy(*face_img, W, H)[1]
+        face_bottom_y = mp.to_model_xy(*face_img, W, H)[1]
 
         face_mesh = head_mesh([list(mxy(*face_img))])
         head_axes, head_shapes, head_weights = mp.head_angle_keyforms(
@@ -215,7 +215,7 @@ class TestUpperTorsoEntersHeadField:
         neck_mesh = torso_mesh(neck_img)
         _axes, shapes, _weights = mp.head_body_transition_keyforms(
             neck_mesh, neck_model, params(), BONES, POSITIONS, W, H,
-            head_bottom_y)
+            face_bottom_y)
         neck_out = shapes[2 + 3 * 1].vertices[0]
 
         rest = math.dist(face_mesh["vertices"][0], neck_model[0])

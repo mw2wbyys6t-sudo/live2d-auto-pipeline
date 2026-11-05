@@ -524,13 +524,13 @@ def head_body_transition_keyforms(
     bone_positions: Dict[str, Any],
     width: float,
     height: float,
-    head_bottom_y: Optional[float],
+    face_bottom_y: Optional[float],
 ) -> tuple:
-    """上身网格按高度连续进入头部 Z 场，同时保留完整身体 Z 场。"""
+    """颈领网格按下巴以下的高度连续进入头部 Z 场，同时保留完整身体 Z 场。"""
     angle = parameters_by_id.get("ParamAngleZ")
     head_joint = (bone_positions or {}).get("Head")
     if (angle is None or head_joint is None
-            or head_bottom_y is None or not vertices):
+            or face_bottom_y is None or not vertices):
         return (), [], []
     body_axis = _body_follow_axis(parameters_by_id, bone_positions, width, height)
     if body_axis is None:
@@ -550,14 +550,14 @@ def head_body_transition_keyforms(
         return (), [], []
 
     hx, hy = to_model_xy(head_joint[0], head_joint[1], width, height)
-    transition = (float(by) - float(head_bottom_y)) * HEAD_BODY_TRANSITION_RATIO
+    transition = (float(by) - float(face_bottom_y)) * HEAD_BODY_TRANSITION_RATIO
     if transition <= 1e-6:
         return (), [], []
 
     weights = []
     body_weights = []
     for i, (_x, y) in enumerate(vertices):
-        value = (float(head_bottom_y) + transition - float(y)) / transition
+        value = (float(face_bottom_y) + transition - float(y)) / transition
         weights.append(min(1.0, max(0.0, value)))
         body_weights.append(_vertex_weight(per_vertex, i, indices))
     if max(weights) <= 0.0 or max(body_weights) <= 0.0:
@@ -628,13 +628,14 @@ def head_assembly_span(meshes: Dict[str, Dict[str, Any]],
     return (hi[0] - lo[0], hi[1] - lo[1])
 
 
-def head_assembly_bottom(meshes: Dict[str, Dict[str, Any]],
+def face_assembly_bottom(meshes: Dict[str, Dict[str, Any]],
                          standard_bones: Dict[str, Dict],
                          bone_positions: Dict[str, Any]) -> Optional[float]:
-    """头部总成在模型坐标中的最低点（y 向下为正）。"""
+    """脸组网格在模型坐标中的最低点（下巴），不把长发下端误当颈根。"""
     if not bone_positions.get("Head"):
         return None
-    assembly = _head_assembly(standard_bones)
+    face_bones = {name for name, info in standard_bones.items()
+                  if (info or {}).get("group") == "face"}
     bottom = None
     for mesh in meshes.values():
         skin = mesh.get("weights") or {}
@@ -643,7 +644,7 @@ def head_assembly_bottom(meshes: Dict[str, Dict[str, Any]],
         vertices = mesh.get("vertices")
         if not bone_names or per_vertex is None or vertices is None or len(vertices) == 0:
             continue
-        indices = [i for i, b in enumerate(bone_names) if b in assembly]
+        indices = [i for i, b in enumerate(bone_names) if b in face_bones]
         if not indices or _peak_influence(per_vertex, indices) <= _MIN_INFLUENCE:
             continue
         width = float(mesh.get("width") or 0)
@@ -1474,7 +1475,7 @@ def build_rig_spec(
     # 整颗头的共享尺度：所有头部网格用同一组 shift / 透视深度，五官才跟着脸走。
     head_span = head_assembly_span(meshes, params_by_id, standard_bones,
                                    bone_positions)
-    head_bottom_y = head_assembly_bottom(meshes, standard_bones, bone_positions)
+    face_bottom_y = face_assembly_bottom(meshes, standard_bones, bone_positions)
     keyformed, multi_hit, eyes_tracked, head_tracked = [], [], [], []
     transition_tracked: List[str] = []
     opacity_driven: List[str] = []
@@ -1556,7 +1557,7 @@ def build_rig_spec(
             transition_axes, transition_shapes, _transition_weights = (
                 head_body_transition_keyforms(
                     mesh, vertices, params_by_id, standard_bones,
-                    bone_positions, width, height, head_bottom_y))
+                    bone_positions, width, height, face_bottom_y))
             pid, shapes, candidates = rotation_keyforms(
                 mesh, params_by_id, bone_positions, standard_bones, width, height)
         else:

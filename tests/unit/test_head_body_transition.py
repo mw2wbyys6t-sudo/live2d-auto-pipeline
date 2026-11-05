@@ -43,12 +43,12 @@ def skin(bone, n, parent=None):
     return {"bone_names": [bone, parent], "weights": [[0.6, 0.4] for _ in range(n)]}
 
 
-def transition(vertices, bone="Neck", head_bottom_y=None, parent=None):
+def transition(vertices, bone="Neck", face_bottom_y=None, parent=None):
     mesh = {"weights": skin(bone, len(vertices), parent)}
-    if head_bottom_y is None:
-        head_bottom_y = mp.to_model_xy(*HEAD_BOTTOM_IMG, W, H)[1]
+    if face_bottom_y is None:
+        face_bottom_y = mp.to_model_xy(*HEAD_BOTTOM_IMG, W, H)[1]
     return mp.head_body_transition_keyforms(
-        mesh, vertices, params(), BONES, POSITIONS, W, H, head_bottom_y)
+        mesh, vertices, params(), BONES, POSITIONS, W, H, face_bottom_y)
 
 
 def shape_at(shapes, z_index, body_index):
@@ -60,7 +60,7 @@ def sincos(value):
     return cos, sin
 
 
-def test_head_assembly_bottom_uses_lowest_head_vertex():
+def test_face_assembly_bottom_uses_lowest_face_vertex():
     vertices = [(500.0, 100.0), (500.0, 242.0)]
     meshes = {
         "face": {
@@ -70,7 +70,7 @@ def test_head_assembly_bottom_uses_lowest_head_vertex():
             "weights": {"bone_names": ["Face"], "weights": [[1.0], [1.0]]},
         }
     }
-    got = mp.head_assembly_bottom(meshes, BONES, POSITIONS)
+    got = mp.face_assembly_bottom(meshes, BONES, POSITIONS)
     assert got == mp.to_model_xy(500.0, 242.0, W, H)[1]
 
 
