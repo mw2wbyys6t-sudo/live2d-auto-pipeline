@@ -222,7 +222,7 @@ class TestUpperTorsoEntersHeadField:
         moved = math.dist(face_out, neck_out)
         assert moved == pytest.approx(rest, abs=1e-6)
 
-    def test_transition_falloff_excludes_shoulders_and_limbs(self):
+    def test_transition_is_limited_to_neck_bones(self):
         head_x, head_y = mxy(HEAD_JOINT[0], 242.0)
         for point, bone, parent in (
             ((head_x, head_y), "Neck", "Body"),

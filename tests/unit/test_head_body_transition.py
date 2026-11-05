@@ -51,16 +51,6 @@ def transition(vertices, bone="Neck", head_bottom_y=None, parent=None):
         mesh, vertices, params(), BONES, POSITIONS, W, H, head_bottom_y)
 
 
-def transition_radius():
-    body_y = mp.to_model_xy(*BODY_PIVOT, W, H)[1]
-    head_y = mp.to_model_xy(*HEAD_BOTTOM_IMG, W, H)[1]
-    return (body_y - head_y) * mp.HEAD_BODY_TRANSITION_RATIO
-
-
-def horizontal_radius():
-    return transition_radius() * mp.HEAD_BODY_HORIZONTAL_RADIUS_RATIO
-
-
 def shape_at(shapes, z_index, body_index):
     return shapes[z_index + 3 * body_index]
 
