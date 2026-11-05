@@ -26,6 +26,13 @@ def test_version_single_source_declares_release_version():
         "core/version.py 是版本号唯一真源"
 
 
+def test_version_info_tuple_matches_single_source():
+    from core.version import __version__, __version_info__
+
+    assert __version__ == RELEASE_VERSION
+    assert __version_info__ == tuple(int(part) for part in RELEASE_VERSION.split("."))
+
+
 def test_python_backend_version_matches_single_source():
     body = _read("api_server.py")
     match = re.search(r'^VERSION = "v([0-9.]+)-py"', body, re.M)

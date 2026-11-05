@@ -2,7 +2,7 @@
 """Pygmalion Studio - Version information (single source of truth)"""
 
 __version__ = "0.10.11"
-__version_info__ = (0, 10, 10)
+__version_info__ = (0, 10, 11)
 __release_date__ = "2026-10-28"
 __codename__ = "GPU Aware"
 
