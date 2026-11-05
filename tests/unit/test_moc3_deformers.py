@@ -3,7 +3,9 @@
 这里的每条结构断言都对应一次官方 Cubism Core 实测（见
 tests/integration/test_moc3_deformer_acceptance.py 与 tools/probe_warp_st_identity.py）。
 """
+import base64
 import math
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +17,8 @@ from live2d_builder.exporter.moc3_model import (
     MeshSpec,
     ParameterSpec,
     RigSpec,
+    RotationDeformerSpec,
+    RotationKeyform,
     UnsupportedRig,
     WarpDeformerSpec,
     compile_static_rig,
@@ -23,6 +27,17 @@ from live2d_builder.exporter.moc3_model import (
 )
 
 PPU = 100.0
+
+# Task 1.5 的黄金字节夹具：根级（无父变形器）全产物字节，由**改动前**的编译器生成。
+# 落成 base64 文本而不是 .bin —— 仓库 .gitignore 的 `*.bin` 是权重文件规则，会连带
+# 把测试用的二进制挡在库外。
+_GOLDEN_FLAT_WARP_BYTES_FILE = (
+    Path(__file__).resolve().parent / "fixtures"
+    / "moc3_root_level_flat_warps_golden.b64")
+
+
+def _golden_flat_warp_bytes() -> bytes:
+    return base64.b64decode(_GOLDEN_FLAT_WARP_BYTES_FILE.read_text(encoding="ascii"))
 
 
 def _square(name, x0=0.0, y0=0.0, side=100.0):
@@ -891,3 +906,172 @@ class TestSharedBodyLean:
         assert self._row_delta(torso, self._TORSO_REST, self._TORSO_Y10,
                                want_top=True)[0] == pytest.approx(
             80.0 * TORSO_LEAN_X, abs=1e-6)
+
+
+# ----------------------------------------------------------------------
+# Task 1.5：根级（无父变形器）的产物字节钉死
+# ----------------------------------------------------------------------
+
+def _rect_lattice(rows, cols, x0, y0, x1, y1, key_value=0.0, dx=0.0, dy=0.0):
+    """(rows+1)x(cols+1) 的轴对齐规则点阵（`_lattice` 只会画正方的那几种）。
+
+    ``dx`` 是**两端的水平弯**（中间列不动，越靠边越弯），``dy`` 是两端的垂直弯：
+    键形之间因此不是纯平移，能钉住「写错轴 / 写反符号」。dx=dy=0 的静止形仍是
+    规则点阵（`_require_axis_lattice` 只查静止形）。
+    """
+    step_x = (x1 - x0) / cols
+    step_y = (y1 - y0) / rows
+    points = []
+    for r in range(rows + 1):
+        # 行方向的比例：两端 ±1、中间 0（奇数行时正中一行完全不弯）
+        fy = (2.0 * r / rows) - 1.0
+        for c in range(cols + 1):
+            fx = (2.0 * c / cols) - 1.0
+            points.append((x0 + c * step_x + dx * fx, y0 + r * step_y + dy * fy))
+    return DeformerGrid(key_value, points)
+
+
+def _flat_mesh(mesh_id, verts, deformer_id="", part_id="",
+               keyform_axis=None, opacity=1.0, draw_order=0.0):
+    """四边形网格；``keyform_axis`` = (参数 id, [(键值, 顶点表), ...])。"""
+    shapes = ()
+    pid = ""
+    if keyform_axis:
+        pid, keyed = keyform_axis
+        shapes = [KeyformShape(float(k), list(v)) for k, v in keyed]
+    return MeshSpec(mesh_id=mesh_id, vertices=list(verts),
+                    triangles=[(0, 1, 2), (0, 2, 3)],
+                    uvs=[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                    draw_order=draw_order, opacity=opacity, part_id=part_id,
+                    deformer_id=deformer_id, keyform_parameter_id=pid,
+                    keyform_shapes=shapes)
+
+
+def _spec_with_flat_warps() -> RigSpec:
+    """全部变形器都是**根级**（``parent_deformer_id`` 为空）的规格 —— 今天真实产物的形状。
+
+    刻意覆盖已验收模型走到的每一条写出路径，好让黄金字节真的能代表它们：
+      * 静态根 warp（单控制网格）+ 挂在它下面的网格（顶点写成 (s, t)）；
+      * 单轴三键根 warp（表情类）；
+      * 双轴多键根 warp（2x3 矩形点阵，非正方形 rows/cols）；
+      * 静态 rotation 与带键形的 rotation（顶点仍是模型像素）；
+      * 同时带自身键形又挂在 warp 下的网格；
+      * 不挂任何变形器的网格。
+    画布与 PPU 都取**非默认**且各轴不同（512x768 / 64），这样「多除一次 ppu」
+    「x/y 写反」这类错误也会改字节。
+    """
+    params = [
+        ParameterSpec("ParamMood", -1.0, 1.0, 0.0),
+        ParameterSpec("ParamMouthOpenY", 0.0, 1.0, 0.0),
+        ParameterSpec("ParamMouthForm", -1.0, 1.0, 0.0),
+        ParameterSpec("ParamAngleZ", -30.0, 30.0, 0.0),
+    ]
+    warp_static = WarpDeformerSpec(
+        deformer_id="WarpStatic", rows=2, cols=2,
+        grids=[_rect_lattice(2, 2, -50.0, -70.0, 50.0, 70.0)],
+        parent_part_id="Part_Head")
+    warp_single = WarpDeformerSpec(
+        deformer_id="WarpMood", rows=1, cols=3,
+        grids=[_rect_lattice(1, 3, 10.0, -20.0, 130.0, 20.0,
+                             key_value=-1.0, dx=-4.0, dy=-2.0),
+               _rect_lattice(1, 3, 10.0, -20.0, 130.0, 20.0),
+               _rect_lattice(1, 3, 10.0, -20.0, 130.0, 20.0,
+                             key_value=1.0, dx=4.0, dy=2.0)],
+        parameter_id="ParamMood", parent_part_id="Part_Mouth")
+    # 双轴带：展平序 index = i_open + 2*i_form（**第一个轴步长为 1**，F-06 实测定论）
+    two_axis_grids = []
+    for form in (-1.0, 0.0, 1.0):
+        for open_y in (0.0, 1.0):
+            two_axis_grids.append(_rect_lattice(
+                2, 3, -30.0, -12.0, 66.0, 44.0, key_value=open_y,
+                dx=9.0 * open_y, dy=6.0 * form))
+    warp_two_axis = WarpDeformerSpec(
+        deformer_id="WarpMouth", rows=2, cols=3, grids=two_axis_grids,
+        axes=(("ParamMouthOpenY", (0.0, 1.0)),
+              ("ParamMouthForm", (-1.0, 0.0, 1.0))),
+        parent_part_id="Part_Lips")
+    rotation_static = RotationDeformerSpec(
+        deformer_id="RotStatic", parent_part_id="Part_Arm",
+        keyforms=[RotationKeyform(0.0, angle=12.5, origin=(18.0, -22.0), scale=1.05)])
+    rotation_keyformed = RotationDeformerSpec(
+        deformer_id="RotHead", parameter_id="ParamAngleZ",
+        parent_part_id="Part_Neck",
+        keyforms=[RotationKeyform(-30.0, angle=-24.0, origin=(0.0, 40.0), scale=1.1),
+                  RotationKeyform(0.0, angle=0.0, origin=(0.0, 40.0), scale=1.0),
+                  RotationKeyform(30.0, angle=24.0, origin=(0.0, 40.0), scale=0.9)])
+
+    meshes = [
+        _flat_mesh("ArtHead", [(-40.0, -60.0), (40.0, -60.0), (40.0, 60.0),
+                               (-40.0, 60.0)],
+                   deformer_id="WarpStatic", part_id="Part_Head"),
+        _flat_mesh("ArtMouth", [(-12.0, -18.0), (18.0, -18.0), (18.0, 18.0),
+                                (-12.0, 18.0)],
+                   deformer_id="WarpMood", part_id="Part_Mouth"),
+        _flat_mesh("ArtLips", [(-24.0, -9.0), (24.0, -9.0), (24.0, 9.0),
+                               (-24.0, 9.0)],
+                   deformer_id="WarpMouth", part_id="Part_Lips"),
+        _flat_mesh("ArtArm", [(60.0, -140.0), (120.0, -140.0), (120.0, -80.0),
+                              (60.0, -80.0)],
+                   deformer_id="RotStatic", part_id="Part_Arm"),
+        _flat_mesh("ArtNeck", [(-8.0, 80.0), (8.0, 80.0), (8.0, 110.0),
+                               (-8.0, 110.0)],
+                   deformer_id="RotHead", part_id="Part_Neck"),
+        _flat_mesh("ArtFree", [(-200.0, -200.0), (-150.0, -200.0),
+                               (-150.0, -150.0), (-200.0, -150.0)],
+                   part_id="Part_Free",
+                   keyform_axis=("ParamMood",
+                                 [(-1.0, [(-200.0, -200.0), (-150.0, -200.0),
+                                          (-152.0, -148.0), (-202.0, -148.0)]),
+                                  (0.0, [(-200.0, -200.0), (-150.0, -200.0),
+                                         (-150.0, -150.0), (-200.0, -150.0)]),
+                                  (1.0, [(-200.0, -200.0), (-150.0, -200.0),
+                                         (-148.0, -152.0), (-198.0, -152.0)])])),
+        _flat_mesh("ArtKeyedOnWarp", [(-20.0, -30.0), (20.0, -30.0),
+                                      (20.0, 30.0), (-20.0, 30.0)],
+                   deformer_id="WarpStatic", part_id="Part_Head",
+                   keyform_axis=("ParamMouthOpenY",
+                                 [(0.0, [(-20.0, -30.0), (20.0, -30.0),
+                                         (20.0, 30.0), (-20.0, 30.0)]),
+                                  (1.0, [(-20.0, -30.0), (20.0, -30.0),
+                                         (26.0, 34.0), (-26.0, 34.0)])])),
+    ]
+    return RigSpec(meshes=meshes, parameters=params,
+                   deformers=[warp_static, warp_single, warp_two_axis,
+                              rotation_static, rotation_keyformed],
+                   canvas_width=512.0, canvas_height=768.0,
+                   pixels_per_unit=64.0)
+
+
+def test_flat_warp_fixture_is_all_root_level():
+    """黄金字节要钉的是「只有根级」的产物 —— 夹具里不许出现父变形器。
+
+    夹具哪天被加了 parent，这条就红：那份对照字节就不再是根级基准了，
+    必须用未改动的编译器重新生成一次，不能顺手把断言删掉。
+    """
+    spec = _spec_with_flat_warps()
+    assert [d.parent_deformer_id for d in spec.deformers] == [""] * len(spec.deformers)
+    spec.validate()
+    assert lint_document(compile_static_rig(spec)) == []
+
+
+def test_root_level_warp_bytes_are_unchanged_by_the_space_map():
+    """根级 warp（parent_deformer_id 为空）的产物字节必须一字不差。
+
+    实测：R0 与 R1（一级恒等 warp）SHA 逐字节相同（``e035d547d377…``，
+    见 F:\\tmp\\trunk-diag\\experiments.json）—— 今天产物里 13 个根变形器
+    全都依赖这条。改空间基准时如果动了根级，所有已验收过的模型都会静默变形。
+
+    黄金字节由**改动前**的编译器（Task 1.5 的实现提交之前）生成，落成 base64 文本
+    夹具 ``tests/unit/fixtures/moc3_root_level_flat_warps_golden.b64``
+    （仓库 ``.gitignore`` 的 ``*.bin`` 是权重文件规则，二进制夹具进不了库）：
+    ``base64.b64encode(compile_static_rig(_spec_with_flat_warps()).to_bytes())``
+    当时产物 10880 字节，sha256 = ``66ab863352dba657295f…eca5e8c8``。
+    """
+    spec = _spec_with_flat_warps()
+    assert _GOLDEN_FLAT_WARP_BYTES_FILE.is_file(), (
+        f"缺黄金字节文件：{_GOLDEN_FLAT_WARP_BYTES_FILE}"
+        "（必须用未改动的编译器生成一次，见本用例 docstring）")
+    assert len(_golden_flat_warp_bytes()) == 10880, (
+        "黄金字节夹具长度变了（应为 10880，被改动前的编译器产出）")
+    assert compile_static_rig(spec).to_bytes() == _golden_flat_warp_bytes(), (
+        "根级写出路径变了：Task 1.5 只允许改父级非空的那条分支")
