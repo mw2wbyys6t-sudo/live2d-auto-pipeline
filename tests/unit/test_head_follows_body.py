@@ -198,8 +198,8 @@ class TestHeadAndTorsoShareOneField:
 class TestUpperTorsoEntersHeadField:
     def test_boundary_pair_distance_is_preserved_for_head_only_pose(self):
         """脸底与颈顶在只转头时必须仍是一对同场顶点。"""
-        face_img = [518.0, 242.0]
-        neck_img = [520.0, 242.0]
+        face_img = [HEAD_JOINT[0], 242.0]
+        neck_img = [HEAD_JOINT[0], 242.0]
         head_bottom_y = mp.to_model_xy(*face_img, W, H)[1]
 
         face_mesh = head_mesh([list(mxy(*face_img))])
@@ -222,14 +222,22 @@ class TestUpperTorsoEntersHeadField:
         moved = math.dist(face_out, neck_out)
         assert moved == pytest.approx(rest, abs=1e-6)
 
-    def test_first_transition_slice_is_limited_to_neck_bones(self):
-        point_model = [list(mxy(512.0, 242.0))]
-        for bone, parent in (("Torso", "Body"), ("Chest", "Torso"),
-                             ("ArmBack_L", "Body"), ("Leg_L", "Waist")):
-            mesh = torso_mesh([point_model[0]])
+    def test_transition_falloff_excludes_shoulders_and_limbs(self):
+        head_x, head_y = mxy(518.0, 242.0)
+        body_y = mxy(BODY_PIVOT[0], BODY_PIVOT[1])[1]
+        radius = (body_y - head_y) * mp.HEAD_BODY_TRANSITION_RATIO
+        for point, bone, parent in (
+            ((head_x, head_y), "Torso", "Body"),
+            ((head_x + 3 * radius, head_y), "Torso", "Body"),
+            ((head_x, head_y), "ArmBack_L", "Body"),
+            ((head_x, head_y), "Leg_L", "Waist"),
+        ):
+            mesh = torso_mesh([point])
             mesh["weights"] = {"bone_names": [bone, parent],
                                "weights": [[0.6, 0.4]]}
             axes, shapes, weights = mp.head_body_transition_keyforms(
-                mesh, point_model, params(), BONES, POSITIONS, W, H,
-                mxy(512.0, 242.0)[1])
-            assert axes == () and shapes == [] and weights == []
+                mesh, [list(point)], params(), BONES, POSITIONS, W, H, head_y)
+            if bone == "Torso" and point[0] == head_x:
+                assert len(shapes) == 9
+            else:
+                assert axes == () and shapes == [] and weights == []

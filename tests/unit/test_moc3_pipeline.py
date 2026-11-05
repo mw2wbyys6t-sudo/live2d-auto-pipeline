@@ -516,6 +516,17 @@ def _rotated_mesh(bone="Head", weight=1.0, width=128.0, height=128.0):
     }
 
 
+def _centered_body_mesh(bone="Neck", width=128.0, height=128.0):
+    verts = [[63.0, 32.0], [65.0, 32.0], [65.0, 96.0], [63.0, 96.0]]
+    return {
+        "vertices": verts,
+        "vertices_norm": [[x / width, y / height] for x, y in verts],
+        "indices": [[0, 1, 2], [0, 2, 3]],
+        "width": width, "height": height,
+        "weights": {"bone_names": [bone], "weights": [[1.0]] * len(verts)},
+    }
+
+
 def test_rotation_keyforms_bake_rigid_z_rotation():
     from live2d_builder.exporter.moc3_pipeline import rotation_keyforms
     from live2d_builder.bones.deformers import BoneHierarchy
@@ -577,7 +588,7 @@ def test_build_rig_spec_attaches_keyforms_from_pipeline_data():
 def test_build_rig_spec_uses_two_axis_transition_for_upper_torso():
     result = _builder_result({
         "face": _rotated_mesh("Face"),
-        "neck": _rotated_mesh("Neck"),
+        "neck": _centered_body_mesh("Neck"),
     }, params=[
         {"Id": "ParamAngleZ", "Min": -30.0, "Max": 30.0, "Value": 0.0},
         {"Id": "ParamBodyAngleZ", "Min": -10.0, "Max": 10.0, "Value": 0.0},

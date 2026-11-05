@@ -512,7 +512,7 @@ def with_body_follow(axes, shapes, vertices, parameters_by_id,
     return tuple(list(axes) + [(BODY_FOLLOW_PARAM, body_keys)]), merged
 
 
-HEAD_BODY_TRANSITION_BONES = frozenset({"Neck"})
+HEAD_BODY_TRANSITION_BONES = frozenset({"Body", "Torso", "Chest", "Neck"})
 HEAD_BODY_TRANSITION_RATIO = 0.35
 
 
@@ -556,9 +556,11 @@ def head_body_transition_keyforms(
 
     weights = []
     body_weights = []
-    for i, (_x, y) in enumerate(vertices):
-        value = (float(head_bottom_y) + transition - float(y)) / transition
-        weights.append(min(1.0, max(0.0, value)))
+    for i, (x, y) in enumerate(vertices):
+        vertical = (float(head_bottom_y) + transition - float(y)) / transition
+        horizontal = (transition - abs(float(x) - float(hx))) / transition
+        value = min(1.0, max(0.0, vertical)) * min(1.0, max(0.0, horizontal))
+        weights.append(value)
         body_weights.append(_vertex_weight(per_vertex, i, indices))
     if max(weights) <= 0.0 or max(body_weights) <= 0.0:
         return (), [], []

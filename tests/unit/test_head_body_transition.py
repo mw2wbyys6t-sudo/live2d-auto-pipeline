@@ -27,6 +27,9 @@ POSITIONS = {
 }
 
 
+HEAD_X_MODEL = mp.to_model_xy(*HEAD_JOINT, W, H)[0]
+
+
 def params():
     return {
         "ParamAngleZ": ParameterSpec("ParamAngleZ", -30.0, 30.0, 0.0),
@@ -46,6 +49,12 @@ def transition(vertices, bone="Neck", head_bottom_y=None, parent=None):
         head_bottom_y = mp.to_model_xy(*HEAD_BOTTOM_IMG, W, H)[1]
     return mp.head_body_transition_keyforms(
         mesh, vertices, params(), BONES, POSITIONS, W, H, head_bottom_y)
+
+
+def transition_radius():
+    body_y = mp.to_model_xy(*BODY_PIVOT, W, H)[1]
+    head_y = mp.to_model_xy(*HEAD_BOTTOM_IMG, W, H)[1]
+    return (body_y - head_y) * mp.HEAD_BODY_TRANSITION_RATIO
 
 
 def shape_at(shapes, z_index, body_index):
@@ -73,12 +82,12 @@ def test_head_assembly_bottom_uses_lowest_head_vertex():
 
 def test_upper_boundary_point_receives_full_head_weight():
     y = mp.to_model_xy(*HEAD_BOTTOM_IMG, W, H)[1]
-    axes, shapes, weights = transition([(0.0, y)])
+    axes, shapes, weights = transition([(HEAD_X_MODEL, y)])
     assert [pid for pid, _keys in axes] == ["ParamAngleZ", "ParamBodyAngleZ"]
     assert weights == [1.0]
     assert len(shapes) == 9
     hx, hy = mp.to_model_xy(*HEAD_JOINT, W, H)
-    expected = mp._blend(0.0, y, hx, hy, *sincos(30.0), 1.0)
+    expected = mp._blend(HEAD_X_MODEL, y, hx, hy, *sincos(30.0), 1.0)
     assert shape_at(shapes, 2, 1).vertices[0] == pytest.approx(expected, abs=1e-6)
 
 
@@ -101,17 +110,26 @@ def test_default_keys_reproduce_rest_exactly():
 
 def test_lower_torso_is_outside_transition_and_falls_back_to_body_only():
     y = mp.to_model_xy(512.0, 450.0, W, H)[1]
-    axes, shapes, weights = transition([(0.0, y)])
+    axes, shapes, weights = transition([(HEAD_X_MODEL, y)])
     assert axes == () and shapes == [] and weights == []
 
 
-def test_only_neck_bones_enter_the_first_transition_slice():
+def test_2d_falloff_includes_torso_center_and_excludes_shoulders():
+    y = mp.to_model_xy(*HEAD_BOTTOM_IMG, W, H)[1]
+    center = [(HEAD_X_MODEL, y)]
+    axes, shapes, weights = transition(center, bone="Torso", parent="Body")
+    assert [pid for pid, _keys in axes] == ["ParamAngleZ", "ParamBodyAngleZ"]
+    assert weights == [1.0]
+    assert len(shapes) == 9
+
+    shoulder_x = HEAD_X_MODEL + 3 * transition_radius()
+    axes, shapes, weights = transition([(shoulder_x, y)], bone="Torso",
+                                       parent="Body")
+    assert axes == () and shapes == [] and weights == []
+
+
+def test_arms_and_legs_do_not_enter_head_transition():
     vertices = [mp.to_model_xy(512.0, 242.0, W, H)]
-    for bone, parent in (("Torso", "Body"), ("Chest", "Torso"),
-                         ("ArmBack_L", "Body"), ("Leg_L", "Waist")):
+    for bone, parent in (("ArmBack_L", "Body"), ("Leg_L", "Waist")):
         axes, shapes, weights = transition(vertices, bone=bone, parent=parent)
         assert axes == () and shapes == [] and weights == []
-
-    axes, shapes, weights = transition(vertices, bone="Neck", parent="Body")
-    assert [pid for pid, _keys in axes] == ["ParamAngleZ", "ParamBodyAngleZ"]
-    assert len(shapes) == 9
