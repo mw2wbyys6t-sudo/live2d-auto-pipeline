@@ -513,7 +513,7 @@ def with_body_follow(axes, shapes, vertices, parameters_by_id,
 
 
 HEAD_BODY_TRANSITION_BONES = frozenset({"Neck"})
-HEAD_BODY_TRANSITION_RATIO = 0.35
+HEAD_BODY_TRANSITION_RATIO = 0.20
 
 
 def head_body_transition_keyforms(
