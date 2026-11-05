@@ -512,6 +512,76 @@ def with_body_follow(axes, shapes, vertices, parameters_by_id,
     return tuple(list(axes) + [(BODY_FOLLOW_PARAM, body_keys)]), merged
 
 
+HEAD_BODY_TRANSITION_BONES = frozenset({"Body", "Torso", "Chest", "Neck"})
+HEAD_BODY_TRANSITION_RATIO = 0.35
+
+
+def head_body_transition_keyforms(
+    mesh: Dict[str, Any],
+    vertices: List[List[float]],
+    parameters_by_id: Dict[str, ParameterSpec],
+    standard_bones: Dict[str, Dict],
+    bone_positions: Dict[str, Any],
+    width: float,
+    height: float,
+    head_bottom_y: Optional[float],
+) -> tuple:
+    """上身网格按高度连续进入头部 Z 场，同时保留完整身体 Z 场。"""
+    angle = parameters_by_id.get("ParamAngleZ")
+    head_joint = (bone_positions or {}).get("Head")
+    if (angle is None or head_joint is None
+            or head_bottom_y is None or not vertices):
+        return (), [], []
+    body_axis = _body_follow_axis(parameters_by_id, bone_positions, width, height)
+    if body_axis is None:
+        return (), [], []
+    body_keys, (bx, by), body_trig = body_axis
+
+    affected = _affected_bones({"body"}, standard_bones)
+    skin = mesh.get("weights") or {}
+    bone_names = skin.get("bone_names") or []
+    per_vertex = skin.get("weights") or []
+    if not bone_names or not per_vertex:
+        return (), [], []
+    indices = [i for i, name in enumerate(bone_names)
+               if name in HEAD_BODY_TRANSITION_BONES and name in affected]
+    if not indices or _peak_influence(per_vertex, indices) <= _MIN_INFLUENCE:
+        return (), [], []
+
+    hx, hy = to_model_xy(head_joint[0], head_joint[1], width, height)
+    transition = (float(by) - float(head_bottom_y)) * HEAD_BODY_TRANSITION_RATIO
+    if transition <= 1e-6:
+        return (), [], []
+
+    weights = []
+    body_weights = []
+    for i, (_x, y) in enumerate(vertices):
+        value = (float(head_bottom_y) + transition - float(y)) / transition
+        weights.append(min(1.0, max(0.0, value)))
+        body_weights.append(_vertex_weight(per_vertex, i, indices))
+    if max(weights) <= 0.0 or max(body_weights) <= 0.0:
+        return (), [], []
+
+    z_keys = tuple(_key_times(angle))
+    axes = (("ParamAngleZ", z_keys), (BODY_FOLLOW_PARAM, body_keys))
+    shapes = []
+    for i_b, key_body in enumerate(body_keys):
+        sin_b, cos_b = body_trig[i_b]
+        for key_z in z_keys:
+            sin_z, cos_z = _sincos(key_z)
+            moved = []
+            for i, point in enumerate(vertices):
+                x, y = float(point[0]), float(point[1])
+                if key_z != 0.0 and weights[i] > 0.0:
+                    x, y = _blend(x, y, hx, hy, cos_z, sin_z, weights[i])
+                if key_body != 0.0 and body_weights[i] > 0.0:
+                    x, y = _blend(x, y, bx, by, cos_b, sin_b, body_weights[i])
+                moved.append([x, y])
+            shapes.append(KeyformShape(
+                key_value=float(len(shapes)), vertices=moved))
+    return axes, shapes, weights
+
+
 def head_assembly_span(meshes: Dict[str, Dict[str, Any]],
                        parameters_by_id: Dict[str, ParameterSpec],
                        standard_bones: Dict[str, Dict],
@@ -555,6 +625,35 @@ def head_assembly_span(meshes: Dict[str, Dict[str, Any]],
     if lo is None:
         return None
     return (hi[0] - lo[0], hi[1] - lo[1])
+
+
+def head_assembly_bottom(meshes: Dict[str, Dict[str, Any]],
+                         standard_bones: Dict[str, Dict],
+                         bone_positions: Dict[str, Any]) -> Optional[float]:
+    """头部总成在模型坐标中的最低点（y 向下为正）。"""
+    if not bone_positions.get("Head"):
+        return None
+    assembly = _head_assembly(standard_bones)
+    bottom = None
+    for mesh in meshes.values():
+        skin = mesh.get("weights") or {}
+        bone_names = skin.get("bone_names") or []
+        per_vertex = skin.get("weights")
+        vertices = mesh.get("vertices")
+        if not bone_names or per_vertex is None or not vertices:
+            continue
+        indices = [i for i, b in enumerate(bone_names) if b in assembly]
+        if not indices or _peak_influence(per_vertex, indices) <= _MIN_INFLUENCE:
+            continue
+        width = float(mesh.get("width") or 0)
+        height = float(mesh.get("height") or 0)
+        if width <= 0 or height <= 0:
+            continue
+        ys = [to_model_xy(float(v[0]), float(v[1]), width, height)[1]
+              for v in vertices]
+        mesh_bottom = max(ys)
+        bottom = mesh_bottom if bottom is None else max(bottom, mesh_bottom)
+    return bottom
 
 
 def _peak_influence(per_vertex, indices) -> float:
