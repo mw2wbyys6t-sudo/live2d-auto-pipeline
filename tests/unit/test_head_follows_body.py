@@ -225,7 +225,8 @@ class TestUpperTorsoEntersHeadField:
     def test_transition_falloff_excludes_shoulders_and_limbs(self):
         head_x, head_y = mxy(518.0, 242.0)
         body_y = mxy(BODY_PIVOT[0], BODY_PIVOT[1])[1]
-        radius = (body_y - head_y) * mp.HEAD_BODY_TRANSITION_RATIO
+        radius = ((body_y - head_y) * mp.HEAD_BODY_TRANSITION_RATIO
+                  * mp.HEAD_BODY_HORIZONTAL_RADIUS_RATIO)
         for point, bone, parent in (
             ((head_x, head_y), "Torso", "Body"),
             ((head_x + 3 * radius, head_y), "Torso", "Body"),

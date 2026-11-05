@@ -57,6 +57,10 @@ def transition_radius():
     return (body_y - head_y) * mp.HEAD_BODY_TRANSITION_RATIO
 
 
+def horizontal_radius():
+    return transition_radius() * mp.HEAD_BODY_HORIZONTAL_RADIUS_RATIO
+
+
 def shape_at(shapes, z_index, body_index):
     return shapes[z_index + 3 * body_index]
 
@@ -122,7 +126,7 @@ def test_2d_falloff_includes_torso_center_and_excludes_shoulders():
     assert weights == [1.0]
     assert len(shapes) == 9
 
-    shoulder_x = HEAD_X_MODEL + 3 * transition_radius()
+    shoulder_x = HEAD_X_MODEL + 3 * horizontal_radius()
     axes, shapes, weights = transition([(shoulder_x, y)], bone="Torso",
                                        parent="Body")
     assert axes == () and shapes == [] and weights == []
