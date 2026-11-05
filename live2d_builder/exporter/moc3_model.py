@@ -11,6 +11,11 @@
     不被参数驱动的对象统一引用 band 0（空带）。
   * art_mesh.position_index_counts = 唯一顶点数（uv 段占 2x 个浮点数），
     art_mesh.vertex_counts = 索引条目数（position_index 段占该值个索引）。
+  * **嵌套 warp（有 `parent_deformer_id`）的控制网格存父级的归一 (s,t) 空间**，
+    因为内核把每一级的输出原样当作父级点阵的 (s,t)，不会按父级静止矩形再归一一次
+    （规则 I，10 帧官方 Core 实测；子级若仍存模型像素，静止帧被线性放大 2×）。
+    根级不受影响：`S_root` 是恒等，单位就是模型像素、以 0 为中心。
+    见 `deformer_space_map`。
 
 参数形变键型（对官方 Haru 全量 84 网格核实，见 tools/probe_haru_keyforms.py）：
   * binding i 与参数 i 一一对应；parameter.keyform_binding_{begin,counts}
@@ -29,7 +34,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Callable, Dict, List, Optional, Sequence, Union
 
 from live2d_builder.exporter import moc3_sections as ms
 from live2d_builder.exporter.moc3_container import CanvasInfo, Moc3Container
@@ -558,7 +563,10 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
     keyform_draw_orders: List[float] = []
     param_by_id = {p.parameter_id: p for p in params}
     # 挂在 warp 下的网格：顶点写成控制网格内的 (s, t)，而不是模型空间
-    # 只有 warp 会改变成员网格的顶点空间（(s,t)）；rotation 下顶点照旧是模型空间
+    # 只有 warp 会改变成员网格的顶点空间（(s,t)）；rotation 下顶点照旧是模型空间。
+    # 参考矩形一律取**规格里的模型像素静止形**：`deformer_space_map` 那套逐级映射
+    # 只作用在点阵上，顶点这条不需要预映 —— 归一对同一条轴的线性映射自抵消，
+    # 实测 R3/R4/R5 写出的 (s,t) 与诊断里「先搬到父级 st 空间再归一」完全相同。
     mesh_rects = {d.deformer_id: reference_rect(d, param_by_id)
                   for d in warps}
 
@@ -620,14 +628,22 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
 
     # warp 变形器的控制网格与网格关键形共用同一个位置池（同样 16 f32 对齐）。
     # rotation 变形器没有位置池：它的键形只有角度/原点/缩放，另表存放。
+    #
+    # 嵌套 warp 的空间基准（规则 I）：第 D 级的点阵写成 `S_D(模型像素)`，也就是
+    # **父级的归一 (s,t) 空间**。根级（parent_deformer_id 为空）走原来那条分支，
+    # 坐标一个字节都不经过映射 —— `S_root` 是恒等，所以「根级不许变」是结构性的。
+    space_map = deformer_space_map(spec)
     warp_keyform_begin: List[int] = []
     warp_keyform_pos_begin: List[int] = []
     warp_keyform_opacities: List[float] = []
     running = 0
     for deformer in warps:
         warp_keyform_begin.append(running)
+        nested = bool(deformer.parent_deformer_id)
+        to_space = space_map[deformer.deformer_id]
         for grid in deformer.grids:
-            warp_keyform_pos_begin.append(append_keyform_positions(grid.points))
+            points = grid.points if not nested else [to_space(p) for p in grid.points]
+            warp_keyform_pos_begin.append(append_keyform_positions(points))
             warp_keyform_opacities.append(float(deformer.opacity))
         running += len(deformer.grids)
     total_warp_keyforms = running
@@ -722,6 +738,94 @@ def to_grid_st(vertices: Sequence[Sequence[float]], rect: tuple) -> List[tuple]:
     x0, y0, x1, y1 = rect
     sx, sy = x1 - x0, y1 - y0
     return [((float(x) - x0) / sx, (float(y) - y0) / sy) for x, y in vertices]
+
+
+def _identity_space(point: Sequence[float]) -> tuple:
+    """根级的空间映射 = 恒等（模型像素原样交给写出层的 ÷ppu）。"""
+    return (float(point[0]), float(point[1]))
+
+
+def deformer_space_map(spec: RigSpec) -> Dict[str, Callable[[Sequence[float]], tuple]]:
+    """每个 warp 变形器 -> 「模型像素 → 该变形器该写的坐标」的映射。
+
+    官方 Core 的规则是**每一级的输出就是父级点阵的 (s, t)**，不会拿父级的静止矩形
+    再归一一次（实测 R2/R3/R5/R6 与规则 N 全部反号，见
+    docs/superpowers/plans/2026-11-05-hierarchical-deformation-trunk.md 的 Task 1.5
+    与 F:\\tmp\\trunk-diag\\nested-warp-diagnosis.md）。所以非根级的控制网格必须存进
+    **父级的归一 (s,t) 空间**（数值 ~[0,1]），官方实样同构：188 个纯嵌套 warp 的静止
+    矩形 85.11% 完全落在 [0,1]、0.00% 以 0 为中心。
+
+    根级例外，而且结构上单独一条分支：根 warp 以 0 为中心、单位就是模型像素
+    （官方那唯一一个根 warp x∈[−0.8795, 0.8795]；实测 R0 不挂变形器与 R1 一级恒等
+    warp 的渲染逐字节相同 ``e035d547d377…``），所以 ``S_root`` 必须是恒等。
+    写出层只对**父级非空**的分支调用本函数，根级的字节因此不可能被它改动。
+
+    递归式（``reference_rect`` 用各级**自身**的静止矩形，坐标系跟着 ``S_parent`` 走）::
+
+        S_root(v)  = v
+        S_child(v) = pixels_per_unit × to_grid_st(S_parent(v), rect_parent_written)
+
+    其中 ``rect_parent_written`` 是父级**写出去**那张静止网格的矩形：根级就是它的
+    模型像素矩形，非根级是它自己在那一级空间里的矩形。因为每一级映射都是轴对齐
+    单调线性，``_require_axis_lattice`` 的前提逐级保持。
+
+    挂在第 D 级下的网格顶点写 ``to_grid_st(v, reference_rect(D))``（顶点仍按模型像素
+    给出）：线性归一对 ``S_parent`` 是**自抵消**的 —— 把点和矩形同时映到父级空间再归一，
+    与直接按静止矩形归一得到同一个 (s, t)，实测 R3/R4/R5 写出的 (s,t) 与诊断一致。
+    """
+    warps = {d.deformer_id: d for d in spec.deformers
+             if isinstance(d, WarpDeformerSpec)}
+    types = {d.deformer_id: d for d in spec.deformers}
+    param_by_id = {p.parameter_id: p for p in spec.parameters}
+    ppu = float(spec.pixels_per_unit)
+    maps: Dict[str, Callable[[Sequence[float]], tuple]] = {}
+    # 每一级「写出去」的静止网格矩形，单位与该级的存储空间一致（像素口径）
+    written_rects: Dict[str, tuple] = {}
+    building: List[str] = []
+
+    def entry(deformer_id: str) -> tuple:
+        if deformer_id in maps:
+            return maps[deformer_id], written_rects[deformer_id]
+        deformer = types.get(deformer_id)
+        if deformer is None:
+            raise UnsupportedRig(f"变形器 {deformer_id} 未声明，无法算空间基准")
+        if not isinstance(deformer, WarpDeformerSpec):
+            raise UnsupportedRig(
+                f"{deformer_id}: warp 的父级是 rotation —— 跨 rotation 的顶点空间"
+                "基准未实测（见本计划 Task 1.5 的「仍未决」），拒绝编译而不是猜一个")
+        parent_id = str(deformer.parent_deformer_id or "")
+        if not parent_id:
+            # 根级：恒等，且矩形就是它自己的静止矩形（模型像素）。
+            maps[deformer_id] = _identity_space
+            written_rects[deformer_id] = reference_rect(deformer, param_by_id)
+            return maps[deformer_id], written_rects[deformer_id]
+        if parent_id == deformer_id or deformer_id in building:
+            raise UnsupportedRig(
+                f"{deformer_id}: warp 父链成环（{building + [deformer_id]}），"
+                "空间基准无法逐级求出")
+        building.append(deformer_id)
+        try:
+            parent_map, parent_written = entry(parent_id)
+        finally:
+            building.pop()
+
+        own_rect = reference_rect(deformer, param_by_id)
+
+        def to_space(point: Sequence[float], parent_map=parent_map,
+                     parent_written=parent_written) -> tuple:
+            (s, t), = to_grid_st([parent_map(point)], parent_written)
+            return (ppu * s, ppu * t)
+
+        low = to_space((own_rect[0], own_rect[1]))
+        high = to_space((own_rect[2], own_rect[3]))
+        maps[deformer_id] = to_space
+        written_rects[deformer_id] = (min(low[0], high[0]), min(low[1], high[1]),
+                                      max(low[0], high[0]), max(low[1], high[1]))
+        return maps[deformer_id], written_rects[deformer_id]
+
+    for warp in warps.values():
+        entry(warp.deformer_id)
+    return maps
 
 
 def _pivot_to_offset(origin, unit: float, total_angle: float) -> tuple:

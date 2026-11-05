@@ -22,6 +22,7 @@ from live2d_builder.exporter.moc3_model import (
     UnsupportedRig,
     WarpDeformerSpec,
     compile_static_rig,
+    deformer_space_map,
     reference_rect,
     to_grid_st,
 )
@@ -1075,3 +1076,203 @@ def test_root_level_warp_bytes_are_unchanged_by_the_space_map():
         "黄金字节夹具长度变了（应为 10880，被改动前的编译器产出）")
     assert compile_static_rig(spec).to_bytes() == _golden_flat_warp_bytes(), (
         "根级写出路径变了：Task 1.5 只允许改父级非空的那条分支")
+
+
+# ----------------------------------------------------------------------
+# Task 1.5 Step 3：嵌套 warp 的空间基准（规则 I）
+# ----------------------------------------------------------------------
+
+def _unit_grid(doc, slot):
+    """读回写进 moc3 的第 ``slot`` 张 warp 点阵（单位坐标）。"""
+    begins = doc.get("warp_deformer_keyform.keyform_position_begin_indices")
+    xs = doc.get("keyform_position.xys")
+    begin = begins[slot]
+    points = doc.get("warp_deformer.vertex_counts")[slot]
+    return _pool_positions(doc, begin, points)
+
+
+def _mesh_st(doc, slot=0):
+    """读回挂在 warp 下的网格顶点（无量纲 (s, t)）。"""
+    begins = doc.get("art_mesh_keyform.keyform_position_begin_indices")
+    counts = doc.get("art_mesh.position_index_counts")   # = 唯一顶点数（官方反直觉命名）
+    return _pool_positions(doc, begins[slot], counts[slot])
+
+
+def _nested_spec(parent_rect=(-100.0, -100.0, 100.0, 100.0),
+                 child_rect=(-100.0, -100.0, 100.0, 100.0),
+                 grand_rect=None, mesh_rect=(-60.0, -60.0, 60.0, 60.0)):
+    """根 warp + 子 warp（+ 可选孙 warp），方块挂在最深一级；坐标都是模型像素。"""
+    def corners(rect):
+        x0, y0, x1, y1 = rect
+        return [(x0, y0), (x1, y0), (x0, y1), (x1, y1)]
+
+    root = WarpDeformerSpec("L0", 1, 1, [DeformerGrid(0.0, corners(parent_rect))])
+    child = WarpDeformerSpec("L1", 1, 1, [DeformerGrid(0.0, corners(child_rect))],
+                             parent_deformer_id="L0")
+    deformers = [root, child]
+    deepest = "L1"
+    if grand_rect is not None:
+        deformers.append(WarpDeformerSpec(
+            "L2", 1, 1, [DeformerGrid(0.0, corners(grand_rect))],
+            parent_deformer_id="L1"))
+        deepest = "L2"
+    mesh = MeshSpec("ArtProbe", corners(mesh_rect), [(0, 1, 2), (0, 2, 3)],
+                    [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                    deformer_id=deepest)
+    return RigSpec(meshes=[mesh], deformers=deformers,
+                   parameters=[ParameterSpec("ParamUnused", -1.0, 1.0, 0.0)],
+                   pixels_per_unit=PPU)
+
+
+def test_root_level_space_map_is_the_identity():
+    """``S_root`` 必须是恒等：根级的单位就是模型像素、以 0 为中心。
+
+    实测 R0（不挂变形器）与 R1（一级恒等 warp）逐像素相同，官方实样里那唯一一个
+    根 warp 的静止矩形也以 0 为中心（x∈[−0.8795, 0.8795]）。给根级套上映射就等于
+    把已验收的每个模型都改一遍。
+    """
+    space_map = deformer_space_map(_nested_spec())
+    for point in ((-100.0, 37.5), (0.0, 0.0), (60.0, -60.0)):
+        assert space_map["L0"](point) == pytest.approx(point)
+    # 写出层只对父级非空的分支调用映射，根级产物由上面的黄金字节钉住
+
+
+def test_nested_warp_lattice_is_written_in_the_parent_fraction_space():
+    """子级的点阵写进**父级的 (s,t) 空间**，不再存模型像素。
+
+    实测：父级 ±1 单位（±100px）时，子级若仍存模型像素，内核按 ``out = −1 + 2p``
+    直接把它当父级 s 用 ⇒ 静止帧线性 2× 且中心移到父矩形最小角（R2 的
+    17578/4371 = 4.02 面积比）。诊断 R3 把子级网格改存父级 st 后逐像素等于对照。
+    """
+    doc = compile_static_rig(_nested_spec())
+    _assert_points(_unit_grid(doc, 0),
+                   [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)])
+    # 子级 ±100px 正好落在父级 st 的 0..1 上（×PPU 只是像素口径，写出时再 ÷PPU）
+    _assert_points(_unit_grid(doc, 1),
+                   [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)])
+    # 成员顶点按**自身**静止形归一，与诊断 R3 写出的 (s,t) 逐条相同
+    _assert_points(_mesh_st(doc),
+                   [(0.2, 0.2), (0.8, 0.2), (0.2, 0.8), (0.8, 0.8)])
+
+
+def test_nested_lattice_follows_the_parent_rect_not_its_own_size():
+    """父矩形 ±150、子级覆盖 ±100 时，子级点阵 = 子区域在父 st 里的位置。
+
+    这条排掉「pixels_per_unit 被乘两次」与「父级行列差一格」：两者都会让比例随
+    父矩形大小改变，诊断 R5 因此必须逐像素等于对照。
+    """
+    doc = compile_static_rig(_nested_spec(
+        parent_rect=(-150.0, -150.0, 150.0, 150.0)))
+    _assert_points(_unit_grid(doc, 0),
+                   [(-1.5, -1.5), (1.5, -1.5), (-1.5, 1.5), (1.5, 1.5)])
+    _assert_points(_unit_grid(doc, 1),
+                   [(1 / 6, 1 / 6), (5 / 6, 1 / 6), (1 / 6, 5 / 6), (5 / 6, 5 / 6)],
+                   rel=1e-9)
+    _assert_points(_mesh_st(doc),
+                   [(0.2, 0.2), (0.8, 0.2), (0.2, 0.8), (0.8, 0.8)])
+
+
+def test_third_level_is_normalized_by_the_level_directly_above_it():
+    """三级链逐级都用**上一级写出去那张网格**的矩形归一，不是模型像素矩形。
+
+    拿诊断 R4（三级恒等，实测等于对照）核对：L1 落在 L0 的 st 里是 [0,1]，
+    L2 落在 L1 的存储空间里也是 [0,1]。规则 N（每级按自身静止矩形重归一）在
+    父矩形与子矩形不同尺寸时会给出一套完全不同的数值 —— 上面那条就是它。
+    """
+    doc = compile_static_rig(_nested_spec(grand_rect=(-100.0, -100.0,
+                                                      100.0, 100.0)))
+    for slot in (1, 2):
+        _assert_points(_unit_grid(doc, slot),
+                       [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)])
+    _assert_points(_mesh_st(doc),
+                   [(0.2, 0.2), (0.8, 0.2), (0.2, 0.8), (0.8, 0.8)])
+    # 父矩形更宽时第三级跟着走：L1 = [1/6,5/6]、L2 = [0,1]（按 L1 写出的矩形归一）
+    wide = compile_static_rig(_nested_spec(
+        parent_rect=(-150.0, -150.0, 150.0, 150.0),
+        child_rect=(-100.0, -100.0, 100.0, 100.0),
+        grand_rect=(-100.0, -100.0, 100.0, 100.0)))
+    _assert_points(_unit_grid(wide, 1),
+                   [(1 / 6, 1 / 6), (5 / 6, 1 / 6), (1 / 6, 5 / 6), (5 / 6, 5 / 6)],
+                   rel=1e-9)
+    _assert_points(_unit_grid(wide, 2),
+                   [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)], rel=1e-9)
+
+
+def test_space_map_uses_the_parents_rest_rect_for_every_keyform():
+    """父级的**静止**矩形定义子级空间；父级自己的形变键形在同一空间里另有点位。
+
+    主干要的就是这条：父级离开静止形时子级的 st 不变，于是被父级点阵一起带走
+    （渲染证据见 tests/unit/test_deformer_parent_chain.py 的 Step 5 用例）。
+    """
+    parent = WarpDeformerSpec(
+        "L0", 1, 1,
+        [DeformerGrid(-30.0, [(-140.0, -100.0), (60.0, -100.0),
+                              (-140.0, 100.0), (60.0, 100.0)]),
+         DeformerGrid(0.0, [(-100.0, -100.0), (100.0, -100.0),
+                            (-100.0, 100.0), (100.0, 100.0)]),
+         DeformerGrid(30.0, [(-60.0, -100.0), (140.0, -100.0),
+                             (-60.0, 100.0), (140.0, 100.0)])],
+        parameter_id="ParamAngleZ")
+    child = WarpDeformerSpec(
+        "L1", 1, 1, [DeformerGrid(0.0, [(-100.0, -100.0), (100.0, -100.0),
+                                        (-100.0, 100.0), (100.0, 100.0)])],
+        parent_deformer_id="L0")
+    mesh = MeshSpec("ArtProbe", [(-60.0, -60.0), (60.0, -60.0), (-60.0, 60.0),
+                                 (60.0, 60.0)], [(0, 1, 2), (0, 2, 3)],
+                    [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                    deformer_id="L1")
+    spec = RigSpec(meshes=[mesh], deformers=[parent, child],
+                   parameters=[ParameterSpec("ParamAngleZ", -30.0, 30.0, 0.0)],
+                   pixels_per_unit=PPU)
+    doc = compile_static_rig(spec)
+    begins = doc.get("warp_deformer_keyform.keyform_position_begin_indices")
+    # 父级三个键形仍是模型单位（静止 ±1.0，满幅 ±1.4）；根级一条没被映射碰过
+    _assert_points(_pool_positions(doc, begins[0], 4)[:2],
+                   [(-1.4, -1.0), (0.6, -1.0)])
+    _assert_points(_pool_positions(doc, begins[1], 4)[:2],
+                   [(-1.0, -1.0), (1.0, -1.0)])
+    _assert_points(_pool_positions(doc, begins[2], 4)[:2],
+                   [(-0.6, -1.0), (1.4, -1.0)])
+    # 子级那一格落在父级 st 的 [0,1]：静止矩形取父级**默认键**的矩形
+    _assert_points(_pool_positions(doc, begins[3], 4),
+                   [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)])
+    _assert_points(_mesh_st(doc),
+                   [(0.2, 0.2), (0.8, 0.2), (0.2, 0.8), (0.8, 0.8)])
+
+
+def test_warp_under_rotation_is_refused():
+    """跨 rotation 的顶点空间没实测过（官方有 59 条这类边），必须拒绝而不是猜。
+
+    主干全用 warp，不碰这条；报错文案要点名「未实测」，否则后人会当成格式 bug
+    顺手改成「照 warp 的规矩办」。
+    """
+    rotation = RotationDeformerSpec(
+        deformer_id="Rot", keyforms=[RotationKeyform(0.0, angle=10.0)])
+    warp = WarpDeformerSpec("W", 1, 1, [DeformerGrid(
+        0.0, [(-100.0, -100.0), (100.0, -100.0), (-100.0, 100.0), (100.0, 100.0)])],
+        parent_deformer_id="Rot")
+    mesh = MeshSpec("Art", [(-60.0, -60.0), (60.0, -60.0), (-60.0, 60.0),
+                            (60.0, 60.0)], [(0, 1, 2), (0, 2, 3)],
+                    [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                    deformer_id="W")
+    spec = RigSpec(meshes=[mesh], deformers=[rotation, warp],
+                   pixels_per_unit=PPU)
+    with pytest.raises(UnsupportedRig, match="rotation"):
+        compile_static_rig(spec)
+
+
+def test_warp_parent_cycle_is_refused():
+    """父链成环时空间基准没有起点，必须报错而不是无限递归。"""
+    a = WarpDeformerSpec("A", 1, 1, [DeformerGrid(
+        0.0, [(-100.0, -100.0), (100.0, -100.0), (-100.0, 100.0), (100.0, 100.0)])],
+        parent_deformer_id="B")
+    b = WarpDeformerSpec("B", 1, 1, [DeformerGrid(
+        0.0, [(-100.0, -100.0), (100.0, -100.0), (-100.0, 100.0), (100.0, 100.0)])],
+        parent_deformer_id="A")
+    mesh = MeshSpec("Art", [(-60.0, -60.0), (60.0, -60.0), (-60.0, 60.0),
+                            (60.0, 60.0)], [(0, 1, 2), (0, 2, 3)],
+                    [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                    deformer_id="A")
+    spec = RigSpec(meshes=[mesh], deformers=[a, b], pixels_per_unit=PPU)
+    with pytest.raises(UnsupportedRig, match="成环"):
+        compile_static_rig(spec)
