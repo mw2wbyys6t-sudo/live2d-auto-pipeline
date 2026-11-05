@@ -4,12 +4,26 @@
 在本地产物上是**未验证**能力。这个测试把它钉成闸门：Core 不求值父级，
 分层主干方案就不成立。
 
-两类用例分开：
+判据的形状（#70 换过一次，别再换回去）：**父级点阵带一条相对默认键的键形带**
+（`ParamAngleZ` 三键 −30 / 0 / +30，满幅键 = 整张点阵平移 ±40 模型像素），子级
+恒等，方块挂在子级上。不能用「把静止点阵整体平移」表达「父级动了」：编译器按
+`reference_rect(deformer)`（取的就是默认键那张）把成员顶点归一成 (s, t)，静态
+平移连同矩形一起动，归一之后 dx 自我抵消 ⇒ 画面一动不动。这条在根级于 Task 1.5
+修复前后**都**成立（+10px 的 x 与 y 位移实测 Δ=0.00）；Task 1 那条
+`chain_applies_parent=true` 能读到位移，靠的正是修复前的缺陷 —— 那时子级不被父级
+矩形重归一。所以闸门现在把静态平移如实降级成观察项
+`static_translation_moves_frame`（实测 false），继承判据叫
+`chain_inherits_parent_band`，由键形带的像素**与幅度**一起支撑。
+
+三类用例分开：
 - 需要官方 Core 渲染的用例带 `requires_live2d`，Core 缺失时**如实 skip**
   （skip = 未验证，不当成通过）；
-- 两条纯逻辑用例（判据在 Core 不可用时必须是 None、`chain_applies_parent`
-  必须读 parent_only 探针）桩掉 `render_probe`，任何机器都会跑，
-  「降级为未验证」这条本身因此也是被钉住的，不依赖本机有没有 GL。
+- 桩掉 `render_probe` / 直接喂合成读数的纯逻辑用例（Core 不可用时判据必须是
+  None、每条判据读哪条探针、幅度算不算得对、静态观察值怎么记录）任何机器都跑，
+  「降级为未验证」这条本身因此也是被钉住的，不依赖本机有没有 GL；
+- 承重夹具（点阵 / 方块 / 键形父级 / 恒等子级）一律取自闸门本身
+  （`gate.band_chain_rig()` 等）：尺子只有一份，而且本文件的渲染缓存与闸门读的是
+  同一批产物字节。
 """
 import hashlib
 import importlib.util
@@ -51,13 +65,22 @@ requires_live2d = pytest.mark.skipif(
     not _has_live2d(), reason="需要官方 Cubism Core（live2d-py）才能验证 warp 父链")
 
 
-def test_parent_chain_module_exposes_probe():
-    """门脚本必须真的可调用，不能只写死一段 main。
+def test_parent_chain_module_exposes_the_three_verdicts():
+    """门脚本必须真的可调用，而且发布的正是简报点名的那三条判据。
 
     ``tools/`` 不是包；仓库里 import 脚本目录的既有做法是手动 sys.path.insert
     （见 ``tests/unit/test_lint_architecture.py``），所以上面先把 tools 加进去。
+    判据名字是对外契约（Task 2 与报告都按这三个名字读 JSON），漂了就一起红。
     """
     assert callable(gate.main)
+    assert callable(gate.evaluate)
+    assert callable(gate.probe_rigs)
+    assert gate.VERDICT_KEYS == ("chain_rest_matches_control",
+                                 "chain_inherits_parent_band",
+                                 "neutral_middle_level_invisible"), (
+        "三条判据的名字/数量与简报不一致：Task 2 按这三个名字读闸门 JSON")
+    assert "chain_applies_parent" not in gate.VERDICT_KEYS, (
+        "旧判据由静态整体平移推出（空操作），#70 已经删掉它；换回来就是继续骗人")
 
 
 def _unavailable_probe(manifest_path, *args, **kwargs):
@@ -75,21 +98,85 @@ def _package_name(manifest_path) -> str:
     return Path(manifest_path).name.split(".")[0]
 
 
-def _stubbed_probe(shas):
-    """按包名返回预设 sha 的假渲染：只验判据的**接线**，不花一次 GPU。"""
-    def probe(manifest_path, *args, **kwargs):
-        return {"ok": True, "pixels_sha256": shas[_package_name(manifest_path)],
-                "blocker": None, "alpha_bbox": [0, 0, 10, 10],
-                "opaque_pixels": 100, "centroid": [5.0, 5.0]}
-    return probe
+# ----------------------------------------------------------------------
+# 合成读数：给 `gate.evaluate` 喂「与实测同量纲」的假探针，验接线不花一次 GPU
+# ----------------------------------------------------------------------
+#
+# 三条静止数字（bbox [153,203,246,296]、质心 [199.5,249.5]、不透明 8836）是
+# tools/deform_trunk_probe_gate.py 在官方 Core 上的实测读数，不是随手编的：
+# 桩要能被真机读数替换，量纲就必须一样。
+_CONTROL_BBOX = [153, 203, 246, 296]
+_CONTROL_CENTROID = [199.5, 249.5]
+_CONTROL_OPAQUE = 8836
+_RENDER_SCALE = (_CONTROL_BBOX[2] - _CONTROL_BBOX[0] + 1) / gate.SIDE_PX
+
+
+def _frame(tag, dx=0.0, dy=0.0, opaque=_CONTROL_OPAQUE):
+    """一条「方块平移过」的假探针：几何按渲染比例换算，`tag` 当像素身份。
+
+    `dx` / `dy` 用**模型像素**（与判据的口径一致），换算成渲染像素在这条里做。
+    """
+    dx_pixels = dx * _RENDER_SCALE
+    dy_pixels = dy * _RENDER_SCALE
+    return {"ok": True, "blocker": None, "pixels_sha256": tag,
+            "opaque_pixels": opaque,
+            "alpha_bbox": [_CONTROL_BBOX[0] + dx_pixels, _CONTROL_BBOX[1] + dy_pixels,
+                           _CONTROL_BBOX[2] + dx_pixels, _CONTROL_BBOX[3] + dy_pixels],
+            "centroid": [_CONTROL_CENTROID[0] + dx_pixels,
+                         _CONTROL_CENTROID[1] + dy_pixels]}
+
+
+def _frames(**override):
+    """一套「三条判据全绿」的合成读数，用例只覆盖自己要动的那一条。
+
+    形状与官方核实测同构（`gate.main()` 的 JSON 就是这组数）：静止那六条帧
+    —— 对照、挂链、拆层、静态恒等链、静态平移链、静态拍平 —— **全是同一帧**
+    （恒等层中性、静态平移空操作），只有键形满幅的 ±40 两帧不同。
+    """
+    band = gate.BAND_DX_MODEL_PX
+    frames = {
+        "control": _frame("rest"),
+        "chain_rest": _frame("rest"),
+        "chain_full": _frame("band+40", dx=band),
+        "chain_neg": _frame("band-40", dx=-band),
+        "no_middle_rest": _frame("rest"),
+        "no_middle_full": _frame("band+40", dx=band),
+        "no_middle_neg": _frame("band-40", dx=-band),
+        "identity_chain": _frame("rest"),
+        "static_chain": _frame("rest"),
+        "static_flat": _frame("rest"),
+    }
+    unknown = sorted(set(override) - set(gate.PROBE_NAMES))
+    assert not unknown, (
+        f"覆盖了闸门不认识的探针名 {unknown}：闸门改名要同改这张合成表")
+    frames.update(override)
+    return frames
+
+
+def _stubbed_render(frames):
+    """把合成表按**探针名**接回 `render_probe` 的调用形状。
+
+    P1-m2：以前这里硬编码 `main()` 传给 `_package` 的五个包名，闸门一改名字就抛
+    KeyError（报出来的还是一句看不出所以然的栈）。现在名字来自 `gate.PROBE_NAMES`
+    这一份共享常量，缺条/多条都直接说清是哪一条。
+    """
+    missing = [name for name in gate.PROBE_NAMES if name not in frames]
+    assert not missing, f"合成表没有覆盖探针 {missing}（闸门与本文件漂移了）"
+
+    def render(manifest_path, params=None, *args, **kwargs):
+        name = _package_name(manifest_path)
+        assert name in frames, (
+            f"闸门渲染了合成表里没有的探针 {name!r}：PROBE_NAMES 与本文件漂移了")
+        return dict(frames[name])
+    return render
 
 
 def test_gate_reports_unverified_when_core_is_unavailable(monkeypatch):
-    """Core 不可用时派生判据必须是 None（未验证），不能是 "" == "" 得出的 true。
+    """Core 不可用时所有派生判据必须是 None（三态），不能是 "" == "" 得出的 true。
 
-    变异控制：去掉 tools/deform_trunk_probe_gate.py 里的 core_ok 守卫、让三条判据
-    无条件比较，`chain_applies_parent` 与 `identity_chain_neutral_rest` 会双双算成
-    true，本用例立刻红。
+    变异控制：去掉 tools/deform_trunk_probe_gate.py 里的 `core_ok` 守卫、让判据
+    无条件比较，`chain_rest_matches_control` 与 `neutral_middle_level_invisible`
+    会双双算成 true（失败探针的 sha 都是空串），本用例立刻红。
     """
     monkeypatch.setattr(gate, "render_probe", _unavailable_probe)
 
@@ -97,38 +184,146 @@ def test_gate_reports_unverified_when_core_is_unavailable(monkeypatch):
 
     assert out["core_ok"] is False
     assert "simulated missing Cubism Core" in out["blocker"]
-    assert out["chain_applies_parent"] is None
-    assert out["chain_matches_flattened"] is None
-    assert out["identity_chain_neutral_rest"] is None
-    # 再显式钉一遍「不是 true」：identity_chain_neutral_rest 是 Task 2 的验收键，
-    # 无 Core 的运行只能读到「未验证」，绝不能读到绿灯。
-    assert out["chain_applies_parent"] is not True
-    assert out["identity_chain_neutral_rest"] is not True
+    for key in gate.VERDICT_KEYS + gate.OBSERVATION_KEYS:
+        assert out[key] is None, f"{key} 在 Core 不可用时必须记成未验证"
+        assert out[key] is not True
+    # 再显式钉一遍最承重的那两条：neutral_middle_level_invisible 与
+    # chain_inherits_parent_band 是 Task 2 的验收键，无 Core 的运行只能读到未验证。
+    assert out["neutral_middle_level_invisible"] is not True
+    assert out["chain_inherits_parent_band"] is not True
+    assert "chain_applies_parent" not in out, (
+        "旧键已删除（语义见 removed_keys），别把它加回 JSON")
+    # 空串要**如实**留在 probes 里，不能伪造成有值。
+    assert out["probes"]["chain_rest"]["pixels_sha256"] == ""
 
 
-def test_gate_reads_the_parent_only_probe_for_its_headline(monkeypatch):
-    """`chain_applies_parent` 只能由「只有父级位移」那条探针推出，不能由 chain 推。
+def test_a_missing_probe_is_recorded_as_unverified_not_true():
+    """少一条探针（名字漂了 / 渲染没跑到）也只能得到 None，不能拿残缺集算判据。
 
-    桩数据刻意违反物理规律（真实 Core 下子级平移被自身 (s, t) 换算抵消，
-    chain 与 parent_only 同帧），为的是把两种接法区分开：
-    - 场景 A：parent_only 变了、chain 没变 → 读 parent_only 得 true，读 chain 得 false；
-    - 场景 B：parent_only 没变、chain 变了 → 读 parent_only 得 false，读 chain 得 true。
-    两条合起来才能同时杀掉「拿 chain_sha 比 rest_sha」这个变异体。
+    这条钉的是 `evaluate` 的入口守卫：缺条时 `core_ok=false` + blocker 点名，
+    而不是让 `sha[...]` 抛 KeyError 或者更糟 —— 用能凑齐的那几条算出 true。
     """
-    monkeypatch.setattr(gate, "render_probe", _stubbed_probe(
-        {"neutral": "n", "rest": "r", "parent_only": "p", "chain": "r", "flat": "f"}))
-    only_parent_moves = gate.main()
-    assert only_parent_moves["core_ok"] is True
-    assert only_parent_moves["parent_only_sha"] == "p"
-    assert only_parent_moves["chain_applies_parent"] is True, (
-        "chain_applies_parent 读的是 chain_sha 而不是 parent_only_sha："
-        "父级求值和子级位移混在一起，判据不可归因")
+    frames = _frames()
+    del frames["no_middle_full"]
 
-    monkeypatch.setattr(gate, "render_probe", _stubbed_probe(
-        {"neutral": "n", "rest": "r", "parent_only": "r", "chain": "p", "flat": "f"}))
-    only_child_moves = gate.main()
-    assert only_child_moves["chain_applies_parent"] is False, (
-        "只有子级位移时判据仍为 true —— 说明它没有读 parent_only 这条单变量探针")
+    out = gate.evaluate(frames)
+
+    assert out["core_ok"] is False
+    assert "no_middle_full" in out["blocker"]
+    for key in gate.VERDICT_KEYS + gate.OBSERVATION_KEYS:
+        assert out[key] is None
+
+
+def test_inheritance_verdict_reads_the_keyform_band_not_the_static_translation():
+    """`chain_inherits_parent_band` 只能读键形带那三条帧，读不到静态平移那两条。
+
+    这是变异对照 B 的夹子：把判据退回「比较 static_chain 与 identity_chain」
+    （= 已删除的 `chain_applies_parent` 的计算形式）时，两个场景一起把它杀掉 ——
+    - 场景 A：键形带**没**动画面、只有静态平移动了 → 诚实接线 false，读静态 true；
+    - 场景 B：键形带动、静态平移不动（官方核实测正是这样）→ 诚实接线 true，读静态 false。
+    单给一个场景杀不掉「无条件 return True」这种更懒的变异，所以两条都写。
+    """
+    only_static_moves = gate.evaluate(_frames(
+        chain_full=_frame("rest"), chain_neg=_frame("rest"),
+        static_chain=_frame("band+40", dx=gate.BAND_DX_MODEL_PX)))
+    assert only_static_moves["core_ok"] is True
+    assert only_static_moves["static_translation_moves_frame"] is True, (
+        "静态那对探针的差异没被如实记下来：观察项也被接线改掉了")
+    assert only_static_moves["chain_inherits_parent_band"] is False, (
+        "继承判据读到了静态整体平移探针 —— 那条是空操作，#70 换掉的就是它")
+
+    honest = gate.evaluate(_frames())
+    assert honest["chain_inherits_parent_band"] is True
+    assert honest["static_translation_moves_frame"] is False
+
+
+def test_inheritance_verdict_checks_the_amplitude_not_only_inequality():
+    """「画面确实动了」不够，必须动**成**那条带写出的幅度，否则不算继承。
+
+    简报明说「不许只比不等」。四个变异体各杀一次：
+    幅度写错（2× 带值 / 多除一次 ppu）、往 y 漂、把方块撕了、只有满幅那侧动、
+    负侧符号反了。每个场景只覆盖一条合成读数，其余保持与实测同构。
+    """
+    band = gate.BAND_DX_MODEL_PX
+    assert gate.evaluate(_frames())["chain_inherits_parent_band"] is True
+
+    double = gate.evaluate(_frames(chain_full=_frame("chain+2band", dx=2 * band)))
+    assert double["chain_inherits_parent_band"] is False, (
+        f"幅度错了（实测 {double['chain_full_shift_model_px']}）还判 true")
+
+    drifting = gate.evaluate(_frames(chain_full=_frame("chain+diag", dx=band, dy=12.0)))
+    assert drifting["chain_inherits_parent_band"] is False, (
+        f"y 方向漂了 12 模型像素还判成纯平移：{drifting['chain_full_shift_model_px']}")
+
+    torn = gate.evaluate(_frames(chain_full=_frame("chain+band", dx=band,
+                                                  opaque=_CONTROL_OPAQUE // 3)))
+    assert torn["chain_inherits_parent_band"] is False, (
+        f"不透明像素掉到三分之一（撕裂/缩放在这里），纯平移判据不该放行："
+        f"{torn['opaque_pixels']}")
+
+    one_side = gate.evaluate(_frames(chain_neg=_frame("rest")))
+    assert one_side["chain_inherits_parent_band"] is False, (
+        "只有 +30 那侧跟了、−30 那侧没跟：不是父级键形带在逐级合成")
+
+    flipped = gate.evaluate(_frames(chain_neg=_frame("chain+band", dx=band)))
+    assert flipped["chain_inherits_parent_band"] is False, (
+        "−30 的质心往 +x 走（符号反了）还判 true")
+
+
+def test_rest_and_middle_verdicts_read_their_own_probe_pairs():
+    """另两条判据各读自己那对探针，不能互相顶替、也不能共用一个 bool。
+
+    `chain_rest_matches_control` 读 control ↔ chain_rest；
+    `neutral_middle_level_invisible` 读拆层那三条 ↔ 挂链那三条。
+    变异：把两条都写成同一个 `chain_rest == no_middle_rest`，第一条断言就红。
+    """
+    green = gate.evaluate(_frames())
+    assert green["chain_rest_matches_control"] is True
+    assert green["neutral_middle_level_invisible"] is True
+
+    control_moves = gate.evaluate(_frames(control=_frame("别的帧")))
+    assert control_moves["chain_rest_matches_control"] is False
+    assert control_moves["neutral_middle_level_invisible"] is True, (
+        "拆层对照里不该读 control：它变了说明接线被并成一条了")
+    assert control_moves["chain_rest_matches_control"] is not (
+        control_moves["neutral_middle_level_invisible"])
+
+    middle_visible = gate.evaluate(_frames(
+        no_middle_full=_frame("中间层还在", dx=gate.BAND_DX_MODEL_PX / 2)))
+    assert middle_visible["neutral_middle_level_invisible"] is False, (
+        "恒等中间层在满幅上留下了半个带的差异，判据却看不见到")
+    assert middle_visible["chain_rest_matches_control"] is True, (
+        "静止那条不该被满幅的场景带红")
+
+
+def test_static_observations_are_recorded_but_never_gate(monkeypatch):
+    """静态那两条读数只进 JSON、不进闸门：计划明说 `chain_matches_flattened` 不作闸门。
+
+    原来这条（`test_flattened_chain_is_recorded_not_gated`）渲两次官方核帧却只断言
+    「sha 非空」—— 修好空间基准后两条帧都逐像素等于无变形器，那 ~15s 什么方向也没
+    钉。现在**不渲染**，只断言记录本身与「它不是判据」这件事。
+
+    它 docstring 里那段知识没有丢，已搬进闸门：静态整体平移被自己的 (s, t) 归一
+    抵消 ⇒ 「拍平」与「挂链」在这对**静态**探针上同帧（`chain_sha == flat_sha`），
+    于是这对探针既不能当「父链被求值」的证据，也不能被读成「父链可省」——
+    见 tools/deform_trunk_probe_gate.py 的模块 docstring 与
+    `chain_shift()` / `unparented_shift()` 的 docstring。真机像素上的这条空操作由
+    `test_gate_verdicts_hold_on_official_core_pixels` 钉住。
+    """
+    monkeypatch.setattr(gate, "render_probe", _stubbed_render(_frames()))
+
+    out = gate.main()
+
+    assert out["core_ok"] is True
+    assert out["chain_sha"] == out["flat_sha"], "合成表里静态那对本来就该同帧"
+    assert out["probes"]["static_chain"]["pixels_sha256"] == \
+        out["probes"]["static_flat"]["pixels_sha256"]
+    for key in ("static_translation_moves_frame", "chain_matches_flattened",
+                "identity_chain_neutral_rest"):
+        assert key in gate.OBSERVATION_KEYS, f"{key} 是观察项，不是判据"
+        assert key not in gate.VERDICT_KEYS
+    assert out["static_translation_is_not_a_verdict"] is True
+    assert out["chain_matches_flattened_is_not_a_gate"] is True
 
 
 _RENDER_CACHE = {}
@@ -154,46 +349,38 @@ def _render(tmp_path, rig, name, params=None):
 
 
 # ----------------------------------------------------------------------
-# 主干形状的探针夹具：父级带键形、子级恒等、方块挂在子级下
+# 主干形状的探针夹具：**全部取自闸门本身**
 # ----------------------------------------------------------------------
 #
-# Task 1.5 之前的这批探针用「把静止点阵整体平移」表达「父级动了」，那是无效的：
-# 编译器用同一张静止矩形归一成员顶点，静态平移在静止帧里自抵消（实测：
-# gate.chain_shift() 与 gate.rest_rig() 现在都逐像素等于不挂变形器的对照）。
-# 主干里父级之所以能动，是因为它有**键形**：静止矩形不变、形变键形离开静止矩形。
-# 所以下面这批探针一律用三键 ParamAngleZ 的父级，Step 5 的承重对照也建在同一套上。
-
-_CANVAS = 512.0
-_PPU = 100.0
-_LATTICE = [[-100.0, -100.0], [100.0, -100.0], [-100.0, 100.0], [100.0, 100.0]]
-_SQUARE = [[-60.0, -60.0], [60.0, -60.0], [-60.0, 60.0], [60.0, 60.0]]
-_UVS = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
-_TRIS = [(0, 1, 2), (0, 2, 3)]
-_SIDE_PX = 120.0          # 方块边长（画布像素），用来把渲染像素换算回模型像素
+# 尺子只有一份。#70 之前这里自己抄了一份 ±100 点阵与 ±60 方块，和
+# tests/unit/test_bindings_gap_probe.py:49-71 那份已经开始漂移（tuple 与 list 混用、
+# `rect=` 参数一份有一份没有）。仓库惯例是每文件自带夹具（`_package` 有 13 份独立
+# 定义），所以不并模块；这条文件改为**引用闸门**那份常数与键形父级，漂移面就只剩
+# bindings_gap_probe 那一处 —— 它那边也写了注释指回这里，改一边必须同步另一边。
+_CANVAS = gate.CANVAS
+_PPU = gate.PPU
+_LATTICE = [list(p) for p in gate.LATTICE]
+_SQUARE = [list(v) for v in gate.SQUARE]
+_UVS = list(gate.UVS)
+_TRIS = list(gate.TRIS)
+_SIDE_PX = gate.SIDE_PX       # 方块边长（画布像素），用来把渲染像素换算回模型像素
 
 
 def _angle_param():
-    return ParameterSpec("ParamAngleZ", -30.0, 30.0, 0.0)
+    return ParameterSpec(gate.BAND_PARAMETER, -gate.BAND_KEY_FULL,
+                         gate.BAND_KEY_FULL, 0.0)
 
 
 def _shifted(points, dx, dy):
-    return [[x + dx, y + dy] for x, y in points]
+    """点阵平移 —— 收敛到闸门那一份（`gate._shift`），两边不可能各漂各的。"""
+    return gate._shift(points, dx, dy)
 
 
 def _warp(deformer_id, points, parent=""):
-    """静态恒等 warp（单控制网格）。"""
+    """静态恒等 warp（单控制网格）：Step 4 那几种形态用的中性层。"""
     return WarpDeformerSpec(deformer_id=deformer_id, rows=1, cols=1,
                             grids=[DeformerGrid(0.0, points)],
                             parent_deformer_id=parent)
-
-
-def _keyform_parent(dx_full=40.0):
-    """三键 ParamAngleZ 的父级：静止 = 恒等点阵，满幅 = 整体平移 ±dx_full 像素。"""
-    return WarpDeformerSpec(
-        deformer_id="Parent", rows=1, cols=1, parameter_id="ParamAngleZ",
-        grids=[DeformerGrid(-30.0, _shifted(_LATTICE, -dx_full, 0.0)),
-               DeformerGrid(0.0, _LATTICE),
-               DeformerGrid(30.0, _shifted(_LATTICE, dx_full, 0.0))])
 
 
 def _square_mesh(mesh_id, deformer_id, verts=None):
@@ -203,6 +390,7 @@ def _square_mesh(mesh_id, deformer_id, verts=None):
 
 
 def _rig(deformers, deformer_id, meshes=None, parameters=None):
+    """本文件额外形状（三级链 / 宽父矩形 / 父级自带成员网格）的本地装配。"""
     return RigSpec(meshes=meshes if meshes is not None else
                    [_square_mesh("ArtProbe", deformer_id)],
                    deformers=list(deformers),
@@ -211,8 +399,8 @@ def _rig(deformers, deformer_id, meshes=None, parameters=None):
 
 
 def chain_rig():
-    """父（键形）→ 子（恒等）→ 方块：主干要的形状。"""
-    return _rig([_keyform_parent(), _warp("Child", _LATTICE, "Parent")], "Child")
+    """父（键形）→ 子（恒等）→ 方块：主干要的形状。取闸门那份，不另抄。"""
+    return gate.band_chain_rig()
 
 
 def no_middle_rig():
@@ -221,23 +409,58 @@ def no_middle_rig():
     Step 5 的对照。刻意不是「手工展平」：展平要算仿射复合，而双线性重采样不等于
     仿射复合，那种 oracle 会造出假失败。拆层不需要算任何数学。
     """
-    return _rig([_keyform_parent()], "Parent")
+    return gate.band_parent_only_rig()
 
 
 def control_rig():
     """不挂任何变形器的同一张方块 —— 「挂链/挂层是不是中性」的基准。"""
-    return _rig([], "")
+    return gate.control_rig()
 
 
 def _model_px_delta(rest_bbox, moved_bbox, known_px):
     """把「渲染 bbox 左边界移动了多少」换算回模型像素。
 
     视图缩放从静止帧自己推：静止帧是边长 ``known_px`` 的正方形，渲染宽度 / 该边长
-    就是比例，所以这条不依赖探针窗口尺寸。
+    就是比例，所以这条不依赖探针窗口尺寸。闸门里同一条换算用**质心**
+    （`gate._model_px_shift`，少一个像素的量化误差），这里保留 bbox 版本是为了
+    和 alpha_bbox 的读数直接对账 —— 两条一起看才排掉「bbox 抖动」。
     """
     scale = (rest_bbox[2] - rest_bbox[0] + 1) / known_px
     return ((moved_bbox[0] - rest_bbox[0]) / scale,
             (moved_bbox[1] - rest_bbox[1]) / scale)
+
+
+@requires_live2d
+def test_gate_verdicts_hold_on_official_core_pixels(tmp_path):
+    """闸门发布的三条判据在**官方 Core 像素**上必须同时为 true —— 主干的承重证据。
+
+    探针取自 `gate.probe_rigs()`、判据由 `gate.evaluate()` 算，所以这条 certify 的
+    就是工具真发布的那份数字，不是测试里的副本；本文件的渲染缓存与闸门用同一批
+    产物字节，除静态那两条以外都是命中缓存（不额外花 GPU）。
+
+    顺带钉住 #70 的两条读数：静态整体平移在像素上是空操作
+    （`static_translation_moves_frame` 为 false），恒等静态链的静止帧等于对照。
+    变异对照 A 的杀法在这里：去掉编译器的嵌套空间映射（`deformer_space_map`），
+    `chain_rest_matches_control` 与 `neutral_middle_level_invisible` 双双变红。
+    """
+    frames = {name: _render(tmp_path, rig, f"gate_{name}", pose)
+              for name, (rig, pose) in gate.probe_rigs().items()}
+    out = gate.evaluate(frames)
+
+    assert out["core_ok"] is True, out["blocker"]
+    for key in gate.VERDICT_KEYS:
+        assert out[key] is True, (key, out["probes"],
+                                  out["chain_full_shift_model_px"],
+                                  out["chain_neg_shift_model_px"])
+    band = gate.BAND_DX_MODEL_PX
+    assert out["chain_full_shift_model_px"][0] == pytest.approx(band, abs=2.0)
+    assert out["chain_full_shift_model_px"][1] == pytest.approx(0.0, abs=2.0)
+    assert out["chain_neg_shift_model_px"][0] == pytest.approx(-band, abs=2.0)
+    assert out["chain_neg_shift_model_px"][1] == pytest.approx(0.0, abs=2.0)
+    assert out["static_translation_moves_frame"] is False, (
+        "静态整体平移又能让画面动了 —— (s, t) 归一那条机制变了，"
+        "#70 换判据的理由要重新审，别直接把旧判据加回来")
+    assert out["identity_chain_neutral_rest"] is True
 
 
 @requires_live2d
@@ -294,6 +517,10 @@ def test_child_shift_without_parent_motion_is_the_negative_control(tmp_path):
     这条钉住「链上一有位移就动」的误读 —— 上一轮的差异必须能归因到父级求值，
     而不是编译产物里的噪声。子级网格的平移被它自己的 (s, t) 换算精确抵消，
     静止帧因此逐像素相同。
+
+    同一个机制正是 #70 作废静态平移判据的理由：父级点阵整体平移也被父级自己的
+    静止矩形抵消，所以「静态平移父级 ⇒ 画面动」在修复后**永远**读 false；
+    旧 `chain_applies_parent` 的这条负读数不是「内核不求值父链」。
     """
     rest = _render(tmp_path, gate.rest_rig(), "rest_control")
     child_only = _render(tmp_path, gate.chain_shift(parent_shift=(0.0, 0.0),
@@ -304,34 +531,16 @@ def test_child_shift_without_parent_motion_is_the_negative_control(tmp_path):
 
 
 @requires_live2d
-def test_flattened_chain_is_recorded_not_gated(tmp_path):
-    """拍平单级 vs 父子链**只作观察**：计划明说 `chain_matches_flattened` 不作闸门。
-
-    所以这里刻意不比两条 sha 的方向 —— 哪天拍平路线真的等价了（那意味着可以不走
-    父链），本用例也不该变红。两条 sha 由 `gate.main()` 如实写进 JSON
-    （`chain_sha` / `flat_sha`）留作证据。
-
-    Task 1.5 的读数变化要记在这里：这两条探针都是**静态**平移，修好空间基准后
-    两边都逐像素等于无变形器（`chain_sha == flat_sha`）—— 静态平移在单级里本来
-    就被自己的 (s, t) 归一抵消，拍平与挂链于是同帧。「父级带动子级」的证据在
-    `test_official_core_applies_warp_parent_chain`（键形驱动）与 Step 5 那条。
-    """
-    chain = _render(tmp_path, gate.chain_shift(), "chain_flat_cmp")
-    flat = _render(tmp_path, gate.unparented_shift(), "flat")
-    assert chain["pixels_sha256"], "对照用的 chain 没渲染出像素"
-    assert flat["pixels_sha256"], "对照用的 flat 没渲染出像素"
-
-
-@requires_live2d
 def test_attaching_an_identity_chain_leaves_the_rest_frame_alone(tmp_path):
     """挂两级恒等链不许改变静止画面 —— 分层主干的前提。
 
     Task 1 留的 `xfail(strict=True)` 就是这条：官方 Core 把子级点阵按父级 (s, t)
     再映一次，静止帧被线性放大 2× 并朝父矩形最小角偏移（实测不透明像素
     35344 vs 基准 8836，面积比 4.0）。Task 1.5 按规则 I 修正编译器的空间基准后，
-    这里必须是普通断言：恒等 = 逐像素等于「不挂任何变形器」。
+    这里必须是普通断言：恒等 = 逐像素等于「不挂任何变形器」（基准帧 =
+    `gate.control_rig()`，也就是旧 `neutral_rig()` 那条 #70 换名的探针）。
     """
-    baseline = _render(tmp_path, gate.neutral_rig(), "neutral")
+    baseline = _render(tmp_path, gate.control_rig(), "neutral")
     rest = _render(tmp_path, gate.rest_rig(), "rest_neutral")
     assert baseline["pixels_sha256"] == rest["pixels_sha256"], (
         f"恒等父链移动了静止帧：基准 {baseline['alpha_bbox']} / "
@@ -442,7 +651,8 @@ def test_a_neutral_middle_level_is_invisible_at_every_pose(tmp_path):
     假失败。拆层不需要算任何数学，中间层若是中性的就必须逐像素相同。
 
     这条是主干（父级带动子级）的承重 claim：诊断的十个 rig 全是静态的，只有
-    静态恒等链成立，键形驱动的继承在这里第一次被测。
+    静态恒等链成立，键形驱动的继承在这里第一次被测。闸门里同一条 claim 叫
+    `neutral_middle_level_invisible`（见上面那条官方核用例）。
     """
     control = _render(tmp_path, control_rig(), "inherit_control")
     for pose in ({}, {"ParamAngleZ": 12.0}, {"ParamAngleZ": 30.0},
@@ -465,4 +675,3 @@ def test_a_neutral_middle_level_is_invisible_at_every_pose(tmp_path):
         "都没动的画面，对照退化")
     dx, _dy = _model_px_delta(control["alpha_bbox"], full["alpha_bbox"], _SIDE_PX)
     assert dx == pytest.approx(40.0, abs=2.0), dx
-
