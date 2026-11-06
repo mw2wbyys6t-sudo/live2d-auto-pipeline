@@ -69,12 +69,16 @@ def prune_physics_to_parameters(physics_data: Dict[str, Any],
         outputs = [o for o in setting.get("Output") or []
                    if o.get("Destination", {}).get("Target") != "Parameter"
                    or o["Destination"]["Id"] in names]
-        for entry in (setting.get("Input") or [])[len(inputs):]:
-            dropped.append(f"{setting.get('Id')}: 输入 "
-                           f"{entry.get('Source', {}).get('Id')}")
-        for entry in (setting.get("Output") or [])[len(outputs):]:
-            dropped.append(f"{setting.get('Id')}: 输出 "
-                           f"{entry.get('Destination', {}).get('Id')}")
+        kept_inputs = {id(entry) for entry in inputs}
+        kept_outputs = {id(entry) for entry in outputs}
+        for entry in setting.get("Input") or []:
+            if id(entry) not in kept_inputs:
+                dropped.append(f"{setting.get('Id')}: 输入 "
+                               f"{entry.get('Source', {}).get('Id')}")
+        for entry in setting.get("Output") or []:
+            if id(entry) not in kept_outputs:
+                dropped.append(f"{setting.get('Id')}: 输出 "
+                               f"{entry.get('Destination', {}).get('Id')}")
         has_input = any((i.get("Source") or {}).get("Target") == "Parameter"
                         for i in inputs)
         has_output = any((o.get("Destination") or {}).get("Target") == "Parameter"

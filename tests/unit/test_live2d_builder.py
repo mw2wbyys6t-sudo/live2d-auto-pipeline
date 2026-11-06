@@ -264,6 +264,35 @@ class TestPhysicsBuilder:
         assert kept["Meta"]["TotalOutputCount"] == 1
         assert kept["Meta"]["PhysicsDictionary"] == [{"Id": "A", "Name": "A"}]
 
+    def test_prune_warning_names_the_actual_missing_parameters(self, caplog):
+        """缺失项在列表开头时，不得把仍保留的参数误报成已剔除。"""
+        from live2d_builder.physics.config import prune_physics_to_parameters
+
+        doc = {
+            "Meta": {},
+            "PhysicsSettings": [{
+                "Id": "A",
+                "Input": [
+                    {"Source": {"Target": "Parameter", "Id": "ParamGhostInput"}},
+                    {"Source": {"Target": "Parameter", "Id": "ParamAngleX"}},
+                ],
+                "Output": [
+                    {"Destination": {"Target": "Parameter", "Id": "ParamGhostOutput"}},
+                    {"Destination": {"Target": "Parameter", "Id": "ParamHairSwing"}},
+                ],
+                "Vertices": [],
+            }],
+        }
+        caplog.set_level("WARNING", logger="live2d.rigging.physics")
+
+        prune_physics_to_parameters(
+            doc, [{"Id": "ParamAngleX"}, {"Id": "ParamHairSwing"}])
+
+        assert "A: 输入 ParamGhostInput" in caplog.text
+        assert "A: 输出 ParamGhostOutput" in caplog.text
+        assert "A: 输入 ParamAngleX" not in caplog.text
+        assert "A: 输出 ParamHairSwing" not in caplog.text
+
     def test_prune_is_a_no_op_without_a_parameter_table(self):
         """调用方没给参数表时不剪 —— 没有依据就不敢删东西。"""
         from live2d_builder.physics.config import prune_physics_to_parameters
