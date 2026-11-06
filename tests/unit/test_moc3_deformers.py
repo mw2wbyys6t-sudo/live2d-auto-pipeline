@@ -1263,8 +1263,13 @@ def test_warp_under_rotation_is_refused():
                     deformer_id="W")
     spec = RigSpec(meshes=[mesh], deformers=[rotation, warp],
                    pixels_per_unit=PPU)
-    with pytest.raises(UnsupportedRig, match="rotation"):
+    with pytest.raises(UnsupportedRig, match="rotation") as caught:
         compile_static_rig(spec)
+    # 报错必须**可操作**：这条边是作者在 DEFAULT_WARP_DEFORMERS 条目里写的
+    # ``under`` 解析出来的，不点名的话读的人只会去写出层找「谁把 rotation 设成父级」。
+    message = str(caught.value)
+    assert "under" in message, message
+    assert "W" in message and "Rot" in message, message
 
 
 def test_warp_parent_cycle_is_refused():
@@ -1485,6 +1490,28 @@ def test_reordered_deformer_table_compiles_to_the_same_bytes():
     """
     assert (compile_static_rig(_nested_pair_spec(child_first=True)).to_bytes()
             == compile_static_rig(_nested_pair_spec(child_first=False)).to_bytes())
+
+
+def test_compile_logs_the_reorder(capfd):
+    """发生重排时必须**记一条 log**：槽位下标进产物字节，无声搬动没法复盘。
+
+    走 ``capfd`` 而不是 ``caplog``：``core.logger`` 自己在 import 时就绑好了
+    StreamHandler，pytest 换 ``sys.stderr`` 换不到它（仓库里断言日志的写法同样是
+    按控制台输出读的）。
+
+    C1 提交（d964f240）不带这条：它成对依赖 moc3_model.compile_static_rig 的重排
+    log，那半属 C2 的审查小修。备份 F:\\tmp\\task3-stepC-wip-7c29bf3b.patch。
+    """
+    compile_static_rig(_nested_pair_spec(child_first=True))
+    out = capfd.readouterr()
+    text = out.out + out.err
+    assert "parent-first" in text, text
+    assert "['L0', 'L1']" in text, text        # 规范化**以后**的顺序要点名
+
+    compile_static_rig(_nested_pair_spec(child_first=False))
+    quiet = capfd.readouterr()
+    assert "parent-first" not in quiet.out + quiet.err, (
+        "作者已经写对顺序时不许有噪音 —— 否则这条 log 会变成没人读的白噪声")
 
 
 def test_parent_first_ordering_is_a_no_op_without_parents():

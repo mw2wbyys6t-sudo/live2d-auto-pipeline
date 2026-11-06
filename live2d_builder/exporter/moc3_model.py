@@ -41,8 +41,11 @@ import math
 from dataclasses import dataclass, replace
 from typing import Callable, Dict, List, Optional, Sequence, Union
 
+from core.logger import get_logger
 from live2d_builder.exporter import moc3_sections as ms
 from live2d_builder.exporter.moc3_container import CanvasInfo, Moc3Container
+
+log = get_logger("exporter.moc3_model")
 
 # position_index 是有符号 16 位索引，且按网格局部编号
 _MAX_MESH_VERTICES = 32767
@@ -582,7 +585,17 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
     # 表序规范化必须发生在**任何槽位被算出来之前**：warps/rotations 两张子表、
     # deformer.ids、deformer.parent_deformer_indices、art_mesh.parent_deformer_indices
     # 全部从这一份 spec.deformers 取索引，一起搬走才不会新旧索引混用。
-    spec = replace(spec, deformers=parent_first_deformer_order(spec.deformers))
+    ordered = parent_first_deformer_order(spec.deformers)
+    if any(got is not want for got, want in zip(ordered, spec.deformers)):
+        # 规范化**必须可见**：它改变槽位下标，而槽位下标进产物字节
+        # （band 去重顺序、位置池顺序都跟着表序走）。官方 Core 只被实测过
+        # 「父级在前」那一种表，所以这里是把产物搬到被量过的那一种上，
+        # 不是「顺序无关」的免费操作。不记一条，读产物字节差异的人就只能自己猜
+        # 是哪一处动的。
+        log.info("变形器表按父链做了 parent-first 规范化：%s -> %s"
+                 % ([d.deformer_id for d in spec.deformers],
+                    [d.deformer_id for d in ordered]))
+    spec = replace(spec, deformers=ordered)
     doc = Moc3Container(version=ms.MocVersion.V3_03)
     doc.canvas = CanvasInfo(
         pixels_per_unit=spec.pixels_per_unit,
@@ -861,11 +874,13 @@ def deformer_space_map(spec: RigSpec) -> Dict[str, Callable[[Sequence[float]], t
         deformer = types.get(deformer_id)
         if deformer is None:
             raise UnsupportedRig(f"变形器 {deformer_id} 未声明，无法算空间基准")
-        if not isinstance(deformer, WarpDeformerSpec):
-            raise UnsupportedRig(
-                f"{deformer_id}: warp 的父级是 rotation —— 跨 rotation 的顶点空间"
-                "基准未实测（见本计划 Task 1.5 的「仍未决」），拒绝编译而不是猜一个")
         parent_id = str(deformer.parent_deformer_id or "")
+        if not isinstance(deformer, WarpDeformerSpec):
+            # 本函数只为 warp 求空间基准，走到这里只可能是**顺着别人的父链进来的**
+            # （见下面递归前的那道预检：那条会点名子级，这条只是兜底）。
+            raise UnsupportedRig(
+                f"{deformer_id}: 它是某条 warp 的父级而自己是 rotation —— 跨"
+                "rotation 的顶点空间基准未实测，拒绝编译而不是猜一个")
         if not parent_id:
             # 根级：恒等，且矩形就是它自己的静止矩形（模型像素）。
             maps[deformer_id] = _identity_space
@@ -877,6 +892,17 @@ def deformer_space_map(spec: RigSpec) -> Dict[str, Callable[[Sequence[float]], t
                 "空间基准无法逐级求出")
         building.append(deformer_id)
         try:
+            parent = types.get(parent_id)
+            if parent is not None and not isinstance(parent, WarpDeformerSpec):
+                # 报错要**可操作**：这条边不是编译器自己造的，是作者在
+                # ``DEFAULT_WARP_DEFORMERS`` 条目里写的 ``under`` 解析出来的
+                # （moc3_pipeline.resolve_deformer_parents）。点名 under，读的人
+                # 才知道去哪儿改，而不是在写出层找「谁把 rotation 设成了父级」。
+                raise UnsupportedRig(
+                    f"{deformer_id}: warp 的父级 {parent_id} 是 rotation —— 跨"
+                    "rotation 的顶点空间基准未实测（官方 Core 那三条判据全在纯 warp "
+                    "链上量的，见上面 docstring），拒绝编译而不是猜一个；"
+                    f"这条父链来自条目 {deformer_id} 的 under")
             parent_map, parent_written = entry(parent_id)
         finally:
             building.pop()
