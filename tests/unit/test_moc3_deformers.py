@@ -1705,6 +1705,15 @@ def test_authored_head_field_chain_stops_at_the_measured_depth_three():
     再加一级（``HairFrontSwing → HairTip`` 那种）之前必须先补一条深度 ≥4 的恒等链
     静止 + 键形继承用例并**跑官方 Core 量出来**；通不过就把那级压平并如实记
     skipped。这条用例就是那个前置条件的闸门 —— 未验证的深度不许静默进产物。
+
+    C2 落地的裁定（``moc3_pipeline.TRUNK_MAX_CHAIN_DEPTH`` 边上那段注释要说理的三件事，
+    写在这里是因为**真正拦人的是这条用例**，不是那个常数）：
+      (a) 官方 Core 的实测包络目前**只到深度 3**，深度 4 一天都没量过；
+      (b) 那个上限取 4 而不是 3，留的那一级余量是**专门给 Task 4 的** ``NeckBand``
+          —— ``BodySway → NeckBand → HeadRig → 头发`` = 深度 4；
+      (c) 所以**Task 4 必须先自己跑官方 Core 把深度 4 量过，才允许依赖它**。上限
+          守卫拦不住作者写第 4 级（≤4 一律放行），拦得住的只有这里这条
+          ``deepest <= 3``：数值 4 是「预留」，不是「已验证」。
     """
     assert _authored_depth("BodySway") == 1
     assert _authored_depth("HeadRig") == 2
