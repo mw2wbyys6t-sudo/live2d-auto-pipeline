@@ -95,10 +95,15 @@ def _run_bridge(tmp_path: Path, layers_dir: Path, script: str) -> dict:
         "character_id": "bridgetest",
     }), encoding="utf-8")
 
+    # encoding 必须显式指定：text=True 的默认解码按 Windows locale（中文系统
+    # 是 cp936）走，而桥脚本输出的是 UTF-8 中文日志，解码失败会让 stdout 变成
+    # None，症状看着像「桥没输出」，实际桥是成功的。见 drivers/live2d_runtime/
+    # moc3_verify.py 的 _spawn。
     completed = subprocess.run(
         [sys.executable, str(script_path), str(params_path)],
         cwd=str(PROJECT_ROOT),
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, timeout=300,
+        encoding="utf-8", errors="replace",
         env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)},
     )
     assert completed.returncode == 0, (

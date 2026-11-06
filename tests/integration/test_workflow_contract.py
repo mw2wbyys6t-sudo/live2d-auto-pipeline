@@ -25,12 +25,16 @@ def _run_workflow_json(args, timeout=120):
     日志中可能混入嵌套 JSON（如 {"id":"..."}），必须用括号配对。
     """
     cmd = [sys.executable, "-m", "core.workflow", *args, "--json"]
+    # encoding 必须显式指定：text=True 的默认解码走 Windows locale（中文系统是
+    # cp936），workflow 输出的 UTF-8 中文日志会让 stdout 变成 None（症状看着像
+    # 「workflow 没返回 JSON」）。见 drivers/live2d_runtime/moc3_verify._spawn。
     proc = subprocess.run(
         cmd,
         cwd=str(PROJECT_ROOT),
         capture_output=True,
-        text=True,
         timeout=timeout,
+        encoding="utf-8",
+        errors="replace",
     )
     out = proc.stdout
     # 从第一个 '{' 开始，用括号配对找到对应的 '}'
@@ -230,8 +234,9 @@ class TestWorkflowHelpOutput:
             [sys.executable, "-m", "core.workflow", "--help"],
             cwd=str(PROJECT_ROOT),
             capture_output=True,
-            text=True,
             timeout=30,
+            encoding="utf-8",
+            errors="replace",
         )
         out = proc.stdout
         for flag in ["--seed", "--negative-prompt", "--json", "--no-semantic"]:

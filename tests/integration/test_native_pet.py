@@ -16,7 +16,8 @@ def target():
 def test_native_pet_first_frame_and_clean_exit():
     python, manifest = target()
     p = subprocess.run([python, '-m', 'drivers.desktop_pet.native_window', manifest,
-                        '--frames', '8'], capture_output=True, text=True, timeout=60)
+                        '--frames', '8'], capture_output=True, timeout=60,
+                       encoding='utf-8', errors='replace')
     assert p.returncode == 0, p.stdout + p.stderr
     reports = [json.loads(s.split('=', 1)[1]) for s in p.stdout.splitlines()
                if s.startswith('LIVE2D_PET=')]
@@ -32,7 +33,8 @@ def test_modified_package_refused_before_window():
     python, manifest = target()
     p = subprocess.run([python, '-m', 'drivers.desktop_pet.native_window', manifest,
                         '--frames', '2', '--expected-sha256', '0' * 64],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, timeout=60,
+                       encoding='utf-8', errors='replace')
     assert p.returncode != 0
     assert 'LIVE2D_PET=' not in p.stdout
     assert 'Model changed after verification' in p.stderr
