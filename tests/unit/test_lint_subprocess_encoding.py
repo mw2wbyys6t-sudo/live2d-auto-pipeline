@@ -11,12 +11,22 @@
 _spawn 用 encoding="utf-8", errors="replace"；tests/unit/test_moc3_verify.py
 ::test_subprocess_output_is_decoded_as_utf8 断言 text=True 不得使用。
 本文件把同一条规则机械地套在 tests/ 自己身上。
+
+覆盖范围（只此，别扩大也别缩小）：仓库根的 tests/ 整棵子树，含
+tests/integration/、tests/unit/、tests/e2e/ 和 tests/conftest.py。
+tests/ 之外同类的 8 处（install.py、start.py、scripts/build_desktop_bundle.py、
+scripts/repeat_verify.py 两处、scripts/smoke_e2e.py 两处、core/gpu_probe.py）
+是另行跟踪的工作项，故意不在本守卫射程内 —— 现在扩进去会让守卫带着 8 条
+已知违规变红，把「谁改坏了 tests/」和「那批还没修」混成一条噪音。
 """
 import ast
 import os
 from pathlib import Path
 
-TESTS_ROOT = Path(__file__).resolve().parent
+# 本文件在 tests/unit/，所以 tests/ 是 parent.parent，仓库根再往上一级。
+# 曾经写成 parent / parent.parent（即 tests/unit 与 tests），守卫就只在
+# tests/unit 里走路，tests/integration 那 6 处全在射程外：全量回退也不会红。
+TESTS_ROOT = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = TESTS_ROOT.parent
 
 # 会按 locale 解码子进程输出的 subprocess 入口（只认 subprocess.<name> 写法）
@@ -82,12 +92,23 @@ def _violations_in(path: Path) -> list:
     return found
 
 
+def _python_files(root: Path) -> list:
+    """root 下要扫的 .py 文件（排序、跳过 __pycache__）。
+
+    单独拆出来是给 test_guard_actually_covers_the_tests 用的：光看
+    「违规数 = 0」分不出「扫干净了」和「压根没扫到」。
+    """
+    return [
+        path
+        for path in sorted(root.rglob("*.py"))
+        if "__pycache__" not in path.parts
+    ]
+
+
 def scan(root: Path) -> list:
     """扫 root 下所有 .py，返回违规描述列表。"""
     violations = []
-    for path in sorted(root.rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
+    for path in _python_files(root):
         violations.extend(_violations_in(path))
     return violations
 
@@ -99,6 +120,51 @@ def test_tests_decode_subprocess_output_explicitly():
         "子进程输出必须显式按 UTF-8 解码（中文 Windows 的 locale 是 cp936，\n"
         "UTF-8 日志解码失败会让 stdout 变成 None）：\n" + "\n".join(violations)
     )
+
+
+def test_guard_actually_covers_the_files_that_matter():
+    """守卫自证扫描范围：不能靠「0 条违规」冒充安全。
+
+    真实缺陷（修复轮 1 发现的）：TESTS_ROOT 一度写成
+    Path(__file__).resolve().parent，也就是 tests/unit。于是
+    test_tests_decode_subprocess_output_explicitly 只在 tests/unit 里走路，
+    本任务修好的 tests/integration 那 6 处全在射程外 —— 把它们整体回退，
+    守卫照样绿，这是最坏的假保护。下面这几条把「悄悄收窄」钉成红：
+    根必须等于由本文件位置推出的 tests/，且 integration/ 与 unit/ 都得真在
+    扫描清单里。
+    """
+    here = Path(__file__).resolve()
+
+    # 1) 扫描锚点：root 就是仓库的 tests/，PROJECT_ROOT 就是仓库根
+    #    （这两条是绝对锚，后面按 TESTS_ROOT 派生的检查才不会空转通过）
+    assert TESTS_ROOT == here.parent.parent, TESTS_ROOT
+    assert TESTS_ROOT.is_dir() and TESTS_ROOT.name == "tests", TESTS_ROOT
+    assert PROJECT_ROOT == TESTS_ROOT.parent, PROJECT_ROOT
+    assert (PROJECT_ROOT / "tests").resolve() == TESTS_ROOT
+
+    labels = [_label(p) for p in _python_files(TESTS_ROOT)]
+
+    # 2) 该扫的两头都必须真扫到：integration（被修的 6 处住这里）和 unit（守卫自己）
+    integration = sorted(x for x in labels if x.startswith("tests/integration/"))
+    unit = sorted(x for x in labels if x.startswith("tests/unit/"))
+    assert integration, "扫描没走 tests/integration/ —— 守卫又被收窄了"
+    assert unit, "扫描没走 tests/unit/ —— 守卫范围不对"
+
+    # 3) tests/ 下每个放 .py 的目录都不许整段漏掉（conftest.py 也在射程内）
+    assert "tests/conftest.py" in labels, labels
+    assert _label(here) in labels, "守卫没扫到自己"
+    dirs_with_py = sorted(
+        d.relative_to(TESTS_ROOT).as_posix()
+        for d in TESTS_ROOT.rglob("*")
+        if d.is_dir() and "__pycache__" not in d.parts and any(d.glob("*.py"))
+    )
+
+    def covered(relative_dir: str) -> bool:
+        needle = "tests/" + relative_dir
+        return any(x == needle or x.startswith(needle + "/") for x in labels)
+
+    uncovered = [d for d in dirs_with_py if not covered(d)]
+    assert uncovered == [], "这些目录里的 .py 一个都没被扫到：" + ", ".join(uncovered)
 
 
 def test_guard_catches_the_bad_idiom(tmp_path):
