@@ -1509,3 +1509,74 @@ def test_parent_first_ordering_leaves_a_cyclic_table_alone():
     b = WarpDeformerSpec("B", 1, 1, [DeformerGrid(0.0, _L0_LATTICE)],
                          parent_deformer_id="A")
     assert parent_first_deformer_order([a, b]) == [a, b]
+
+
+# ======================================================================
+# Task 3 Step B：父级的静止矩形要铺满**子孙**的画
+#
+# `build_deformers` 里 `rect = _member_rect(members)` 只看**直接**成员。挂上
+# `under` 以后，子级的画不再出现在父级的成员表里，于是「画在父级网格之外」变成
+# 常态（歌手件：hair_back 有 27/140 个顶点在 HeadRig 矩形之外，越界 74.85px）。
+#
+# 为什么这仍然要修，即使 Core 会外推（#72 已经量过）：官方美术约定是**画留在父级
+# 网格之内**，只有留在里面，官方 Core、自研播放器、离线尺子才读同一个数 ——
+# 矩形之内三方一致到 ≤1px，而越界 + 非仿射弯曲的父级键形实测差 29px
+# （诊断 `H_out_4x3_bend`：夹取 118px / 外推 29px）。把画留在里面才是让三方
+# 一致的那个修法；让尺子学会外推只是不再拿幻影当证据。
+# ======================================================================
+
+def _rect_of(deformer, params=()):
+    """写出层眼里的「静止形」矩形（模型像素）—— 与内核换算 (s,t) 用的是同一个。"""
+    return reference_rect(deformer, {p.parameter_id: p for p in params})
+
+
+def _covers(rect, mesh):
+    return [(x, y) for x, y in mesh.vertices
+            if not (rect[0] <= x <= rect[2] and rect[1] <= y <= rect[3])]
+
+
+def test_a_parent_rect_covers_every_descendants_vertex():
+    """孙级（三级链）的画也算进父级矩形：只看直接成员会把头发甩在 HeadRig 外面。"""
+    face = _patch("face", 0.0, 120.0, 40.0, 200.0)           # HeadRig 自己的成员
+    hair_root = _patch("hair_front", -20.0, 60.0, 60.0, 120.0)
+    hair_tip = _patch("hair_back", -50.0, -260.0, 50.0, 40.0)  # 发梢远远低过头
+    entries = [
+        _entry("HeadRig", [], "", ["face"]),
+        _entry("HairFrontSwing", [], "", ["hair_front"], under="HeadRig"),
+        _entry("HairBackSwing", [], "", ["hair_back"], under="HairFrontSwing"),
+    ]
+    deformers, _notes, _static = _build([face, hair_root, hair_tip], entries, [])
+    by_id = {d.deformer_id: d for d in deformers}
+    assert by_id["HairBackSwing"].parent_deformer_id == "HairFrontSwing"
+    rect = _rect_of(by_id["HeadRig"])
+    for mesh in (face, hair_root, hair_tip):
+        assert _covers(rect, mesh) == [], (mesh.mesh_id, rect)
+
+
+def test_a_childless_deformer_rect_is_the_member_rect_unchanged():
+    """没有子孙时一个字节都不许动：今天 13/13 都是根级，黄金回归钉的就是那份矩形。
+
+    `tests/unit/test_moc3_deformers.py` 与 69b39399 那条根级黄金夹具覆盖的就是
+    这条路径 —— 矩形并集只在**真的有 warp 子孙**时才生效。
+    """
+    from live2d_builder.exporter.moc3_pipeline import _member_rect
+    face = _patch("face", 0.0, 120.0, 40.0, 200.0)
+    deformers, _notes, _static = _build([face], [_entry("HeadRig", [], "", ["face"])], [])
+    assert _rect_of(deformers[0]) == pytest.approx(_member_rect([face]))
+
+
+def test_the_rect_union_follows_the_landed_parents_only():
+    """父级没落地（没成员）时，子级的画不该被算进一个根本不存在的父级矩形里。
+
+    `resolve_deformer_parents` 只看**声明**，而矩形服务的是**编译出来的**那条链：
+    照声明并集的话，一个从未落地的父级会拿到一份它用不上的大矩形。
+    """
+    hair = _patch("hair_back", -50.0, -260.0, 50.0, 40.0)
+    entries = [
+        _entry("Ghost", [], "", []),                                  # 没有成员 → 不编译
+        _entry("HairBackSwing", [], "", ["hair_back"], under="Ghost"),
+    ]
+    deformers, notes, _static = _build([hair], entries, [])
+    assert [d.deformer_id for d in deformers] == ["HairBackSwing"]
+    assert any("Ghost" in n for n in notes), notes
+    assert _covers(_rect_of(deformers[0]), hair) == []

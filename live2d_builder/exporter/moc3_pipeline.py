@@ -631,6 +631,44 @@ def _member_rect(members: List[MeshSpec]) -> tuple:
     return x0 - margin_x, y0 - margin_y, x1 + margin_x, y1 + margin_y
 
 
+def rect_covering_descendants(name: str,
+                              members_by_name: Dict[str, List[MeshSpec]],
+                              parents: Dict[str, str]) -> List[MeshSpec]:
+    """``name`` 的静止矩形**应该覆盖**的网格：自己的成员 + 全部子孙的成员。
+
+    为什么不能只看直接成员（``_member_rect(members)``）：内核把 warp 下的顶点当作
+    **父级控制网格内的 (s,t)**，画落在父级网格之外时官方 Core 是按边界那一格线性
+    外推的（#72 实测：越界 160px 的一条边，Core 画的位置与「根本没有变形器」的对照
+    逐字节相同）。所以「挂上父级」本身不会打偏静止帧 —— 但官方美术约定是**画留在
+    父级网格之内**，理由有三条，都量过：
+
+      1. 矩形之内，官方 Core、自研播放器、离线尺子三方读数一致到 ≤1px；
+      2. 越界 + **非仿射弯曲**的父级键形在驱动键上与 Core 实测差 29px
+         （诊断 `H_out_4x3_bend`；夹取版差 118px，外推版也不等于内核）；
+      3. 越界量会被离线尺子读成静止偏差（歌手件 hair_back 27/140 个顶点在
+         HeadRig 矩形之外 ⇒ 假报「静止帧偏 27.183px」，而 Core 静止 SHA 没动）。
+
+    让矩形把子孙罩住，三条同时消失；这是**参数化**的改动（父级场的跨度会变，
+    因此挂父级与撤烘焙、扩矩形必须在同一批里量满幅弧幅，见 Task 3 的验收）。
+
+    子孙按**合法** under 边（:func:`resolve_deformer_parents`）走；某级根本没
+    编译出来时它不在 ``members_by_name`` 里，自然贡献 0 个网格。
+    """
+    children: Dict[str, List[str]] = {}
+    for child, under in parents.items():
+        children.setdefault(under, []).append(child)
+    picked: List[MeshSpec] = list(members_by_name.get(name) or [])
+    stack, seen = list(children.get(name, [])), {name}
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        picked.extend(members_by_name.get(current) or [])
+        stack.extend(children.get(current, []))
+    return picked
+
+
 #: 用「躯干倾摆」这套形变的 profile。它们必须共用同一个尺度，见
 #: :func:`_body_lean_rect`。
 BODY_LEAN_PROFILES = ("torso", "lift_lean")
@@ -1242,7 +1280,11 @@ def build_deformers(specs: List[MeshSpec],
         if dtype == "warp":
             n_rows = max(2, int(entry.get("grid_rows") or 2))
             n_cols = max(2, int(entry.get("grid_cols") or 2))
-            rect = _member_rect(members)
+            # 矩形按**子孙**的成员算，不只是直接成员：见
+            # :func:`rect_covering_descendants`（#72 的产物侧修法 —— 画留在父级网格
+            # 之内，Core / 自研播放器 / 离线尺子才读同一个数）。没有 warp 子孙时
+            # 这份并集就是 members 本身，今天的根级产物一个字节都不变。
+            rect = _member_rect(rect_covering_descendants(name, members_by_name, parents))
             # 成员网格**静止姿态**的并集范围（不含键形摆动）。形变量要按它算，
             # 否则嘴/眼会被含键形的外包框放大好几倍（见 _open_down_grids）。
             mesh_rect = _rest_rect(members)
