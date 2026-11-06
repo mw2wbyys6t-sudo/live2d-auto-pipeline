@@ -20,7 +20,7 @@ import json
 import math
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
 from core.logger import get_logger
 from live2d_builder.exporter.moc3_lint import lint_document
@@ -512,6 +512,43 @@ def with_body_follow(axes, shapes, vertices, parameters_by_id,
     return tuple(list(axes) + [(BODY_FOLLOW_PARAM, body_keys)]), merged
 
 
+def body_follow_band(vertices: List[List[float]],
+                     parameters_by_id: Dict[str, ParameterSpec],
+                     bone_positions: Dict[str, Any],
+                     width: float, height: float,
+                     weights: Optional[Sequence[float]] = None) -> tuple:
+    """只有 ``ParamBodyAngleZ`` 的跟随带 ``((轴…), 形状…)``；条件不齐时 ``((), ())``。
+
+    为什么主干覆盖以后的网格**还需要**它：撤销 ``head_angle_keyforms`` 是为了不把
+    头转施加两次，但身体侧倾并不在任何祖先那条带上 —— ``BodySway`` 的轴是
+    ``ParamBodyAngleX / Y / Sway / Breath``，**没有** ``ParamBodyAngleZ``（那一直
+    是靠每个网格自己的带补进去的）。把 ``with_body_follow`` 连同头带一起撤掉的结果
+    是头彻底不跟身子：实测（singer）躯干 10° 侧倾时领口离脸 57px，正是
+    ``tests/unit/test_head_follows_body.py`` 钉住的那条缺陷。BodySway / NeckBand 闭包
+    那份烘焙的撤销属 Task 4/5，且必须与「祖先真的带上 Z」同时落地。
+
+    枢轴、键值与蒙皮权重全部取自与 :func:`with_body_follow` 同一套
+    （``_body_follow_axis`` + ``_blend``），所以「只驱动身体场时头与躯干落在同一点」
+    这条既有判据不变；默认键那一档逐顶点等于静止姿态（``_blend`` 在 cos=1、sin=0
+    时是恒等），静止帧因此是构造上不变的。
+    """
+    body = _body_follow_axis(parameters_by_id, bone_positions, width, height)
+    if body is None:
+        return (), ()
+    body_keys, (bx, by), body_trig = body
+    if weights is None:
+        weights = [1.0] * len(vertices)
+    shapes: List[KeyformShape] = []
+    for index, key_b in enumerate(body_keys):
+        sin_b, cos_b = body_trig[index]
+        shapes.append(KeyformShape(
+            key_value=float(index),
+            vertices=[_blend(point[0], point[1], bx, by, cos_b, sin_b,
+                             weights[i] if i < len(weights) else 1.0)
+                      for i, point in enumerate(vertices)]))
+    return ((BODY_FOLLOW_PARAM, body_keys), ), tuple(shapes)
+
+
 def head_assembly_span(meshes: Dict[str, Dict[str, Any]],
                        parameters_by_id: Dict[str, ParameterSpec],
                        standard_bones: Dict[str, Dict],
@@ -674,6 +711,30 @@ def rect_covering_descendants(name: str,
 BODY_LEAN_PROFILES = ("torso", "lift_lean")
 
 
+def resolve_membership(entries: List[Dict],
+                       mesh_ids: Iterable[str]) -> Dict[str, str]:
+    """层名 -> 变形器名。与 :func:`_resolve_warp_members` **同一套**规则：按声明顺序先到先得。
+
+    烘焙守卫在**烘焙前**就要知道归属（``build_deformers`` 是在装配阶段才用
+    ``replace(mesh, deformer_id=...)`` 改写 specs 的），而两处规则一旦不同，就会出现
+    「以为被主干接住、其实没有」的头颈脱节 —— 所以这里把规则抽成一个函数，
+    ``_resolve_warp_members`` 也从它取数，不给第二份实现留生存空间。
+    """
+    by_norm = {_norm(str(mid)): str(mid) for mid in mesh_ids}
+    taken: Dict[str, str] = {}
+    for entry in entries:
+        if str(entry.get("type")) not in ("warp", "rotation"):
+            continue
+        name = str(entry.get("name") or "")
+        if not name:
+            continue
+        for target in entry.get("targets") or []:
+            mesh_id = by_norm.get(_norm(str(target)))
+            if mesh_id is not None and mesh_id not in taken:
+                taken[mesh_id] = name
+    return taken
+
+
 def _resolve_warp_members(specs: List[MeshSpec],
                           entries: List[Dict]) -> Dict[str, List[MeshSpec]]:
     """按 ``entries`` 的**声明顺序**解析每个变形器的成员网格。
@@ -682,21 +743,10 @@ def _resolve_warp_members(specs: List[MeshSpec],
     变形器不在表里。:func:`build_deformers` 与 :func:`_body_lean_rect` 共用这一份解析，
     共享尺度算出来的范围才跟真正挂上去的成员一致。
     """
-    by_norm = {_norm(m.mesh_id): m for m in specs}
-    taken: Dict[str, str] = {}
+    by_id = {m.mesh_id: m for m in specs}
     members_by_name: Dict[str, List[MeshSpec]] = {}
-    for entry in entries:
-        if str(entry.get("type")) not in ("warp", "rotation"):
-            continue
-        name = str(entry.get("name") or "")
-        picked: List[MeshSpec] = []
-        for target in entry.get("targets") or []:
-            mesh = by_norm.get(_norm(target))
-            if mesh is not None and mesh.mesh_id not in taken:
-                picked.append(mesh)
-                taken[mesh.mesh_id] = name
-        if picked:
-            members_by_name[name] = picked
+    for mesh_id, name in resolve_membership(entries, by_id).items():
+        members_by_name.setdefault(name, []).append(by_id[mesh_id])
     return members_by_name
 
 
@@ -1037,12 +1087,15 @@ def _apply_head(points, values, options):
 
 
 def _head_follow_deform(points, rect, mesh_rect, values, options):
-    """只跟随头部三轴。
+    """只跟随头部三轴 —— Task 3 起这是**整颗头唯一**的一份头转（``HeadRig``）。
 
-    腮红 / 眼泪这类层用的是**不透明度**键形（``ParamCheek`` / ``ParamTears``），
-    网格键形带已被占满，头部三轴进不去；它们本来也没有别的变形器，所以用一条
-    只含头部三轴的 warp 接住（实测：``ParamAngleZ = 30`` 时脸转 13.15px，
-    cheek / tear 位移 0px，腮红和泪痕留在原地）。
+    它原本是给腮红 / 眼泪这类层补洞用的：那些层的网格键形带被**不透明度**键形
+    （``ParamCheek`` / ``ParamTears``）占满，头部三轴进不去，而它们又没有别的变形器，
+    于是各建一条只含三轴的 warp（实测 ``ParamAngleZ = 30`` 时脸转 13.15px、
+    cheek / tear 位移 0px，腮红和泪痕留在原地）。代价是同一颗头被**六个**独立拟合的
+    场各转一遍：满幅（``ParamAngleZ=30`` + ``ParamBodyAngleZ=10``）时同角度、不同
+    圆心，配对距离没人约束 —— singer 件实测头内部 27.1272px。现在部件改成挂在
+    HeadRig 之下，靠 ``parent_deformer_indices`` 继承同一份形变。
     """
     return _apply_head(points, values, options)
 
@@ -1093,9 +1146,14 @@ DEFORMER_PROFILES: Dict[str, tuple] = {
     "mouth": (("open", "form", "size"), _mouth_deform),
     "mouth_cavity": (("open",), _mouth_cavity_deform),
     "eye": (("open",), _eye_deform),
-    # 眨眼 + 头部三轴：眼睛网格的键形带被眼球跟踪占用，只能压在变形器这一层。
+    # 眨眼 + 头部三轴。**Task 3 起作者表不再使用它**（EyeBlink_L/R 退回 ``eye``，
+    # 头的三轴由 HeadRig 一条带送到）；能力保留：`_apply_head` 那套公式还在被
+    # ``head`` 用，而 ``eye_head`` 的组合顺序（先表情、后随头）仍是
+    # ``tests/unit/test_moc3_deformers.py::TestEyeFollowsHead`` 的测试对象。
     "eye_head": (("open", "angle_x", "angle_y", "angle_z"), _eye_head_deform),
-    # 只有头部三轴：给键形带被不透明度（表情）占满的层用。
+    # 只有头部三轴。Task 3 以前它是给淡入层（CheekFollow / TearFollow）各补一份
+    # 头转用的 —— 那正是头内部各场各转各的来源；现在它是**整颗头唯一**的那一份
+    # （HeadRig），挂在它下面的部件靠继承而不是靠各自拟合。
     "head": (("angle_x", "angle_y", "angle_z"), _head_follow_deform),
     "brow": (("y", "angle", "form"), _brow_deform),
     "hair_sway": (("swing",), _hair_sway_deform),
@@ -1231,6 +1289,154 @@ def resolve_deformer_parents(entries: List[Dict]) -> Dict[str, str]:
             if _edge_is_acyclic(name, raw)}
 
 
+#: 编译侧的**链深上限**。Task 1.5 只用官方 Core 量到深度 3 的恒等链静止与键形继承
+#: （``tests/unit/test_deformer_parent_chain.py``、
+#: ``tests/unit/test_moc3_deformers.py::test_third_level_is_normalized_by_the_level_directly_above_it``），
+#: 4 已经留了一级余量。这条守卫的存在理由不是「怕递归太慢」，而是：以前编译侧
+#: 完全没有上限（``resolve_deformer_parents`` 无界走、``deformer_space_map.entry``
+#: 只防环），只有离线尺子与探针各自限在 ``guard < 32`` —— 于是「作者多写一级」和
+#: 「尺子还不认」之间没有任何一处会拦。超过上限的那一级**退回无父级并留痕**，
+#: 而不是让未验证过的深度静默进产物。
+TRUNK_MAX_CHAIN_DEPTH = 4
+
+
+def deformer_chain_depth(name: str, parents: Dict[str, str]) -> int:
+    """沿 ``parents`` 数到根级的层数；根级 = 1。"""
+    depth, cursor, seen = 1, parents.get(name, ""), {name}
+    while cursor and cursor not in seen:
+        seen.add(cursor)
+        cursor = parents.get(cursor, "")
+        depth += 1
+    return depth
+
+
+def _drop_over_depth_edges(parents: Dict[str, str]) -> tuple:
+    """把深度超过 ``TRUNK_MAX_CHAIN_DEPTH`` 的那些边退回根级，返回 ``(留下的边, 说明)``。"""
+    depths = {name: deformer_chain_depth(name, parents) for name in parents}
+    kept = {name: under for name, under in parents.items()
+            if depths[name] <= TRUNK_MAX_CHAIN_DEPTH}
+    notes = [f"{name}(under 链深 {depths[name]} 超过已验证上限 "
+             f"{TRUNK_MAX_CHAIN_DEPTH}：按无父级处理)"
+             for name in parents if name not in kept]
+    return kept, notes
+
+
+def under_edge_notes(entries: List[Dict]) -> List[str]:
+    """被丢掉的 ``under`` 边必须**可见**：拼错的父级名与成环的父链都算。
+
+    ``resolve_deformer_parents`` 在 ``RigSpec._validate_deformers`` **之前**就把未声明
+    父级与自父滤掉了，所以 ``under: "HeadRgg"`` 会**静默**变成一片扁平林：既不报
+    「父变形器不存在」，也不进 ``uncompiled``，画面还看着合理。本分支的约束是
+    「宁可不驱动 … 并如实留痕」，而 Task 3~5 恰恰要手改这些条目 —— 少一个键、
+    多打一个字母都是必然会犯的错误。
+    """
+    declared = {str(entry.get("name") or "") for entry in entries} - {""}
+    legal = resolve_deformer_parents(entries)
+    notes: List[str] = []
+    for entry in entries:
+        name = str(entry.get("name") or "")
+        under = str(entry.get("under") or "")
+        if not name or not under or name in legal:
+            continue
+        if under == name:
+            notes.append(f"{name}(under 指向自己：按无父级处理)")
+        elif under not in declared:
+            notes.append(f"{name}(under {under} 未声明：按无父级处理)")
+        else:
+            notes.append(f"{name}(under 父链成环：按无父级处理)")
+    return notes
+
+
+def legal_deformer_parents(entries: List[Dict]) -> tuple:
+    """``under`` 边的**唯一**裁定处： ``(留下的边, 被丢掉那些边的说明)``。
+
+    两处消费方（``build_deformers`` 写 ``parent_deformer_id``、
+    :func:`head_field_deformers` 判「继承到底送不送得到」）必须走同一个裁定，
+    否则会出现「守卫以为送得到、编译器其实把这条边丢了」的头颈脱节。
+    """
+    parents, deep_notes = _drop_over_depth_edges(resolve_deformer_parents(entries))
+    return parents, under_edge_notes(entries) + deep_notes
+
+
+#: 带着「整颗头的三轴」这一份形变的 profile。``eye_head`` 是 Task 3 之前的历史形态
+#: （眨眼 + 头部三轴一条带），作为**能力**保留在 ``DEFORMER_PROFILES`` 里，作者表
+#: 已经不用它了；这里一并认出来，免得有人改回去时守卫静默失效。
+HEAD_FIELD_PROFILES = frozenset({"head", "eye_head"})
+
+#: 负责把头送到各部件的那条主干变形器的**名字**。作者表里它就是 HeadRig；
+#: Task 5 会把这套机制扩到 NeckBand 与 BodySway（届时换成 TRUNK_DEFORMERS 全集）。
+HEAD_FIELD_DEFORMERS = frozenset({"HeadRig"})
+
+
+def head_field_deformers(entries: List[Dict],
+                         mesh_ids: Iterable[str]) -> Set[str]:
+    """HeadRig 及其**真的会编译出来**的子孙 —— 这些变形器负责成员网格的头部三轴。
+
+    只看声明不够，三条理由都指向「声明存在 ≠ 边真的落地」：
+      1. 条目没落地：``build_deformers`` 会因「没有成员网格」整条跳过某个变形器，
+         并在第二趟把指向它的边退回根级；
+      2. 边被裁定丢掉：未声明 / 成环 / 自父 / 超过 ``TRUNK_MAX_CHAIN_DEPTH`` 的
+         ``under`` 都不再送形变（:func:`legal_deformer_parents`）；
+      3. 父级只是静态点阵：``profile`` 不是 ``head`` 时那条带上没有头的三轴。
+    照声明就撤烘焙、而继承其实断了，结果是部件**一动不动** —— 比双份转动更难查，
+    也比现状更糟。
+    """
+    parents, _notes = legal_deformer_parents(entries)
+    owned = set(resolve_membership(entries, mesh_ids).values())
+    emitted = {str(entry.get("name") or "") for entry in entries
+               if str(entry.get("type")) in ("warp", "rotation")
+               and str(entry.get("name") or "") in owned}
+    roots = {name for name in HEAD_FIELD_DEFORMERS
+             if name in emitted
+             and any(str(entry.get("name") or "") == name
+                     and str(entry.get("profile") or "") in HEAD_FIELD_PROFILES
+                     for entry in entries)}
+    children: Dict[str, List[str]] = {}
+    for name, under in parents.items():
+        if name in emitted and under in emitted:
+            children.setdefault(under, []).append(name)
+    found: Set[str] = set()
+    frontier = list(roots)
+    while frontier:
+        name = frontier.pop()
+        if name in found:
+            continue
+        found.add(name)
+        frontier.extend(children.get(name, []))
+    return found
+
+
+def head_field_covered_ids(entries: List[Dict],
+                           mesh_ids: Iterable[str],
+                           head_available: bool) -> Set[str]:
+    """主干已经接住头部三轴的层名。``head_available=False`` 时返回空集 —— 宁回退烘焙。"""
+    if not head_available:
+        return set()
+    owners = head_field_deformers(entries, mesh_ids)
+    if not owners:
+        return set()
+    return {mesh_id for mesh_id, name in
+            resolve_membership(entries, mesh_ids).items() if name in owners}
+
+
+def head_field_available(bone_positions: Dict[str, Any],
+                         head_span: Optional[tuple],
+                         parameters_by_id: Dict[str, ParameterSpec],
+                         angle_ids: Sequence[str] = HEAD_ANGLE_AXES) -> bool:
+    """``profile="head"`` 那条带**能不能**算出来 —— 与 :func:`_head_options` 同一套前提。
+
+    ``_head_options`` 要画布尺寸才能把 Head 关节换算成模型坐标，而烘焙守卫必须在
+    网格循环**之前**决定（那时 width/height 还攥在 ``extents`` 里没取出来），所以
+    这里只查与尺寸无关的那几条前提。两边前提不同步时，宁可这里更严：守卫让位、
+    烘焙留下，画面最差也就是回到今天的样子。
+    """
+    if head_span is None or len(angle_ids) != 3:
+        return False
+    if bone_positions.get("Head") is None:
+        return False
+    return all(parameters_by_id.get(pid) is not None for pid in angle_ids)
+
+
 def build_deformers(specs: List[MeshSpec],
                     entries: List[Dict],
                     width: float,
@@ -1264,7 +1470,10 @@ def build_deformers(specs: List[MeshSpec],
     breath_bound: List[str] = []
     expression_bound: List[str] = []
     skipped: List[str] = []
-    parents = resolve_deformer_parents(entries)
+    # ``under`` 的裁定只此一处：留下的边写进 parent_deformer_id，被丢掉的边在这里
+    # 留痕（未声明 / 自父 / 成环 / 超过链深上限），不静默退回扁平林。
+    parents, edge_notes = legal_deformer_parents(entries)
+    skipped.extend(edge_notes)
     for entry in entries:
         name = str(entry.get("name") or "")
         dtype = str(entry.get("type"))
@@ -1476,6 +1685,15 @@ def build_rig_spec(
                                    bone_positions)
     keyformed, multi_hit, eyes_tracked, head_tracked = [], [], [], []
     opacity_driven: List[str] = []
+    trunk_covered: List[str] = []
+    # 主干已经接住头部三轴的层名（Task 3 只对 HeadRig 闭包启用；扩到 NeckBand 与
+    # BodySway 是 Task 5）。归属必须在**烘焙之前**按层名解析一次：变形器装配在
+    # 循环之后才改写 ``mesh.deformer_id``，等到那时候再问就晚了。
+    deformer_entries = (builder_result.get("deformer_tree") or {}).get("deformers") or []
+    covered = head_field_covered_ids(
+        deformer_entries, meshes.keys(),
+        head_available=head_field_available(bone_positions, head_span,
+                                           params_by_id))
 
     for order, (name, mesh) in enumerate(meshes.items()):
         width = float(mesh.get("width") or 0)
@@ -1548,11 +1766,26 @@ def build_rig_spec(
             head_axes, head_shapes, head_weights = head_angle_keyforms(
                 mesh, vertices, params_by_id, standard_bones,
                 bone_positions, width, height, head_span=head_span)
-            head_axes, head_shapes = with_body_follow(
-                head_axes, head_shapes, vertices, params_by_id,
-                bone_positions, width, height, weights=head_weights)
-            pid, shapes, candidates = rotation_keyforms(
-                mesh, params_by_id, bone_positions, standard_bones, width, height)
+            if name in covered:
+                # 头的三轴由 HeadRig（或其 warp 子级）送到 —— 这里必须**不再**烘一份，
+                # 否则转头被施加两次（挂上父级却不撤烘焙 = 画面比现状更差）。
+                # 上面那次调用只为拿 ``head_weights``：身体跟随的权重必须和头形变的
+                # 权重同源，否则半权重顶点会比邻居家多跑一截。
+                # 眼球跟踪带（``eye_axes``）与不透明度带**保留** —— 那是本来就该相对
+                # 父级动的局部表情，不在「重复拟合」的那一份里。
+                head_axes, head_shapes = body_follow_band(
+                    vertices, params_by_id, bone_positions, width, height,
+                    weights=head_weights)
+                # 旋转带也必须一起撤：``head_axes`` 空了以后 rotation_keyforms 会把
+                # 同一颗头降级成单轴 Z 逐顶点键形，那同样是第二次侧转。
+                pid, shapes, candidates = "", [], []
+            else:
+                head_axes, head_shapes = with_body_follow(
+                    head_axes, head_shapes, vertices, params_by_id,
+                    bone_positions, width, height, weights=head_weights)
+                pid, shapes, candidates = rotation_keyforms(
+                    mesh, params_by_id, bone_positions, standard_bones,
+                    width, height)
         else:
             # 见 MESH_KEYFORMS_ENABLED 的说明：网格键形会让内核在加载阶段崩溃。
             eye_axes = eye_shapes = head_axes = head_shapes = ()
@@ -1570,6 +1803,20 @@ def build_rig_spec(
                 texture_index=page,
                 keyform_shapes=eye_shapes,
                 keyform_axes=eye_axes,
+            ))
+            continue
+        if name in covered:
+            # 挂进主干场的网格：带里只剩身体跟随（甚至什么都没有），头转在父级。
+            trunk_covered.append(name)
+            specs.append(MeshSpec(
+                mesh_id=str(name),
+                vertices=vertices,
+                triangles=triangles,
+                uvs=uvs,
+                draw_order=float(order),
+                texture_index=page,
+                keyform_shapes=head_shapes,
+                keyform_axes=head_axes,
             ))
             continue
         if head_axes:
@@ -1607,6 +1854,10 @@ def build_rig_spec(
     if head_tracked:
         log.info(f"头部三轴复合已烘焙（{'+'.join(HEAD_ANGLE_AXES)}）："
                  f"{len(head_tracked)} 个网格 {head_tracked[:5]}")
+    if trunk_covered:
+        log.info(f"头部三轴改由 HeadRig 继承，网格不再自带这份带："
+                 f"{len(trunk_covered)} 个网格 {trunk_covered[:5]}"
+                 f"{'…' if len(trunk_covered) > 5 else ''}")
     if eyes_tracked:
         log.info(f"眼球跟随已烘焙（{'+'.join(EYE_TRACK_AXES)} 双轴）："
                  f"{len(eyes_tracked)} 个网格 {eyes_tracked[:5]}")

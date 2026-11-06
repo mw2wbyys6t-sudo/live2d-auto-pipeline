@@ -631,3 +631,274 @@ def test_idle_motion_covers_all_when_physics_is_unreadable(tmp_path):
     moc3_pipeline.write_idle_motion(str(tmp_path), "char", driven)
 
     assert _motion_curve_ids(tmp_path, manifest) == set(driven)
+
+
+# ======================================================================
+# Task 3：HeadRig 闭包里的网格不再自己拟合头部三轴
+#
+# 挂上 HeadRig 却留着 `head_angle_keyforms` 的烘焙 = 转头**施加两次**，中间提交
+# 是一个比现状更差的画面（计划把撤烘焙放在 Task 5，本任务必须与挂 HeadRig 原子落地）。
+# 反过来，撤了烘焙而 HeadRig 其实没建成 / 头部信息不全，头就彻底不动。
+# 两组方向都要有用例钉住，任何一边单独改掉都会红。
+# ======================================================================
+
+_BODY_Z = {"Id": "ParamBodyAngleZ", "Min": -10, "Max": 10, "Value": 0}
+_CHEEK = {"Id": "ParamCheek", "Min": 0, "Max": 1, "Value": 0}
+_EYE_OPEN_L = {"Id": "ParamEyeLOpen", "Min": 0, "Max": 1, "Value": 1}
+_HEAD_BONE_POSITIONS = {"Head": (0.0, -40.0), "Body": (0.0, 100.0)}
+
+
+def _layer_mesh(bones, weight=1.0):
+    """一张 128x64 的层网格，绑到给定骨骼上（与 ``_mesh()`` 同一副顶点）。"""
+    mesh = _mesh()
+    mesh["weights"] = {"bone_names": list(bones),
+                       "weights": [[weight]] * len(mesh["vertices"])}
+    return mesh
+
+
+def _head_rig_entry(targets, under=""):
+    entry = {"name": "HeadRig", "type": "warp", "parent": "Head",
+             "grid_rows": 4, "grid_cols": 3, "profile": "head",
+             "parameters": ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
+             "targets": list(targets)}
+    if under:
+        entry["under"] = under
+    return entry
+
+
+def _result(meshes, deformers=(), params=()):
+    result = _builder_result(meshes, deformers=deformers, params=params)
+    result["bone_positions"] = dict(_HEAD_BONE_POSITIONS)
+    return result
+
+
+def test_resolve_membership_is_declaration_order_first_come():
+    """一个网格只能挂一个变形器：归属按**声明顺序先到先得**，与 ``_resolve_warp_members`` 同规则。
+
+    烘焙守卫在**烘焙前**就要知道归属（装配在烘焙之后才改写 ``mesh.deformer_id``），
+    两处规则一旦不同就会出现「以为被主干接住、其实没有」的头颈脱节。
+    """
+    from live2d_builder.exporter.moc3_pipeline import resolve_membership
+    entries = [
+        {"name": "HeadRig", "type": "warp", "targets": ["face", "nose"]},
+        {"name": "Other", "type": "warp", "targets": ["face"]},
+    ]
+    assert resolve_membership(entries, ["face", "nose", "orphan"]) == {
+        "face": "HeadRig", "nose": "HeadRig"}
+
+
+def test_head_rig_members_do_not_bake_their_own_head_rotation():
+    """挂进 HeadRig 的 face：头部三轴只存在于变形器那一条带上，网格带里不再有一份。"""
+    result = _result({"face": _layer_mesh(["Face"])},
+                     deformers=[_head_rig_entry(["face"])],
+                     params=_HEAD_PARAMS)
+    spec = build_rig_spec(result, {"face": _uv()})
+    mesh = spec.meshes[0]
+    assert mesh.deformer_id == "HeadRig"
+    assert not any(pid.startswith("ParamAngle")
+                   for pid, _keys in (mesh.keyform_axes or ())), mesh.keyform_axes
+    head = next(d for d in spec.deformers if d.deformer_id == "HeadRig")
+    assert [pid for pid, _k in head.axes_spec] == list(moc3_pipeline.HEAD_ANGLE_AXES)
+
+
+def test_covered_mesh_never_falls_back_to_a_single_axis_z_band():
+    """撤掉头带以后也不许退化成单轴 Z 网格带 —— 那同样是**第二次** Z 旋转。
+
+    ``rotation_keyforms`` 走的正是「没有头部三轴带 → 单轴 Z 逐顶点键形」这条降级路
+    （见 ``test_head_mesh_falls_back_to_single_axis_z_unless_all_three_are_declared``）。
+    挂在 HeadRig 之下再叠一条 Z 带，就是双份侧转。
+    """
+    result = _result({"face": _layer_mesh(["Face"])},
+                     deformers=[_head_rig_entry(["face"])],
+                     params=_HEAD_PARAMS)          # 没有 ParamBodyAngleZ
+    spec = build_rig_spec(result, {"face": _uv()})
+    mesh = spec.meshes[0]
+    assert mesh.deformer_id == "HeadRig"
+    assert (mesh.keyform_axes or ()) == () and not mesh.keyform_shapes
+    assert mesh.keyform_parameter_id == ""
+
+
+def test_covered_head_mesh_still_follows_the_body_lean():
+    """撤掉头带以后，``ParamBodyAngleZ`` 的跟随必须留在网格这一层。
+
+    BodySway 那条带里**没有** ``ParamBodyAngleZ``（今天 12 个躯干网格的刚体拟合：
+    θ=10.000°、中心 (455.2,1038.8)），HeadRig 继承不到它。撤掉烘焙时若把身体跟随
+    一并撤掉，头在侧倾时就不再跟身子 —— 那正是 ``tests/unit/test_head_follows_body.py``
+    记过的「躯干 10° 时领口离脸 57px」。撤 BodySway 成员那份烘焙是 Task 4/5 的事。
+    """
+    result = _result({"face": _layer_mesh(["Face"])},
+                     deformers=[_head_rig_entry(["face"], under="BodySway"),
+                                {"name": "BodySway", "type": "warp",
+                                 "grid_rows": 3, "grid_cols": 2,
+                                 "profile": "torso",
+                                 "parameters": ["ParamBodyAngleX"],
+                                 "targets": ["torso"]}],
+                     params=_HEAD_PARAMS + [_BODY_Z])
+    spec = build_rig_spec(result, {"face": _uv()})
+    mesh = next(m for m in spec.meshes if m.mesh_id == "face")
+    assert [pid for pid, _k in mesh.keyform_axes] == ["ParamBodyAngleZ"], (
+        mesh.keyform_axes)
+    # 默认键必须逐顶点复现静止姿态（画面不变的构造保证）
+    keys = list(mesh.keyform_axes[0][1])
+    rest_index = keys.index(0.0)
+    for got, want in zip(mesh.keyform_shapes[rest_index].vertices, mesh.vertices):
+        assert got[0] == pytest.approx(want[0], abs=1e-9)
+        assert got[1] == pytest.approx(want[1], abs=1e-9)
+
+
+def test_covered_eye_mesh_keeps_the_eyeball_axes_and_loses_the_head_axes():
+    """眼球跟踪是**局部表情**，必须留着；头部三轴改由 HeadRig 送到。"""
+    result = _result(
+        {"eyewhite_left": _skinned_mesh(["Eyeball_L"]),
+         "face": _layer_mesh(["Face"])},
+        deformers=[_head_rig_entry(["face"]),
+                   {"name": "EyeBlink_L", "type": "warp", "parent": "Eye_L",
+                    "grid_rows": 4, "grid_cols": 4, "profile": "eye",
+                    "parameters": ["ParamEyeLOpen"],
+                    "targets": ["eyewhite_left"], "under": "HeadRig"}],
+        params=_EYE_PARAMS + _HEAD_PARAMS + [_EYE_OPEN_L])
+    spec = build_rig_spec(result, {"eyewhite_left": _uv(), "face": _uv()})
+    mesh = next(m for m in spec.meshes if m.mesh_id == "eyewhite_left")
+    assert mesh.deformer_id == "EyeBlink_L", (
+        "先声明的 HeadRig 不许把眼球层抢走：抢走就等于把眨眼一起丢掉")
+    assert [pid for pid, _k in mesh.keyform_axes] == [
+        "ParamEyeBallX", "ParamEyeBallY"], mesh.keyform_axes
+    by_id = {d.deformer_id: d for d in spec.deformers}
+    assert [pid for pid, _k in by_id["EyeBlink_L"].axes_spec] == ["ParamEyeLOpen"]
+    assert [pid for pid, _k in by_id["HeadRig"].axes_spec] == list(
+        moc3_pipeline.HEAD_ANGLE_AXES)
+    assert by_id["EyeBlink_L"].parent_deformer_id == "HeadRig"
+
+
+def test_covered_fade_layer_keeps_its_opacity_band_only():
+    """腮红：不透明度带照旧留在网格上，头转由 HeadRig 送到（不再各拟合一份）。"""
+    result = _result({"cheek": _layer_mesh(["Face"])},
+                     deformers=[_head_rig_entry(["cheek"])],
+                     params=_HEAD_PARAMS + [_CHEEK, _BODY_Z])
+    spec = build_rig_spec(result, {"cheek": _uv()})
+    mesh = spec.meshes[0]
+    assert mesh.deformer_id == "HeadRig"
+    assert [pid for pid, _k in mesh.keyform_axes] == [
+        "ParamCheek", "ParamBodyAngleZ"], mesh.keyform_axes
+
+
+def test_the_authored_table_does_not_double_apply_the_head_turn():
+    """用**真实作者表**跑一遍：face / cheek / 眼皮 都归 HeadRig，且都不带角度带。
+
+    手搓夹具测的是机制，这条测的是作者表与机制的接线：HeadRig 一旦写进
+    ``DEFAULT_WARP_DEFORMERS`` 而守卫漏了某个入口，头转就会施加两次。
+    """
+    from live2d_builder.bones.deformers import DeformerHierarchy
+    names = ["face", "cheek", "tear_left", "eyelid_left", "eyewhite_left",
+             "irides_left", "eyebrow_L", "nose", "mouth", "mouth_cavity",
+             "hair_front", "hair_back", "neck", "clothes_top", "accessories"]
+    meshes = {}
+    for n in names:
+        bones = ["Neck"] if n in ("neck", "clothes_top") else (
+            ["Eyeball_L"] if n in ("eyewhite_left", "irides_left") else ["Face"])
+        meshes[n] = _layer_mesh(bones)
+    built = DeformerHierarchy().build(
+        {}, {n: {"vertices": m["vertices"]} for n, m in meshes.items()},
+        layer_names=names)
+    result = _builder_result(
+        meshes, deformers=built["deformers"],
+        params=_HEAD_PARAMS + [_BODY_Z, _CHEEK, _EYE_OPEN_L] + _EYE_PARAMS)
+    result["bone_positions"] = dict(_HEAD_BONE_POSITIONS)
+    spec = build_rig_spec(result, {n: _uv() for n in names})
+    by_id = {m.mesh_id: m for m in spec.meshes}
+    owner = {d.deformer_id: d for d in spec.deformers}
+
+    assert by_id["face"].deformer_id == "HeadRig"
+    assert by_id["cheek"].deformer_id == "HeadRig"
+    assert by_id["eyelid_left"].deformer_id == "HeadRig"
+    assert by_id["neck"].deformer_id == "BodySway"
+    for n in ("face", "cheek", "tear_left", "eyelid_left", "eyebrow_L", "nose",
+              "mouth", "mouth_cavity", "hair_front", "hair_back", "accessories"):
+        axes = [pid for pid, _k in (by_id[n].keyform_axes or ())]
+        assert not [p for p in axes if p.startswith("ParamAngle")], (n, axes)
+    # 头部三轴在**产物**里也只有一个持有者
+    carriers = [d.deformer_id for d in spec.deformers
+                if any(pid in moc3_pipeline.HEAD_ANGLE_AXES
+                       for pid, _k in d.axes_spec)]
+    assert carriers == ["HeadRig"], carriers
+    assert owner["HeadRig"].parent_deformer_id == "BodySway"
+
+
+def test_meshes_outside_the_head_closure_keep_their_baked_head_band():
+    """没进 HeadRig 闭包（``deformers=()`` 或不挂 HeadRig）时烘焙照旧 —— 守卫没扩大化。"""
+    result = _result({"face": _layer_mesh(["Face"])},
+                     deformers=[{"name": "SomethingElse", "type": "warp",
+                                 "grid_rows": 2, "grid_cols": 2,
+                                 "targets": ["face"]}],
+                     params=_HEAD_PARAMS)
+    spec = build_rig_spec(result, {"face": _uv()})
+    mesh = spec.meshes[0]
+    assert [pid for pid, _k in mesh.keyform_axes] == list(
+        moc3_pipeline.HEAD_ANGLE_AXES)
+
+    plain = _result({"face": _layer_mesh(["Face"])}, params=_HEAD_PARAMS)
+    spec = build_rig_spec(plain, {"face": _uv()})
+    assert [pid for pid, _k in spec.meshes[0].keyform_axes] == list(
+        moc3_pipeline.HEAD_ANGLE_AXES)
+
+
+def test_head_information_missing_keeps_the_baked_band():
+    """Head 关节 / head_span 算不出来时不许「先撤烘焙再指望变形器」。
+
+    ``_head_options`` 返回 None ⇒ HeadRig 的 ``head`` profile 编成**静态**点阵
+    （``build_deformers`` 会记一条 ``HeadRig(头部信息不全…)``）。此时若照撤网格自己的
+    带，头就一动不动 —— 比双份转动更难查，所以守卫要让位给烘焙。
+    """
+    result = _builder_result({"face": _layer_mesh(["Face"])},
+                             deformers=[_head_rig_entry(["face"])],
+                             params=_HEAD_PARAMS)
+    result["bone_positions"] = {"Body": (0.0, 100.0)}   # 没有 Head 关节
+    spec = build_rig_spec(result, {"face": _uv()})
+    mesh = spec.meshes[0]
+    assert mesh.deformer_id == "HeadRig"
+    # 同一次导出里没有任何东西替它转：带必须留在**原样**的位置（这里即今天的空带），
+    # 判据用「与不挂变形器时逐轴相同」写，不去猜某个具体键形是否存在。
+    plain = _builder_result({"face": _layer_mesh(["Face"])}, params=_HEAD_PARAMS)
+    plain["bone_positions"] = {"Body": (0.0, 100.0)}
+    reference = build_rig_spec(plain, {"face": _uv()}).meshes[0]
+    assert [pid for pid, _k in (mesh.keyform_axes or ())] == [
+        pid for pid, _k in (reference.keyform_axes or ())]
+
+
+def test_a_head_rig_without_the_head_profile_does_not_strip_the_bands():
+    """HeadRig 挂名却没有 ``profile: "head"`` 时它只是静态点阵 —— 守卫必须让位。
+
+    归属解析只看**名字**，形变方式写在 ``profile`` 里。名字接住了、profile 没了，
+    照声明撤烘焙的结果是「网格没有自己的带 + 父级一动不动」= 头彻底冻结。
+    """
+    entry = _head_rig_entry(["face"])
+    entry["profile"] = ""
+    result = _result({"face": _layer_mesh(["Face"])}, deformers=[entry],
+                     params=_HEAD_PARAMS)
+    spec = build_rig_spec(result, {"face": _uv()})
+    mesh = spec.meshes[0]
+    assert mesh.deformer_id == "HeadRig"
+    assert [pid for pid, _k in mesh.keyform_axes] == list(
+        moc3_pipeline.HEAD_ANGLE_AXES)
+
+
+def test_a_head_rig_that_never_lands_does_not_strip_its_children():
+    """HeadRig 声明了但一个成员网格都没挂上时不编译 —— 此时子级的烘焙必须保留。
+
+    归属解析只看**声明**，编译只看**成员**；两者对「HeadRig 到底存不存在」给出不同
+    答案时，如果照声明撤烘焙，子级（嘴/眉/眼）就会既没有自己的带、也继承不到父级。
+    """
+    from live2d_builder.bones.deformers import DeformerHierarchy
+    names = ["mouth", "eyebrow_L"]
+    meshes = {n: _layer_mesh(["Face"]) for n in names}
+    built = DeformerHierarchy().build(
+        {}, {n: {"vertices": m["vertices"]} for n, m in meshes.items()},
+        layer_names=names)
+    result = _builder_result(meshes, deformers=built["deformers"],
+                             params=_HEAD_PARAMS)
+    result["bone_positions"] = dict(_HEAD_BONE_POSITIONS)
+    spec = build_rig_spec(result, {n: _uv() for n in names})
+    assert "HeadRig" not in [d.deformer_id for d in spec.deformers]
+    for mesh in spec.meshes:
+        assert [pid for pid, _k in mesh.keyform_axes] == list(
+            moc3_pipeline.HEAD_ANGLE_AXES), mesh.mesh_id

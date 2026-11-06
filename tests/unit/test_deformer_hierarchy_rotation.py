@@ -83,28 +83,45 @@ def test_no_rotation_skips_are_reported_when_all_targets_match():
     assert out["rotation_skipped"] == []
 
 
-def test_expression_fade_layers_get_head_follow_deformers():
-    """腮红 / 眼泪的网格键形带被不透明度占满，头部三轴只能走变形器。
+def test_expression_fade_layers_follow_the_single_head_field():
+    """腮红 / 眼泪不再各拟合一份头部三轴，而是落进**唯一**那条 HeadRig。
 
-    实测（2026-11-01，singer 分层导出件）：这两类层没有 warp 变形器时，
-    ``ParamAngleX/Y/Z = ±30`` 下 ``cheek`` / ``tear_left`` / ``tear_right``
-    位移 **0px**，同姿势脸移 13.15px —— 腮红与泪痕留在原地滑出脸外。
+    契约的来处（2026-11-01 实测）：这两类层的网格键形带被**不透明度**
+    （ParamCheek / ParamTears）占满，头部三轴进不去，当时没有 warp 就把它们留在原地
+    —— ``ParamAngleX/Y/Z = ±30`` 下 ``cheek`` / ``tear_left`` / ``tear_right`` 位移
+    **0px**，同姿势脸移 13.15px，腮红与泪痕滑出脸外。所以「必须随头转」这条**没变**，
+    变的是由谁负责：Task 3 把 ``CheekFollow`` / ``TearFollow`` 两条各自拟合三轴的
+    4×4 网格删掉（它们是头内部 27.1272px 漂移的六个独立场之二），层名改由
+    ``HeadRig.targets`` 显式接住。断言因此从「这两个条目存在且 profile=head」
+    改成「这三层真的挂在 HeadRig 上」，语义不变、持有者唯一化。
     """
     names = REAL_LAYER_NAMES + ["cheek", "tear_left", "tear_right"]
-    out = _build(names)
-    warp = {d["name"]: d for d in out["deformers"] if d["type"] == "warp"}
-    assert warp["CheekFollow"]["profile"] == "head"
-    assert warp["TearFollow"]["profile"] == "head"
-    for name in ("CheekFollow", "TearFollow"):
-        assert warp[name]["parameters"] == [
-            "ParamAngleX", "ParamAngleY", "ParamAngleZ"]
+    warp = {d["name"]: d for d in _build(names)["deformers"] if d["type"] == "warp"}
+    assert "CheekFollow" not in warp and "TearFollow" not in warp
+    assert warp["HeadRig"]["profile"] == "head"
+    assert warp["HeadRig"]["parameters"] == [
+        "ParamAngleX", "ParamAngleY", "ParamAngleZ"]
+    assert {"cheek", "tear_left", "tear_right"} <= set(warp["HeadRig"]["targets"])
 
 
 def test_absent_expression_layers_do_not_create_their_deformers():
     """层不存在就别建空壳变形器：否则会白占一个名额并出现在统计里。"""
-    out = _build(REAL_LAYER_NAMES)
-    names = [d["name"] for d in out["deformers"]]
+    names = [d["name"] for d in _build(REAL_LAYER_NAMES)["deformers"]]
     assert "CheekFollow" not in names and "TearFollow" not in names
+
+
+def test_the_fade_follow_deformers_are_gone_even_with_the_layers_present():
+    """正常场景里这两个名字也**恒不出现** —— 它们是被设计删掉的，不是被过滤掉的。
+
+    上一条走的是「层不存在 → 不建」的降级路径；只看那条会把「条目还在表里、
+    只是这次没命中」误读成已删干净。删条目这件事本身要在层齐全时也可观察。
+    """
+    from live2d_builder.bones.deformers import DeformerHierarchy
+    authored = [e["name"] for e in DeformerHierarchy.DEFAULT_WARP_DEFORMERS]
+    assert "CheekFollow" not in authored and "TearFollow" not in authored
+    names = REAL_LAYER_NAMES + ["cheek", "tear_left", "tear_right"]
+    assert all(d["name"] not in ("CheekFollow", "TearFollow")
+               for d in _build(names)["deformers"])
 
 
 def test_shoulder_lift_carries_cuff_and_hand_with_the_arm():

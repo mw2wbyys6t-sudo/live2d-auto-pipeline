@@ -1476,7 +1476,13 @@ def test_child_before_parent_table_is_written_parent_first():
 
 
 def test_reordered_deformer_table_compiles_to_the_same_bytes():
-    """规范化后的产物与作者本来就写对的表**逐字节相同** —— 表序不再是自由量。"""
+    """规范化后的产物与作者本来就写对的表**逐字节相同** —— 表序不再是自由量。
+
+    注意这条证的是**规范化本身**（子先父后被搬成父先子后，结果与写对的表同），
+    **不是**「表序与产物字节无关」：审查员独立查过，重排确实会改字节（band 去重
+    顺序、位置池顺序都跟着表序走）。真正的前提是 **parent-first 是唯一被官方 Core
+    量过的顺序**，所以搬动它是把产物搬回被量过的那一种，而不是免费的整理。
+    """
     assert (compile_static_rig(_nested_pair_spec(child_first=True)).to_bytes()
             == compile_static_rig(_nested_pair_spec(child_first=False)).to_bytes())
 
@@ -1508,8 +1514,264 @@ def test_parent_first_ordering_leaves_a_cyclic_table_alone():
                          parent_deformer_id="B")
     b = WarpDeformerSpec("B", 1, 1, [DeformerGrid(0.0, _L0_LATTICE)],
                          parent_deformer_id="A")
-    assert parent_first_deformer_order([a, b]) == [a, b]
+    ordered = parent_first_deformer_order([a, b])
+    # 用 `is` 而不是 `==`：frozen dataclass 下 `==` 对「值相等的副本」也成立，
+    # 规范化要是把条目复制一份再按别的顺序交回来，`==` 照样绿（姊妹用例用的就是 is）。
+    assert len(ordered) == 2
+    assert ordered[0] is a and ordered[1] is b, (
+        "成环时必须原样交回**同一批对象**，顺序一个字都不许动")
 
+
+# ======================================================================
+# Task 3：单一头部场 —— ``ParamAngle*`` 在作者表里只能有一个头部持有者
+#
+# 自己的基线读数（在 36c3fcc4 重建歌手产物后用 tools/bindings_gap_probe.py 量，
+# 满幅 ``ParamAngleZ=30`` + ``ParamBodyAngleZ=10``）：
+#   eyelid_left↔eyewhite_left **27.1272px**、eyewhite_left↔nose 27.1268px、
+#   cheek↔mouth 27.1267px、face↔eyewhite_left 27.1259px。
+# 逐网格等效刚体拟合给出的原因是**圆心**而不是角度：脸/眉/口/鼻/发 θ=40.000°
+# 圆心 (167.7, 1136.3)（网格自带键形带），眼/腮红/泪 θ=40.000° 圆心
+# (198.4, 1161.5)（各条 warp 自己拟合的那一份）。角度一致、圆心差 39.7px ⇒
+# 相对位移 θ(rad)·d ≈ 0.698×39.7 ≈ 27.7px —— 与实测的 27.13 同一回事。
+# 只驱动 ParamAngleZ=30（身体轴停在默认值）时两侧圆心重合、头内部配对全为 0，
+# 所以**验收必须在满幅上量**。
+# ======================================================================
+
+#: 取自 test_deformer_hierarchy_rotation.py 的真实分层产出名。
+#: ``build()`` 会用 ``_matched_targets`` 按真实层名过滤 targets（deformers.py:783），
+#: 夹具里不存在目标的变形器**整条不建**，所以断言作者意图要直接读类属性，
+#: 断言"真建出来了"才走 build()。
+SINGER_LAYERS = [
+    "hair_back", "face", "eyelid_left", "eyelid_right",
+    "eyewhite_left", "eyewhite_right", "irides_left", "irides_right",
+    "hair_front", "eyebrow_L", "eyebrow_R", "nose", "mouth_cavity", "mouth",
+    "neck", "clothes_top", "waistband", "collar", "cheek", "tear_left",
+    "accessories",
+]
+
+
+def _authored_table():
+    from live2d_builder.bones.deformers import DeformerHierarchy
+    return list(DeformerHierarchy.DEFAULT_WARP_DEFORMERS)
+
+
+def _authored(name):
+    return next(e for e in _authored_table() if e["name"] == name)
+
+
+def _built(names=None):
+    from live2d_builder.bones.deformers import DeformerHierarchy
+    names = list(SINGER_LAYERS if names is None else names)
+    meshes = {n: {"vertices": [[0, 0], [10, 0], [10, 10], [0, 10]]}
+              for n in names}
+    return {d["name"]: d for d in DeformerHierarchy().build(
+        {}, meshes, layer_names=names)["deformers"]}
+
+
+def _authored_depth(name, entries=None):
+    """沿**合法** under 边数到根级的层数（根级 = 1）。"""
+    from live2d_builder.exporter.moc3_pipeline import resolve_deformer_parents
+    entries = list(_authored_table() if entries is None else entries)
+    parents = resolve_deformer_parents(entries)
+    cursor, depth, guard = name, 1, 0
+    while parents.get(cursor) and guard <= len(entries):
+        cursor, depth, guard = parents[cursor], depth + 1, guard + 1
+    return depth
+
+
+def test_head_rig_is_authored_as_the_only_head_rotation_owner():
+    head = _authored("HeadRig")
+    assert head["profile"] == "head"
+    assert head["parameters"] == ["ParamAngleX", "ParamAngleY", "ParamAngleZ"]
+    assert {"face", "nose", "accessories"} <= set(head["targets"])
+    # 头部三轴在**作者意图**里只出现在 HeadRig 一条上。基线这里会是
+    # ['EyeBlink_L', 'EyeBlink_R', 'CheekFollow', 'TearFollow'] —— 四处各自再
+    # 拟合一份，就是头内部那 27.1272px 的来源。
+    # Task 4 引入 NeckBand（分级场，不是第二份刚体转动）以后这条要改成
+    # ``== ["NeckBand"]``。
+    refitters = [e["name"] for e in _authored_table()
+                 if e["name"] != "HeadRig"
+                 and "ParamAngleZ" in (e.get("parameters") or [])]
+    assert refitters == [], refitters
+
+
+def test_expression_deformers_inherit_head_instead_of_refitting_it():
+    for name in ("BrowMove_L", "BrowMove_R", "MouthOpen", "MouthCavity",
+                 "EyeBlink_L", "EyeBlink_R", "HairFrontSwing", "HairBackSwing",
+                 "HairSideSwing_L", "HairSideSwing_R"):
+        assert _authored(name)["under"] == "HeadRig", name
+    assert "ParamAngleZ" not in (_authored("EyeBlink_L").get("parameters") or [])
+    assert "ParamAngleZ" not in (_authored("HairFrontSwing").get("parameters") or [])
+    # 眼睛退回 ``eye``：眨眼是本来就该相对父级动的局部表情，头部三轴由继承送到。
+    # ``DEFORMER_PROFILES["eye_head"]`` 作为**能力**保留（见 TestEyeFollowsHead），
+    # 只是作者表不再使用它。
+    assert _authored("EyeBlink_L")["profile"] == "eye"
+    assert _authored("EyeBlink_L")["parameters"] == ["ParamEyeLOpen"]
+    assert _authored("EyeBlink_R")["parameters"] == ["ParamEyeROpen"]
+    # 头是挂在身子上的：HeadRig 在躯干场之下（Task 4 的颈胸过渡也要这条边）
+    assert _authored("HeadRig")["under"] == "BodySway"
+
+
+def test_cheek_and_tear_no_longer_need_their_own_head_field():
+    assert all(e["name"] not in ("CheekFollow", "TearFollow")
+               for e in _authored_table())
+    built = _built()
+    assert "HeadRig" in built, "真实层名下 HeadRig 必须真的建出来（否则重蹈 rotation 的覆辙）"
+    assert built["HeadRig"]["profile"] == "head"
+    assert set(built["HeadRig"]["targets"]) >= {"face", "nose", "accessories"}
+
+
+def test_fade_layers_are_listed_by_layer_name_in_the_head_rig_targets():
+    """``cheek`` / ``tear_*`` 必须**显式列名**在 ``HeadRig.targets`` 里。
+
+    淡入层的层名只活在 ``OPACITY_KEYFORM_LAYERS``（moc3_pipeline.py:1084-1088）；
+    CheekFollow/TearFollow 一删，若不把层名交给 HeadRig，``_matched_targets``
+    （deformers.py:783）就**静默**把它们丢在头场之外 —— 重演「腮红留在原地滑出脸外」
+    （实测 ParamAngleZ=30 时 cheek 位移 0px），而 deformers.py:778 记过同款事故：
+    同一批图 11 个变形器 → 0 个，构建照样报 valid。测试全绿也不代表画面没坏。
+    """
+    names = SINGER_LAYERS + ["tear_right"]
+    built = _built(names)
+    targets = set(built["HeadRig"]["targets"])
+    assert {"cheek", "tear_left", "tear_right"} <= targets, targets
+    from live2d_builder.exporter.moc3_pipeline import resolve_membership
+    owned = resolve_membership(list(built.values()), names)
+    assert owned["cheek"] == "HeadRig"
+    assert owned["tear_left"] == "HeadRig"
+    assert owned["tear_right"] == "HeadRig"
+
+
+def test_head_rig_also_carries_the_eyelids_that_have_no_other_deformer():
+    """``eyelid_left`` / ``eyelid_right`` 今天谁都不挂，只靠自己的键形带随头转。
+
+    基线上 ``eyelid_left↔eyewhite_left`` = 27.1272px 正是这一对的开口：不把它们
+    列进 HeadRig.targets，撤掉烘焙以后眼皮会**原地不动**，比现状更糟。
+    """
+    built = _built()
+    assert {"eyelid_left", "eyelid_right"} <= set(built["HeadRig"]["targets"])
+    from live2d_builder.exporter.moc3_pipeline import resolve_membership
+    owned = resolve_membership(list(built.values()), SINGER_LAYERS)
+    assert owned["eyelid_left"] == "HeadRig"
+
+
+def test_body_sway_members_stay_on_body_sway_in_task_3():
+    """neck / collar / clothes_top / waistband 仍归 BodySway，且没被 HeadRig 抢走。
+
+    BodySway 那条带里**不含** ``ParamAngleZ``，撤掉这些网格自己的烘焙会让脖子彻底
+    不跟头；把 neck 移交 NeckBand 必须与 NeckBand 的出现在同一笔提交里（Task 4），
+    分两笔会留下「neck 谁都不挂」的中间态，那一刻跑的任何读数都是假的。
+    """
+    built = _built()
+    assert {"neck", "clothes_top", "waistband", "collar"} <= set(
+        built["BodySway"]["targets"])
+    assert "under" not in built["BodySway"]
+    from live2d_builder.exporter.moc3_pipeline import resolve_membership
+    owned = resolve_membership(list(built.values()), SINGER_LAYERS)
+    assert owned["neck"] == "BodySway"
+    assert owned["collar"] == "BodySway"
+
+
+def test_authored_head_field_chain_stops_at_the_measured_depth_three():
+    """Task 1.5 只用官方 Core 量到**深度 3**，作者表今天就停在 3，一步不许多。
+
+    量过的包络是 BodySway(1) → HeadRig(2) → MouthOpen / BrowMove_L / EyeBlink_L(3)。
+    再加一级（``HairFrontSwing → HairTip`` 那种）之前必须先补一条深度 ≥4 的恒等链
+    静止 + 键形继承用例并**跑官方 Core 量出来**；通不过就把那级压平并如实记
+    skipped。这条用例就是那个前置条件的闸门 —— 未验证的深度不许静默进产物。
+    """
+    assert _authored_depth("BodySway") == 1
+    assert _authored_depth("HeadRig") == 2
+    for name in ("MouthOpen", "BrowMove_L", "EyeBlink_L", "HairFrontSwing",
+                 "MouthCavity", "HairBackSwing"):
+        assert _authored_depth(name) == 3, name
+    deepest = max(_authored_depth(e["name"]) for e in _authored_table())
+    assert deepest <= 3, deepest
+
+
+def test_build_deformers_leaves_a_note_for_an_undeclared_under():
+    """``under`` 拼错时必须有痕。
+
+    ``resolve_deformer_parents`` 在 ``RigSpec._validate_deformers`` **之前**就把未声明
+    父级滤掉了，所以 ``under: "HeadRgg"`` 今天会静默变成一片扁平林：既不报错、
+    也不进 ``uncompiled``，画面还看着合理 —— 违反本分支「宁可不驱动…并如实留痕」。
+    """
+    meshes = [_patch("face"), _patch("mouth")]
+    entries = [
+        _entry("HeadRig", [], "head", ["face"]),
+        _entry("MouthOpen", [], "mouth", ["mouth"], under="HeadRgg"),
+    ]
+    deformers, notes, _static = _build(meshes, entries, [])
+    by_id = {d.deformer_id: d for d in deformers}
+    assert by_id["MouthOpen"].parent_deformer_id == ""
+    assert "MouthOpen(under HeadRgg 未声明：按无父级处理)" in notes, notes
+
+
+def test_build_deformers_leaves_a_note_for_a_cyclic_under():
+    """成环的 under 同样要留痕：环交给 ``deformer_space_map`` 报错，但作者得看得见解释。"""
+    meshes = [_patch("face"), _patch("mouth")]
+    entries = [
+        _entry("Dee", [], "mouth", ["mouth"], under="Dum"),
+        _entry("Dum", [], "mouth", ["face"], under="Dee"),
+    ]
+    deformers, notes, _static = _build(meshes, entries, [])
+    assert all(d.parent_deformer_id == "" for d in deformers)
+    assert any("父链成环" in n for n in notes), notes
+    assert any(n.startswith("Dee(") for n in notes), notes
+
+
+def test_undeclared_under_is_visible_from_the_authored_table_end_to_end(monkeypatch):
+    """端到端：拼错的 ``under`` 走完 build() → build_deformers 还得留下同一条说明。
+
+    只在函数级测不够 —— ``create_warp_deformer`` 用固定键集重建条目字典，键在那里
+    掉了的话 ``build()`` 交出来的条目根本没有 "HeadRgg"，扁平林照样静默。
+    """
+    from live2d_builder.bones.deformers import DeformerHierarchy
+    authored = [
+        {"name": "HeadRig", "parent": "Head", "rows": 3, "cols": 3,
+         "type": "warp", "profile": "head", "targets": ["face"]},
+        {"name": "MouthOpen", "parent": "Mouth", "rows": 2, "cols": 3,
+         "type": "warp", "profile": "mouth", "targets": ["mouth"],
+         "under": "HeadRgg"},
+    ]
+    monkeypatch.setattr(DeformerHierarchy, "DEFAULT_WARP_DEFORMERS", authored)
+    names = ["face", "mouth"]
+    built = DeformerHierarchy().build(
+        {}, {n: {"vertices": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0],
+                              [0.0, 10.0]]} for n in names}, layer_names=names)
+    assert built["by_name"]["MouthOpen"]["under"] == "HeadRgg"
+    deformers, notes, _static = _build([_patch("face"), _patch("mouth")],
+                                       built["deformers"], [])
+    assert all(d.parent_deformer_id == "" for d in deformers)
+    assert any("HeadRgg 未声明" in n for n in notes), notes
+
+
+def test_build_deformers_flattens_a_chain_deeper_than_the_cap():
+    """链深超过 ``TRUNK_MAX_CHAIN_DEPTH`` 时退回无父级并留痕。
+
+    编译侧今天完全没上限：``resolve_deformer_parents`` 无界走，
+    ``deformer_space_map.entry`` 只防环，而离线尺子与探针各自限在 ``guard < 32``。
+    守卫要落在**编译侧**，而不是让递归去撞栈或撞探针的那个 32。
+    """
+    from live2d_builder.exporter.moc3_pipeline import TRUNK_MAX_CHAIN_DEPTH
+    count = TRUNK_MAX_CHAIN_DEPTH + 2
+    meshes = [_patch(f"m{i}") for i in range(count)]
+    entries = [_entry("L1", [], "mouth", [meshes[0].mesh_id])]
+    for i in range(2, count + 1):
+        entries.append(_entry(f"L{i}", [], "mouth", [meshes[i - 1].mesh_id],
+                              under=f"L{i - 1}"))
+    deformers, notes, _static = _build(meshes, entries, [])
+    by_id = {d.deformer_id: d for d in deformers}
+    kept = [f"L{i}" for i in range(1, TRUNK_MAX_CHAIN_DEPTH + 1)]
+    dropped = [f"L{i}" for i in range(TRUNK_MAX_CHAIN_DEPTH + 1, count + 1)]
+    for name in dropped:
+        assert by_id[name].parent_deformer_id == "", name
+        assert any(name in n and "链深" in n for n in notes), (name, notes)
+    assert by_id["L2"].parent_deformer_id == "L1"
+    assert by_id[kept[-1]].parent_deformer_id == f"L{TRUNK_MAX_CHAIN_DEPTH - 1}"
+    # 留下的链里最深的节点不许超过上限
+    for name in kept:
+        assert _authored_depth(name, entries) <= TRUNK_MAX_CHAIN_DEPTH or \
+            by_id[name].parent_deformer_id == ""
 
 # ======================================================================
 # Task 3 Step B：父级的静止矩形要铺满**子孙**的画

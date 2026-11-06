@@ -610,29 +610,73 @@ class DeformerHierarchy:
     # ``"under"``：这条变形器**挂在哪条变形器**下（值 = 本表里的 ``name``），
     #   由 ``moc3_pipeline.resolve_deformer_parents`` 解析成 moc3 的
     #   ``parent_deformer_id``，于是子级继承父级的转动、同一个参数不必再各
-    #   拟合一份键形带。空 = 根级（今天 13/13 都是根级）。
+    #   拟合一份键形带。空 = 根级。Task 3 起这张表**不再是扁平林**：
+    #   BodySway(根) → HeadRig → 表情/头发变形器，最深三级（官方 Core 实测过的
+    #   包络就是三级，见 ``tests/unit/test_moc3_deformers.py``
+    #   ``test_authored_head_field_chain_stops_at_the_measured_depth_three``）。
     #
     # 之所以另起一个键：两个 ``parent`` 语义在不同层，重载会把「骨骼归属」和
     # 「变形链」搅成一团，而且 ``parent`` 早就被每条写着，改判它等于悄悄重排
     # 全部产物。
     #
     # 写 ``under`` 时不必操心表的顺序：写出前 ``moc3_model`` 会按父链做拓扑
-    # 规范化（``parent_first_deformer_order``），父级在后也一样。
+    # 规范化（``parent_first_deformer_order``），父级在后也一样（规范化会搬动
+    # 槽位序，产物按被官方 Core 量过的 parent-first 那一种写出）。但**层数**
+    # 要操心：超过 ``TRUNK_MAX_CHAIN_DEPTH`` 的
+    # 那一级会被 ``build_deformers`` 退回无父级并留痕，未验证的深度不许静默进产物。
     DEFAULT_WARP_DEFORMERS: List[Dict] = [
+        # ---- 头部总成：整个头只转一次 ----
+        #
+        # 头的转动**只**存在于 HeadRig 这一条带里；挂在其下的网格靠 moc3 的
+        # parent_deformer_indices 继承（Task 1 已用官方 Core 验证逐级求值）。
+        # 之前每个部件各拟合一份 ParamAngle*，六个独立场之间的配对距离没人约束
+        # —— 实测头内部 27px 漂移就来自这里（36c3fcc4 重建的歌手件，满幅
+        # ParamAngleZ=30 / ParamBodyAngleZ=10：eyelid_left↔eyewhite_left 27.1272px、
+        # eyewhite_left↔nose 27.1268px、cheek↔mouth 27.1267px、
+        # face↔eyewhite_left 27.1259px。逐网格拟合给出的不是角度差（两侧都是
+        # 40.000°）而是**圆心**差 39.7px —— θ(rad)·d ≈ 27.7px，与实测同源。
+        #
+        # ``targets`` 里的层名必须**逐个显式列出**：``build()`` 会拿真实层名过滤
+        # targets（``build`` 内的 ``_matched_targets``，deformers.py:783 @ 36c3fcc4），
+        # 没列上的层既不会报错也不会留痕，只是**不随头转**。三类必须点名的层：
+        #   * ``cheek`` / ``tear_left`` / ``tear_right`` —— 它们原本的 CheekFollow /
+        #     TearFollow 被删掉了，而层名只活在 ``OPACITY_KEYFORM_LAYERS`` 里
+        #     （moc3_pipeline.py:1084-1088 @ 36c3fcc4）；漏掉就是「腮红留在原地滑出脸外」。
+        #   * ``eyelid_left`` / ``eyelid_right`` —— 合成上眼睑，此前谁都不挂、
+        #     只靠自己的键形带随头转；撤烘焙后不接住就是眼皮原地不动。
+        #   * ``ear_left`` / ``ear_right`` / ``accessories`` —— 耳朵与头顶饰件在
+        #     真实层名里可能出现，且都在头的外沿。
+        # 淡入层只交出**几何归属**：ParamCheek / ParamTears 的不透明度键形照旧留在
+        # 网格上（一个网格只能挂一条带，那是局部表情，本来就该相对父级动）。
+        # 头是挂在身子上的：``under: "BodySway"`` 让整颗头跟着躯干侧倾走，这条边
+        # 今天由各网格自己的 ``ParamBodyAngleZ`` 烘焙承担（撤烘焙时必须留住那一份，
+        # 见 moc3_pipeline.body_follow_band —— BodySway 的带里**没有** Z 轴）。
+        # 链深因此是 BodySway(1) → HeadRig(2) → 表情/头发(3)，正好停在官方 Core
+        # 量过的包络上（Task 1.5 只验到深度 3；上限守卫见 TRUNK_MAX_CHAIN_DEPTH）。
+        {"name": "HeadRig",  "parent": "Head", "under": "BodySway",
+         "rows": 4, "cols": 3, "type": "warp", "profile": "head",
+         "parameters": ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
+         "targets": ["face", "nose", "accessories", "ear_left", "ear_right",
+                    "cheek", "tear_left", "tear_right",
+                    "eyelid_left", "eyelid_right"]},
         # ---- 头发摆动：由 ParamHairSwing 驱动，发根钉住、发梢摆 ----
-        {"name": "HairFrontSwing", "parent": "Head", "rows": 3, "cols": 3,
+        {"name": "HairFrontSwing", "parent": "Head", "under": "HeadRig",
+         "rows": 3, "cols": 3,
          "type": "warp", "profile": "hair_sway",
          "parameters": ["ParamHairSwing"],
          "targets": ["hair_front", "hair_bangs", "hair_mid", "hair_side"]},
-        {"name": "HairBackSwing",  "parent": "Head", "rows": 4, "cols": 2,
+        {"name": "HairBackSwing",  "parent": "Head", "under": "HeadRig",
+         "rows": 4, "cols": 2,
          "type": "warp", "profile": "hair_sway",
          "parameters": ["ParamHairSwing"],
          "targets": ["hair_back", "hair_shadow_back"]},
-        {"name": "HairSideSwing_L","parent": "Head", "rows": 2, "cols": 2,
+        {"name": "HairSideSwing_L", "parent": "Head", "under": "HeadRig",
+         "rows": 2, "cols": 2,
          "type": "warp", "profile": "hair_sway",
          "parameters": ["ParamHairSwing"],
          "targets": ["hair_back_left"]},
-        {"name": "HairSideSwing_R","parent": "Head", "rows": 2, "cols": 2,
+        {"name": "HairSideSwing_R", "parent": "Head", "under": "HeadRig",
+         "rows": 2, "cols": 2,
          "type": "warp", "profile": "hair_sway",
          "parameters": ["ParamHairSwing"],
          "targets": ["hair_back_right"]},
@@ -657,13 +701,15 @@ class DeformerHierarchy:
         # （ParamAngleX/Y/Z）；变形器与网格键形是两层，可以同时生效。
         # 一个变形器也只能挂一个带，所以同一部件的多个参数合成一条**多轴带**
         # （见 moc3_pipeline.DEFORMER_PROFILES / moc3_model.WarpDeformerSpec.axes）。
-        {"name": "MouthOpen", "parent": "Mouth", "rows": 2, "cols": 3,
+        {"name": "MouthOpen", "parent": "Mouth", "under": "HeadRig",
+         "rows": 2, "cols": 3,
          "type": "warp", "profile": "mouth",
          "parameters": ["ParamMouthOpenY", "ParamMouthForm", "ParamMouthSize"],
          "targets": ["mouth", "mouth_open", "mouth_close"]},
         # 口内：与嘴线同源、但**张得更深**，所以在嘴唇下方露出一条腔体。
         # 若挂在 MouthOpen 下（同样的 2.5×），它会永远正好被嘴唇盖住——等于没做。
-        {"name": "MouthCavity", "parent": "Mouth", "rows": 2, "cols": 2,
+        {"name": "MouthCavity", "parent": "Mouth", "under": "HeadRig",
+         "rows": 2, "cols": 2,
          "type": "warp", "profile": "mouth_cavity",
          "parameters": ["ParamMouthOpenY"],
          "targets": ["mouth_cavity", "mouth_inner"]},
@@ -672,48 +718,51 @@ class DeformerHierarchy:
         # LayerComposer._synthesize_eyelid），收拢后露出来就是闭眼的样子。
         # 闭眼图是**静态**的，所以不占变形器：它由 EyeBlink 的收拢动作"让出来"。
         #
-        # 同一条带还要带上头部三轴（``eye_head``）：眼球网格的键形带被双眼球跟踪
+        # Task 3 以前这里还带头部三轴（``eye_head``）：眼球网格的键形带被双眼球跟踪
         # （ParamEyeBallX/Y）占满，头部转动只能压在变形器层；而一块网格只能挂一个
-        # 变形器，所以眨眼与转头合成一条多轴带。此前眼球完全不随头转：实测
-        # ParamAngleY=30 时上眼睑移动 15.10px、眼球 0px，眼睛在眼眶里向后滑。
+        # 变形器，所以眨眼与转头合成一条多轴带。现在那条带里**只剩眨眼**，头的三轴
+        # 由 ``under: "HeadRig"`` 继承 —— 两条各拟合一份的结果是同一刚体角下圆心差
+        # 39.7px（实测满幅 eyelid_left↔eyewhite_left 27.1272px），眼球相对眼睑滑开。
+        # 局部表情（``eye_track_keyforms`` 那份）本来就该相对父级动，**保留**。
         #
         # 控制网格用 4×4 点（3 格）：1 格时透视项在 84px 宽的眼区上被双线性近似
         # 掉 0.35px，3 格降到 0.07~0.15px，再加密（5 格）无改善。同步把
         # moc3 从 453248 涨到 460160 字节。
-        {"name": "EyeBlink_L", "parent": "Eye_L", "rows": 4, "cols": 4,
-         "type": "warp", "profile": "eye_head",
-         "parameters": ["ParamEyeLOpen", "ParamAngleX", "ParamAngleY",
-                        "ParamAngleZ"],
+        {"name": "EyeBlink_L", "parent": "Eye_L", "under": "HeadRig",
+         "rows": 4, "cols": 4,
+         "type": "warp", "profile": "eye",
+         "parameters": ["ParamEyeLOpen"],
          "targets": ["eyewhite_left", "irides_left", "eyelash_left",
                      "eyes_left", "eye_left"]},
-        {"name": "EyeBlink_R", "parent": "Eye_R", "rows": 4, "cols": 4,
-         "type": "warp", "profile": "eye_head",
-         "parameters": ["ParamEyeROpen", "ParamAngleX", "ParamAngleY",
-                        "ParamAngleZ"],
+        {"name": "EyeBlink_R", "parent": "Eye_R", "under": "HeadRig",
+         "rows": 4, "cols": 4,
+         "type": "warp", "profile": "eye",
+         "parameters": ["ParamEyeROpen"],
          "targets": ["eyewhite_right", "irides_right", "eyelash_right",
                      "eyes_right", "eye_right"]},
-        {"name": "BrowMove_L", "parent": "Brow_L", "rows": 2, "cols": 3,
+        {"name": "BrowMove_L", "parent": "Brow_L", "under": "HeadRig",
+         "rows": 2, "cols": 3,
          "type": "warp", "profile": "brow",
          "parameters": ["ParamBrowLY", "ParamBrowLAngle", "ParamBrowLForm"],
          "targets": ["eyebrow_L", "brow_L", "brow_left"]},
-        {"name": "BrowMove_R", "parent": "Brow_R", "rows": 2, "cols": 3,
+        {"name": "BrowMove_R", "parent": "Brow_R", "under": "HeadRig",
+         "rows": 2, "cols": 3,
          "type": "warp", "profile": "brow", "mirror": True,
          "parameters": ["ParamBrowRY", "ParamBrowRAngle", "ParamBrowRForm"],
          "targets": ["eyebrow_R", "brow_R", "brow_right"]},
-        # ---- 表情淡入层也要随头转 ----
+        # ---- 表情淡入层：Task 3 起不再有各自的头部场 ----
         #
-        # 腮红 / 眼泪用的是**不透明度**键形（ParamCheek / ParamTears），网格键形带
-        # 被它占满，头部三轴进不去，而它们又没有别的变形器 —— 实测 ParamAngleZ=30
-        # 时脸转 13.15px、cheek / tear 位移 0px，腮红和泪痕留在原地滑出脸外。
-        # 用一条只含头部三轴的 warp 接住（与 eye_head 同一套头变换、同一个 head_span）。
-        {"name": "CheekFollow", "parent": "Face", "rows": 4, "cols": 4,
-         "type": "warp", "profile": "head",
-         "parameters": ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
-         "targets": ["cheek", "cheek_blush", "blush"]},
-        {"name": "TearFollow", "parent": "Face", "rows": 4, "cols": 4,
-         "type": "warp", "profile": "head",
-         "parameters": ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
-         "targets": ["tear_left", "tear_right", "tear_l", "tear_r", "tears"]},
+        # 这里原本是 CheekFollow / TearFollow 两条 4×4 warp：腮红 / 眼泪的网格键形带
+        # 被不透明度（ParamCheek / ParamTears）占满，头部三轴进不去，而它们又没有别的
+        # 变形器 —— 实测 ParamAngleZ=30 时脸转 13.15px、cheek / tear 位移 0px，腮红和
+        # 泪痕留在原地滑出脸外，所以当时补了「只含头部三轴的 warp」这条路。
+        #
+        # 那是**六个独立拟合的头部场**中的两个，正是头内部 27.1272px 开口的来源，
+        # 于是本任务把它们删掉、把 ``cheek`` / ``tear_left`` / ``tear_right`` 三个层名
+        # 显式交给上面的 HeadRig（不列名就会被 ``_matched_targets`` 静默丢掉，重演
+        # 「腮红留在原地」）。不透明度键形照旧留在网格上 —— 淡入层交出的只是几何归属。
+        # ``DEFORMER_PROFILES["head"]`` 与 ``_head_options`` 这条**能力**保留（HeadRig
+        # 用的就是它），只是不再各部件一份。
         # ---- 肩部抬落（叠加躯干倾摆）----
         #
         # 没有独立的肩部图层，只能抬整条上臂（Live2D 里肩参数本来也会带上臂）。
