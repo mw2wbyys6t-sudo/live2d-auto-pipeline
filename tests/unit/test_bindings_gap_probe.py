@@ -117,12 +117,33 @@ def root_level_spec():
                    canvas_width=512.0, canvas_height=512.0, pixels_per_unit=PPU)
 
 
+def child_first_nested_chain_spec():
+    """与 :func:`nested_chain_spec` 同一套链，但**子级写在父级之前**。
+
+    这正是 Task 3 作者表的形状（``HairFrontSwing`` 写在 ``HeadRig`` 之前，
+    ``HeadRig`` 又写在 ``BodySway`` 之前）。``compile_static_rig`` 会把它规范成
+    parent-first 再算槽位，所以**参考实现必须按产物的槽位序取数**；照作者顺序比
+    就会以「参考实现假设顺序一致」的名义在 Task 6 点出一条假的产品 bug。
+    """
+    from dataclasses import replace
+    spec = nested_chain_spec()
+    return replace(spec, deformers=list(reversed(spec.deformers)))
+
+
 # ----------------------------------------------------------------------
 # 参考实现：直接按实测的规则 I 在**产物**上求值
 # ----------------------------------------------------------------------
 
 def _stored_warps(doc, spec):
-    """moc3 里写出去的东西：每级每键的点阵（单位）+ 父级下标 + 成员顶点的 (s,t)。"""
+    """moc3 里写出去的东西：每级每键的点阵（单位）+ 父级下标 + 成员顶点的 (s,t)。
+
+    **按名字取槽位，不按调用方的书写顺序**：写出层会先把变形器表规范化成
+    parent-first（``compile_static_rig`` → ``parent_first_deformer_order``），所以
+    ``deformer.ids`` 的顺序是**产物的顺序**，而 ``spec.deformers`` 是**作者顺序**。
+    Task 3 的作者表第一次出现子先父后（HairFrontSwing 写在 HeadRig 之前），拿作者
+    顺序去比槽位就会以「这条参考实现假设顺序一致」失败，看起来像产品 bug ——
+    参考实现要复现的是内核看到的表，不是作者键入的表。
+    """
     warps = [d for d in spec.deformers if isinstance(d, WarpDeformerSpec)]
     assert len(warps) == len(spec.deformers), "这条参考实现只覆盖全 warp 的链"
     for deformer in warps:
@@ -130,19 +151,22 @@ def _stored_warps(doc, spec):
             "rows/cols 必须是 1：那时「矩形线性映射」才严格等于内核的双线性采样")
     ids = doc.get("deformer.ids")
     parents = doc.get("deformer.parent_deformer_indices")
-    assert ids == [d.deformer_id for d in warps], (
-        "这条参考实现假设变形器表全是 warp 且顺序一致（deformers 与 warps 同一张表）")
+    by_name = {d.deformer_id: d for d in warps}
+    assert sorted(ids) == sorted(by_name), (
+        "变形器表必须全是 warp 且名字一一对应（顺序由写出层规范化决定，"
+        "与作者书写顺序无关，所以下面按 ids 的顺序取槽位）")
     begins = doc.get("warp_deformer_keyform.keyform_position_begin_indices")
     counts = doc.get("warp_deformer.keyform_counts")
     xs = doc.get("keyform_position.xys")
     lattices = {}
     running = 0
-    for index, deformer in enumerate(warps):
-        lattices[deformer.deformer_id] = []
+    for index, name in enumerate(ids):
+        deformer = by_name[name]
+        lattices[name] = []
         for grid in range(counts[index]):
             begin = begins[running + grid]
             flat = xs[begin:begin + 2 * deformer.vertex_count]
-            lattices[deformer.deformer_id].append(
+            lattices[name].append(
                 [(flat[k], flat[k + 1]) for k in range(0, len(flat), 2)])
         running += counts[index]
     mesh_began = doc.get("art_mesh_keyform.keyform_position_begin_indices")
@@ -151,7 +175,10 @@ def _stored_warps(doc, spec):
     mesh_st = [[(xs[mesh_began[m] + 2 * k], xs[mesh_began[m] + 2 * k + 1])
                 for k in range(mesh_counts[m])]
                for m in range(len(mesh_counts))]
-    return warps, ids, parents, lattices, mesh_st, mesh_deformers
+    # 交回**产物槽位序**的那份表：`by_slot = {i: w for i, w in enumerate(...)}`
+    # 靠的就是这个顺序与 parents / mesh_deformers 的下标同构。
+    ordered = [by_name[name] for name in ids]
+    return ordered, ids, parents, lattices, mesh_st, mesh_deformers
 
 
 def _blend(lattice_set, deformer, resolve):
@@ -238,6 +265,27 @@ def test_offline_chain_root_level_rig_still_agrees_with_the_compiled_moc3():
         for (rx, ry), (ox, oy) in zip(reference, offline):
             assert ox == pytest.approx(rx, abs=1e-9), (values, reference, offline)
             assert oy == pytest.approx(ry, abs=1e-9), (values, reference, offline)
+
+
+@pytest.mark.parametrize("values", [{}, {"ParamAngleZ": 30.0}])
+def test_the_reference_implementation_follows_the_compiled_slot_order(values):
+    """作者把子级写在父级**之前**时，参考实现必须照样对上离线求值。
+
+    这条是 Task 3 的作者表形状带来的新前提：规范化会搬动槽位，而槽位下标就是
+    ``deformer.parent_deformer_indices`` 与 ``art_mesh.parent_deformer_indices``
+    引用变形器的方式。照**作者顺序**比 ids 的话，这条会以「参考实现假设顺序一致」
+    失败，看起来像产品 bug —— 实际是尺子的实现细节在替作者手感说话。
+    """
+    spec = child_first_nested_chain_spec()
+    doc = compile_static_rig(spec)
+    assert doc.get("deformer.ids") == ["Parent", "Child"], (
+        "写出层必须已经把这张子先父后的表规范成 parent-first")
+    reference = _rule_i_from_moc3(doc, spec, values)
+    offline = _offline_positions(spec, values)
+    assert len(reference) == len(offline) == 4
+    for (rx, ry), (ox, oy) in zip(reference, offline):
+        assert ox == pytest.approx(rx, abs=1e-9), (values, reference, offline)
+        assert oy == pytest.approx(ry, abs=1e-9), (values, reference, offline)
 
 
 def test_offline_selfcheck_rest_holds_with_a_nested_chain():
@@ -487,3 +535,69 @@ def test_the_shipped_player_extrapolates_out_of_grid_art_like_the_core_and_the_r
         1, 1, 0.5, -0.8)
     assert got["x"] == pytest.approx(want[0], abs=1e-3), (got, want)
     assert got["y"] == pytest.approx(want[1], abs=1e-3), (got, want)
+
+
+# ----------------------------------------------------------------------
+# Task 1.5 审查前移的那块未测区：**子级矩形整体越出父级矩形**
+#
+# 官方实样里约 15% 的嵌套矩形就在父级之外，而编译器今天照收（st 读到 -0.25/1.25）。
+# Task 3 的 HeadRig 成员（发梢、耳、饰物）正是这一类，所以这条必须有用例。
+# 判据按诊断的实样写：Core 在这种链上既不裁也不歪 —— C_out_4x3_rest 与
+# D_out_1x1_rest 都跟「没有变形器」的对照**逐字节相同**，驱动键（E/G：平移与仿射
+# 旋转）与对照差恰好等于场本身。也就是说「中间层是恒等的」就等于「没有中间层」，
+# 与它在不在父级矩形之内无关。
+# ----------------------------------------------------------------------
+
+def child_outside_parent_spec(middle=True):
+    """1×1 父级（±100、带 ±40px 平移键形）→ 方块；``middle`` 决定要不要中间层。
+
+    中间层 Child 的点阵就是它自己静止矩形的恒等映射，而它的矩形整体挂在父级
+    矩形之下 100px 处 —— 对照（``middle=False``）是同一个方块直接挂到父级。
+    两者读数的差就是「中间层到底改变了什么」的答案。
+    """
+    rect = (-60.0, -260.0, 60.0, 60.0)
+    parent = _keyform_parent()
+    corners = [[x, y] for x, y in [rect[0:2], (rect[2], rect[1]),
+                                   rect[2:4], (rect[0], rect[3])]]
+    if middle:
+        child = WarpDeformerSpec(
+            "Child", 1, 1, [DeformerGrid(0.0, _lattice_of(rect, 1, 1))],
+            parent_deformer_id="Parent")
+        mesh = MeshSpec("ArtProbe", corners, _TRIS, list(_UVS),
+                        deformer_id="Child")
+        deformers = [parent, child]
+    else:
+        mesh = MeshSpec("ArtProbe", corners, _TRIS, list(_UVS),
+                        deformer_id="Parent")
+        deformers = [parent]
+    return RigSpec(meshes=[mesh], deformers=deformers, parameters=[_angle()],
+                   canvas_width=512.0, canvas_height=512.0, pixels_per_unit=PPU)
+
+
+@pytest.mark.parametrize("values", [{}, {"ParamAngleZ": 30.0}, {"ParamAngleZ": -30.0}],
+                         ids=["rest", "z+30", "z-30"])
+def test_a_child_rect_outside_the_parent_compiles_and_stays_neutral(values):
+    """越出父级矩形不崩、也不改变画面：恒等中间层 == 没有中间层（静止与满幅）。"""
+    nested_spec = child_outside_parent_spec(middle=True)
+    plain_spec = child_outside_parent_spec(middle=False)
+    doc = compile_static_rig(nested_spec)      # 崩溃就是这条用例的失败
+    assert doc.get("deformer.parent_deformer_indices") is not None
+
+    nested = _offline_positions(nested_spec, values)
+    plain = _offline_positions(plain_spec, values)
+    assert len(nested) == len(plain) == 4
+    for (nx, ny), (px, py) in zip(nested, plain):
+        assert nx == pytest.approx(px, abs=1e-9), (values, nested, plain)
+        assert ny == pytest.approx(py, abs=1e-9), (values, nested, plain)
+
+    # 尺子的读数必须与**产物字节**按规则 I 复算的一致（外推后两边才是同一个约定）
+    reference = _rule_i_from_moc3(doc, nested_spec, values)
+    for (rx, ry), (ox, oy) in zip(reference, nested):
+        assert ox == pytest.approx(rx, abs=1e-9), (values, reference, nested)
+        assert oy == pytest.approx(ry, abs=1e-9), (values, reference, nested)
+
+    # 而越界这件事本身要单独点名，不能悄悄算进静止偏差
+    bindings = build_bindings_document(nested_spec)
+    field = probe_mod.Field(bindings, {})
+    metric = field.art_outside_parent_grid(bindings["meshes"][0])
+    assert metric["levels"] == {"Parent": 2}, metric   # 四个角里下面那两个在父矩形之外
