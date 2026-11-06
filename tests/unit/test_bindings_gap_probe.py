@@ -25,7 +25,9 @@ Task 6 的配对距离闸门、以及一切「跨层相对位移」读数都出�
 """
 import importlib.util
 import json
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -294,3 +296,194 @@ def test_offline_chain_matches_official_core_on_a_nested_chain(tmp_path):
     assert rendered_dx == pytest.approx(40.0, abs=2.0), (
         f"内核画的是 {rendered_dx:.2f}px，尺子读的是 {predicted_dx[0]:.2f}px："
         "两者不再是同一条空间约定")
+
+
+# ======================================================================
+# #72：越出父级静止矩形的画（art outside parent grid）
+#
+# 上面那些用例的几何**全部**落在父级静止矩形之内，所以它们看不见这个缺陷：
+# `sample_warp_grid` 旧版先把 (u,v) 夹到 [0,1] 再采样，而官方 Core 不夹 ——
+# 挂在父级矩形之外的画会被整段塌到矩形边界上。实测（诊断
+# `step3_core_arbiter.py` / `step4_ruler_vs_core.py`，2026-11-06）：
+#   C_out_4x3_rest / D_out_1x1_rest（子级画挂在父矩形外 160px，恒等点阵，静止）
+#   与「根本没有变形器」的对照 A2_ctrl_out **逐字节相同**（Core SHA 5ef39e13…，
+#   alpha_bbox [153,203,246,452]）；夹取版尺子却读 [153,203,246,328]。
+#   124px 的幻影 = 160px 的越界量 × 400/512 的屏幕比例，正好等于越界量本身。
+# 真实产物里 hair_back 之于 HeadRig 就是这个形状（27/140 个顶点在 HeadRig 矩形
+# 之外），于是"静止帧偏 27.183px"被当成产品缺陷查了一整轮 —— 那是尺子在撒谎。
+#
+# 同一份夹取在 shipped player 里也有一份：web/lib/live2d-bindings.ts 的
+# `sampleWarpGrid`（自研渲染器的采样器），所以两边都要按 Core 外推。
+# ======================================================================
+
+#: 与诊断同一套几何：父矩形 ±100 模型像素（直接由上面的共享尺子 _LATTICE 导出，
+#: 不再抄第二份数字），画从 y=-260 起（底部 160px 越界）。
+_OUT_PARENT_RECT = (min(p[0] for p in _LATTICE), min(p[1] for p in _LATTICE),
+                    max(p[0] for p in _LATTICE), max(p[1] for p in _LATTICE))
+_OUT_MESH_RECT = (-60.0, -260.0, 60.0, 60.0)
+#: Core 渲染窗口 400x500（`render_probe` 的默认值）对 512 画布的比例与中心，
+#: 在两个对照渲染上标定到 ≤1px（诊断 `step4_ruler_vs_core.py:26-27`）。
+_SCREEN_SCALE = 400.0 / 512.0
+_SCREEN_CX, _SCREEN_CY = 199.5, 249.5
+
+
+def _lattice_of(rect, rows, cols):
+    """矩形上的 (rows+1)×(cols+1) 恒等点阵：行优先、x 最快、行号随 y 增。"""
+    x0, y0, x1, y1 = rect
+    return [[x0 + (x1 - x0) * c / cols, y0 + (y1 - y0) * r / rows]
+            for r in range(rows + 1) for c in range(cols + 1)]
+
+
+def _quad_grid_mesh(rect, deformer_id, n=4):
+    """rect 上的 n×n 顶点方块（贴图纯色，所以顶点密度只影响 bbox 读数）。"""
+    x0, y0, x1, y1 = rect
+    pts = [[x0 + (x1 - x0) * c / (n - 1), y0 + (y1 - y0) * r / (n - 1)]
+           for r in range(n) for c in range(n)]
+    tris = []
+    for r in range(n - 1):
+        for c in range(n - 1):
+            i = r * n + c
+            tris.append((i, i + 1, i + n + 1))
+            tris.append((i, i + n + 1, i + n))
+    uvs = [[c / (n - 1), r / (n - 1)] for r in range(n) for c in range(n)]
+    return MeshSpec("ArtProbe", pts, tris, uvs, deformer_id=deformer_id)
+
+
+def out_of_rect_chain_spec(rows=4, cols=3):
+    """恒等点阵的父级 → 1×1 子级 → 挂出父级矩形 160px 的方块（静止）。
+
+    诊断的 `C_out_4x3_rest`：父级与子级的默认点阵都是各自静止矩形上的恒等映射，
+    Core 在这种链上画得**与没有变形器时逐字节相同**，所以任何静止偏差都是尺子的。
+    """
+    parent = WarpDeformerSpec(
+        "Parent", rows=rows, cols=cols,
+        grids=[DeformerGrid(0.0, _lattice_of(_OUT_PARENT_RECT, rows, cols))],
+        parameter_id="ParamP")
+    child = WarpDeformerSpec(
+        "Child", 1, 1, [DeformerGrid(0.0, _lattice_of(_OUT_MESH_RECT, 1, 1))],
+        parent_deformer_id="Parent")
+    return RigSpec(meshes=[_quad_grid_mesh(_OUT_MESH_RECT, "Child")],
+                   deformers=[parent, child],
+                   parameters=[ParameterSpec("ParamP", 0.0, 1.0, 0.0),
+                               ParameterSpec("ParamQ", 0.0, 1.0, 0.0)],
+                   canvas_width=512.0, canvas_height=512.0, pixels_per_unit=PPU)
+
+
+def _screen_y(doc, y_local):
+    """尺子的局部坐标（原点画布中心、y 向上）→ Core 渲染窗口的屏幕行。"""
+    return _SCREEN_CY - _SCREEN_SCALE * y_local
+
+
+@pytest.mark.parametrize("rows,cols", [(1, 1), (4, 3)],
+                         ids=["1x1_parent", "4x3_parent"])
+def test_art_outside_the_parent_grid_is_extrapolated_not_clamped(rows, cols):
+    """挂在父级静止矩形之外的画必须按 Core 那样外推，不许塌到矩形边界。
+
+    判据来自 Core 实样（诊断 M3/M4）：越界顶点停在静止位置，屏幕行 452；
+    旧夹取版读 328，差的 124px 就是那 160px 越界量的屏幕投影。
+    """
+    spec = out_of_rect_chain_spec(rows=rows, cols=cols)
+    doc = build_bindings_document(spec)
+    field = probe_mod.Field(doc, {})
+    _rest, moved = field.deformed(doc["meshes"][0])
+
+    bottom = min(y for _x, y in moved)
+    assert bottom == pytest.approx(-260.0, abs=1e-3), (
+        f"越界顶点被读成 y={bottom:.3f}（塌到父矩形边界 -100 = 夹取），"
+        "而 Core 把它画在静止位置 -260")
+    assert _screen_y(doc, bottom) == pytest.approx(452.0, abs=1.5), (
+        "Core 实测屏幕行 452；夹取版读 328")
+
+    worst, where = probe_mod.selfcheck_rest(field, doc["meshes"])
+    # 1e-3px 就是探针自检 1 自己的门限（bindings_gap_probe.main）；4×3 那种
+    # 非 1×1 点阵过一遍 float32 会留 2e-4 的舍入，与夹取无关。
+    assert worst < 1e-3, f"恒等链静止重放偏了 {worst:.4f}px（{where}）—— 夹取的幻影"
+
+
+def test_the_ruler_names_art_outside_the_parent_grid_as_its_own_metric():
+    """越界画要**单列命名**，不许混进偏差数：外推与 Core 的差别在非仿射弯曲
+    父级上仍有 29px（诊断 H_out_4x3_bend），读的人必须能看出这条数不在
+    「Core、播放器、尺子三方一致」的区域内。
+    """
+    spec = out_of_rect_chain_spec()
+    doc = build_bindings_document(spec)
+    field = probe_mod.Field(doc, {})
+    metric = field.art_outside_parent_grid(doc["meshes"][0])
+    # 方块 4×4 个点、y 从 -260 到 60（步长 106.67）⇒ 两行（-260、-153.3）落在
+    # 父矩形下沿 -100 之外 = 8 个顶点；子级矩形就是画的矩形，所以那一读数是 0。
+    assert metric["total"] == 8, metric
+    assert metric["vertices"] == 16, metric
+    assert metric["levels"] == {"Parent": 8}, metric
+
+
+@requires_live2d
+def test_official_core_draws_out_of_rect_art_where_the_ruler_now_puts_it(tmp_path):
+    """三方一致的唯一硬判据：Core 画在哪，尺子就要读在哪（越界画，静止帧）。"""
+    from drivers.live2d_runtime.moc3_verify import render_probe
+
+    spec = out_of_rect_chain_spec()
+    doc = compile_static_rig(spec)
+    manifest = _package(tmp_path, doc.to_bytes(), "probe_out_of_grid")
+    rest = render_probe(str(manifest))
+    if not rest["ok"]:
+        pytest.skip(f"官方 Core 不可用：{rest.get('blocker')}")
+    # 诊断实样：与无变形器对照 A2_ctrl_out 逐字节相同，bbox 下沿 452
+    assert rest["alpha_bbox"][3] == pytest.approx(452, abs=3), rest["alpha_bbox"]
+
+    bindings = build_bindings_document(spec)
+    field = probe_mod.Field(bindings, {})
+    _rest, moved = field.deformed(bindings["meshes"][0])
+    predicted = max(_screen_y(bindings, y) for _x, y in moved)
+    assert predicted == pytest.approx(rest["alpha_bbox"][3], abs=2.0), (
+        f"内核画到 {rest['alpha_bbox'][3]}，尺子读 {predicted:.1f}："
+        "越界画又被夹回去了")
+
+
+#: 自研播放器里那一份采样器的判据点：矩形 ±100 的恒等 1×1 网格，
+#: 采样 (u,v)=(0.5,-0.8) —— 即 x=0、y 挂在矩形下沿之外 160px 处。
+#: Core 画在 y=-260（诊断 A2/C_out/D_out：屏幕行 452），夹取版读 y=-100（327.6）。
+_PLAYER_SAMPLER_HARNESS = """
+import { pathToFileURL } from 'node:url';
+const mod = await import(pathToFileURL(process.env.TS_PATH).href);
+const grid = new Float32Array([-100, -100, 100, -100, -100, 100, 100, 100]);
+const out = { x: NaN, y: NaN };
+mod.sampleWarpGrid(grid, 1, 1, 0.5, -0.8, out);
+console.log(JSON.stringify(out));
+"""
+
+
+def _player_sampler_out_of_grid():
+    """用 node 跑 `web/lib/live2d-bindings.ts` 的 sampleWarpGrid（同一处夹取）。"""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("需要 node 才能跑 shipped 播放器里那一份采样器")
+    ts = ROOT / "web" / "lib" / "live2d-bindings.ts"
+    assert ts.is_file(), ts
+    env = dict(os.environ, TS_PATH=str(ts))
+    proc = subprocess.run([node, "--input-type=module", "-e",
+                           _PLAYER_SAMPLER_HARNESS],
+                          capture_output=True, text=True, encoding="utf-8",
+                          env=env, timeout=120)
+    assert proc.returncode == 0, proc.stderr[-500:]
+    lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("{")]
+    assert lines, proc.stdout[-500:]
+    return json.loads(lines[-1])
+
+
+def test_the_shipped_player_extrapolates_out_of_grid_art_like_the_core_and_the_ruler():
+    """#72 的浏览器那一半：播放器与尺子共用同一条越界约定，而且都是 Core 的那条。
+
+    `bindings_gap_probe` 的模块文档就自称是 `live2d-player.ts:updateArtMeshes` 的
+    移植，两处 `min(max(u,0),1)` 是同一只手加的。修一边只会让两个渲染器**更加**
+    不一致，所以这条同时钉住：TS 的读数 == Python 的读数 == Core 的 -260。
+    """
+    got = _player_sampler_out_of_grid()
+    assert got["y"] == pytest.approx(-260.0, abs=1e-3), (
+        f"播放器把越界的画读成 y={got['y']}（塌到父矩形边界），"
+        "Core 画的是 -260 —— 浏览器里头发会脱离头")
+    assert got["x"] == pytest.approx(0.0, abs=1e-3), got
+    want = probe_mod.sample_warp_grid(
+        [-100.0, -100.0, 100.0, -100.0, -100.0, 100.0, 100.0, 100.0],
+        1, 1, 0.5, -0.8)
+    assert got["x"] == pytest.approx(want[0], abs=1e-3), (got, want)
+    assert got["y"] == pytest.approx(want[1], abs=1e-3), (got, want)

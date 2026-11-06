@@ -169,7 +169,15 @@ export function blendScalar(
 
 /**
  * 变形器网格双线性采样。`grid` 是扁平控制点表（行优先、x 最快），
- * (u, v) 是网格内归一化位置（0..1，夹取）。
+ * (u, v) 是网格内归一化位置。
+ *
+ * **越出 0..1 的画按边界那一格线性外推，不夹取**（#72）：官方 Cubism Core 就是这么
+ * 画的，实测挂在父级静止矩形外 160px 的一条边，Core 画在屏幕行 452（与「根本没有
+ * 变形器」的对照逐字节相同），旧版的 `Math.min(Math.max(u,0),1)` 把它塌到矩形边界
+ * 读成 328。判据钉在 `tests/unit/test_bindings_gap_probe.py
+ * ::test_the_shipped_player_extrapolates_out_of_grid_art_like_the_core_and_the_ruler`
+ * —— 那份 TS 与离线尺子 `tools/bindings_gap_probe.py:sample_warp_grid` 是同一只手
+ * 移植的，改一边必须同步另一边，否则自研播放器与官方内核会画出不一样多的画面。
  */
 export function sampleWarpGrid(
   grid: Float32Array,
@@ -179,16 +187,19 @@ export function sampleWarpGrid(
   v: number,
   out: { x: number; y: number },
 ): void {
-  const cx = Math.min(Math.max(u, 0), 1) * cols;
-  const cy = Math.min(Math.max(v, 0), 1) * rows;
+  const cx = u * cols;
+  const cy = v * rows;
+  // Math.floor 而不是 Math.trunc：越到负方向时 trunc 会把「第一格之前」当成第一格
+  // 本身重复用一次，外推方向就错了。
   let c0 = Math.floor(cx);
   let r0 = Math.floor(cy);
-  if (c0 >= cols) c0 = cols - 1;
-  if (r0 >= rows) r0 = rows - 1;
+  if (c0 > cols - 1) c0 = cols - 1;
+  if (r0 > rows - 1) r0 = rows - 1;
   if (c0 < 0) c0 = 0;
   if (r0 < 0) r0 = 0;
   const c1 = Math.min(c0 + 1, cols);
   const r1 = Math.min(r0 + 1, rows);
+  // fx/fy 可以落在 [0,1] 之外：那正是外推项。
   const fx = cx - c0;
   const fy = cy - r0;
 

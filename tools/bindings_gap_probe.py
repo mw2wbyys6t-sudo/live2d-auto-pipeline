@@ -16,6 +16,11 @@
 求值顺序与 web/lib/live2d-player.ts:updateArtMeshes 一致：
   变形器键形混合 → 网格键形混合 → 顶点穿变形器链（先自身网格，再逐级父级）。
 
+顶点落在变形器静止矩形**之外**时按官方 Core 那样线性外推，不夹取（#72）：
+旧版把 (u,v) 夹在 [0,1]，于是"挂在父级网格外的画"被整段塌到父级边界上，
+自检 1 会报出 27~130px 的静止偏差，而同一批产物的 Core 静止 SHA 一个像素都没动。
+越界的量现在单独成列（`art outside parent grid`），永不并进偏差读数。
+
 用法：
     python tools/bindings_gap_probe.py <name>.bindings.json [选项]
     --pose "ParamAngleZ=30,ParamBodyAngleZ=10"   显式姿态（可重复，取并集）
@@ -101,13 +106,25 @@ def blend_flat(terms, tables, width):
 
 
 def sample_warp_grid(grid, rows, cols, u, v):
-    """变形器网格双线性采样（行优先、x 最快，(u,v) 夹在 0..1）。"""
-    cx = min(max(u, 0.0), 1.0) * cols
-    cy = min(max(v, 0.0), 1.0) * rows
-    c0 = min(int(cx), cols)
-    r0 = min(int(cy), rows)
-    c0 = max(c0, 0)
-    r0 = max(r0, 0)
+    """变形器网格双线性采样（行优先、x 最快）。
+
+    (u,v) **不夹取**，越界的那一段按边界那一格线性外推 —— 这是官方 Core 的行为
+    （#72）。旧版这里写的是 `min(max(u,0),1)`，那是移植时自己加的假设：把挂在
+    变形器静止矩形之外的画整段塌到矩形边界上。实测（诊断 `step3_core_arbiter.py`
+    / `step4_ruler_vs_core.py`，判据已钉进
+    ``tests/unit/test_bindings_gap_probe.py::test_art_outside_the_parent_grid_is_extrapolated_not_clamped``）：
+    挂在父矩形外 160px 的边，Core 画在 452（与「根本没有变形器」的对照逐字节相同），
+    夹取版读 328 —— 124 屏幕像素的幻影正好等于越界量。嵌套主干第一次让这件事变得
+    可观测（hair_back 的 27/140 个顶点在 HeadRig 矩形之外），于是这把尺子报出
+    「静止帧偏了 27.183px」，而同一批产物的 Core 静止 SHA 一直没动。
+
+    连续性：u=1 时新旧两版都给最后一列控制点，矩形之内的读数一个像素都不变。
+    """
+    cx = u * cols
+    cy = v * rows
+    # int() 向零取整，越界到负方向必须用 floor，否则第一格会被当成第 0 格重复用
+    c0 = min(max(int(math.floor(cx)), 0), max(cols - 1, 0))
+    r0 = min(max(int(math.floor(cy)), 0), max(rows - 1, 0))
     c1 = min(c0 + 1, cols)
     r1 = min(r0 + 1, rows)
     fx = cx - c0
@@ -169,40 +186,83 @@ class Field:
             else:
                 self._current[did] = blend_flat(terms, self._warp_grid[did], len(rest))
 
+    def _step(self, x, y, pid):
+        """把点过**一级**变形器（自身静止矩形换算 (u,v) → 采样，越界外推）。"""
+        spec = self.deformers[pid]
+        x0, y0, x1, y1 = self._warp_rest[pid]
+        w = x1 - x0
+        h = y1 - y0
+        u = (x - x0) / w if w else 0.5
+        v = (y - y0) / h if h else 0.5
+        return sample_warp_grid(self._current[pid], spec["rows"], spec["cols"], u, v)
+
     def chain(self, x, y, deformer_id):
         """第三步：顶点穿变形器链（先自身，再逐级父级）。"""
         pid = deformer_id
         guard = 0
         while pid and guard < 32 and pid in self.deformers:
-            spec = self.deformers[pid]
-            x0, y0, x1, y1 = self._warp_rest[pid]
-            w = x1 - x0
-            h = y1 - y0
-            u = (x - x0) / w if w else 0.5
-            v = (y - y0) / h if h else 0.5
-            x, y = sample_warp_grid(self._current[pid], spec["rows"], spec["cols"], u, v)
-            pid = spec.get("parent") or ""
+            x, y = self._step(x, y, pid)
+            pid = self.deformers[pid].get("parent") or ""
             guard += 1
         return x, y
 
-    def deformed(self, mesh):
-        """返回该网格在局部坐标下的 (静止表, 形变表)。"""
+    def art_outside_parent_grid(self, mesh):
+        """这个网格有多少顶点落在**某一级**变形器静止矩形之外。
+
+        单列成名的指标（``art outside parent grid``），**不并进**自检 1 的偏差数：
+        尺子跟着 Core 外推以后，矩形之内与仿射/平移场上的越界画与 Core 一致到
+        ≤1px，但**非仿射弯曲**的父级键形在越界处仍有实测 29px 的口径差
+        （诊断 `H_out_4x3_bend`：夹取 118px、外推 29px、Core 446）。也就是说
+        读数落进这个区域，就离开了「Core、自研播放器、尺子三方一致」的保证范围，
+        必须单独看得见，不能混在"静止偏了多少像素"里当成产品缺陷。
+
+        产物侧的正解是**把父级矩形铺满子孙的画**
+        （`moc3_pipeline` 的变形器静止矩形取后代并集），让这个指标读 0。
+        """
+        flat = self._blended(mesh)
+        pts = [(flat[i], flat[i + 1]) for i in range(0, len(flat), 2)]
+        outside_any = [False] * len(pts)
+        levels = {}
+        pid = mesh.get("deformer") or ""
+        guard = 0
+        while pid and guard < 32 and pid in self.deformers:
+            x0, y0, x1, y1 = self._warp_rest[pid]
+            hit = 0
+            for i, (x, y) in enumerate(pts):
+                if x < x0 or x > x1 or y < y0 or y > y1:
+                    outside_any[i] = True
+                    hit += 1
+            if hit:
+                levels[pid] = hit
+            pts = [self._step(x, y, pid) for x, y in pts]
+            pid = self.deformers[pid].get("parent") or ""
+            guard += 1
+        return {"total": sum(1 for f in outside_any if f),
+                "vertices": len(outside_any), "levels": levels}
+
+    def _blended(self, mesh):
+        """第二步：网格自身键形带混合后的局部顶点表。"""
         half_w, half_h = self.half_w, self.half_h
-        rest = [c - half_w if i % 2 == 0 else c - half_h
-                for i, c in enumerate(mesh["vertices"])]
         kf = mesh.get("keyforms")
         axes = [(pid, keys) for pid, keys in (kf["axes"] if kf else [])]
         tables = None
         if kf:
             tables = [[c - half_w if i % 2 == 0 else c - half_h
                        for i, c in enumerate(v)] for v in kf["vertices"]]
+        rest = [c - half_w if i % 2 == 0 else c - half_h
+                for i, c in enumerate(mesh["vertices"])]
         terms = keyform_terms(axes, self.resolve)
         if not terms or tables is None:
-            blended = list(rest)
-        elif len(terms) == 1:
-            blended = list(tables[terms[0][0]])
-        else:
-            blended = blend_flat(terms, tables, len(rest))
+            return list(rest)
+        if len(terms) == 1:
+            return list(tables[terms[0][0]])
+        return blend_flat(terms, tables, len(rest))
+
+    def deformed(self, mesh):
+        """返回该网格在局部坐标下的 (静止表, 形变表)。"""
+        rest = [c - self.half_w if i % 2 == 0 else c - self.half_h
+                for i, c in enumerate(mesh["vertices"])]
+        blended = self._blended(mesh)
         did = mesh.get("deformer") or ""
         out = []
         for i in range(0, len(blended), 2):
@@ -334,6 +394,23 @@ def main():
           f"{'  ✅' if w < 1e-3 else '  ❌ 求值移植有误，后面读数全部作废'}")
     if w >= 1e-3:
         sys.exit(1)
+
+    # art outside parent grid —— **单独一列，不并进上面那个偏差数**。
+    # 尺子按 Core 外推越界画（#72），但外推只在「矩形之内」与「仿射/平移场」上
+    # 与 Core 一致到 ≤1px；非仿射弯曲的父级键形在越界处实测还差 29px
+    # （诊断 H_out_4x3_bend：夹取 118px、外推 29px）。读数落进这条名单的顶点，
+    # 就不在「Core、自研播放器、尺子三方一致」的保证范围内，必须看得见。
+    hits = [(m["id"], base.art_outside_parent_grid(m)) for m in meshes]
+    hits = [(mid, rec) for mid, rec in hits if rec["total"]]
+    print(f"art outside parent grid（越出某级变形器静止矩形的顶点）："
+          f"{len(hits)} 个网格 / {sum(r['total'] for _i, r in hits)} 个顶点"
+          f"{'  ✅ 全部画都在各自父级网格之内' if not hits else ''}")
+    for mid, rec in hits:
+        detail = ", ".join(f"{k}: {v}" for k, v in sorted(rec["levels"].items()))
+        print(f"  {mid:18s} {rec['total']:4d}/{rec['vertices']:<5d} 之外（{detail}）")
+    if hits:
+        print("  ↑ 修法在产物侧：让父级静止矩形覆盖子孙的画（moc3_pipeline 的"
+              "矩形取后代并集），把这条读数压到 0；不要靠夹取把它「量成」0。")
 
     pose = Field(doc, values)
     print(f"姿态：{len(values)} 个参数"
