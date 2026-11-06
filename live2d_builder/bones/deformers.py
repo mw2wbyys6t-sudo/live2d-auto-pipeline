@@ -691,7 +691,13 @@ class DeformerHierarchy:
          "parameters": ["ParamBodyAngleX", "ParamBodyAngleY",
                         "ParamBodySway", "ParamBreath"],
          "targets": ["clothes_top", "clothes_inner", "clothes_outer",
-                     "waistband", "collar", "chest", "body", "neck"]},
+                     "waistband", "collar", "chest", "body"]},
+        # 颈胸过渡只接住 neck：face↔neck 的可见缝归零；collar/clothes_top 留在
+        # BodySway，避免把梯度缝搬到可见胸肩。
+        {"name": "NeckBand", "parent": "Neck", "under": "BodySway",
+         "rows": 4, "cols": 2, "type": "warp", "profile": "neck_band",
+         "parameters": ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
+         "targets": ["neck"]},
         {"name": "SkirtSway",      "parent": "Skirt", "rows": 4, "cols": 3,
          "type": "warp", "targets": ["skirt"]},
         # ---- 表情形变：参数写死在说明里（这些效果没有对应骨骼，无从推导）----

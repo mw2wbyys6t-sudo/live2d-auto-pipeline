@@ -1614,12 +1614,11 @@ def test_head_rig_is_authored_as_the_only_head_rotation_owner():
     # 头部三轴在**作者意图**里只出现在 HeadRig 一条上。基线这里会是
     # ['EyeBlink_L', 'EyeBlink_R', 'CheekFollow', 'TearFollow'] —— 四处各自再
     # 拟合一份，就是头内部那 27.1272px 的来源。
-    # Task 4 引入 NeckBand（分级场，不是第二份刚体转动）以后这条要改成
-    # ``== ["NeckBand"]``。
+    # NeckBand 是同一场按高度衰减的过渡，不是另一份独立拟合的刚体头转。
     refitters = [e["name"] for e in _authored_table()
                  if e["name"] != "HeadRig"
                  and "ParamAngleZ" in (e.get("parameters") or [])]
-    assert refitters == [], refitters
+    assert refitters == ["NeckBand"], refitters
 
 
 def test_expression_deformers_inherit_head_instead_of_refitting_it():
@@ -1635,8 +1634,10 @@ def test_expression_deformers_inherit_head_instead_of_refitting_it():
     assert _authored("EyeBlink_L")["profile"] == "eye"
     assert _authored("EyeBlink_L")["parameters"] == ["ParamEyeLOpen"]
     assert _authored("EyeBlink_R")["parameters"] == ["ParamEyeROpen"]
-    # 头是挂在身子上的：HeadRig 在躯干场之下（Task 4 的颈胸过渡也要这条边）
+    # 头与颈场都只继承躯干场；把 HeadRig 再挂到 NeckBand 下会让 NeckBand 的
+    # 高度梯度外插进整颗头，实测把头内部从 0.0018px 破坏到 5.04px。
     assert _authored("HeadRig")["under"] == "BodySway"
+    assert _authored("NeckBand")["under"] == "BodySway"
 
 
 def test_cheek_and_tear_no_longer_need_their_own_head_field():
@@ -1681,41 +1682,30 @@ def test_head_rig_also_carries_the_eyelids_that_have_no_other_deformer():
     assert owned["eyelid_left"] == "HeadRig"
 
 
-def test_body_sway_members_stay_on_body_sway_in_task_3():
-    """neck / collar / clothes_top / waistband 仍归 BodySway，且没被 HeadRig 抢走。
+def test_neck_moves_to_the_graded_band_without_a_gap():
+    """只把 neck 交给过渡场；衣服与领口留在 BodySway，避免把缝搬到可见胸肩。"""
+    from live2d_builder.bones.deformers import DeformerHierarchy
+    authored = {e["name"]: e for e in DeformerHierarchy.DEFAULT_WARP_DEFORMERS}
+    assert authored["NeckBand"]["targets"] == ["neck"]
+    assert {"collar", "clothes_top", "waistband"} <= set(authored["BodySway"]["targets"])
+    overlap = (set(authored["NeckBand"]["targets"])
+               & set(authored["BodySway"]["targets"]))
+    assert overlap == set(), f"两个变形器抢同一批成员：{sorted(overlap)}"
 
-    BodySway 那条带里**不含** ``ParamAngleZ``，撤掉这些网格自己的烘焙会让脖子彻底
-    不跟头；把 neck 移交 NeckBand 必须与 NeckBand 的出现在同一笔提交里（Task 4），
-    分两笔会留下「neck 谁都不挂」的中间态，那一刻跑的任何读数都是假的。
-    """
     built = _built()
-    assert {"neck", "clothes_top", "waistband", "collar"} <= set(
-        built["BodySway"]["targets"])
-    assert "under" not in built["BodySway"]
+    assert "waistband" in built["BodySway"]["targets"]
     from live2d_builder.exporter.moc3_pipeline import resolve_membership
     owned = resolve_membership(list(built.values()), SINGER_LAYERS)
-    assert owned["neck"] == "BodySway"
+    assert owned["neck"] == "NeckBand"
     assert owned["collar"] == "BodySway"
+    assert owned["clothes_top"] == "BodySway"
+    assert owned["waistband"] == "BodySway"
 
 
 def test_authored_head_field_chain_stops_at_the_measured_depth_three():
-    """Task 1.5 只用官方 Core 量到**深度 3**，作者表今天就停在 3，一步不许多。
-
-    量过的包络是 BodySway(1) → HeadRig(2) → MouthOpen / BrowMove_L / EyeBlink_L(3)。
-    再加一级（``HairFrontSwing → HairTip`` 那种）之前必须先补一条深度 ≥4 的恒等链
-    静止 + 键形继承用例并**跑官方 Core 量出来**；通不过就把那级压平并如实记
-    skipped。这条用例就是那个前置条件的闸门 —— 未验证的深度不许静默进产物。
-
-    C2 落地的裁定（``moc3_pipeline.TRUNK_MAX_CHAIN_DEPTH`` 边上那段注释要说理的三件事，
-    写在这里是因为**真正拦人的是这条用例**，不是那个常数）：
-      (a) 官方 Core 的实测包络目前**只到深度 3**，深度 4 一天都没量过；
-      (b) 那个上限取 4 而不是 3，留的那一级余量是**专门给 Task 4 的** ``NeckBand``
-          —— ``BodySway → NeckBand → HeadRig → 头发`` = 深度 4；
-      (c) 所以**Task 4 必须先自己跑官方 Core 把深度 4 量过，才允许依赖它**。上限
-          守卫拦不住作者写第 4 级（≤4 一律放行），拦得住的只有这里这条
-          ``deepest <= 3``：数值 4 是「预留」，不是「已验证」。
-    """
+    """NeckBand 与 HeadRig 是 BodySway 的兄弟场，作者表最深仍是官方量过的 3。"""
     assert _authored_depth("BodySway") == 1
+    assert _authored_depth("NeckBand") == 2
     assert _authored_depth("HeadRig") == 2
     for name in ("MouthOpen", "BrowMove_L", "EyeBlink_L", "HairFrontSwing",
                  "MouthCavity", "HairBackSwing"):

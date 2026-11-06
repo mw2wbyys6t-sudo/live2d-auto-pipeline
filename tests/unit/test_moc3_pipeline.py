@@ -791,10 +791,11 @@ def test_the_authored_table_does_not_double_apply_the_head_turn():
     from live2d_builder.bones.deformers import DeformerHierarchy
     names = ["face", "cheek", "tear_left", "eyelid_left", "eyewhite_left",
              "irides_left", "eyebrow_L", "nose", "mouth", "mouth_cavity",
-             "hair_front", "hair_back", "neck", "clothes_top", "accessories"]
+             "hair_front", "hair_back", "neck", "clothes_top", "waistband",
+             "accessories"]
     meshes = {}
     for n in names:
-        bones = ["Neck"] if n in ("neck", "clothes_top") else (
+        bones = ["Neck"] if n in ("neck", "clothes_top", "waistband") else (
             ["Eyeball_L"] if n in ("eyewhite_left", "irides_left") else ["Face"])
         meshes[n] = _layer_mesh(bones)
     built = DeformerHierarchy().build(
@@ -811,17 +812,22 @@ def test_the_authored_table_does_not_double_apply_the_head_turn():
     assert by_id["face"].deformer_id == "HeadRig"
     assert by_id["cheek"].deformer_id == "HeadRig"
     assert by_id["eyelid_left"].deformer_id == "HeadRig"
-    assert by_id["neck"].deformer_id == "BodySway"
+    assert by_id["neck"].deformer_id == "NeckBand"
+    assert by_id["clothes_top"].deformer_id == "BodySway"
+    assert by_id["waistband"].deformer_id == "BodySway"
     for n in ("face", "cheek", "tear_left", "eyelid_left", "eyebrow_L", "nose",
-              "mouth", "mouth_cavity", "hair_front", "hair_back", "accessories"):
+              "mouth", "mouth_cavity", "hair_front", "hair_back", "accessories",
+              "neck", "clothes_top", "waistband"):
         axes = [pid for pid, _k in (by_id[n].keyform_axes or ())]
         assert not [p for p in axes if p.startswith("ParamAngle")], (n, axes)
-    # 头部三轴在**产物**里也只有一个持有者
-    carriers = [d.deformer_id for d in spec.deformers
+    # 头部三轴只能由刚体 HeadRig 与分级 NeckBand 两级变形场持有；任何网格私自
+    # 再烘一份，都会恢复成各场各转的来源。
+    carriers = {d.deformer_id for d in spec.deformers
                 if any(pid in moc3_pipeline.HEAD_ANGLE_AXES
-                       for pid, _k in d.axes_spec)]
-    assert carriers == ["HeadRig"], carriers
+                       for pid, _k in d.axes_spec)}
+    assert carriers == {"HeadRig", "NeckBand"}, carriers
     assert owner["HeadRig"].parent_deformer_id == "BodySway"
+    assert owner["NeckBand"].parent_deformer_id == "BodySway"
 
 
 def test_meshes_outside_the_head_closure_keep_their_baked_head_band():

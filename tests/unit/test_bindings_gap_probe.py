@@ -108,6 +108,19 @@ def nested_chain_spec():
                    canvas_width=512.0, canvas_height=512.0, pixels_per_unit=PPU)
 
 
+def dense_nested_chain_spec():
+    """4×2 恒等中间点阵：矩形线性映射只有在混合点阵仍为矩形时才成立。"""
+    dense = [[x, y] for y in (-100.0, -100.0 / 3.0, 100.0 / 3.0, 100.0)
+             for x in (-100.0, 100.0)]
+    parent = _keyform_parent()
+    child = WarpDeformerSpec("Child", 3, 1, [DeformerGrid(0.0, dense)],
+                             parent_deformer_id="Parent")
+    mesh = MeshSpec("ArtProbe", list(_SQUARE), _TRIS, list(_UVS),
+                    deformer_id="Child")
+    return RigSpec(meshes=[mesh], deformers=[parent, child], parameters=[_angle()],
+                   canvas_width=512.0, canvas_height=512.0, pixels_per_unit=PPU)
+
+
 def root_level_spec():
     """只有一级（根 warp）的同一套键形：今天产物的形状，同步不许把它改坏。"""
     parent = _keyform_parent()
@@ -146,9 +159,6 @@ def _stored_warps(doc, spec):
     """
     warps = [d for d in spec.deformers if isinstance(d, WarpDeformerSpec)]
     assert len(warps) == len(spec.deformers), "这条参考实现只覆盖全 warp 的链"
-    for deformer in warps:
-        assert deformer.rows == 1 and deformer.cols == 1, (
-            "rows/cols 必须是 1：那时「矩形线性映射」才严格等于内核的双线性采样")
     ids = doc.get("deformer.ids")
     parents = doc.get("deformer.parent_deformer_indices")
     by_name = {d.deformer_id: d for d in warps}
@@ -193,6 +203,20 @@ def _blend(lattice_set, deformer, resolve):
     return [(blended[k], blended[k + 1]) for k in range(0, width, 2)]
 
 
+def _assert_axis_aligned_rectangle(grid, deformer):
+    """矩形包围盒映射只在混合点阵仍为轴对齐矩形时等价于双线性采样。"""
+    rows, cols = deformer.rows + 1, deformer.cols + 1
+    assert len(grid) == rows * cols
+    for row in range(rows):
+        ys = [grid[row * cols + col][1] for col in range(cols)]
+        assert all(abs(y - ys[0]) <= 1e-9 for y in ys), (
+            f"{deformer.deformer_id} 混合后的点阵必须构成轴对齐矩形：第 {row} 行弯曲")
+    for col in range(cols):
+        xs = [grid[row * cols + col][0] for row in range(rows)]
+        assert all(abs(x - xs[0]) <= 1e-9 for x in xs), (
+            f"{deformer.deformer_id} 混合后的点阵必须构成轴对齐矩形：第 {col} 列弯曲")
+
+
 def _rule_i_from_moc3(doc, spec, values):
     """实测规则 I：每一级的输出**就是**父级点阵的 (s,t)，不再归一一次。
 
@@ -214,6 +238,7 @@ def _rule_i_from_moc3(doc, spec, values):
         while slot is not None and slot >= 0 and guard < 32:
             deformer = by_slot[slot]
             grid = _blend(lattices[deformer.deformer_id], deformer, resolve)
+            _assert_axis_aligned_rectangle(grid, deformer)
             xs = [p[0] for p in grid]
             ys = [p[1] for p in grid]
             x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
@@ -253,6 +278,37 @@ def test_offline_chain_uses_the_same_space_convention_as_the_compiled_moc3(value
     for (rx, ry), (ox, oy) in zip(reference, offline):
         assert ox == pytest.approx(rx, abs=1e-9), (reference, offline)
         assert oy == pytest.approx(ry, abs=1e-9), (reference, offline)
+
+
+@pytest.mark.parametrize("values", [{}, {"ParamAngleZ": 30.0}])
+def test_dense_identity_middle_grid_agrees_with_offline_evaluation(values):
+    """非 1×1 恒等链必须可用；弯曲混合点阵则由矩形性守卫明确拒绝。"""
+    spec = dense_nested_chain_spec()
+    doc = compile_static_rig(spec)
+    reference = _rule_i_from_moc3(doc, spec, values)
+    offline = _offline_positions(spec, values)
+    assert len(reference) == len(offline) == 4
+    for (rx, ry), (ox, oy) in zip(reference, offline):
+        # bindings_export 固定保留千分像素；4×2 的 1/3 行距因此有 0.0002px 量化差。
+        assert ox == pytest.approx(rx, abs=0.001), (values, reference, offline)
+        assert oy == pytest.approx(ry, abs=0.001), (values, reference, offline)
+
+
+def test_dense_reference_rejects_a_non_rectangular_blended_grid():
+    """非 1×1 不是通行证：弯曲后的混合点阵不能用包围盒线性映射冒充。"""
+    from dataclasses import replace
+    spec = dense_nested_chain_spec()
+    child = spec.deformers[1]
+    bent = [list(p) for p in child.grids[0].points]
+    bent[2][0] += 7.0
+    keyed = replace(child, grids=[DeformerGrid(-30.0, child.grids[0].points),
+                                 child.grids[0],
+                                 DeformerGrid(30.0, bent)],
+                    parameter_id="ParamAngleZ")
+    spec = replace(spec, deformers=[spec.deformers[0], keyed])
+    doc = compile_static_rig(spec)
+    with pytest.raises(AssertionError, match="轴对齐矩形"):
+        _rule_i_from_moc3(doc, spec, {"ParamAngleZ": 30.0})
 
 
 def test_offline_chain_root_level_rig_still_agrees_with_the_compiled_moc3():

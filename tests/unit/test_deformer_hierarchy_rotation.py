@@ -146,14 +146,11 @@ def test_shoulder_lift_targets_shrink_to_what_really_exists():
 
 
 def test_neck_leans_with_the_torso():
-    """领口画在脖子上：只有领子倾摆、脖子不动，衣服就像从脖子上滑走。
-
-    实测（2026-11-01，singer，``ParamBodyAngleY = 10``）领子横移 26.03px、
-    上身衣服 14.67px，脖子 **0px**。
-    """
+    """领口画在脖子上：脖子进入分级颈场后，仍须通过 NeckBand→BodySway 继承躯干倾摆。"""
     out = _build(REAL_LAYER_NAMES)
     warp = {d["name"]: d for d in out["deformers"] if d["type"] == "warp"}
-    assert "neck" in warp["BodySway"]["targets"]
+    assert "neck" in warp["NeckBand"]["targets"]
+    assert warp["NeckBand"]["under"] == "BodySway"
 
 
 def test_shoulder_lift_also_carries_the_body_lean():

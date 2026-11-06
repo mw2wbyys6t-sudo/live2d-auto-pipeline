@@ -51,8 +51,8 @@ REST_OPAQUE_PIXELS = 69857
 
 #: Task 3 落地（单一头部场 + 父级矩形覆盖子孙）以后的产物字节哨兵。
 #: 改拓扑的那一笔提交必须连同这两个数一起改，并在提交信息里说清楚画面为什么没变。
-ARTIFACT_SHA256 = "b2e7d36535542d0f27fad775870aac29527df4e805faa6dfe6cf2a239607b615"
-ARTIFACT_BYTES = 359936
+ARTIFACT_SHA256 = "9fa17d0f13e6d68e50d029211595d935390309bc5aff4115730bc91dd1aad56a"
+ARTIFACT_BYTES = 361984
 
 NAME = "trunk"
 

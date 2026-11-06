@@ -594,6 +594,36 @@ def head_assembly_span(meshes: Dict[str, Dict[str, Any]],
     return (hi[0] - lo[0], hi[1] - lo[1])
 
 
+def head_assembly_bottom(meshes: Dict[str, Dict[str, Any]],
+                         standard_bones: Dict[str, Dict],
+                         bone_positions: Dict[str, Any]) -> Optional[float]:
+    """头总成顶点的最大模型 y（头下缘），入选判据与 :func:`head_assembly_span` 同源。"""
+    joint = (bone_positions or {}).get("Head")
+    if joint is None:
+        return None
+    assembly = _head_assembly(standard_bones)
+    bottom = None
+    for mesh in meshes.values():
+        skin = mesh.get("weights") or {}
+        bone_names = skin.get("bone_names") or []
+        per_vertex = skin.get("weights")
+        vertices = mesh.get("vertices")
+        if not bone_names or per_vertex is None or vertices is None or len(vertices) == 0:
+            continue
+        indices = [i for i, b in enumerate(bone_names) if b in assembly]
+        if not indices or _peak_influence(per_vertex, indices) <= _MIN_INFLUENCE:
+            continue
+        width = float(mesh.get("width") or 0)
+        height = float(mesh.get("height") or 0)
+        if width <= 0 or height <= 0:
+            continue
+        ys = [to_model_xy(float(v[0]), float(v[1]), width, height)[1]
+              for v in vertices]
+        mesh_bottom = max(ys)
+        bottom = mesh_bottom if bottom is None else max(bottom, mesh_bottom)
+    return bottom
+
+
 def _peak_influence(per_vertex, indices) -> float:
     peak = 0.0
     for row in per_vertex:
@@ -1100,6 +1130,42 @@ def _head_follow_deform(points, rect, mesh_rect, values, options):
     return _apply_head(points, values, options)
 
 
+NECK_BAND_ROWS_MIN = 4          # 带内至少 4 行，否则连续过渡退化成二值
+
+
+def neck_band_weight(y: float, boundary_y: float, band_bottom_y: float) -> float:
+    """颈胸过渡带里的头部场权重：头下缘 1，带底 0，中间线性且带外夹取。"""
+    span = float(band_bottom_y) - float(boundary_y)
+    if span <= 1e-6:
+        return 0.0
+    return min(1.0, max(0.0, (float(band_bottom_y) - float(y)) / span))
+
+
+def _neck_band_deform(points, rect, mesh_rect, values, options):
+    """在同一个 warp 点阵里按格点高度混合头部场，带底完全不受头转影响。"""
+    head = options.get("head")
+    if not head:
+        return list(points)
+    px, py, shift_x, shift_y, depth = head
+    boundary = float(options.get("boundary_y", py))
+    bottom = float(options.get("band_bottom_y", rect[3]))
+    angles = options.get("head_angles") or {}
+    out = []
+    for x, y in points:
+        weight = neck_band_weight(float(y), boundary, bottom)
+        if weight <= 0.0:
+            out.append([x, y])
+            continue
+        theta = [math.radians(values.get(role, 0.0) * angles.get(role, 0.0))
+                 for role in ("angle_x", "angle_y", "angle_z")]
+        sx, cx = math.sin(theta[0]), math.cos(theta[0])
+        sy, cy = math.sin(theta[1]), math.cos(theta[1])
+        sz, cz = math.sin(theta[2]), math.cos(theta[2])
+        out.append(_head_transform(x, y, px, py, shift_x, shift_y,
+                                   sx, cx, sy, cy, sz, cz, depth, weight))
+    return out
+
+
 def _eye_head_deform(points, rect, mesh_rect, values, options):
     """眨眼（眼球向上收拢）**叠加**整颗头的转头/点头/侧转。
 
@@ -1155,6 +1221,7 @@ DEFORMER_PROFILES: Dict[str, tuple] = {
     # 头转用的 —— 那正是头内部各场各转各的来源；现在它是**整颗头唯一**的那一份
     # （HeadRig），挂在它下面的部件靠继承而不是靠各自拟合。
     "head": (("angle_x", "angle_y", "angle_z"), _head_follow_deform),
+    "neck_band": (("angle_x", "angle_y", "angle_z"), _neck_band_deform),
     "brow": (("y", "angle", "form"), _brow_deform),
     "hair_sway": (("swing",), _hair_sway_deform),
     "torso": (("angle_x", "angle_y", "sway", "breath"), _torso_deform),
@@ -1443,7 +1510,8 @@ def build_deformers(specs: List[MeshSpec],
                     height: float,
                     parameters_by_id: Dict[str, ParameterSpec] | None = None,
                     bone_positions: Dict[str, Any] | None = None,
-                    head_span: Optional[tuple] = None) -> tuple:
+                    head_span: Optional[tuple] = None,
+                    head_bottom: Optional[float] = None) -> tuple:
     """把管线的 warp / rotation 变形器编成规格，并把成员网格就地挂上（改写 specs）。
 
     返回 ``(变形器规格, 未编译说明, 静态变形器名)``。一个网格只能挂一个变形器。
@@ -1507,7 +1575,7 @@ def build_deformers(specs: List[MeshSpec],
                 # 身体轴参数不全：退回「只抬肩」，别把抬肩一起丢掉
                 profile, param_ids = "lift", param_ids[:1]
             missing_head = False
-            if profile in ("eye_head", "head"):
+            if profile in ("eye_head", "head", "neck_band"):
                 angle_ids = param_ids[1:] if profile == "eye_head" else param_ids
                 head_options = _head_options(
                     bone_positions or {}, width, height, head_span,
@@ -1522,12 +1590,23 @@ def build_deformers(specs: List[MeshSpec],
                     options.update(head_options)
             bound_param = ""
             axes: tuple = ()
-            if missing_head:
+            if profile == "neck_band" and head_bottom is None:
+                n_rows = max(n_rows, NECK_BAND_ROWS_MIN)
+                skipped.append(f"{name}(缺头下缘：颈胸过渡场不生成)")
+                axes, grids = (), [DeformerGrid(0.0, _lattice(rect, n_cols, n_rows))]
+            elif missing_head:
                 # 只剩空壳的「跟随头部」会让成员网格白占一个变形器名额，
                 # 静态网格 + 如实记录才是本来的行为。
+                if profile == "neck_band":
+                    n_rows = max(n_rows, NECK_BAND_ROWS_MIN)
                 skipped.append(f"{name}(头部信息不全：缺 Head 关节 / head_span / 角度参数)")
                 axes, grids = (), [DeformerGrid(0.0, _lattice(rect, n_cols, n_rows))]
             elif profile in DEFORMER_PROFILES and param_ids:
+                if profile == "neck_band":
+                    # 必须在 _profile_grids 生成点阵之前抬行数，否则 rows 与点数不一致。
+                    n_rows = max(n_rows, NECK_BAND_ROWS_MIN)
+                    options["boundary_y"] = float(head_bottom)
+                    options["band_bottom_y"] = float(mesh_rect[3])
                 axes, grids = _profile_grids(
                     profile, param_ids, rect, n_cols, n_rows, mesh_rect,
                     parameters_by_id or {}, options)
@@ -1683,6 +1762,7 @@ def build_rig_spec(
     # 整颗头的共享尺度：所有头部网格用同一组 shift / 透视深度，五官才跟着脸走。
     head_span = head_assembly_span(meshes, params_by_id, standard_bones,
                                    bone_positions)
+    head_bottom = head_assembly_bottom(meshes, standard_bones, bone_positions)
     keyformed, multi_hit, eyes_tracked, head_tracked = [], [], [], []
     opacity_driven: List[str] = []
     trunk_covered: List[str] = []
@@ -1877,7 +1957,7 @@ def build_rig_spec(
     deformer_specs, uncompiled, static = build_deformers(
         specs, list(deformers), width, height,
         parameters_by_id=params_by_id, bone_positions=bone_positions,
-        head_span=head_span)
+        head_span=head_span, head_bottom=head_bottom)
     warps = [d for d in deformer_specs if isinstance(d, WarpDeformerSpec)]
     if deformer_specs:
         linked = sum(1 for m in specs if m.deformer_id)
