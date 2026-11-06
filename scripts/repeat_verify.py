@@ -48,6 +48,7 @@ def cycle(idx: int, port: int, binary: str, config: str, app_dir: str, verify_co
     proc = subprocess.Popen(
         [binary, "-config", config, "-port", str(port)],
         env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        encoding="utf-8", errors="replace",
     )
     result = {"cycle": idx, "port": port, "steps": []}
     try:
@@ -87,7 +88,8 @@ def cycle(idx: int, port: int, binary: str, config: str, app_dir: str, verify_co
             py = sys.executable
             p = subprocess.run(
                 [py, "-m", "drivers.live2d_runtime.moc3_consistency", str(out / moc3[0])],
-                capture_output=True, text=True, timeout=120, cwd=app_dir, env=env,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=120, cwd=app_dir, env=env,
             )
             assert p.returncode == 0 and '"ok": true' in p.stdout, f"内核一致性失败: {p.stdout[-200:]}"
             result["steps"].append("core consistency ok")

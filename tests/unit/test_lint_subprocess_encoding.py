@@ -12,12 +12,8 @@ _spawn 用 encoding="utf-8", errors="replace"；tests/unit/test_moc3_verify.py
 ::test_subprocess_output_is_decoded_as_utf8 断言 text=True 不得使用。
 本文件把同一条规则机械地套在 tests/ 自己身上。
 
-覆盖范围（只此，别扩大也别缩小）：仓库根的 tests/ 整棵子树，含
-tests/integration/、tests/unit/、tests/e2e/ 和 tests/conftest.py。
-tests/ 之外同类的 8 处（install.py、start.py、scripts/build_desktop_bundle.py、
-scripts/repeat_verify.py 两处、scripts/smoke_e2e.py 两处、core/gpu_probe.py）
-是另行跟踪的工作项，故意不在本守卫射程内 —— 现在扩进去会让守卫带着 8 条
-已知违规变红，把「谁改坏了 tests/」和「那批还没修」混成一条噪音。
+覆盖仓库根的 tests/、core/、scripts/ 整棵子树，以及 install.py 与 start.py。
+不扫描桌面安装包内捆绑的第三方 site-packages。
 """
 import ast
 import os
@@ -28,6 +24,8 @@ from pathlib import Path
 # tests/unit 里走路，tests/integration 那 6 处全在射程外：全量回退也不会红。
 TESTS_ROOT = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = TESTS_ROOT.parent
+PRODUCT_ROOTS = (PROJECT_ROOT / "core", PROJECT_ROOT / "scripts")
+PRODUCT_FILES = (PROJECT_ROOT / "install.py", PROJECT_ROOT / "start.py")
 
 # 会按 locale 解码子进程输出的 subprocess 入口（只认 subprocess.<name> 写法）
 _SUBPROCESS_FUNCS = {"run", "check_output", "check_call", "call", "Popen"}
@@ -120,6 +118,15 @@ def test_tests_decode_subprocess_output_explicitly():
         "子进程输出必须显式按 UTF-8 解码（中文 Windows 的 locale 是 cp936，\n"
         "UTF-8 日志解码失败会让 stdout 变成 None）：\n" + "\n".join(violations)
     )
+
+
+def test_product_scripts_decode_subprocess_output_explicitly():
+    """产品脚本与 GPU 探测同样不得按 locale 解码子进程输出。"""
+    assert all(root.is_dir() for root in PRODUCT_ROOTS)
+    assert all(path.is_file() for path in PRODUCT_FILES)
+    violations = [issue for root in PRODUCT_ROOTS for issue in scan(root)]
+    violations.extend(issue for path in PRODUCT_FILES for issue in _violations_in(path))
+    assert violations == [], "\n".join(violations)
 
 
 def test_guard_actually_covers_the_files_that_matter():

@@ -200,7 +200,8 @@ def source_provenance() -> dict:
     def git(*args: str) -> str:
         try:
             out = subprocess.run(("git", *args), cwd=ROOT, capture_output=True,
-                                 text=True, timeout=20)
+                                 text=True, encoding="utf-8", errors="replace",
+                                 timeout=20)
         except (OSError, subprocess.SubprocessError):
             return ""
         return out.stdout.strip() if out.returncode == 0 else ""

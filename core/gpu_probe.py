@@ -101,6 +101,8 @@ def _default_adapter_collector() -> List[Dict[str, Any]]:
             ["powershell", "-NoProfile", "-Command", _WMI_QUERY],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=8,
         )
     except Exception:

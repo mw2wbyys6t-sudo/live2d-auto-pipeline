@@ -136,7 +136,7 @@ def main() -> int:
             raise SystemExit(f"❌ 找不到 moc3_consistency.py: {consistency_py}")
         proc = subprocess.run(
             [py, "-m", "drivers.live2d_runtime.moc3_consistency", str(out_dir / moc3[0])],
-            capture_output=True, text=True, timeout=120, cwd=str(app_dir),
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=str(app_dir),
         )
         if proc.returncode != 0:
             print("STDOUT:", proc.stdout[-1000:])
@@ -155,7 +155,7 @@ def main() -> int:
         report = out_dir / "verify-report.json"
         proc = subprocess.run(
             [py, str(verify_py), str(manifest), "--report", str(report)],
-            capture_output=True, text=True, timeout=300, cwd=str(app_dir),
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300, cwd=str(app_dir),
         )
         result = json.loads(report.read_text(encoding="utf-8")) if report.is_file() else {}
         if not result.get("runtime_verified"):

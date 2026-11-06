@@ -108,7 +108,8 @@ def format_go_display(raw, ver):
 def _run_version_cmd(cmd):
     """运行版本检测命令，合并 stdout+stderr 返回文本，失败返回 None。"""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
+                                encoding="utf-8", errors="replace")
     except (FileNotFoundError, subprocess.SubprocessError, OSError):
         return None
     if result.returncode != 0:
