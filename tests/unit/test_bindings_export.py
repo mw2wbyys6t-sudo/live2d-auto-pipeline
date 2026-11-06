@@ -189,6 +189,36 @@ def test_rotation_deformers_are_not_exported(tmp_path):
     assert doc["skippedRotationDeformers"] == ["HeadTurn"]
 
 
+def test_deformer_parent_is_exported_by_name(tmp_path):
+    """父子链进 bindings 时写的是**父变形器名**，不是槽位下标。
+
+    Task 2 把作者层的 ``under`` 接成 ``parent_deformer_id`` 之后，
+    ``tools/bindings_gap_probe.py`` 的 ``chain()`` 就靠这份名字逐级求值配对距离；
+    写成槽位的话变形器表顺序一变就读错。没有父级的变形器仍然写空串（今天 13/13
+    的形状），这条同时钉住「不许把骨骼归属写进这一栏」。
+    """
+    _manifest(tmp_path)
+    root = WarpDeformerSpec(
+        deformer_id="HeadRig", rows=1, cols=1,
+        grids=[DeformerGrid(0.0, [[-50.0, -50.0], [50.0, -50.0],
+                                  [-50.0, 50.0], [50.0, 50.0]])])
+    child = WarpDeformerSpec(
+        deformer_id="MouthOpen", rows=1, cols=1,
+        grids=[DeformerGrid(0.0, [[0.0, 10.0], [50.0, 10.0],
+                                  [0.0, 50.0], [50.0, 50.0]]),
+               DeformerGrid(1.0, [[0.0, 10.0], [50.0, 10.0],
+                                  [0.0, 60.0], [50.0, 60.0]])],
+        axes=(("ParamMouthOpenY", (0.0, 1.0)),),
+        parent_deformer_id="HeadRig")
+    doc = json.loads(
+        write_bindings(_spec(deformers=[root, child]),
+                       str(tmp_path), "char").read_text(encoding="utf-8"))
+
+    by_id = {d["id"]: d for d in doc["deformers"]}
+    assert by_id["HeadRig"]["parent"] == ""
+    assert by_id["MouthOpen"]["parent"] == "HeadRig"
+
+
 def test_write_bindings_needs_a_manifest_to_reference_it(tmp_path):
     """没有 model3.json 就无处挂引用 —— 不写一个没人引用的孤儿文件。"""
     assert write_bindings(_spec(), str(tmp_path), "char") is None

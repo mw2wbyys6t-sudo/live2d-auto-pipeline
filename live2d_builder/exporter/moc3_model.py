@@ -28,12 +28,17 @@
   * 同一参数可以持有多个 binding：键值布局不同的网格各自成组，
     parameter.keyform_binding_{begin,counts} 划出该参数名下的连续 binding。
 
-变形器（warp / rotation）尚未支持：出现即报错，不静默丢弃。
+变形器：warp 已在真实产物里长期使用（静止网格 + 逐键点阵，成员顶点写 (s,t)），
+rotation 的写出路径也已实现（角度/枢轴/缩放按实测的 ``p' = R·p + offset`` 落表），
+只是今天的 ``DEFAULT_WARP_DEFORMERS`` 还建不出层名命中的 rotation 条目。不支持的
+形态出现即报错、不静默丢弃：warp 的父级是 rotation（跨 rotation 的顶点空间未实测）、
+以及父链成环。变形器表在写出前按父链做拓扑规范化（``parent_first_deformer_order``），
+所以 ``deformer.parent_deformer_indices`` 引用的槽位与作者的书写顺序无关。
 """
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Dict, List, Optional, Sequence, Union
 
 from live2d_builder.exporter import moc3_sections as ms
@@ -271,6 +276,9 @@ class RigSpec:
                 raise UnsupportedRig(
                     f"{deformer.deformer_id}: 父部件 {parent_part} 不存在")
             if deformer.parent_deformer_id:
+                # 这里只管「父级存不存在 / 是不是自己」。表里**父级排在子级之后**
+                # 不是错误：写出前 compile_static_rig 会用
+                # parent_first_deformer_order 把整张表拓扑规范化，槽位引用一起搬走。
                 if deformer.parent_deformer_id not in ids:
                     raise UnsupportedRig(
                         f"{deformer.deformer_id}: 父变形器 "
@@ -521,9 +529,60 @@ def keyform_groups(spec: RigSpec) -> tuple:
     return bindings, unique
 
 
+def parent_first_deformer_order(
+    deformers: Sequence[Union[WarpDeformerSpec, RotationDeformerSpec]],
+) -> List[Union[WarpDeformerSpec, RotationDeformerSpec]]:
+    """把变形器表排成「父级一定在子级之前」；表里有环时**原样返回**。
+
+    为什么由写出层负责：moc3 的父链按**槽位下标**引用
+    （``deformer.parent_deformer_indices`` = ``ids.index(...)``，
+    ``art_mesh.parent_deformer_indices`` 同理），而官方 Core 只被实测过「父级在前」
+    这一种表（Task 1 的父子链门、Task 1.5 的嵌套空间基准全部建立在这上面）。
+    ``under`` 接通后表序由 ``DEFAULT_WARP_DEFORMERS`` 的书写顺序决定，没人保证
+    父在前，所以在这里把它钉住，而不是留给作者的手感。
+
+    稳定性与中性是这条函数的契约，两条都有测试盯着：
+
+      * **没有父级时输出与输入同一批对象、同一个顺序**（Kahn 第一轮就按原始下标
+        把全部条目取出）。今天的产物 13/13 都是根级，写出层因此不可能被这次规范化
+        改动一个字节 —— 由黄金夹具
+        ``tests/unit/test_moc3_deformers.py::test_root_level_warp_bytes_are_unchanged_by_the_space_map``
+        与 ``test_parent_first_ordering_is_a_no_op_without_parents`` 两头钉住。
+      * **成环时不猜顺序**：拓扑无解就原样交回，让 ``deformer_space_map`` 用它那条
+        点名整条链的「父链成环」报错收尾（既有契约
+        ``tests/unit/test_moc3_deformers.py::test_warp_parent_cycle_is_refused``）。
+        规范化要是把环吞掉，报错会退化成「某个槽位找不到」这种误导。
+
+    这里只做**顺序**，不校验引用：未声明父级与自父仍归
+    ``RigSpec._validate_deformers``，那份逻辑不在这儿重复一遍，免得两处漂移。
+    """
+    items = list(deformers)
+    declared = {deformer.deformer_id for deformer in items}
+    placed: set = set()
+    remaining = list(range(len(items)))
+    ordered: List[Union[WarpDeformerSpec, RotationDeformerSpec]] = []
+    while remaining:
+        ready = [index for index in remaining
+                 if not (items[index].parent_deformer_id
+                         and items[index].parent_deformer_id in declared
+                         and items[index].parent_deformer_id not in placed)]
+        if not ready:
+            return items                     # 环：交给 deformer_space_map 报错
+        taken = set(ready)
+        remaining = [index for index in remaining if index not in taken]
+        for index in ready:
+            ordered.append(items[index])
+            placed.add(items[index].deformer_id)
+    return ordered
+
+
 def compile_static_rig(spec: RigSpec) -> Moc3Container:
     """编译模型：静态几何 + 可选的参数形变键型。"""
     spec.validate()
+    # 表序规范化必须发生在**任何槽位被算出来之前**：warps/rotations 两张子表、
+    # deformer.ids、deformer.parent_deformer_indices、art_mesh.parent_deformer_indices
+    # 全部从这一份 spec.deformers 取索引，一起搬走才不会新旧索引混用。
+    spec = replace(spec, deformers=parent_first_deformer_order(spec.deformers))
     doc = Moc3Container(version=ms.MocVersion.V3_03)
     doc.canvas = CanvasInfo(
         pixels_per_unit=spec.pixels_per_unit,
@@ -566,7 +625,8 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
     # 只有 warp 会改变成员网格的顶点空间（(s,t)）；rotation 下顶点照旧是模型空间。
     # 参考矩形一律取**规格里的模型像素静止形**：`deformer_space_map` 那套逐级映射
     # 只作用在点阵上，顶点这条不需要预映 —— 归一对同一条轴的线性映射自抵消，
-    # 实测 R3/R4/R5 写出的 (s,t) 与诊断里「先搬到父级 st 空间再归一」完全相同。
+    # 实测写出的 (s,t) 与 `deformer_space_map`  docstring 的规则 I 一致（用例
+    # ``tests/unit/test_moc3_deformers.py::test_space_map_uses_the_parents_rest_rect_for_every_keyform``）。
     mesh_rects = {d.deformer_id: reference_rect(d, param_by_id)
                   for d in warps}
 
@@ -749,16 +809,27 @@ def deformer_space_map(spec: RigSpec) -> Dict[str, Callable[[Sequence[float]], t
     """每个 warp 变形器 -> 「模型像素 → 该变形器该写的坐标」的映射。
 
     官方 Core 的规则是**每一级的输出就是父级点阵的 (s, t)**，不会拿父级的静止矩形
-    再归一一次（实测 R2/R3/R5/R6 与规则 N 全部反号，见
-    docs/superpowers/plans/2026-11-05-hierarchical-deformation-trunk.md 的 Task 1.5
-    与 F:\\tmp\\trunk-diag\\nested-warp-diagnosis.md）。所以非根级的控制网格必须存进
+    再归一一次。规则 N（每级按自身静止矩形重归一）与该规则在父/子矩形不同尺寸时
+    给出完全不同的数值，实测反号；两条各自钉在仓库里的测试是
+    ``tests/unit/test_moc3_deformers.py::test_nested_warp_lattice_is_written_in_the_parent_fraction_space``
+    （父 ±150、子 ±100 时子级点阵 = 子区域在父 st 里的 1/6..5/6）与
+    ``tests/unit/test_moc3_deformers.py::test_third_level_is_normalized_by_the_level_directly_above_it``
+    （三级链逐级按上一级**写出去**的矩形归一）。官方渲染侧的同一约定由
+    ``tests/unit/test_deformer_parent_chain.py`` 与
+    ``tests/unit/test_bindings_gap_probe.py`` 的 ``_rule_i_from_moc3``（从产物字节
+    独立复算的参考实现）两路核对。所以非根级的控制网格必须存进
     **父级的归一 (s,t) 空间**（数值 ~[0,1]），官方实样同构：188 个纯嵌套 warp 的静止
     矩形 85.11% 完全落在 [0,1]、0.00% 以 0 为中心。
 
     根级例外，而且结构上单独一条分支：根 warp 以 0 为中心、单位就是模型像素
-    （官方那唯一一个根 warp x∈[−0.8795, 0.8795]；实测 R0 不挂变形器与 R1 一级恒等
-    warp 的渲染逐字节相同 ``e035d547d377…``），所以 ``S_root`` 必须是恒等。
-    写出层只对**父级非空**的分支调用本函数，根级的字节因此不可能被它改动。
+    （官方那唯一一个根 warp x∈[−0.8795, 0.8795]；实测「不挂变形器」与「一级恒等
+    warp」的渲染逐字节相同 ``e035d547d377…``），所以 ``S_root`` 必须是恒等。
+    写出层只对**父级非空**的分支调用本函数，根级的字节因此不可能被它改动 ——
+    这条由黄金夹具 ``tests/unit/fixtures/moc3_root_level_flat_warps_golden.b64``
+    （sha256 ``66ab863352dba657295fa45db39684070061ce1d0b0143f2be0f9c10eca5e8c8``、
+    10880 字节，用例
+    ``tests/unit/test_moc3_deformers.py::test_root_level_warp_bytes_are_unchanged_by_the_space_map``）
+    从产物侧钉住。
 
     递归式（``reference_rect`` 用各级**自身**的静止矩形，坐标系跟着 ``S_parent`` 走）::
 
@@ -771,7 +842,8 @@ def deformer_space_map(spec: RigSpec) -> Dict[str, Callable[[Sequence[float]], t
 
     挂在第 D 级下的网格顶点写 ``to_grid_st(v, reference_rect(D))``（顶点仍按模型像素
     给出）：线性归一对 ``S_parent`` 是**自抵消**的 —— 把点和矩形同时映到父级空间再归一，
-    与直接按静止矩形归一得到同一个 (s, t)，实测 R3/R4/R5 写出的 (s,t) 与诊断一致。
+    与直接按静止矩形归一得到同一个 (s, t)，实测写出的 (s,t) 与上面的规则 I 一致
+    （``tests/unit/test_moc3_deformers.py::test_nested_lattice_follows_the_parent_rect_not_its_own_size``）。
     """
     warps = {d.deformer_id: d for d in spec.deformers
              if isinstance(d, WarpDeformerSpec)}

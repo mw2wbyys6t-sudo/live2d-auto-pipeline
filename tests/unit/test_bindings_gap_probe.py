@@ -9,8 +9,19 @@ Task 6 的配对距离闸门、以及一切「跨层相对位移」读数都出�
      不再按父级静止矩形归一）复算的参考实现 `_rule_i_from_moc3()`；
   3. 官方 Core 的渲染位移（有 Core 时）。
 
-实测依据：F:\\tmp\\trunk-diag\\nested-warp-diagnosis.md（10 帧官方 Core），
-`experiments.json` 里 R2/R3/R5/R6 的离线预测与渲染读数一致。
+实测依据（全部钉在仓库里）：
+  * 规则 I 的两条结构断言 ——
+    ``test_moc3_deformers.py::test_nested_warp_lattice_is_written_in_the_parent_fraction_space``
+    与 ``::test_third_level_is_normalized_by_the_level_directly_above_it``；
+  * 官方 Core 的逐级合成 —— ``test_deformer_parent_chain.py``（键形带判据）；
+  * 根级不受影响的字节基准 —— 夹具
+    ``tests/unit/fixtures/moc3_root_level_flat_warps_golden.b64``
+    （sha256 ``66ab863352dba657295fa45db39684070061ce1d0b0143f2be0f9c10eca5e8c8``、
+    10880 字节）与真实歌手产物 ``transition.moc3``
+    （sha256 ``c062538d9ee41c2d26b9ef5322699bc884f76f3f24100857302682ab5f66956f``、
+    877440 字节）。
+规则 N（每级按自身静止矩形重归一）与上面的判据在父/子矩形不同尺寸时反号，
+被这两条用例否掉。
 """
 import importlib.util
 import json

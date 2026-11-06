@@ -189,13 +189,16 @@ def _patch(name, x0=0.0, y0=0.0, x1=40.0, y1=10.0):
     )
 
 
-def _entry(name, parameters, profile, targets, rows=2, cols=3, mirror=False):
+def _entry(name, parameters, profile, targets, rows=2, cols=3, mirror=False,
+           under=""):
     out = {"name": name, "type": "warp", "parent": "Mouth",
            "grid_rows": rows, "grid_cols": cols,
            "parameters": list(parameters), "profile": profile,
            "targets": list(targets)}
     if mirror:
         out["mirror"] = True
+    if under:
+        out["under"] = under
     return out
 
 
@@ -1058,9 +1061,12 @@ def test_flat_warp_fixture_is_all_root_level():
 def test_root_level_warp_bytes_are_unchanged_by_the_space_map():
     """根级 warp（parent_deformer_id 为空）的产物字节必须一字不差。
 
-    实测：R0 与 R1（一级恒等 warp）SHA 逐字节相同（``e035d547d377…``，
-    见 F:\\tmp\\trunk-diag\\experiments.json）—— 今天产物里 13 个根变形器
-    全都依赖这条。改空间基准时如果动了根级，所有已验收过的模型都会静默变形。
+    实测：不挂变形器与挂一级恒等 warp 的两帧逐像素相同（渲染 SHA ``e035d547d377…``，
+    官方 Core 侧的同一约定由 tests/unit/test_deformer_parent_chain.py 的
+    ``test_attaching_an_identity_chain_leaves_the_rest_frame_alone`` 守住，离线侧由
+    tests/unit/test_bindings_gap_probe.py 的 ``_rule_i_from_moc3`` 复算核对）——
+    今天产物里 13 个根变形器全都依赖这条。
+    改空间基准时如果动了根级，所有已验收过的模型都会静默变形。
 
     黄金字节由**改动前**的编译器（Task 1.5 的实现提交之前）生成，落成 base64 文本
     夹具 ``tests/unit/fixtures/moc3_root_level_flat_warps_golden.b64``
@@ -1276,3 +1282,230 @@ def test_warp_parent_cycle_is_refused():
     spec = RigSpec(meshes=[mesh], deformers=[a, b], pixels_per_unit=PPU)
     with pytest.raises(UnsupportedRig, match="成环"):
         compile_static_rig(spec)
+
+
+# ----------------------------------------------------------------------
+# Task 2：作者层的 ``under`` 接成真正的 parent_deformer_id
+#
+# ``DEFAULT_WARP_DEFORMERS`` 每条都写了 ``"parent": "Head"`` 这类**骨骼名**
+# （bones/deformers.py），而变形器之间的父链在 moc3 里是另一个东西
+# （``WarpDeformerSpec.parent_deformer_id``）。本任务新增一个不与骨骼 parent
+# 冲突的键 ``under``（值 = 变形器名），把它解析成父链，并在父级没落地时如实降级。
+# ----------------------------------------------------------------------
+
+def test_resolve_deformer_parents_keeps_only_declared_legal_edges():
+    from live2d_builder.exporter.moc3_pipeline import resolve_deformer_parents
+    entries = [
+        {"name": "BodySway", "type": "warp"},
+        {"name": "HeadRig", "type": "warp", "under": "BodySway"},
+        {"name": "MouthOpen", "type": "warp", "under": "HeadRig"},
+        {"name": "Orphan", "type": "warp", "under": "NoSuchDeformer"},
+        {"name": "Self", "type": "warp", "under": "Self"},
+        {"name": "CycleA", "type": "warp", "under": "CycleB"},
+        {"name": "CycleB", "type": "warp", "under": "CycleA"},
+    ]
+    assert resolve_deformer_parents(entries) == {
+        "HeadRig": "BodySway", "MouthOpen": "HeadRig",
+    }
+
+
+def test_resolve_deformer_parents_uses_under_not_the_bone_parent():
+    """``parent`` 已经是骨骼名，不许被当成变形器父级。
+
+    最难区分的形状：某个变形器的**名字**恰好等于另一条想挂上去的骨骼名。
+    只认 ``under`` 才让「骨骼归属」和「变形链」两层各说各的。
+    """
+    from live2d_builder.exporter.moc3_pipeline import resolve_deformer_parents
+    entries = [
+        {"name": "HeadRig", "type": "warp", "parent": "Head"},
+        {"name": "MouthOpen", "type": "warp", "parent": "HeadRig"},
+        {"name": "CheekFollow", "type": "warp", "parent": "HeadRig",
+         "under": "HeadRig"},
+    ]
+    assert resolve_deformer_parents(entries) == {"CheekFollow": "HeadRig"}
+
+
+def test_build_deformers_writes_parent_deformer_id():
+    meshes = [_patch("face"), _patch("mouth")]
+    entries = [
+        _entry("HeadRig", [], "head", ["face"]),
+        _entry("MouthOpen", [], "mouth", ["mouth"], under="HeadRig"),
+    ]
+    deformers, _notes, _static = _build(meshes, entries, [])
+    by_id = {d.deformer_id: d for d in deformers}
+    assert by_id["HeadRig"].parent_deformer_id == ""
+    assert by_id["MouthOpen"].parent_deformer_id == "HeadRig"
+
+
+def test_build_deformers_writes_parent_deformer_id_for_rotation_entries():
+    """rotation 条目的 ``under`` 同样落地：公共表 ``deformer.parent_deformer_indices``
+    覆盖两张子表，只接 warp 那一半就等于留一条写不出父链的路。
+
+    反方向（warp 挂在 rotation 下）不在这里放开：跨 rotation 的顶点空间没实测过，
+    编译器照旧拒绝（``test_warp_under_rotation_is_refused``）。
+    """
+    meshes = [_patch("face"), _patch("arm_L")]
+    entries = [
+        _entry("BodySway", [], "torso", ["face"]),
+        {"name": "ArmSwing", "type": "rotation", "parent": "Arm_L",
+         "pivot": [10.0, 5.0], "targets": ["arm_L"], "under": "BodySway"},
+    ]
+    deformers, _notes, _static = _build(meshes, entries, [])
+    by_id = {d.deformer_id: d for d in deformers}
+    assert by_id["ArmSwing"].parent_deformer_id == "BodySway"
+
+
+def test_build_deformers_downgrades_when_parent_not_emitted():
+    """父级 entry 因为「没有成员网格」被跳过时，子级必须退回无父级并留痕。"""
+    meshes = [_patch("mouth")]
+    entries = [
+        _entry("HeadRig", [], "head", []),
+        _entry("MouthOpen", [], "mouth", ["mouth"], under="HeadRig"),
+    ]
+    deformers, notes, _static = _build(meshes, entries, [])
+    assert deformers[0].parent_deformer_id == ""
+    assert any("HeadRig" in n and "未落地" in n for n in notes), notes
+
+
+def test_build_deformers_keeps_parents_of_unrelated_entries_alone():
+    """没有写 ``under`` 的条目一律是根级 —— 今天 13/13 的形状。"""
+    meshes = [_patch("face"), _patch("mouth")]
+    entries = [
+        _entry("HeadRig", [], "head", ["face"]),
+        _entry("MouthOpen", [], "mouth", ["mouth"]),
+    ]
+    deformers, notes, _static = _build(meshes, entries, [])
+    assert [d.parent_deformer_id for d in deformers] == ["", ""]
+    assert not any("未落地" in n for n in notes), notes
+
+
+# ---- 作者键的透传：create_warp_deformer 用固定键集重建字典，under 会被静默丢掉 ----
+
+def test_create_warp_deformer_threads_the_authored_under_key():
+    from live2d_builder.bones.deformers import DeformerHierarchy
+    hierarchy = DeformerHierarchy()
+    d = hierarchy.create_warp_deformer(name="MouthOpen", parent="Mouth",
+                                       targets=["mouth"], under="HeadRig")
+    assert d["under"] == "HeadRig"
+    # 没写 under 就不许冒出空键：条目字典的形状就是今天产物的输入形状
+    plain = hierarchy.create_warp_deformer(name="MouthOpen", parent="Mouth",
+                                           targets=["mouth"])
+    assert "under" not in plain
+
+
+def test_deformer_hierarchy_build_does_not_drop_the_authored_under(monkeypatch):
+    """``build()`` 用固定 kwargs 调 create_warp_deformer —— 两处都得接住。
+
+    只在 ``create_warp_deformer`` 加形参不够：``build()`` 那边不传就永远是空；
+    只改 ``build()`` 也不够：字典在 create 里被重建，键会掉。这条同时压两端。
+    """
+    from live2d_builder.bones.deformers import DeformerHierarchy
+    authored = [
+        {"name": "HeadRig", "parent": "Head", "rows": 2, "cols": 2,
+         "type": "warp", "targets": ["face"]},
+        {"name": "MouthOpen", "parent": "Mouth", "rows": 2, "cols": 2,
+         "type": "warp", "targets": ["mouth"], "under": "HeadRig"},
+    ]
+    monkeypatch.setattr(DeformerHierarchy, "DEFAULT_WARP_DEFORMERS", authored)
+    names = ["face", "mouth"]
+    built = DeformerHierarchy().build(
+        {}, {n: {"vertices": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+             for n in names}, layer_names=names)
+    by_name = {d["name"]: d for d in built["deformers"]}
+    assert by_name["MouthOpen"].get("under") == "HeadRig"
+    assert "under" not in by_name["HeadRig"]
+    # 骨骼 parent 一个字节都不许动
+    assert by_name["MouthOpen"]["parent"] == "Mouth"
+
+
+def test_under_survives_from_the_authored_list_to_parent_deformer_id(monkeypatch):
+    """`under` 的通路总线：DEFAULT_WARP_DEFORMERS → create_warp_deformer →
+    build() 的条目 → build_deformers → ``WarpDeformerSpec.parent_deformer_id``。
+
+    中间任何一环用固定键集重建字典，这个键都会**静默**丢掉 —— 产物看上去只是
+    「没接父级」，不报错也不留痕，正是本任务最容易做错的样子。
+    """
+    from live2d_builder.bones.deformers import DeformerHierarchy
+    authored = [
+        {"name": "HeadRig", "parent": "Head", "rows": 2, "cols": 2,
+         "type": "warp", "targets": ["face"]},
+        {"name": "MouthOpen", "parent": "Mouth", "rows": 2, "cols": 2,
+         "type": "warp", "targets": ["mouth"], "under": "HeadRig"},
+    ]
+    monkeypatch.setattr(DeformerHierarchy, "DEFAULT_WARP_DEFORMERS", authored)
+    names = ["face", "mouth"]
+    built = DeformerHierarchy().build(
+        {}, {n: {"vertices": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}
+             for n in names}, layer_names=names)
+    meshes = [_patch("face"), _patch("mouth")]
+    deformers, _notes, _static = _build(meshes, built["deformers"], [])
+    by_id = {d.deformer_id: d for d in deformers}
+    assert by_id["MouthOpen"].parent_deformer_id == "HeadRig"
+
+
+# ---- Task 1.5 审查前移项 1：变形器表的顺序（父级必须先于子级写出） ----
+
+_L0_LATTICE = [(-100.0, -100.0), (100.0, -100.0),
+               (-100.0, 100.0), (100.0, 100.0)]
+_PROBE_SQUARE = [(-60.0, -60.0), (60.0, -60.0), (-60.0, 60.0), (60.0, 60.0)]
+
+
+def _nested_pair_spec(child_first: bool) -> RigSpec:
+    """根 warp L0 ← 子 warp L1，方块挂在 L1 下；``child_first`` 即「写反的表」。
+
+    ``under`` 一旦接通，表顺序就由 ``DEFAULT_WARP_DEFORMERS`` 的书写顺序决定，
+    而官方 Core 只被实测过「父级在前」那一种（Task 1 / Task 1.5 的全部渲染读数）。
+    """
+    root = WarpDeformerSpec("L0", 1, 1, [DeformerGrid(0.0, _L0_LATTICE)])
+    child = WarpDeformerSpec("L1", 1, 1, [DeformerGrid(0.0, _L0_LATTICE)],
+                             parent_deformer_id="L0")
+    mesh = MeshSpec("ArtProbe", _PROBE_SQUARE, [(0, 1, 2), (0, 2, 3)],
+                    [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                    deformer_id="L1")
+    return RigSpec(meshes=[mesh],
+                   deformers=[child, root] if child_first else [root, child],
+                   pixels_per_unit=PPU)
+
+
+def test_child_before_parent_table_is_written_parent_first():
+    """子级排在父级前面的表必须在写出前被规范化，否则槽位引用跟着作者手感走。"""
+    doc = compile_static_rig(_nested_pair_spec(child_first=True))
+    assert doc.get("deformer.ids") == ["L0", "L1"]
+    assert doc.get("deformer.parent_deformer_indices") == [-1, 0]
+    assert doc.get("art_mesh.parent_deformer_indices") == [1]
+
+
+def test_reordered_deformer_table_compiles_to_the_same_bytes():
+    """规范化后的产物与作者本来就写对的表**逐字节相同** —— 表序不再是自由量。"""
+    assert (compile_static_rig(_nested_pair_spec(child_first=True)).to_bytes()
+            == compile_static_rig(_nested_pair_spec(child_first=False)).to_bytes())
+
+
+def test_parent_first_ordering_is_a_no_op_without_parents():
+    """没有父级（今天 13/13 的产物形状）时不许改动条目对象与顺序。
+
+    这条是「插管不改画面」的结构保证：黄金字节夹具
+    ``test_root_level_warp_bytes_are_unchanged_by_the_space_map`` 从产物侧再钉一次。
+    """
+    from live2d_builder.exporter.moc3_model import parent_first_deformer_order
+    deformers = [WarpDeformerSpec("B", 1, 1, [DeformerGrid(0.0, _L0_LATTICE)]),
+                 WarpDeformerSpec("A", 1, 1, [DeformerGrid(0.0, _L0_LATTICE)])]
+    ordered = parent_first_deformer_order(deformers)
+    assert len(ordered) == len(deformers)
+    assert all(got is want for got, want in zip(ordered, deformers)), (
+        "没有父链时规范化必须原样交回（同一批对象、同一个顺序），否则今天的产物"
+        "会被悄悄重排")
+
+
+def test_parent_first_ordering_leaves_a_cyclic_table_alone():
+    """成环的表不许被规范化悄悄改写：环要交给 ``deformer_space_map`` 报「成环」。
+
+    拓扑排序遇到环时若「随便留一个顺序」，``test_warp_parent_cycle_is_refused``
+    那条契约就会被一句误导性的槽位错误替掉。
+    """
+    from live2d_builder.exporter.moc3_model import parent_first_deformer_order
+    a = WarpDeformerSpec("A", 1, 1, [DeformerGrid(0.0, _L0_LATTICE)],
+                         parent_deformer_id="B")
+    b = WarpDeformerSpec("B", 1, 1, [DeformerGrid(0.0, _L0_LATTICE)],
+                         parent_deformer_id="A")
+    assert parent_first_deformer_order([a, b]) == [a, b]

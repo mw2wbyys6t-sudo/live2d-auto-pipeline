@@ -1156,6 +1156,43 @@ def _profile_grids(profile: str,
     return axes, grids
 
 
+def _edge_is_acyclic(name: str, raw: Dict[str, str]) -> bool:
+    """从 ``name`` 的父级出发会不会绕回自己（或绕进已走过的节点）。"""
+    seen: set = set()
+    cursor = raw[name]
+    while cursor:
+        if cursor in seen or cursor == name:
+            return False
+        seen.add(cursor)
+        cursor = raw.get(cursor, "")
+    return True
+
+
+def resolve_deformer_parents(entries: List[Dict]) -> Dict[str, str]:
+    """``entry["under"]`` -> 父变形器名；只保留指向已声明节点、且不构成环的边。
+
+    用 ``under`` 而不是复用 ``parent``：``parent`` 已经是**骨骼名**（
+    ``bones/deformers.py`` 的 ``DEFAULT_WARP_DEFORMERS`` 每条都在写
+    ``"parent": "Head"`` 这类骨骼），两层语义重载会把「骨骼归属」和「变形链」
+    搅成一团 —— 骨骼链由 model3.json 的 Part 层级表达，变形链由 moc3 的
+    ``deformer.parent_deformer_indices`` 表达。
+
+    不自父、指向未声明节点、成环的边在这里**就地丢弃**（子级因此退回根级），
+    不报错：未声明/自父的报错归 ``RigSpec._validate_deformers``，环的报错归
+    ``deformer_space_map``（那条会点名整条链）。本函数只保证交出去的每条边都能用，
+    所以它的判定必须比那两处更宽松，不能反过来重复它们的措辞。
+    """
+    declared = {str(entry.get("name") or "") for entry in entries} - {""}
+    raw: Dict[str, str] = {}
+    for entry in entries:
+        name = str(entry.get("name") or "")
+        under = str(entry.get("under") or "")
+        if name and under and under in declared and under != name:
+            raw[name] = under
+    return {name: under for name, under in raw.items()
+            if _edge_is_acyclic(name, raw)}
+
+
 def build_deformers(specs: List[MeshSpec],
                     entries: List[Dict],
                     width: float,
@@ -1166,6 +1203,10 @@ def build_deformers(specs: List[MeshSpec],
     """把管线的 warp / rotation 变形器编成规格，并把成员网格就地挂上（改写 specs）。
 
     返回 ``(变形器规格, 未编译说明, 静态变形器名)``。一个网格只能挂一个变形器。
+
+    条目里的 ``under``（父变形器名）解析成 ``parent_deformer_id``；父级因为
+    「没有成员网格」等原因根本没被落地时，子级退回无父级并在 ``uncompiled`` 里
+    留一条 ``X(父级 Y 未落地：按无父级处理)``，不静默保留一条指向空气的父链。
 
     rotation 的**参数绑定**由枢轴判定（见 ``_driving_rotation_parameter``）：命中唯一
     官方参数时烘焙**逐键键形**，它真的会随参数转动；枢轴对不上任何已知转动骨骼时退回
@@ -1185,6 +1226,7 @@ def build_deformers(specs: List[MeshSpec],
     breath_bound: List[str] = []
     expression_bound: List[str] = []
     skipped: List[str] = []
+    parents = resolve_deformer_parents(entries)
     for entry in entries:
         name = str(entry.get("name") or "")
         dtype = str(entry.get("type"))
@@ -1271,7 +1313,8 @@ def build_deformers(specs: List[MeshSpec],
                 deformer_id=name, rows=n_rows - 1, cols=n_cols - 1,
                 parameter_id=bound_param,
                 axes=axes,
-                grids=grids))
+                grids=grids,
+                parent_deformer_id=parents.get(name, "")))
         elif dtype == "rotation":
             pivot = entry.get("pivot") or (0.0, 0.0)
             # 与网格顶点同一换算：图像坐标 -> 原点居中、y 向上的模型坐标
@@ -1294,14 +1337,29 @@ def build_deformers(specs: List[MeshSpec],
                                         origin=origin)
                         for value in _key_times(param)
                     ],
-                    base_angle=float(entry.get("angle") or 0.0)))
+                    base_angle=float(entry.get("angle") or 0.0),
+                    parent_deformer_id=parents.get(name, "")))
                 bound.append(f"{name}={pid}")
             else:
                 out.append(RotationDeformerSpec(
                     deformer_id=name,
                     keyforms=[RotationKeyform(0.0, angle=0.0, origin=origin)],
-                    base_angle=float(entry.get("angle") or 0.0)))
+                    base_angle=float(entry.get("angle") or 0.0),
+                    parent_deformer_id=parents.get(name, "")))
                 static.append(name)
+    # 父级是否真的落地，要到循环结束才知道（成员网格空不空在循环里判），所以父链
+    # 用**两趟**收尾：先按声明写好，再把指向「声明了但没进表」的父级的边退回无父级，
+    # 并如实记一条说明。留着那条边等于交给编译器去报「父变形器不存在」。
+    emitted = {deformer.deformer_id for deformer in out}
+    finalized: List = []
+    for deformer in out:
+        parent_id = deformer.parent_deformer_id
+        if parent_id and parent_id not in emitted:
+            skipped.append(f"{deformer.deformer_id}(父级 {parent_id} "
+                           "未落地：按无父级处理)")
+            deformer = replace(deformer, parent_deformer_id="")
+        finalized.append(deformer)
+    out = finalized
     if linked:
         specs[:] = [
             replace(mesh, deformer_id=linked[mesh.mesh_id])

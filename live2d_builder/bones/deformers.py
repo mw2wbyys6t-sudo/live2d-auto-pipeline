@@ -603,6 +603,21 @@ class DeformerHierarchy:
     a single point. These map to Live2D Cubism's ArtMesh deformers.
     """
 
+    # ---- 两个 parent 键，别混 ----
+    #
+    # ``"parent"``：这条变形器**挂在哪个骨骼**下（Part/Bone 归属），由
+    #   model3.json / 骨骼层级那一层消费，导出层不读它当变形器父级。
+    # ``"under"``：这条变形器**挂在哪条变形器**下（值 = 本表里的 ``name``），
+    #   由 ``moc3_pipeline.resolve_deformer_parents`` 解析成 moc3 的
+    #   ``parent_deformer_id``，于是子级继承父级的转动、同一个参数不必再各
+    #   拟合一份键形带。空 = 根级（今天 13/13 都是根级）。
+    #
+    # 之所以另起一个键：两个 ``parent`` 语义在不同层，重载会把「骨骼归属」和
+    # 「变形链」搅成一团，而且 ``parent`` 早就被每条写着，改判它等于悄悄重排
+    # 全部产物。
+    #
+    # 写 ``under`` 时不必操心表的顺序：写出前 ``moc3_model`` 会按父链做拓扑
+    # 规范化（``parent_first_deformer_order``），父级在后也一样。
     DEFAULT_WARP_DEFORMERS: List[Dict] = [
         # ---- 头发摆动：由 ParamHairSwing 驱动，发根钉住、发梢摆 ----
         {"name": "HairFrontSwing", "parent": "Head", "rows": 3, "cols": 3,
@@ -808,6 +823,8 @@ class DeformerHierarchy:
                                 ([spec["parameter"]] if spec.get("parameter") else [])),
                 profile=spec.get("profile", ""),
                 mirror=bool(spec.get("mirror", False)),
+                # 变形器父级（不是骨骼）：不在这里透传，作者写的 under 就到此为止
+                under=spec.get("under", ""),
             )
             self._deformers.append(d)
             self._by_name[d["name"]] = d
@@ -832,6 +849,7 @@ class DeformerHierarchy:
                 parent=spec["parent"],
                 pivot=spec["pivot"],
                 targets=targets,
+                under=spec.get("under", ""),
             )
             self._deformers.append(d)
             self._by_name[d["name"]] = d
@@ -857,12 +875,13 @@ class DeformerHierarchy:
         parameters: Optional[List[str]] = None,
         profile: str = "",
         mirror: bool = False,
+        under: str = "",
     ) -> Dict:
         """Create a warp (free-form) deformer with an R*C control grid.
 
         Args:
             name:      Deformer identifier.
-            parent:    Parent deformer or bone name.
+            parent:    骨骼名（Part/Bone 归属，写进 model3.json 那一层）。
             grid_rows: Number of control point rows.
             grid_cols: Number of control point columns.
             targets:   Layer names this deformer affects.
@@ -870,6 +889,13 @@ class DeformerHierarchy:
                        指定，留给导出阶段按枢轴推导（呼吸曾经就是这么绑的）。
             profile:   形变方式，取值见 ``moc3_pipeline.DEFORMER_PROFILES``。
             mirror:    左右对称部件的镜像标记（眉毛倾斜方向取反）。
+            under:     **变形器**父级名（不是骨骼）。导出阶段
+                       （``moc3_pipeline.resolve_deformer_parents``）把它解析成
+                       moc3 的 ``parent_deformer_id``，于是这一级继承父级的转动，
+                       不必再各拟合一份。空 = 根级。
+                       这个键必须在这里显式接住：下面的 ``out`` 是**固定键集**重建
+                       的字典，作者在 ``DEFAULT_WARP_DEFORMERS`` 写的 ``under``
+                       不接就会被静默丢掉。
 
         Returns:
             Deformer definition dict.
@@ -900,6 +926,9 @@ class DeformerHierarchy:
             out["profile"] = profile
         if mirror:
             out["mirror"] = True
+        if under:
+            # 没有 under 就不冒出这个键：条目字典的形状保持今天的样子
+            out["under"] = under
         return out
 
     def create_rotation_deformer(
@@ -909,20 +938,23 @@ class DeformerHierarchy:
         pivot: Tuple[float, float] = (0.0, 0.0),
         angle: float = 0.0,
         targets: Optional[List[str]] = None,
+        under: str = "",
     ) -> Dict:
         """Create a rotation deformer pivoting around ``pivot``.
 
         Args:
             name:   Deformer identifier.
-            parent: Parent deformer or bone name.
+            parent: 骨骼名（Part/Bone 归属）。
             pivot:  (x, y) pivot point in model space.
             angle:  Default rotation in degrees.
             targets: Layer names affected.
+            under:  **变形器**父级名，语义同 :meth:`create_warp_deformer`
+                    （导出阶段解析成 ``parent_deformer_id``）。
 
         Returns:
             Deformer definition dict.
         """
-        return {
+        out = {
             "name": name,
             "type": "rotation",
             "parent": parent,
@@ -930,6 +962,9 @@ class DeformerHierarchy:
             "angle": float(angle),
             "targets": list(targets or []),
         }
+        if under:
+            out["under"] = under
+        return out
 
     def to_json(self) -> Dict:
         """Export all deformers as a JSON-serialisable dict (Cubism import format)."""
