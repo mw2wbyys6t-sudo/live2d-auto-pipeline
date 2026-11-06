@@ -473,7 +473,7 @@ jobs:
           path: dist
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         # 全量运行时安装包可能超过 GitHub Release 单附件 2GB 上限。此时不阻断
         # 发布（Release 仍生成），安装包以 Actions 产物 nsis-installer 交付。
         continue-on-error: true
