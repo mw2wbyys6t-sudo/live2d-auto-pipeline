@@ -376,9 +376,9 @@ def _shifted(points, dx, dy):
     return gate._shift(points, dx, dy)
 
 
-def _warp(deformer_id, points, parent=""):
+def _warp(deformer_id, points, parent="", rows=1, cols=1):
     """静态恒等 warp（单控制网格）：Step 4 那几种形态用的中性层。"""
-    return WarpDeformerSpec(deformer_id=deformer_id, rows=1, cols=1,
+    return WarpDeformerSpec(deformer_id=deformer_id, rows=rows, cols=cols,
                             grids=[DeformerGrid(0.0, points)],
                             parent_deformer_id=parent)
 
@@ -410,6 +410,12 @@ def no_middle_rig():
     仿射复合，那种 oracle 会造出假失败。拆层不需要算任何数学。
     """
     return gate.band_parent_only_rig()
+
+
+def four_level_band_chain_rig():
+    """现有 gate 三键根级带 → L1 → L2 → L3，三级中间层全部恒等。"""
+    return _rig([gate.band_parent(), _warp("L1", _LATTICE, "ProbeParent"),
+                 _warp("L2", _LATTICE, "L1"), _warp("L3", _LATTICE, "L2")], "L3")
 
 
 def control_rig():
@@ -558,6 +564,22 @@ def three_level_rig():
                  _warp("L2", _LATTICE, "L1")], "L2")
 
 
+def _dense_middle_lattice():
+    """同一 ±100 rest 矩形上的 4×2 点阵：行优先、x 最快，每行覆盖整个宽度。"""
+    x0, y0 = _LATTICE[0]
+    x1, y1 = _LATTICE[-1]
+    return [[x0 + (x1 - x0) * c, y0 + (y1 - y0) * r / 3.0]
+            for r in range(4) for c in range(2)]
+
+
+def four_level_identity_rig():
+    """四级恒等链 L0 → L1 → L2 → L3；L1 是 rows=3、cols=1 的 4×2 点阵。"""
+    return _rig([_warp("L0", _LATTICE),
+                 _warp("L1", _dense_middle_lattice(), "L0", rows=3, cols=1),
+                 _warp("L2", _LATTICE, "L1"),
+                 _warp("L3", _LATTICE, "L2")], "L3")
+
+
 def wider_parent_rig():
     """父矩形比子级宽（父 ±150 / 子 ±100）。
 
@@ -603,6 +625,17 @@ def test_a_three_level_identity_chain_leaves_the_rest_frame_alone(tmp_path):
     rest = _render(tmp_path, three_level_rig(), "three_level")
     assert rest["pixels_sha256"] == control["pixels_sha256"], (
         f"三级恒等链移动了静止帧：基准 {control['alpha_bbox']} / "
+        f"挂链 {rest['alpha_bbox']}（不透明像素 {control['opaque_pixels']} vs "
+        f"{rest['opaque_pixels']}）")
+
+
+@requires_live2d
+def test_a_four_level_identity_chain_with_a_dense_middle_grid_leaves_rest_alone(tmp_path):
+    """官方 Core 的深度 4 静止包络：四个 warp 与中间 4×2 点阵都必须中性。"""
+    control = _render(tmp_path, control_rig(), "neutral_four_level")
+    rest = _render(tmp_path, four_level_identity_rig(), "four_level_identity")
+    assert rest["pixels_sha256"] == control["pixels_sha256"], (
+        f"四级恒等链移动了静止帧：基准 {control['alpha_bbox']} / "
         f"挂链 {rest['alpha_bbox']}（不透明像素 {control['opaque_pixels']} vs "
         f"{rest['opaque_pixels']}）")
 
@@ -675,3 +708,33 @@ def test_a_neutral_middle_level_is_invisible_at_every_pose(tmp_path):
         "都没动的画面，对照退化")
     dx, _dy = _model_px_delta(control["alpha_bbox"], full["alpha_bbox"], _SIDE_PX)
     assert dx == pytest.approx(40.0, abs=2.0), dx
+
+
+@requires_live2d
+def test_a_four_level_chain_inherits_the_root_keyform_at_every_pose(tmp_path):
+    """深度 4 链在四姿态等于同一根级键形 warp 的拆层对照，且满幅位移非退化。"""
+    control = _render(tmp_path, control_rig(), "inherit_four_level_control")
+    for pose in ({}, {gate.BAND_PARAMETER: 12.0}, {gate.BAND_PARAMETER: 30.0},
+                 {gate.BAND_PARAMETER: -30.0}):
+        with_middle = _render(tmp_path, four_level_band_chain_rig(),
+                              "inherit_four_level_chain", pose)
+        without_middle = _render(tmp_path, no_middle_rig(),
+                                 "inherit_four_level_no_middle", pose)
+        assert with_middle["pixels_sha256"] == without_middle["pixels_sha256"], (
+            f"姿态 {pose or '默认'}：三级恒等中间层改变了深度 4 画面 —— "
+            f"带 {with_middle['alpha_bbox']} / 不带 {without_middle['alpha_bbox']}，"
+            f"不透明像素 {with_middle['opaque_pixels']} vs "
+            f"{without_middle['opaque_pixels']}")
+        if not pose:
+            assert with_middle["pixels_sha256"] == control["pixels_sha256"], (
+                "深度 4 链在默认帧不等于无变形器 control：基准与挂链的 alpha_bbox "
+                f"分别是 {control['alpha_bbox']} / {with_middle['alpha_bbox']}")
+
+    full = _render(tmp_path, four_level_band_chain_rig(), "inherit_four_level_chain",
+                   {gate.BAND_PARAMETER: gate.BAND_KEY_FULL})
+    assert full["pixels_sha256"] != control["pixels_sha256"], (
+        "深度 4 满幅帧仍等于默认 control：拆层两边可能都没动，继承对照退化")
+    dx, dy = _model_px_delta(control["alpha_bbox"], full["alpha_bbox"], _SIDE_PX)
+    assert dx == pytest.approx(gate.BAND_DX_MODEL_PX,
+                               abs=gate.AMPLITUDE_TOL_MODEL_PX), dx
+    assert dy == pytest.approx(0.0, abs=gate.AMPLITUDE_TOL_MODEL_PX), dy
