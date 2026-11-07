@@ -77,7 +77,10 @@ class AmodalCompleter:
             image: Full original image (RGB or RGBA). The visible content
                 outside ``occluded_mask`` is preserved.
             visible_mask: Boolean ``(H, W)`` array marking known/visible pixels
-                of the part being completed. May be used as a hint.
+                of the part being completed. These are the ONLY pixels fill
+                colors may be derived from — the original image shows the
+                front layer inside the occluded region, so treating the whole
+                image as known would bleed front-layer colors into the fill.
             occluded_mask: Boolean ``(H, W)`` array marking pixels that need
                 to be hallucinated for this part.
 
@@ -103,29 +106,41 @@ class AmodalCompleter:
             return image
 
         target_pixels = vis | occ
+        # 本层可见像素之外的区域一律视为待补：原图在遮挡区显示的是前排层的
+        # 颜色，若只把 occ 标成待补，inpaint 会拿前排衣服色当已知色渗进来。
+        known = vis & ~occ
         rgb = arr[:, :, :3].copy()
 
-        inpaint_mask = occ.astype(np.uint8) * 255
+        unknown = (~known).astype(np.uint8) * 255
 
         filled: Optional[np.ndarray] = None
 
         # 1) Try pix2gestalt learned model if available
         try:
-            filled = self._inpaint_pix2gestalt(Image.fromarray(rgb, "RGB"), occ)
+            filled = self._inpaint_pix2gestalt(Image.fromarray(rgb, "RGB"), ~known)
             if filled is not None:
                 rgb = np.array(filled.convert("RGB"))
         except Exception as exc:  # pragma: no cover - model/runtime
             log.warning(f"pix2gestalt inpainting failed ({exc}); trying cv2")
 
         # 2) OpenCV Telea inpainting on RGB
-        if filled is None and HAS_CV2:
+        if filled is None and HAS_CV2 and known.any():
             try:
-                rgb = self._inpaint_cv2(rgb, inpaint_mask)
+                # 裁到目标包围盒再补：unknown 现在覆盖整张画布，全图 Telea
+                # 会把几十万像素都推进 marching heap。已知像素全部在框内，
+                # 填充结果不变。
+                ys, xs = np.nonzero(target_pixels)
+                pad = 8
+                y0, y1 = max(0, int(ys.min()) - pad), min(h, int(ys.max()) + pad + 1)
+                x0, x1 = max(0, int(xs.min()) - pad), min(w, int(xs.max()) + pad + 1)
+                sub = np.ascontiguousarray(rgb[y0:y1, x0:x1])
+                sub_unknown = np.ascontiguousarray(unknown[y0:y1, x0:x1])
+                rgb[y0:y1, x0:x1] = self._inpaint_cv2(sub, sub_unknown)
             except Exception as exc:
                 log.warning(f"OpenCV inpainting failed ({exc}); using simple fill")
-                rgb = self._simple_fill(rgb, occ)
-        elif filled is None and not HAS_CV2:
-            rgb = self._simple_fill(rgb, occ)
+                rgb = self._simple_fill(rgb, occ, known=known)
+        elif filled is None:
+            rgb = self._simple_fill(rgb, occ, known=known)
 
         # Composite: keep original visible pixels, take filled for occluded
         out_rgb = arr[:, :, :3].copy()
@@ -191,7 +206,12 @@ class AmodalCompleter:
             log.warning(f"pix2gestalt call failed: {exc}")
             return None
 
-    def _simple_fill(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    def _simple_fill(
+        self,
+        image: np.ndarray,
+        mask: np.ndarray,
+        known: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
         """Nearest-neighbor color fill — ultimate fallback.
 
         Iteratively dilates known pixels into the masked region using a
@@ -201,16 +221,24 @@ class AmodalCompleter:
         Args:
             image: RGB uint8 array ``(H, W, 3)``.
             mask: Boolean array ``(H, W)`` (True = fill).
+            known: Boolean array ``(H, W)`` of pixels colors may propagate
+                from. Defaults to ``~mask``; callers completing a part must
+                pass the part's own visible pixels so front-layer colors
+                never enter the fill.
 
         Returns:
             RGB uint8 array with masked pixels filled.
         """
         h, w = image.shape[:2]
-        known = ~mask
+        fill = np.asarray(mask, dtype=bool)
+        if known is None:
+            known = ~fill
+        else:
+            known = np.asarray(known, dtype=bool) & ~fill
         # If we have no known pixels, just return mid-gray fill
         if not known.any():
             out = image.copy()
-            out[mask] = (128, 128, 128)
+            out[fill] = (128, 128, 128)
             return out
 
         result = image.copy().astype(np.float32)
@@ -219,23 +247,27 @@ class AmodalCompleter:
             # Use cv2.distanceTransform to find nearest known pixel for each
             # masked pixel and copy its color via repeated dilation blending.
             try:
-                inv_mask = (~known).astype(np.uint8)
-                # Repeatedly dilate known region inward to propagate color
+                # Repeatedly dilate known region inward to propagate color.
+                # 只需覆盖 fill 区即可停：known 现在可能只是画布的一小块，
+                # 推进到全画布 known 会白跑几百轮。
                 cur_known = known.copy()
                 iter_img = result.copy()
                 kernel = np.ones((3, 3), np.uint8)
-                while not cur_known.all():
+                while not cur_known[fill].all():
                     dilated = cv2.dilate(cur_known.astype(np.uint8), kernel, iterations=1).astype(bool)
                     new_pixels = dilated & ~cur_known
                     if not new_pixels.any():
                         break
-                    # Average of 3x3 known neighbors
-                    sum_rgb = cv2.boxFilter(iter_img, ddepth=-1, ksize=(3, 3), normalize=False)
+                    # Average of 3x3 known neighbors；未知像素的残值必须先清零，
+                    # 否则 sum 里混着前排颜色而 cnt 只数已知像素，均值会污染。
+                    known_img = iter_img * cur_known[..., None]
+                    sum_rgb = cv2.boxFilter(known_img, ddepth=-1, ksize=(3, 3), normalize=False)
                     cnt = cv2.boxFilter(cur_known.astype(np.float32), ddepth=-1, ksize=(3, 3), normalize=False)
                     cnt = np.maximum(cnt, 1.0)
                     avg = sum_rgb / cnt[..., None]
                     iter_img[new_pixels] = avg[new_pixels]
                     cur_known = dilated
+                iter_img[fill & ~cur_known] = (128, 128, 128)
                 return np.clip(iter_img, 0, 255).astype(np.uint8)
             except Exception as exc:
                 log.warning(f"cv2-based simple_fill failed ({exc}); using pure numpy")
@@ -246,7 +278,7 @@ class AmodalCompleter:
         cur_known = known.copy()
         max_iters = max(h, w)
         for _ in range(max_iters):
-            if cur_known.all():
+            if cur_known[fill].all():
                 break
             # Compute 3x3 sum over known values and known-count
             padded = np.pad(cur, ((1, 1), (1, 1), (0, 0)), mode="edge")
@@ -272,7 +304,7 @@ class AmodalCompleter:
             avg = neighbor_sum[new_pixels] / neighbor_cnt[new_pixels, None]
             cur[new_pixels] = avg
             cur_known |= new_pixels
-        # Any still-unknown pixels get neutral gray
-        if not cur_known.all():
-            cur[~cur_known] = (128, 128, 128)
+        # Any still-unknown fill pixels get neutral gray
+        if not cur_known[fill].all():
+            cur[fill & ~cur_known] = (128, 128, 128)
         return cur.astype(np.uint8)

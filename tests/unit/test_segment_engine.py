@@ -105,6 +105,53 @@ class TestAmodalCompleter:
         result = completer._simple_fill(np.array(img), mask)
         assert result.shape == (64, 64, 3)
 
+    @staticmethod
+    def _hard_cut_color_scene():
+        """脖子(肤色)与衣服(蓝色)零交集硬切；补画区在原图里显示的是衣服色。"""
+        neck = np.zeros((96, 64), dtype=bool)
+        neck[20:40, 20:44] = True
+        clothes = np.zeros_like(neck)
+        clothes[40:88, 10:54] = True
+        original = np.zeros((96, 64, 4), dtype=np.uint8)
+        original[neck] = (220, 170, 130, 255)
+        original[clothes] = (30, 100, 160, 255)
+        hidden = np.zeros_like(neck)
+        hidden[40:52, 20:44] = True
+        assert np.array_equal(hidden & clothes, hidden)
+        assert not (hidden & neck).any()
+        return original, neck, hidden
+
+    def _assert_fill_comes_from_the_back_part(self, result, original, neck, hidden):
+        arr = np.array(result)
+        assert np.array_equal(arr[neck], original[neck])
+        assert np.array_equal(arr[..., 3] > 0, neck | hidden)
+        mean = arr[hidden][:, :3].astype(np.float64).mean(axis=0)
+        neck_rgb = np.array([220, 170, 130], dtype=np.float64)
+        clothes_rgb = np.array([30, 100, 160], dtype=np.float64)
+        assert np.linalg.norm(mean - neck_rgb) < np.linalg.norm(mean - clothes_rgb), (
+            f"补画区均值 {mean} 渗进了前排衣服色而非本层肤色")
+
+    def test_completion_colors_come_only_from_the_visible_part(self):
+        """硬切补画的填充色只能取自后排部件自己的可见像素。
+
+        被补区域在原图里显示前排衣服的颜色；拿整张原图当已知色做 inpaint，
+        会把衣服色渗进脖子隐藏区——静止时被衣服盖住看不出来，运动露缝就显形。
+        """
+        completer = AmodalCompleter()
+        original, neck, hidden = self._hard_cut_color_scene()
+        result = completer.complete(
+            Image.fromarray(original), visible_mask=neck, occluded_mask=hidden)
+        self._assert_fill_comes_from_the_back_part(result, original, neck, hidden)
+
+    def test_fallback_fill_colors_come_only_from_the_visible_part(self, monkeypatch):
+        """无 cv2 的最近邻兜底同样只能从本层可见像素取色。"""
+        monkeypatch.setattr("core.segment_engine.amodal.HAS_CV2", False)
+        completer = AmodalCompleter()
+        original, neck, hidden = self._hard_cut_color_scene()
+        result = completer.complete(
+            Image.fromarray(original), visible_mask=neck, occluded_mask=hidden)
+        self._assert_fill_comes_from_the_back_part(result, original, neck, hidden)
+
 
 class TestLayerComposer:
     """Test layer composition and ordering."""
@@ -204,6 +251,74 @@ class TestLayerComposer:
         assert isinstance(occ, dict)
         assert "hair_front" in occ
         assert "face_base" in occ
+
+    def test_hard_cut_amodal_boundary_counts_as_occlusion(self):
+        """SAM2 沿绘画边界硬切时，相邻的前排衣服也必须触发后排补画。"""
+        composer = LayerComposer()
+        masks = {
+            "neck": np.zeros((64, 64), dtype=bool),
+            "clothes_top": np.zeros((64, 64), dtype=bool),
+        }
+        masks["neck"][20:40, 10:50] = True
+        masks["clothes_top"][40:60, 10:50] = True
+        assert not (masks["neck"] & masks["clothes_top"]).any()
+
+        occ = composer.generate_occlusion_map(masks)
+        assert "clothes_top" in occ["neck"]["occluded_by"]
+        assert "neck" in occ["clothes_top"]["occludes"]
+
+    def test_hard_cut_completion_stays_under_the_adjacent_front_layer(self, tmp_path):
+        composer = LayerComposer()
+        neck = np.zeros((96, 64), dtype=bool)
+        neck[20:40, 20:44] = True
+        clothes = np.zeros_like(neck)
+        clothes[40:88, 10:54] = True
+        original = np.zeros((96, 64, 4), dtype=np.uint8)
+        original[neck] = (220, 170, 130, 255)
+        original[clothes] = (30, 100, 160, 255)
+        expected_hidden = composer._dilate(
+            neck, composer.OCCLUSION_HARD_CUT_MARGIN) & clothes
+        assert expected_hidden.any()
+        assert (clothes & ~expected_hidden).any()
+
+        layers = composer.compose(
+            {"neck": neck, "clothes_inner": clothes},
+            Image.fromarray(original), str(tmp_path))
+        with Image.open(layers["neck"]["path"]) as layer:
+            completed = np.array(layer.convert("RGBA"))
+        assert layers["neck"]["completed"] is True
+        assert np.array_equal(completed[neck], original[neck])
+        assert np.array_equal(completed[..., 3] > 0, neck | expected_hidden)
+
+        composite = Image.new("RGBA", (64, 96))
+        for info in composer.reorder_layers(layers).values():
+            with Image.open(info["path"]) as layer:
+                composite.alpha_composite(layer.convert("RGBA"))
+        assert np.array_equal(np.array(composite), original)
+
+    def test_adjacent_non_amodal_layers_do_not_gain_an_occlusion_relation(self):
+        composer = LayerComposer()
+        back = np.zeros((64, 64), dtype=bool)
+        back[10:30, 10:30] = True
+        front = np.zeros_like(back)
+        front[30:50, 10:30] = True
+
+        occlusion = composer.generate_occlusion_map(
+            {"face_base": back, "mouth": front})
+        assert occlusion["face_base"]["occluded_by"] == []
+
+    def test_far_apart_layers_are_not_treated_as_hard_cut_occlusion(self):
+        """扩边只接住边界邻接，不能把整件衣服误判成脖子的遮挡。"""
+        composer = LayerComposer()
+        masks = {
+            "neck": np.zeros((128, 128), dtype=bool),
+            "clothes_top": np.zeros((128, 128), dtype=bool),
+        }
+        masks["neck"][20:40, 40:80] = True
+        masks["clothes_top"][100:120, 40:80] = True
+
+        occ = composer.generate_occlusion_map(masks)
+        assert occ["neck"]["occluded_by"] == []
 
     def test_reorder_layers(self):
         composer = LayerComposer()

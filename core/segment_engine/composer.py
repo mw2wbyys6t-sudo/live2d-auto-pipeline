@@ -138,6 +138,11 @@ class LayerComposer:
     #: 眨眼/闭嘴时那一圈会露出来，看起来像"眼睛还在"。
     FEATURE_ERASE_MARGIN = 2
 
+    #: SAM2 常沿绘画边界切成零交集硬接。补画必须先认出「紧贴在后排层前面的
+    #: 前排层」，否则遮挡检测要求输入已经重叠，AmodalCompleter 永远不会触发。
+    #: 12px 覆盖常见抗锯齿/描边宽度，又不足以把相隔一整段肢体的层误判成遮挡。
+    OCCLUSION_HARD_CUT_MARGIN = 12
+
     #: 合成上眼睑：层名 -> 可以作为"眼睛可见区域"的候选层（按优先级）。
     #:
     #: 立绘里没有眼皮画稿，闭眼只能把眼球压扁——眼睛变成一坨被压扁的色块。这里合成
@@ -286,9 +291,16 @@ class LayerComposer:
             # a part drawn in front of this one.
             occluded_by = occlusion_map.get(part, {}).get("occluded_by", [])
             occluded_mask = np.zeros((h, w), dtype=bool)
+            adjacent_region = None
             for other in occluded_by:
                 if other in part_masks:
-                    occluded_mask |= part_masks[other].astype(bool)
+                    front = np.asarray(part_masks[other], dtype=bool)
+                    if not np.any(mask & front):
+                        if adjacent_region is None:
+                            adjacent_region = self._dilate(
+                                mask, self.OCCLUSION_HARD_CUT_MARGIN)
+                        front = front & adjacent_region
+                    occluded_mask |= front
             occluded_mask &= ~mask  # only pixels we don't already own
 
             completed = False
@@ -861,6 +873,8 @@ class LayerComposer:
         # 实测这一项占了 occlusion map 生成时间的大头（1.10s）。
         nonempty: Dict[str, bool] = {}
         bboxes: Dict[str, Tuple[int, int, int, int]] = {}
+        probe_masks: Dict[str, np.ndarray] = {}
+        probe_bboxes: Dict[str, Tuple[int, int, int, int]] = {}
         for n in names:
             ys, xs = np.nonzero(masks[n])
             nonempty[n] = len(xs) > 0
@@ -869,6 +883,15 @@ class LayerComposer:
                              int(xs.max()), int(ys.max()))
             else:
                 bboxes[n] = (0, 0, 0, 0)
+            # 只有会被有意补大的后排部件才做扩边；前排层保持原掩码，避免把
+            # 「相邻」扩大成「大面积互相遮挡」。
+            probe_masks[n] = (self._dilate(masks[n], self.OCCLUSION_HARD_CUT_MARGIN)
+                              if n in self.AMODAL_PARTS and nonempty[n]
+                              else masks[n])
+            ys, xs = np.nonzero(probe_masks[n])
+            probe_bboxes[n] = ((int(xs.min()), int(ys.min()),
+                               int(xs.max()), int(ys.max()))
+                               if len(xs) else (0, 0, 0, 0))
 
         result: Dict[str, Dict[str, List[str]]] = {}
         for name in names:
@@ -878,7 +901,7 @@ class LayerComposer:
             if not nonempty[a]:
                 continue
             ma = masks[a]
-            ax0, ay0, ax1, ay1 = bboxes[a]
+            ax0, ay0, ax1, ay1 = probe_bboxes[a]
             for b in draw_seq[i + 1:]:
                 if not nonempty[b]:
                     continue
@@ -886,7 +909,9 @@ class LayerComposer:
                 # Fast pre-check via precomputed bounding boxes
                 if ax0 > bx1 or bx0 > ax1 or ay0 > by1 or by0 > ay1:
                     continue
-                if np.any(ma & masks[b]):
+                mb = masks[b]
+                # 真实交集是传统判据；amodal 层的扩边交集专门接住硬切边界。
+                if np.any(ma & mb) or np.any(probe_masks[a] & mb):
                     # b is drawn in front of a -> b occludes a
                     result[a]["occluded_by"].append(b)
                     result[b]["occludes"].append(a)
