@@ -1427,12 +1427,14 @@ def legal_deformer_parents(entries: List[Dict]) -> tuple:
 
 #: 带着「整颗头的三轴」这一份形变的 profile。``eye_head`` 是 Task 3 之前的历史形态
 #: （眨眼 + 头部三轴一条带），作为**能力**保留在 ``DEFORMER_PROFILES`` 里，作者表
-#: 已经不用它了；这里一并认出来，免得有人改回去时守卫静默失效。
-HEAD_FIELD_PROFILES = frozenset({"head", "eye_head"})
+#: 已经不用它了；这里一并认出来，免得有人改回去时守卫静默失效。``neck_band`` 是
+#: Task 5 扩进来的颈胸分级场，它那条带同样只有头部三轴。
+HEAD_FIELD_PROFILES = frozenset({"head", "eye_head", "neck_band"})
 
-#: 负责把头送到各部件的那条主干变形器的**名字**。作者表里它就是 HeadRig；
-#: Task 5 会把这套机制扩到 NeckBand 与 BodySway（届时换成 TRUNK_DEFORMERS 全集）。
-HEAD_FIELD_DEFORMERS = frozenset({"HeadRig"})
+#: 负责把头送到各部件的那条主干变形器的**名字**。HeadRig 送整颗头，NeckBand 送脖子
+#: （Task 5 扩入）。BodySway 不在这里：它那条带是躯干 X/Y/摆动/呼吸，**没有**头部
+#: 三轴，撤掉它成员的头部烘焙会让头彻底不动；它的子孙 HeadRig/NeckBand 各自是根。
+HEAD_FIELD_DEFORMERS = frozenset({"HeadRig", "NeckBand"})
 
 
 def head_field_deformers(entries: List[Dict],
@@ -1766,9 +1768,9 @@ def build_rig_spec(
     keyformed, multi_hit, eyes_tracked, head_tracked = [], [], [], []
     opacity_driven: List[str] = []
     trunk_covered: List[str] = []
-    # 主干已经接住头部三轴的层名（Task 3 只对 HeadRig 闭包启用；扩到 NeckBand 与
-    # BodySway 是 Task 5）。归属必须在**烘焙之前**按层名解析一次：变形器装配在
-    # 循环之后才改写 ``mesh.deformer_id``，等到那时候再问就晚了。
+    # 主干已经接住头部三轴的层名（HeadRig 与 NeckBand 闭包；BodySway 那条带没有
+    # 头部三轴，不在守卫根里）。归属必须在**烘焙之前**按层名解析一次：变形器装配
+    # 在循环之后才改写 ``mesh.deformer_id``，等到那时候再问就晚了。
     deformer_entries = (builder_result.get("deformer_tree") or {}).get("deformers") or []
     covered = head_field_covered_ids(
         deformer_entries, meshes.keys(),

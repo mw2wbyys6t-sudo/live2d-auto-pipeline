@@ -782,6 +782,35 @@ def test_covered_fade_layer_keeps_its_opacity_band_only():
         "ParamCheek", "ParamBodyAngleZ"], mesh.keyform_axes
 
 
+def test_neck_band_member_does_not_bake_its_own_head_rotation():
+    """NeckBand 也携带头部三轴：挂进去的 neck 即便蒙皮到 Head，也不许再烘一份头转。
+
+    作者表里 neck 绑 ``Neck`` 骨（``head_angle_keyforms`` 本就返回空），所以现状
+    看不出问题；但只要源画把脖子蒙到 ``Head``（脖子随头动是很自然的绑法），
+    NeckBand 不在守卫根里就会让 neck 同时吃「网格烘焙 + NeckBand 继承」两份头转。
+    这条把守卫扩到 NeckBand 闭包钉死。
+    """
+    neck_band = {"name": "NeckBand", "type": "warp", "parent": "Neck",
+                 "grid_rows": 4, "grid_cols": 2, "profile": "neck_band",
+                 "parameters": ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
+                 "targets": ["neck"], "under": "BodySway"}
+    body = {"name": "BodySway", "type": "warp", "parent": "Torso",
+            "grid_rows": 3, "grid_cols": 2, "profile": "torso",
+            "parameters": ["ParamBodyAngleX"], "targets": ["torso"]}
+    result = _result({"neck": _layer_mesh(["Head"]),
+                      "torso": _layer_mesh(["Body"])},
+                     deformers=[neck_band, body],
+                     params=_HEAD_PARAMS + [_BODY_Z])
+    spec = build_rig_spec(result, {"neck": _uv(), "torso": _uv()})
+    mesh = next(m for m in spec.meshes if m.mesh_id == "neck")
+    assert mesh.deformer_id == "NeckBand"
+    assert not any(pid.startswith("ParamAngle")
+                   for pid, _keys in (mesh.keyform_axes or ())), mesh.keyform_axes
+    # 身体跟随仍需留在网格层（BodySway 不带 ParamBodyAngleZ）
+    assert [pid for pid, _k in mesh.keyform_axes] == ["ParamBodyAngleZ"], (
+        mesh.keyform_axes)
+
+
 def test_the_authored_table_does_not_double_apply_the_head_turn():
     """用**真实作者表**跑一遍：face / cheek / 眼皮 都归 HeadRig，且都不带角度带。
 
