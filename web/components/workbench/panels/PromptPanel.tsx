@@ -59,6 +59,12 @@ export default function PromptPanel() {
     setConsistency,
     characterId,
     setCharacterId,
+    engine,
+    setEngine,
+    imageModel,
+    setImageModel,
+    lora,
+    setLora,
     characters,
     current,
     appendPromptTag,
@@ -166,6 +172,52 @@ export default function PromptPanel() {
             </button>
           ))}
         </div>
+      </section>
+
+      <section>
+        <div className="text-xs font-medium text-gray-400 mb-1.5">生图引擎</div>
+        <select
+          value={engine}
+          onChange={(e) => setEngine(e.target.value)}
+          className="w-full px-2.5 py-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-white focus:outline-none focus:border-pink-500"
+        >
+          <option value="auto">自动选择（云端优先）</option>
+          <option value="comfyui">ComfyUI（本地 · 免费 · 可微调）</option>
+          <option value="sd_webui">SD WebUI（本地 · 免费 · 可微调）</option>
+        </select>
+
+        {engine !== 'auto' && (
+          <div className="mt-2 space-y-2">
+            <div>
+              <label htmlFor="engine-model" className="text-[10px] text-gray-500 block mb-1">
+                底模文件名 <span className="text-gray-600">（留空 = 用引擎当前默认模型）</span>
+              </label>
+              <input
+                id="engine-model"
+                value={imageModel}
+                onChange={(e) => setImageModel(e.target.value)}
+                placeholder="例如 illustriousXL_v01.safetensors"
+                className="w-full px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-pink-500"
+              />
+            </div>
+            <div>
+              <label htmlFor="engine-lora" className="text-[10px] text-gray-500 block mb-1">
+                LoRA 文件名 <span className="text-gray-600">（角色一致性，留空 = 不注入）</span>
+              </label>
+              <input
+                id="engine-lora"
+                value={lora}
+                onChange={(e) => setLora(e.target.value)}
+                placeholder="例如 char_style_v1.safetensors"
+                className="w-full px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-pink-500"
+              />
+            </div>
+            <p className="text-[10px] leading-relaxed text-gray-600">
+              底模放 models/checkpoints，LoRA 放 models/loras。6GB 显存建议先用 SD1.5
+              二次元底模调提示词，定稿再换 SDXL（启动 ComfyUI 时加 --lowvram）。
+            </p>
+          </div>
+        )}
       </section>
 
       <section>

@@ -242,6 +242,15 @@ class GenerateCharacterRequest(BaseModel):
     use_semantic: bool = True
     export_live2d: bool = True
     deploy_desktop: bool = False
+    # 空 = 按优先级自动选择（保持旧行为）。多引擎并存后必须能指名，
+    # 否则用户只能靠优先级碰运气，无法指定"用本地免费底模"。
+    provider: str = ""
+    # 本地引擎的模型文件名（comfyui 的 checkpoint、sd_webui 的模型名）。
+    # 只在本地引擎上有意义，云端 provider 传它会返回 400 —— 静默忽略会让
+    # 用户以为换了模型。
+    model: str = ""
+    # 本地引擎的 LoRA 文件名（角色一致性）。留空 = 不注入。
+    lora: str = ""
 
 
 class ChatRequest(BaseModel):
@@ -582,10 +591,15 @@ def _record_generation(result: Dict[str, Any]) -> None:
     layering = steps.get("layering") or {}
     psd = steps.get("psd") or {}
     psd_path = psd.get("psd_path", "") or ""
+    generate = steps.get("generate") or {}
     record = {
         "character_id": result.get("character_id", ""),
         "image_path": result.get("character_image", ""),
         "image_url": result.get("image_url", ""),
+        # 多引擎并存后，"这张图谁画的"必须能复盘：只留时间戳无法解释同角色
+        # 两次生成画风不同。model 在本地引擎上是 `<底模>+<LoRA>`。
+        "provider": generate.get("provider", ""),
+        "model": generate.get("model", ""),
         "layers_dir": layering.get("output_dir", ""),
         "layer_count": layering.get("layer_count", 0),
         "segmentation_method": layering.get("method", ""),
@@ -1672,17 +1686,56 @@ async def generate_image(req: GenerateRequest):
         return _server_error("图像生成", e)
 
 
+def _validate_engine_request(req: "GenerateCharacterRequest") -> None:
+    """校验 provider / model / lora 的组合是否成立。
+
+    为什么要在边界拒绝而不是静默忽略：用户显式指定了模型，说明他对结果有
+    预期；静默回退到默认引擎会让他以为"这个模型效果就这样"，把配置错误
+    误判成模型质量问题。
+    """
+    provider = (req.provider or "").strip()
+    model = (req.model or "").strip()
+    lora = (req.lora or "").strip()
+    if not provider and not model and not lora:
+        return  # 全部留空 = 旧行为，按优先级自动选择
+
+    from core.image_gen.router import ProviderRouter, get_router
+
+    router = get_router()
+    if provider and provider != "auto":
+        registered = {info["name"] for info in router.get_provider_info()}
+        if provider not in registered:
+            raise ClientRequestError(
+                f"未知的图像引擎 '{provider}'，可选：{sorted(registered)}")
+
+    # model / lora 只对本地引擎有意义：这两个 provider 的模型是磁盘上的文件，
+    # 可以被指名；云端 provider 的模型名由它自己决定。
+    local = {"comfyui", "sd_webui"}
+    effective = provider if provider and provider != "auto" else ""
+    if (model or lora) and effective not in local:
+        if not effective:
+            raise ClientRequestError(
+                "指定 model 或 lora 时必须同时指定 provider（comfyui 或 sd_webui），"
+                "否则无法确定由哪个本地引擎加载它")
+        raise ClientRequestError(
+            f"引擎 '{effective}' 不支持指定 model / lora；"
+            f"只有 {sorted(local)} 的模型是本地文件")
+
+
 def _run_generate_character(req: "GenerateCharacterRequest") -> Dict[str, Any]:
     """同步执行完整角色工作流（在线程池中调用，避免阻塞事件循环）。"""
     from core.workflow import WorkflowEngine
     engine = WorkflowEngine(
         output_dir=str(OUTPUT_DIR),
-        provider=None,  # None = 自动选择 (seedream → sensenova → pollinations)
+        # 空 = 自动选择 (seedream → sensenova → pollinations)；非空则只用它
+        provider=(req.provider or None),
         width=req.width,
         height=req.height,
         character_consistency=req.character_id or None,
         use_semantic_segmentation=req.use_semantic,
         export_live2d=req.export_live2d,
+        image_model=req.model or "",
+        lora=req.lora or "",
     )
     result = engine.run(
         prompt=req.prompt,
@@ -1721,8 +1774,11 @@ def _run_generate_character(req: "GenerateCharacterRequest") -> Dict[str, Any]:
 async def generate_character(req: GenerateCharacterRequest):
     try:
         _clamp_dimensions(req)  # 边界处钳制，与 /api/generate 同一条信任边界
+        _validate_engine_request(req)  # 引擎/模型组合不成立时直接 400
         result = await _to_thread_bounded(_run_generate_character, WORKFLOW_TIMEOUT, req)
         return ok(result, "角色生成完成" if result.get("success") else "角色生成失败")
+    except ClientRequestError as e:
+        return err(str(e), 400)
     except asyncio.TimeoutError:
         return err(
             _timeout_message("角色生成工作流", WORKFLOW_TIMEOUT, "LIVE2D_WORKFLOW_TIMEOUT"),

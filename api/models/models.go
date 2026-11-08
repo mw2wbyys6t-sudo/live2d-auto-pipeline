@@ -247,6 +247,13 @@ type GenerateRequest struct {
 	UseTracking    bool   `json:"use_tracking,omitempty"`
 	NegativePrompt string `json:"negative_prompt,omitempty"`
 	DeployDesktop  bool   `json:"deploy_desktop,omitempty"`
+	// 生图引擎选择。空 = 由 Python 侧按优先级自动选择（保持旧行为）。
+	// 多引擎并存后必须能指名，否则用户无法指定"用本地免费底模"。
+	Provider string `json:"provider,omitempty"`
+	// 本地引擎的模型文件名（comfyui 的 checkpoint / sd_webui 的模型名）。
+	Model string `json:"model,omitempty"`
+	// 本地引擎的 LoRA 文件名（角色一致性）。留空 = 不注入。
+	Lora string `json:"lora,omitempty"`
 }
 
 // ChatRequest LLM聊天请求

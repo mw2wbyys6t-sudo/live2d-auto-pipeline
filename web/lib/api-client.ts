@@ -273,6 +273,10 @@ export class APIClient {
       use_semantic: req.segmentationMethod === 'semantic' || req.characterConsistency,
       export_live2d: true,
       deploy_desktop: false,
+      // 引擎留空即不传：后端按优先级自动选择，保持旧行为。
+      provider: req.engine || undefined,
+      model: req.model?.trim() || undefined,
+      lora: req.lora?.trim() || undefined,
     };
   }
 

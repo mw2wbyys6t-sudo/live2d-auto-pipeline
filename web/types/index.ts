@@ -79,7 +79,7 @@ export type SegmentationMethod = 'kmeans' | 'semantic';
 export interface GenerationRequest {
   prompt: string;
   negativePrompt?: string;
-  /** 后端当前不消费 provider：保留为可选，避免 UI 展示无效选项。 */
+  /** 界面上的偏好标记，不透传给后端；真正生效的引擎见 engine。 */
   provider?: ProviderId;
   width: Resolution;
   height: Resolution;
@@ -92,6 +92,12 @@ export interface GenerationRequest {
   steps?: number;
   cfg?: number;
   segmentationMethod?: SegmentationMethod;
+  /** 生图引擎（auto / comfyui / sd_webui / …）；留空 = 后端按优先级自动选择。 */
+  engine?: string;
+  /** 本地引擎的底模文件名（comfyui checkpoint / sd_webui 模型名）。 */
+  model?: string;
+  /** 本地引擎的 LoRA 文件名（角色一致性）。 */
+  lora?: string;
 }
 
 export type PipelineStatus =

@@ -74,6 +74,9 @@ class ComfyUIProvider(ImageProvider):
         )
         self.checkpoint = (os.environ.get("COMFYUI_CHECKPOINT") or "").strip()
         self.workflow_path = (os.environ.get("COMFYUI_WORKFLOW") or "").strip()
+        # LoRA 是「角色一致性」的落点：训练产物放进 ComfyUI 的 models/loras 后，
+        # 用 COMFYUI_LORA 指认文件名（可省略扩展名）。未设置即不注入，保持原图结构。
+        self.lora = (os.environ.get("COMFYUI_LORA") or "").strip()
         self._session = session
         self._probe_cache: tuple[float, bool] = (0.0, False)
 
@@ -106,8 +109,13 @@ class ComfyUIProvider(ImageProvider):
         return (
             "启动 ComfyUI（默认 http://127.0.0.1:8188）后即可使用。\n"
             "1) 在 ComfyUI 里下载至少一个 checkpoint（models/checkpoints）；\n"
+            "   6GB 显存：先用 SD1.5 二次元模型快速调提示词，定稿再换 SDXL\n"
+            "   （Illustrious-XL / NoobAI-XL，需开 --lowvram，出图更慢但更精细）；\n"
             "2) 若模型不在默认目录，设置 COMFYUI_CHECKPOINT 指定文件名；\n"
-            "3) 想用自定义工作流时，设置 COMFYUI_WORKFLOW 指向 API 格式的 workflow JSON。\n"
+            "3) 角色一致性：把训练好的 LoRA 放进 models/loras，用 COMFYUI_LORA\n"
+            "   指认文件名（可省略 .safetensors），强度用 COMFYUI_LORA_STRENGTH；\n"
+            "4) 想用自定义工作流时，设置 COMFYUI_WORKFLOW 指向 API 格式的 workflow JSON\n"
+            "   （支持 {{LORA}} / {{LORA_STRENGTH}} / {{LORA_STRENGTH_CLIP}} 占位符）。\n"
             f"当前地址：{self.base_url}"
         )
 
@@ -141,6 +149,8 @@ class ComfyUIProvider(ImageProvider):
             width=int(width),
             height=int(height),
             seed=int(seed),
+            lora=kwargs.get("lora"),
+            model=kwargs.get("model"),
         )
 
         self._report_progress("提交到 ComfyUI", 20)
@@ -154,13 +164,17 @@ class ComfyUIProvider(ImageProvider):
         saved = self._save_bytes(data, output_path)
 
         used_checkpoint = getattr(self, "_pending_checkpoint", "") or self.checkpoint
+        used_lora = getattr(self, "_pending_lora", "") or ""
+        # 复盘需要知道「这张图用的是哪个底模 + 哪个 LoRA」，缺一不可：
+        # 多模型并存后，只记 checkpoint 无法解释同一底模下画风不同。
+        model_label = f"{used_checkpoint}+{used_lora}" if used_lora else used_checkpoint
         self._report_progress("完成", 100)
         log.success(f"ComfyUI 本地生成完成: {saved}")
         return GenerationResult(
             success=True,
             image_path=saved,
             provider=self.name,
-            model=used_checkpoint,
+            model=model_label,
             prompt=prompt or "",
             width=int(width),
             height=int(height),
@@ -170,6 +184,10 @@ class ComfyUIProvider(ImageProvider):
                 "prompt_id": prompt_id,
                 "seed": seed,
                 "filename": image_info.get("filename", ""),
+                "checkpoint": used_checkpoint,
+                "lora": used_lora,
+                "lora_strength": (getattr(self, "_pending_lora_strength", None)
+                                  if used_lora else None),
             },
         )
 
@@ -179,7 +197,12 @@ class ComfyUIProvider(ImageProvider):
         """递归替换占位符；数值型占位符保持 int，避免 ComfyUI 类型校验失败。"""
         numeric = {"{{WIDTH}}": self._pending_width, "{{HEIGHT}}": self._pending_height,
                    "{{SEED}}": self._pending_seed, "{{STEPS}}": self._pending_steps,
-                   "{{CFG}}": self._pending_cfg}
+                   "{{CFG}}": self._pending_cfg,
+                   # 强度必须是 float：ComfyUI 会对 LoraLoader 的这两个输入做
+                   # 类型校验，留成字符串会被直接拒收。
+                   "{{LORA_STRENGTH}}": getattr(self, "_pending_lora_strength", 1.0),
+                   "{{LORA_STRENGTH_CLIP}}": getattr(
+                       self, "_pending_lora_strength_clip", 1.0)}
         if isinstance(node, dict):
             return {k: self._apply_placeholders(v) for k, v in node.items()}
         if isinstance(node, list):
@@ -191,6 +214,7 @@ class ComfyUIProvider(ImageProvider):
                 "{{PROMPT}}": self._pending_prompt,
                 "{{NEGATIVE_PROMPT}}": self._pending_negative,
                 "{{CHECKPOINT}}": self._pending_checkpoint,
+                "{{LORA}}": getattr(self, "_pending_lora", ""),
                 "{{SAMPLER}}": os.environ.get("COMFYUI_SAMPLER", "dpmpp_2m"),
                 "{{SCHEDULER}}": os.environ.get("COMFYUI_SCHEDULER", "karras"),
                 "{{PREFIX}}": "live2d",
@@ -204,6 +228,8 @@ class ComfyUIProvider(ImageProvider):
     def _build_graph(
         self, prompt: str, negative_prompt: str,
         width: int, height: int, seed: int,
+        lora: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         self._pending_prompt = prompt or ""
         self._pending_negative = negative_prompt or ""
@@ -212,23 +238,40 @@ class ComfyUIProvider(ImageProvider):
         self._pending_seed = seed
         self._pending_steps = _env_int("COMFYUI_STEPS", 28)
         self._pending_cfg = _env_float("COMFYUI_CFG", 7.0)
+        # LoRA 在**每次构建**时解析，不用 __init__ 的快照：一个 provider 实例要能
+        # 按角色切换 LoRA（角色一致性正是这么用的）。请求级 lora 参数优先于环境变量。
+        # 解析失败要抛错 —— 静默忽略会让「以为加了 LoRA」的产物无法解释。
+        self._pending_lora = self._resolve_lora(lora)
+        self._pending_lora_strength = _env_float("COMFYUI_LORA_STRENGTH", 1.0)
+        self._pending_lora_strength_clip = _env_float(
+            "COMFYUI_LORA_STRENGTH_CLIP", self._pending_lora_strength)
 
         if self.workflow_path:
-            self._pending_checkpoint = self._resolve_checkpoint(required=False) or ""
+            self._pending_checkpoint = self._resolve_checkpoint(
+                required=False, override=model) or ""
             return self._load_workflow_file(self.workflow_path)
 
-        self._pending_checkpoint = self._resolve_checkpoint(required=True)
+        self._pending_checkpoint = self._resolve_checkpoint(required=True, override=model)
         sampler = os.environ.get("COMFYUI_SAMPLER", "dpmpp_2m")
         scheduler = os.environ.get("COMFYUI_SCHEDULER", "karras")
 
-        # 标准 txt2img 图：Checkpoint → 双 CLIPTextEncode → EmptyLatent → KSampler → VAE → SaveImage
+        graph = self._txt2img_graph(
+            width, height, seed, sampler, scheduler,
+            self._pending_steps, self._pending_cfg)
+        return self._inject_lora(graph)
+
+    def _txt2img_graph(
+        self, width: int, height: int, seed: int,
+        sampler: str, scheduler: str, steps: int, cfg: float,
+    ) -> Dict[str, Any]:
+        """标准 txt2img 图：Checkpoint → 双 CLIPTextEncode → EmptyLatent → KSampler → VAE → SaveImage。"""
         return {
             "3": {
                 "class_type": "KSampler",
                 "inputs": {
                     "seed": seed,
-                    "steps": self._pending_steps,
-                    "cfg": self._pending_cfg,
+                    "steps": steps,
+                    "cfg": cfg,
                     "sampler_name": sampler,
                     "scheduler": scheduler,
                     "denoise": 1.0,
@@ -264,6 +307,33 @@ class ComfyUIProvider(ImageProvider):
             },
         }
 
+    #: LoRA 节点编号。选 10 是为了不动既有 3~9 的编号（黄金断言依赖它们）。
+    LORA_NODE_ID = "10"
+
+    def _inject_lora(self, graph: Dict[str, Any]) -> Dict[str, Any]:
+        """把 LoraLoader 插到 Checkpoint 与采样器之间。
+
+        关键点：**model 与 clip 都要改接** LoRA 输出。只改 model 会让提示词
+        绕过 LoRA 的词嵌入，等于只生效一半（画风变了但触发词不认）。
+        未配置 LoRA 时原样返回 —— 结构逐键不变。
+        """
+        if not self._pending_lora:
+            return graph
+        graph[self.LORA_NODE_ID] = {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "lora_name": self._pending_lora,
+                "strength_model": self._pending_lora_strength,
+                "strength_clip": self._pending_lora_strength_clip,
+                "model": ["4", 0],
+                "clip": ["4", 1],
+            },
+        }
+        graph["3"]["inputs"]["model"] = [self.LORA_NODE_ID, 0]
+        for node_id in ("6", "7"):
+            graph[node_id]["inputs"]["clip"] = [self.LORA_NODE_ID, 1]
+        return graph
+
     def _load_workflow_file(self, path: str) -> Dict[str, Any]:
         p = Path(path).expanduser()
         if not p.is_file():
@@ -287,7 +357,58 @@ class ComfyUIProvider(ImageProvider):
                                   provider=self.name, retryable=False)
         return self._apply_placeholders(graph)
 
-    def _resolve_checkpoint(self, required: bool = True) -> str:
+    def _resolve_lora(self, override: Optional[str] = None) -> str:
+        """把 LoRA 名解析成 ComfyUI 里真实的 lora 文件名。
+
+        优先级：请求级 ``override`` > 环境变量 ``COMFYUI_LORA``。
+        - 都为空 → 返回空串（不注入 LoRA，属正常路径）；
+        - 配置了 → 必须在 ``/object_info/LoraLoader`` 的列表里能对上。
+          允许省略 ``.safetensors`` 扩展名，但**不做模糊匹配**：猜错一个
+          LoRA 等于把角色换成别人，这比失败更难排查。
+        """
+        # 每次都读环境变量（而不是 __init__ 的快照）：设置页可以在进程运行中改配置，
+        # 一个 provider 实例也要能按角色切换 LoRA。
+        wanted = (override or os.environ.get("COMFYUI_LORA") or self.lora or "").strip()
+        if not wanted:
+            return ""
+        try:
+            resp = self.session.get(self._url("/object_info/LoraLoader"), timeout=5)
+            if resp.status_code != 200:
+                raise GenerationError(
+                    f"查询 LoRA 列表失败: HTTP {resp.status_code}", provider=self.name)
+            info = resp.json()
+            node = info.get("LoraLoader", {}) if isinstance(info, dict) else {}
+            available = [str(x) for x in (
+                node.get("input", {})
+                .get("required", {})
+                .get("lora_name", [[]])[0] or []
+            )]
+        except GenerationError:
+            raise
+        except Exception as e:
+            raise GenerationError(
+                f"查询 ComfyUI LoRA 失败: {e}", provider=self.name) from e
+
+        for candidate in (wanted, f"{wanted}.safetensors"):
+            if candidate in available:
+                log.info(f"使用 LoRA: {candidate}")
+                return candidate
+        raise GenerationError(
+            f"COMFYUI_LORA 指定的 '{wanted}' 不在 ComfyUI 的 models/loras 里。"
+            f"可用：{available or '（空）'}。请把训练好的 .safetensors 放进 "
+            f"models/loras，或用 COMFYUI_LORA 指向正确文件名。",
+            provider=self.name, retryable=False, code="lora_not_found",
+        )
+
+    def _resolve_checkpoint(self, required: bool = True,
+                            override: Optional[str] = None) -> str:
+        """解析底模文件名。优先级：请求级 override > COMFYUI_CHECKPOINT > 自动取第一个。
+
+        显式 override 直接采信、不去对象列表里核对：ComfyUI 的 checkpoint 列表
+        在模型刚放进去时可能还没刷新，而猜错/拒绝的代价比让 ComfyUI 自己报错更高。
+        """
+        if override and override.strip():
+            return override.strip()
         if self.checkpoint:
             return self.checkpoint
         try:

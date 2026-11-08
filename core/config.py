@@ -183,6 +183,12 @@ class SecureConfig:
             # 本地生图引擎（只连本机回环地址；见 core/image_gen/local_http.py）
             'COMFYUI_BASE_URL': 'http://127.0.0.1:8188',
             'SD_WEBUI_BASE_URL': 'http://127.0.0.1:7860',
+            # 角色一致性用的 LoRA：训练产物放进 ComfyUI 的 models/loras 后，
+            # 这里填文件名（可省略 .safetensors）。留空 = 不注入 LoRA。
+            # 请求级 lora 参数优先于它，便于同一实例按角色切换。
+            'COMFYUI_LORA': '',
+            'COMFYUI_LORA_STRENGTH': '1.0',
+            'COMFYUI_LORA_STRENGTH_CLIP': '1.0',
             # 1 = 只允许本地引擎，完全不发起外网请求
             'LIVE2D_LOCAL_ONLY': '0',
             # 安全默认：桌面形态只绑回环；容器由 Dockerfile/compose 显式

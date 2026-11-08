@@ -250,6 +250,16 @@ func (h *Handler) GenerateCharacter(c *gin.Context) {
 	h.wsHub.BroadcastProgress(taskID, "generating", 40, "正在生成图片...")
 	result, err := h.imageGenerator.GenerateWithCharacter(req)
 	if err != nil {
+		if errors.Is(err, services.ErrInvalidEngineSelection) {
+			// 参数错，重试无用；把具体原因原样告诉调用方（文案由 services 生成，
+			// 不含本机路径或上游原文）。
+			h.wsHub.BroadcastProgress(taskID, "error", 0, err.Error())
+			c.JSON(http.StatusBadRequest, models.Response{
+				Success: false,
+				Error:   err.Error(),
+			})
+			return
+		}
 		if errors.Is(err, services.ErrNoImageEngine) {
 			// 不是「稍后重试」能好的故障：把该做什么直接说出来，
 			// WS 与 HTTP 两条通道用同一句文案。

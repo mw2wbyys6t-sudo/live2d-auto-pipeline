@@ -116,6 +116,14 @@ interface WorkbenchValue {
   setConsistency: (value: boolean) => void;
   characterId: string;
   setCharacterId: (value: string) => void;
+  /** 生图引擎；'auto' = 由后端按优先级自动选择。 */
+  engine: string;
+  setEngine: (value: string) => void;
+  /** 本地引擎底模 / LoRA 文件名；仅 engine 为 comfyui / sd_webui 时生效。 */
+  imageModel: string;
+  setImageModel: (value: string) => void;
+  lora: string;
+  setLora: (value: string) => void;
   appendPromptTag: (tag: string) => void;
 
   generation: GenerationState;
@@ -240,6 +248,11 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
   const [resolution, setResolution] = useState<Resolution>(1024);
   const [consistency, setConsistency] = useState(true);
   const [characterId, setCharacterId] = useState('');
+  // 生图引擎：默认 auto（后端按优先级自动选，行为与旧版一致）。
+  // 只有显式选了本地引擎，底模 / LoRA 才随请求下发。
+  const [engine, setEngine] = useState('auto');
+  const [imageModel, setImageModel] = useState('');
+  const [lora, setLora] = useState('');
 
   const [generation, setGeneration] = useState<GenerationState>({
     running: false,
@@ -523,6 +536,10 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       height: resolution,
       characterConsistency: consistency,
       characterId: consistency && characterId ? characterId : undefined,
+      engine: engine === 'auto' ? undefined : engine,
+      // 底模 / LoRA 只在本地引擎上有意义；其它引擎传了会被后端 400 拒掉。
+      model: engine === 'auto' ? undefined : imageModel.trim() || undefined,
+      lora: engine === 'auto' ? undefined : lora.trim() || undefined,
     };
     try {
       const result = await apiClient.generateStream(
@@ -578,6 +595,9 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     resolution,
     consistency,
     characterId,
+    engine,
+    imageModel,
+    lora,
     generation.running,
     stage,
     setStage,
@@ -1065,6 +1085,12 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       setConsistency,
       characterId,
       setCharacterId,
+      engine,
+      setEngine,
+      imageModel,
+      setImageModel,
+      lora,
+      setLora,
       appendPromptTag,
       generation,
       generate,
@@ -1113,6 +1139,9 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       resolution,
       consistency,
       characterId,
+      engine,
+      imageModel,
+      lora,
       appendPromptTag,
       generation,
       generate,

@@ -247,3 +247,36 @@ const result = await step.execute({
   style: 'anime',
 });
 ```
+
+---
+
+## 🧩 分层友好约束（本地引擎 / 任意底模通用）
+
+LoRA 学的是「角色长什么样」，学不会「图层能不能切开」。要让 `core/segment_engine`
+稳定分出部位，提示词必须主动约束构图。把下面这段追加在角色描述之后：
+
+```text
+front-facing standing pose, arms held away from the torso, legs slightly apart,
+no limb overlapping the body, hair not crossing the face,
+flat even lighting, no cast shadow on clothes, no props in front of the body,
+plain pure white background, full body, three-quarter view only if arms stay clear
+```
+
+对应负向提示词：
+
+```text
+crossed arms, hands on hips, overlapping sleeves, hair over eyes,
+back view, sitting, cropped legs, blurred edges, heavy vignette,
+cast shadow, complex background, multiple characters
+```
+
+三条硬约束的理由（都对应现有分层链路）：
+
+| 约束 | 为什么 | 违反后的表现 |
+|---|---|---|
+| 手臂离开躯干 | 袖子与上衣重叠时，分割模型无法判定边界属于谁 | `arm_L` 被并进 `clothes_top`，绑骨后手臂带走上衣 |
+| 腿微分开 | 双腿并拢时缝隙里没有背景像素，分不出两条腿 | `leg_L`/`leg_R` 合成一块，走路动画失效 |
+| 纯白背景 + 无投影 | 投影会被当成衣物的一部分，边缘也不干净 | 分层边缘多一圈灰边，透明背景不干净 |
+
+> 生成分辨率建议 ≥1024 高度：低于这个尺寸时 `REQUIRED_PARTS` 里的小部件
+> （眼睛、嘴）会退化到几百像素，部位分割的 IoU 明显下降。

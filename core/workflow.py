@@ -145,6 +145,8 @@ class WorkflowEngine:
         use_semantic_segmentation: bool = True,
         segmentation_backend: str = "auto",
         export_live2d: bool = False,
+        image_model: str = "",
+        lora: str = "",
     ):
         """Initialize the workflow engine.
 
@@ -168,6 +170,10 @@ class WorkflowEngine:
         self.k_clusters = k_clusters
         # "auto"/空字符串表示由 ProviderRouter 按优先级自动选择
         self.provider_name = None if provider in (None, "", "auto") else provider
+        # 本地引擎的底模 / LoRA：留空即由 provider 自己决定（环境变量或自动挑选）。
+        # 这两个值最终会出现在生成记录里，多模型并存时才解释得清"这张图谁画的"。
+        self.image_model = (image_model or "").strip()
+        self.lora = (lora or "").strip()
         self.width = width
         self.height = height
         self.use_semantic_segmentation = use_semantic_segmentation
@@ -496,6 +502,23 @@ class WorkflowEngine:
                         + "；".join(verdict["reasons"]))
         return quality
 
+    def _local_engine_options(self) -> Dict[str, Any]:
+        """只把本地引擎认识的 `model` / `lora` 传下去。
+
+        为什么按 provider 过滤而不是无条件透传：`model` 在云端 provider 上
+        语义不同（那是它们的固定模型名），透传会混淆"用户以为换了模型"与
+        "provider 忽略了它"。空值不传，保持旧调用链的参数形态。
+        """
+        local = {"comfyui", "sd_webui"}
+        if self.provider_name not in local:
+            return {}
+        options: Dict[str, Any] = {}
+        if self.image_model:
+            options["model"] = self.image_model
+        if self.lora:
+            options["lora"] = self.lora
+        return options
+
     def run(
         self,
         prompt: str = "",
@@ -575,6 +598,7 @@ class WorkflowEngine:
                     negative_prompt=effective_negative or None,
                     seed=seed,
                     auto_fallback=auto_fallback,
+                    **self._local_engine_options(),
                 )
                 character_path = gen_result.image_path
                 temp_generated = character_path
@@ -958,6 +982,12 @@ if __name__ == "__main__":
                         default="auto", help="Image provider")
     parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--height", type=int, default=1024)
+    # 本地引擎的底模 / LoRA。留空 = 由 provider 自己决定（环境变量或自动挑选）。
+    # Go 侧把这两个字段透传进来，界面才能"选模型"。
+    parser.add_argument("--model", default="",
+                        help="Local engine model file (comfyui checkpoint / sd_webui model)")
+    parser.add_argument("--lora", default="",
+                        help="Local engine LoRA file (character consistency)")
     parser.add_argument("--version", "-V", action="version", version=FULL_VERSION_STRING)
     # v0.10.0 new options
     parser.add_argument("--character-id", help="Character ID for consistency (loads or creates)")
@@ -986,6 +1016,8 @@ if __name__ == "__main__":
         character_consistency=args.character_id,
         use_semantic_segmentation=args.semantic,
         export_live2d=args.live2d_export,
+        image_model=args.model or "",
+        lora=args.lora or "",
     )
     result = wf.run(
         prompt=args.prompt,

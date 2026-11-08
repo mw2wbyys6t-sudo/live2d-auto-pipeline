@@ -330,3 +330,141 @@ class TestRouterLocalMode:
         # 失败要能照着做，而不是 "Last error: None"
         assert "设置" in str(exc.value)
         assert not out.exists(), "失败时不该留下一张假图"
+
+
+# ---------- ComfyUI：LoRA 注入 ----------
+
+
+def _comfy_routes_with_lora(png: bytes, loras=("char_style_v1.safetensors",)):
+    """在基础路由上加 LoraLoader 的可用列表。"""
+    routes = _comfy_routes(png)
+    routes["GET /object_info/LoraLoader"] = FakeResponse(
+        200,
+        {"LoraLoader": {"input": {"required": {"lora_name": [list(loras)]}}}},
+    )
+    return routes
+
+
+class TestComfyUILoraInjection:
+    """LoRA 是角色一致性的落点：必须真的接进采样图，而不是只写在配置里。"""
+
+    def _provider(self, monkeypatch, routes, tmp_path):
+        from core.image_gen.comfyui import ComfyUIProvider
+
+        monkeypatch.setenv("COMFYUI_BASE_URL", "http://127.0.0.1:8188")
+        monkeypatch.delenv("COMFYUI_CHECKPOINT", raising=False)
+        monkeypatch.delenv("COMFYUI_WORKFLOW", raising=False)
+        session = FakeSession(routes)
+        return ComfyUIProvider(session=session), session, tmp_path / "out.png"
+
+    def test_without_lora_the_graph_keeps_its_original_shape(
+            self, tmp_path, monkeypatch):
+        """未配 LoRA 时结构必须逐键不变 —— 既有产物与断言都依赖这套节点编号。"""
+        provider, session, out = self._provider(
+            monkeypatch, _comfy_routes_with_lora(_png_bytes()), tmp_path)
+        monkeypatch.delenv("COMFYUI_LORA", raising=False)
+
+        provider.generate(prompt="1girl", output_path=str(out), seed=7)
+
+        posted = _find_call(session, "POST /prompt")["json"]["prompt"]
+        assert set(posted) == {"3", "4", "5", "6", "7", "8", "9"}
+        assert not any(n["class_type"] == "LoraLoader" for n in posted.values())
+        assert posted["3"]["inputs"]["model"] == ["4", 0]
+        assert posted["6"]["inputs"]["clip"] == ["4", 1]
+
+    def test_lora_node_is_wired_into_sampler_and_both_clips(
+            self, tmp_path, monkeypatch):
+        provider, session, out = self._provider(
+            monkeypatch, _comfy_routes_with_lora(_png_bytes()), tmp_path)
+        monkeypatch.setenv("COMFYUI_LORA", "char_style_v1")
+
+        result = provider.generate(prompt="1girl", output_path=str(out), seed=7)
+
+        posted = _find_call(session, "POST /prompt")["json"]["prompt"]
+        lora_nodes = [k for k, n in posted.items() if n["class_type"] == "LoraLoader"]
+        assert len(lora_nodes) == 1, posted
+        lora_id = lora_nodes[0]
+        assert posted[lora_id]["inputs"]["lora_name"] == "char_style_v1.safetensors"
+        # 模型与 CLIP 都必须经 LoRA 节点，否则只生效一半
+        assert posted["3"]["inputs"]["model"] == [lora_id, 0]
+        assert posted["6"]["inputs"]["clip"] == [lora_id, 1]
+        assert posted["7"]["inputs"]["clip"] == [lora_id, 1]
+        # 结果要能复盘到底用了哪个 LoRA
+        assert "char_style_v1" in result.model
+
+    def test_lora_strength_is_forwarded_as_float(self, tmp_path, monkeypatch):
+        provider, session, out = self._provider(
+            monkeypatch, _comfy_routes_with_lora(_png_bytes()), tmp_path)
+        monkeypatch.setenv("COMFYUI_LORA", "char_style_v1.safetensors")
+        monkeypatch.setenv("COMFYUI_LORA_STRENGTH", "0.75")
+        monkeypatch.setenv("COMFYUI_LORA_STRENGTH_CLIP", "0.6")
+
+        provider.generate(prompt="1girl", output_path=str(out), seed=7)
+
+        posted = _find_call(session, "POST /prompt")["json"]["prompt"]
+        lora_id = next(k for k, n in posted.items() if n["class_type"] == "LoraLoader")
+        assert posted[lora_id]["inputs"]["strength_model"] == pytest.approx(0.75)
+        assert posted[lora_id]["inputs"]["strength_clip"] == pytest.approx(0.6)
+
+    def test_illegal_strength_falls_back_to_default(self, tmp_path, monkeypatch):
+        provider, session, out = self._provider(
+            monkeypatch, _comfy_routes_with_lora(_png_bytes()), tmp_path)
+        monkeypatch.setenv("COMFYUI_LORA", "char_style_v1")
+        monkeypatch.setenv("COMFYUI_LORA_STRENGTH", "not-a-number")
+
+        provider.generate(prompt="1girl", output_path=str(out), seed=7)
+
+        posted = _find_call(session, "POST /prompt")["json"]["prompt"]
+        lora_id = next(k for k, n in posted.items() if n["class_type"] == "LoraLoader")
+        assert posted[lora_id]["inputs"]["strength_model"] == pytest.approx(1.0)
+
+    def test_missing_lora_raises_instead_of_silently_ignoring(
+            self, tmp_path, monkeypatch):
+        """配了却找不到时必须报错：静默忽略会让「以为加了 LoRA」的产物无法解释。"""
+        from core.image_gen.base import GenerationError
+
+        routes = _comfy_routes_with_lora(_png_bytes(), loras=("other.safetensors",))
+        provider, session, out = self._provider(monkeypatch, routes, tmp_path)
+        monkeypatch.setenv("COMFYUI_LORA", "char_style_v1")
+
+        with pytest.raises(GenerationError) as exc:
+            provider.generate(prompt="1girl", output_path=str(out), seed=7)
+
+        message = str(exc.value)
+        assert "char_style_v1" in message
+        assert "other.safetensors" in message, "错误里要列出可用的 LoRA"
+        assert not any(k == "POST /prompt" for k, _ in session.calls), \
+            "校验失败就不该把采样请求发出去"
+
+    def test_custom_workflow_supports_lora_placeholders(self, tmp_path, monkeypatch):
+        from core.image_gen.comfyui import ComfyUIProvider
+
+        workflow = {
+            "1": {"class_type": "KSampler", "inputs": {"seed": "{{SEED}}"}},
+            "10": {"class_type": "LoraLoader", "inputs": {
+                "lora_name": "{{LORA}}",
+                "strength_model": "{{LORA_STRENGTH}}",
+                "strength_clip": "{{LORA_STRENGTH_CLIP}}",
+            }},
+        }
+        wf_path = tmp_path / "wf_lora.json"
+        wf_path.write_text(json.dumps(workflow), encoding="utf-8")
+
+        # workflow_path 在 __init__ 里读取，必须先设 env 再造 provider
+        monkeypatch.setenv("COMFYUI_BASE_URL", "http://127.0.0.1:8188")
+        monkeypatch.delenv("COMFYUI_CHECKPOINT", raising=False)
+        monkeypatch.setenv("COMFYUI_WORKFLOW", str(wf_path))
+        monkeypatch.setenv("COMFYUI_LORA", "char_style_v1.safetensors")
+        monkeypatch.setenv("COMFYUI_LORA_STRENGTH", "0.8")
+        monkeypatch.delenv("COMFYUI_LORA_STRENGTH_CLIP", raising=False)
+
+        session = FakeSession(_comfy_routes_with_lora(_png_bytes()))
+        provider = ComfyUIProvider(session=session)
+        out = tmp_path / "out.png"
+
+        provider.generate(prompt="1girl", output_path=str(out), seed=7)
+
+        posted = _find_call(session, "POST /prompt")["json"]["prompt"]
+        assert posted["10"]["inputs"]["lora_name"] == "char_style_v1.safetensors"
+        assert posted["10"]["inputs"]["strength_model"] == pytest.approx(0.8)
+        assert posted["10"]["inputs"]["strength_clip"] == pytest.approx(0.8)

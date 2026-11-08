@@ -46,6 +46,13 @@ func (g *ImageGenerator) GenerateImage(req models.GenerateImageRequest) (*models
 
 // GenerateWithCharacter 使用角色一致性和语义分割生成（v0.10.0）
 func (g *ImageGenerator) GenerateWithCharacter(req models.GenerateRequest) (*models.GenerateImageResponse, error) {
+	// 引擎参数不合法是**请求错误**，不是运行时故障：必须先拦下来。
+	// 否则它会走完整条工作流、失败、再回退成占位图 —— 用户看到"生成成功"
+	// 但图片没变，比直接报错更难排查。
+	if err := validateEngineSelection(req); err != nil {
+		return nil, err
+	}
+
 	// 设置默认值
 	if req.Width <= 0 {
 		req.Width = 1024
@@ -88,21 +95,65 @@ func (g *ImageGenerator) GenerateWithCharacter(req models.GenerateRequest) (*mod
 // 而不是并入「生成服务暂不可用，请稍后重试」——后者会让人白等。
 var ErrNoImageEngine = errors.New("没有可用的图像引擎")
 
+// ErrInvalidEngineSelection 表示请求里的「引擎 / 模型 / LoRA」组合不可能生效。
+// 与 ErrNoImageEngine 的区别：这是调用方传错了参数，重试没有意义；
+// handler 必须以 400 原样回怼，而不是折叠成"服务暂不可用"。
+var ErrInvalidEngineSelection = errors.New("图像引擎参数不合法")
+
+// knownImageProviders 必须与 core/workflow.py 的 --provider choices 保持一致：
+// Go 是把这些值原样拼进 CLI 参数的，多一个少一个都会让 Python 侧 argparse
+// 直接退出（退出码 2、没有 JSON），最终表现为"生成成功但拿到占位图"。
+var knownImageProviders = map[string]struct{}{
+	"auto": {}, "comfyui": {}, "sd_webui": {}, "pollinations": {},
+	"sensenova": {}, "seedream": {}, "openai": {}, "local_placeholder": {},
+}
+
+// validateEngineSelection 在启动 Python 之前校验引擎组合。
+//
+// 只做两条规则（与 Python 侧 _validate_engine_request 同义）：
+//  1. provider 必须是已注册的引擎名；
+//  2. model / lora 是**本地文件名**，只能由 comfyui / sd_webui 加载。
+//
+// 全空表示"按优先级自动选择"，保持旧行为。
+func validateEngineSelection(req models.GenerateRequest) error {
+	provider := strings.TrimSpace(req.Provider)
+	model := strings.TrimSpace(req.Model)
+	lora := strings.TrimSpace(req.Lora)
+	if provider == "" && model == "" && lora == "" {
+		return nil
+	}
+	if provider != "" {
+		if _, ok := knownImageProviders[provider]; !ok {
+			return fmt.Errorf("%w：未知的图像引擎 %q", ErrInvalidEngineSelection, provider)
+		}
+	}
+	local := provider == "comfyui" || provider == "sd_webui"
+	if (model != "" || lora != "") && !local {
+		if provider == "" {
+			return fmt.Errorf("%w：指定模型或 LoRA 时必须同时指定引擎（comfyui 或 sd_webui），"+
+				"否则无法确定由谁加载本地文件", ErrInvalidEngineSelection)
+		}
+		return fmt.Errorf("%w：引擎 %q 不支持指定模型 / LoRA；"+
+			"只有 comfyui 与 sd_webui 使用本地模型文件", ErrInvalidEngineSelection, provider)
+	}
+	return nil
+}
+
 // pythonWorkflowResult 对应 Python WorkflowEngine.run() 返回的 JSON 结构
 type pythonWorkflowResult struct {
-	Success        bool                   `json:"success"`
-	Version        string                 `json:"version"`
-	CharacterImage string                 `json:"character_image"`
-	LayersDir      string                 `json:"layers_dir"`
-	OutputDir      string                 `json:"output_dir"`
-	CharacterID    string                 `json:"character_id,omitempty"`
-	Error          string                 `json:"error,omitempty"`
-	ErrorState     string                 `json:"error_state,omitempty"`
+	Success        bool   `json:"success"`
+	Version        string `json:"version"`
+	CharacterImage string `json:"character_image"`
+	LayersDir      string `json:"layers_dir"`
+	OutputDir      string `json:"output_dir"`
+	CharacterID    string `json:"character_id,omitempty"`
+	Error          string `json:"error,omitempty"`
+	ErrorState     string `json:"error_state,omitempty"`
 	// ErrorCode 是机器可读的失败原因（见 core/image_gen/base.GenerationError.code）。
 	// 只有它非空时，Error 的原文才允许直接递到用户面前。
-	ErrorCode      string                 `json:"error_code,omitempty"`
-	Steps          map[string]interface{} `json:"steps,omitempty"`
-	Prompt         *workflowPrompt        `json:"prompt,omitempty"`
+	ErrorCode string                 `json:"error_code,omitempty"`
+	Steps     map[string]interface{} `json:"steps,omitempty"`
+	Prompt    *workflowPrompt        `json:"prompt,omitempty"`
 }
 
 // workflowPrompt 是 core/workflow.py 写下的提示词链路记录。
@@ -172,6 +223,17 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 
 	if req.CharacterID != "" {
 		args = append(args, "--character-id", req.CharacterID)
+	}
+	// 引擎 / 底模 / LoRA：留空即保持旧的"按优先级自动选择"行为，一个参数都不加。
+	// 值已经过 validateEngineSelection 校验，这里只做透传。
+	if provider := strings.TrimSpace(req.Provider); provider != "" && provider != "auto" {
+		args = append(args, "--provider", provider)
+	}
+	if model := strings.TrimSpace(req.Model); model != "" {
+		args = append(args, "--model", model)
+	}
+	if lora := strings.TrimSpace(req.Lora); lora != "" {
+		args = append(args, "--lora", lora)
 	}
 	if !req.UseSemantic {
 		args = append(args, "--no-semantic")
