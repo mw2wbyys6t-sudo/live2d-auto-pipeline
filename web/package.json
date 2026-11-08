@@ -29,6 +29,10 @@
   },
   "overrides": {
     "postcss": "^8.5.14",
-    "postcss-selector-parser": "^7.1.6"
+    "postcss-selector-parser": "^7.1.6",
+    "chokidar": "^4.0.3",
+    "postcss-nested": "^7.0.2",
+    "js-tokens": "^5.0.0",
+    "commander": "^6.2.1"
   }
 }

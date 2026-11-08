@@ -3,7 +3,7 @@
 > **读者（Audience）**：维护者与合规负责人。
 > **文档类型（Diátaxis）**：explanation + how-to。
 > **真相源（Source of Truth）**：包元数据清单由 [`scripts/fossa_license_inventory.py`](../scripts/fossa_license_inventory.py) 实算；FOSSA 另做依赖内嵌许可证深扫，两者口径不同。本文件记录判定依据与后台操作步骤。
-> **最后校验（Last verified）**：2026-10-29（FOSSA revision scan `126535209`，commit `42a99c7`；本项目自身协议已于 v0.10.10 起改为 AGPL-3.0 + 商业授权双轨，见 ADR-001 Rev.5）。
+> **最后校验（Last verified）**：2026-11-18（FOSSA 摘要 72 issues = 58 Flagged + 7 Denied + 5 Outdated + 2 Vulnerabilities；逐条载体复核见 §3.2.2，载体核对脚本见 `scripts/fossa_license_carrier_check.py`；本项目自身协议自 v0.10.10 起为 AGPL-3.0 + 商业授权双轨，见 ADR-001 Rev.5）。上一轮：2026-10-29（revision scan `126535209`，commit `42a99c7`）。
 
 ---
 
@@ -226,6 +226,73 @@ CC-BY-NC-SA-4.0
 Licensing Active 由 65 降到 **57**（−7 条 Denied，−1 条 Apache-in-code）；
 其余 LGPL / MPL 的 Flagged **保留可见**，不为了状态变绿而批量 Approve。
 
+### 3.2.2 2026-11-18 那次扫描（72 issues）的逐条复核
+
+本次扫描摘要：**72 issues = 58 Flagged License + 7 Denied License + 5 Outdated + 2 Vulnerabilities**。
+下面按**载体**逐条给结论 —— 判据是「这条 ID 在依赖里到底有没有许可证全文载体」，
+而不是扫描器的编号。可复现命令见 [`scripts/fossa_license_carrier_check.py`](../scripts/fossa_license_carrier_check.py)：
+
+```bash
+python scripts/fossa_license_carrier_check.py \
+  --expect numpy:GPL-1.0 --expect scipy:LGPL-3.0-only \
+  --expect scipy:LGPL-2.0-or-later --expect scipy:LGPL-2.1-later \
+  --expect scipy:GPL-3.0-with-GCC-exception \
+  --expect pillow:GPL-3.0-only --expect pillow:Bitstreamream
+```
+
+**Python 侧许可证 ID（58 条 Flagged 的主体）**
+
+| FOSSA 报的 ID | 真实载体 | 结论 |
+|---|---|---|
+| `numpy: GPL-1.0` | **无载体**：numpy 2.4.6/2.5.3 的 wheel、sdist、已装版里都没有 GPL-1 全文 | **扫描器误判**（编号错位），按「识别有误」ignore |
+| `scipy: LGPL-3.0-only` | **无载体** | **扫描器误判**（把 GPL-3 尾段与 LGPL 提及跨段拼接） |
+| `scipy: LGPL-2.0-or-later` | **无载体**；真实是 `LGPL-2.1-or-later` | **扫描器误判**（版本号错位） |
+| `scipy: LGPL-2.1-later` | `scipy-*.dist-info/LICENSE.txt` —— 捆绑 **libquadmath**（`LGPL-2.1-or-later`） | 真实载体；弱 copyleft + 动态链接，与 AGPL-3.0 兼容 → 按 §3.2 审阅后放行 |
+| `scipy: GPL-3.0-with-GCC-exception` | 同上文件 —— 捆绑 **libgfortran**（`GPL-3.0-or-later WITH GCC-exception-3.1`） | 真实载体；项目已是 AGPL-3.0，可经 GPL-3.0 §13 互认 → 逐条审阅后放行 |
+| `pillow: GPL-3.0-only` | 载体是**聚合许可告知文件**里的 liblzma「COPYING.GPLv3」提及；真正的 GPLv3 字体（GNU FreeFont）在 sdist 的 `Tests/fonts/`，**不进 wheel** | 真实载体为告知文件而非被 import 的代码 → 审阅后放行 |
+| `pillow: Bitstreamream`（2 条） | **无载体**：Bitstream Vera 只在 sdist 的 `Tests/fonts/DejaVuSans/`；wheel 内无 `Tests/`。另有一条命中来自 `PIL/MpegImagePlugin.py` 的 `class BitStream` 与 `*_BITSTREAM_*` 错误串 | **扫描器误判**（另一半是普通单词） |
+| `pygame-ce: LGPL-2.1-only` / `GPL-2.0-only` / `GPL-2.0-later` | 都在 wheel 内 `pygame/docs/`（自身 LGPL-2.1 全文 + 捆绑 mpg123 的 GPL-2.0 全文；`GPL-2.0-later` 是 LGPL-2.1 正文第 3 条的交叉引用） | 载体是**文档/许可告知**，不是被 import 的 GPL-2.0 代码 → 按「载体不是 GPL-2.0 实现」逐条审阅 |
+| `pygame-ce: LGPL-3.0-only` | **无载体**（上游 README 写明 `LGPL-2.1-or-later`） | **扫描器误判**（classifier 与版本号拼接） |
+| `onnxruntime-directml: MPL-2.0`、`next: MPL-2.0` | 传递依赖里的文件级 copyleft | 与 §3.2 既有结论一致：未修改上游文件 → 审阅后放行 |
+| `live2d-auto-pipeline: AGPL-3.0-only` | **项目自身** `LICENSE`（ADR-001 Rev.5 起为 AGPL-3.0 + 商业授权双轨） | 不是第三方依赖问题；策略 §3.1 已把 AGPL-3.0 列入 Approve，若后台仍报 Flag，属策略未生效 → 后台核对 |
+
+> 关键事实：numpy 的 `License-Expression` 是 `BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0`，
+> Pillow 是 `MIT-CMU` —— **元数据层面两者都干净**，FOSSA 报的全是包内许可证全文文件。
+
+**Outdated（5 条）—— npm 侧，仓库侧已处理**
+
+| FOSSA 报的 | 实际已装 | 最新 | 处置 |
+|---|---|---|---|
+| `chokidar` | 3.6.0（dev） | 6.0.0 | override 到 **4.0.3**：4.x 仍是 CJS，tailwind 用的 `atomic/usePolling/awaitWriteFinish/ignoreInitial` 全支持；5.x+ 是 ESM-only，`require()` 直接失败 |
+| `postcss-nested` | 6.2.0（dev） | 9.0.1 | override 到 **7.0.2**：仍是 CJS（`engines.node>=18`），与仓库已有 `postcss-selector-parser` override 相容；8.x+ ESM-only |
+| `js-tokens` | 4.0.0（**prod**，react→loose-envify） | 10.0.0 | override 到 **5.0.0**：最后一个兼容版（`exports.default` 仍是 global RegExp）；6.0.0+ 没有 `.default`，loose-envify 直接崩 |
+| `commander` | **4.1.1**（dev） | 15.1.0 | override 到 **6.2.1**：FOSSA 写的 `14.1.1` **是 registry 里从未发布过的无效版本号**；12.0.0 起 `module.exports` 不再有 `.option()`/`.parse()`，sucrase CLI 会崩，故停在 6.x |
+| `nanoid` | 3.3.20（prod，postcss） | 6.0.2 | **不动**：3.3.20 已是 registry 的 `legacy` tag；4.x/5.x 丢掉 CJS `require` 条件，6.0.2 要求 node≥22（仓库未声明 `engines`，会打破 CI） |
+
+> 说明：FOSSA 的「Outdated」是拿**最新版本**比对的，因此上面 4 条即使升到「最后兼容版」，
+> 后台仍会显示 outdated —— 要归零只能升到 ESM-only 大版本，而 Tailwind 3.4.19 是 CJS
+> `require()` 语义，升级会破坏构建。**这一项以「已升到最后一个兼容版本」为验收口径**，
+> 不是以计数归零为口径。
+
+**Vulnerabilities（2 条）—— CVE-2026-112366（picomatch ReDoS）**
+
+- 权威记录真实存在（cvelistV5 + NVD，`CWE-1333`），但 **FOSSA 标的 `High 9.7` 无出处**：
+  NVD 给的是 **CVSS4 8.7 / CVSS3.1 7.5**，EPSS 0.00335（0.27 百分位）。
+- 受影响范围 `≤4.0.7`，而 registry 的 `latest` 就是 `4.0.7` → **没有可升的修复版本**；
+  上游修复 PR 至今未合并，实测把 PR 打上后 `+(*a)` 载荷仍复现 11 秒级回溯。FOSSA 的
+  「No fix」属实。
+- 本仓库两个实例（2.3.2、4.0.7）均为 **dev-only**：BFS 验证从 `dependencies` 完全不可达、
+  不进 `next build` 产物；唯一输入源是 `tailwind.config.js` 里写死的静态 glob，
+  **没有用户输入流向 picomatch**。风险 = 构建期本地 DoS，不是线上可利用漏洞。
+- 结论：**仓库侧无可修项**，后台按「仅 dev 依赖、不进产物、无用户可控输入」逐条 ignore；
+  跟踪上游修复 PR 合并后即随常规依赖升级带走。
+
+**本轮仓库侧实际改动**：仅 `web/package.json` 的 `overrides`（4 条）与对应
+`package-lock.json`；`npm audit` 0 漏洞、`npm run build` 通过、
+`scripts/check-license-bundle.sh web/public` 通过。**没有改任何 Python 下限**：
+scipy 的 Kokkos mdspan（`Apache-2.0 WITH LLVM-exception`）只存在于 scipy ≤1.17，
+而 scipy ≥1.18 要求 Python ≥3.12，会牺牲仓库声明的 Python 3.11 支持 —— 保持现状并在此记录取舍。
+
 ### 3.3 一个待确认项
 
 `segment-anything` 的 PyPI 元数据缺 `license` 字段（FOSSA 会记成"未声明许可"）。
@@ -286,6 +353,7 @@ export FOSSA_API_KEY=<你复制的 key>
 |---|---|
 | `.fossa.yml` | FOSSA 扫描配置（分析范围、项目定位符、策略名） |
 | `scripts/fossa_license_inventory.py` | 四生态依赖许可清单 + 策略建议生成器 |
+| `scripts/fossa_license_carrier_check.py` | FOSSA 报的 SPDX ID 在依赖里的**载体核对**（运行时 / 告知文件 / 文档 / 测试 / 无载体=误判） |
 | `scripts/check-license-bundle.sh` | FF-15 许可全文随产物分发的发布闸门 |
 | `.github/workflows/fossa.yml` | FOSSA 扫描 CI job（无 key 自动跳过） |
 | `docs/LIMITATIONS.md` §9 | FOSSA 三项告警的真实数字与归因 |

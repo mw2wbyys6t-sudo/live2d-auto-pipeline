@@ -3,9 +3,9 @@
 
 FOSSA 的「License Compliance」告警本质是：把依赖树里每个包的许可，与组织
 的 Licensing 策略（允许/需审阅/禁止三档）逐条比对，不一致就记一条 issue。
-仓库侧看不见那 65 条明细（逐条明细只有企业版 API 能取），但**许可本身是可
+仓库侧看不见那些明细（逐条明细只有企业版 API 能取），但**许可本身是可
 以自己枚举的** —— 本脚本把四个生态的依赖树解析出来，逐个取 SPDX 标识，按
-Apache-2.0 分发场景分类，直接给出「策略里该允许什么」的清单。
+AGPL-3.0 双轨分发场景分类，直接给出「策略里该允许什么」的清单。
 
 用法：
     python scripts/fossa_license_inventory.py            # 人类可读报告
@@ -19,9 +19,14 @@ Apache-2.0 分发场景分类，直接给出「策略里该允许什么」的清
 - crates.io：https://crates.io/api/v1/crates/<name>
 - Go：https://api.deps.dev/v3/systems/go/packages/<module>/versions/<version>
 
-为什么分类标准是「按 Apache-2.0 分发」：本仓库自身是 Apache-2.0（ADR-001 Rev.4），
-产出物对外分发，所以判断标准是「这个依赖的许可能否出现在 Apache-2.0 项目的
-分发物里」，而不是「它是不是自由软件」。
+为什么分类标准是「按 AGPL-3.0 分发」：本仓库自身自 v0.10.10 起是
+**AGPL-3.0 + 商业授权双轨**（ADR-001 Rev.5，见根目录 ``LICENSE``），产出物
+对外分发，所以判断标准是「这个依赖的许可能否出现在 AGPL-3.0 项目的分发物里」，
+而不是「它是不是自由软件」。强 copyleft（GPL-2.0-only 等）仍然进禁止档。
+
+本脚本只覆盖**包元数据**里的许可；FOSSA 还会深扫依赖**内部捆绑**的许可证全文
+（libgfortran / libquadmath / pygame 文档等），那一侧的口径见
+``scripts/fossa_license_carrier_check.py`` 与 ``docs/license-policy.md`` §3.2.2。
 """
 
 from __future__ import annotations

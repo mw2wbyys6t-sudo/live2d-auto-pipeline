@@ -83,6 +83,18 @@ jobs:
         run: |
           python -m pytest tests/ -v --cov=core --cov=drivers --cov=llm_bridge --cov=live2d_builder --cov-report=xml --cov-report=term
 
+      # FOSSA 许可证 ID 的载体复核门禁（见 docs/license-policy.md §3.2.2）。
+      # 这 4 条 ID 在依赖里**找不到许可证全文载体**，是扫描器误判 —— 后台按
+      # 「识别有误」逐条 ignore 即可。若哪天它们出现了**运行时载体**，说明依赖
+      # 结构变了（上游新增捆绑库），原来的误判结论作废，必须重新复核后再放行。
+      - name: 许可证载体复核门禁（误判 ID 不得出现运行时载体）
+        run: |
+          python scripts/fossa_license_carrier_check.py --fail-on runtime \
+            --expect numpy:GPL-1.0 \
+            --expect scipy:LGPL-3.0-only \
+            --expect scipy:LGPL-2.0-or-later \
+            --expect pillow:Bitstreamream
+
       - name: Upload coverage
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
         if: matrix.python-version == '3.11'
