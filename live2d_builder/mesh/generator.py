@@ -54,6 +54,9 @@ class MeshGenerator:
     #: 整行丢失）。放 1px 只影响边界那一圈三角形，掩码之外的像素本来也是透明的。
     FILTER_PAD_PX = 1
 
+    #: Exclude triangles whose doubled area is below this pixel-space tolerance.
+    DEGENERATE_AREA2_EPSILON = 1e-8
+
     #: 轮廓折线的弦高误差上限（px）。早先把 ``contour_spacing``（12px）直接当
     #: approxPolyDP 的 epsilon，140×160 的矩形会被削成斜四边形：右边界从 x=170
     #: 斜到 169，整列墨水落到网格外；有机轮廓的凹口同样被弦切掉。1px 是"看不出
@@ -543,6 +546,11 @@ class MeshGenerator:
             filter_mask = mask
         kept: List[Tuple[int, int, int]] = []
         for t in tri.simplices:
+            a, b, c = pts[t]
+            area2 = abs((b[0] - a[0]) * (c[1] - a[1]) -
+                        (b[1] - a[1]) * (c[0] - a[0]))
+            if not math.isfinite(float(area2)) or area2 <= self.DEGENERATE_AREA2_EPSILON:
+                continue
             cx = int(round(pts[t].mean(axis=0)[0]))
             cy = int(round(pts[t].mean(axis=0)[1]))
             cx = max(0, min(w - 1, cx))

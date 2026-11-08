@@ -8,6 +8,7 @@ import pytest
 import numpy as np
 from PIL import Image
 
+import live2d_builder.mesh.generator as gen_module
 from live2d_builder.mesh.generator import MeshGenerator
 from live2d_builder.blendshapes.parameters import ParameterSet
 from live2d_builder.blendshapes.expressions import ExpressionBuilder
@@ -71,6 +72,29 @@ class TestMeshGenerator:
         img = make_layer_image(100, 100)
         mesh = gen.generate_grid_mesh(img, spacing=25)
         assert len(mesh["vertices"]) > 4
+
+    def test_delaunay_filters_zero_area_triangles(self):
+        gen = MeshGenerator()
+        points = [(10.0, 10.0), (20.0, 10.0), (20.0, 20.0),
+                  (10.0, 20.0)]
+        mask = np.ones((40, 40), dtype=np.uint8)
+
+        class DegenerateTriangulation:
+            simplices = np.asarray([[0, 1, 2], [0, 1, 3], [0, 1, 1]])
+
+        original_delaunay = gen_module.Delaunay
+        gen_module.Delaunay = lambda _points: DegenerateTriangulation()
+        try:
+            mesh = gen._build_delaunay(points, mask, 40, 40)
+        finally:
+            gen_module.Delaunay = original_delaunay
+        vertices = np.asarray(mesh["vertices"], dtype=float)
+        assert len(mesh["indices"]) == 2
+        for triangle in mesh["indices"]:
+            a, b, c = vertices[list(triangle)]
+            area2 = abs((b[0] - a[0]) * (c[1] - a[1]) -
+                        (b[1] - a[1]) * (c[0] - a[0]))
+            assert area2 > 1e-8
 
 
 class TestParameterSet:
