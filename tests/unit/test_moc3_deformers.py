@@ -1683,11 +1683,11 @@ def test_head_rig_also_carries_the_eyelids_that_have_no_other_deformer():
 
 
 def test_neck_moves_to_the_graded_band_without_a_gap():
-    """只把 neck 交给过渡场；衣服与领口留在 BodySway，避免把缝搬到可见胸肩。"""
+    """颈部与领口进过渡场；上衣下片和腰带留在 BodySway。"""
     from live2d_builder.bones.deformers import DeformerHierarchy
     authored = {e["name"]: e for e in DeformerHierarchy.DEFAULT_WARP_DEFORMERS}
-    assert authored["NeckBand"]["targets"] == ["neck"]
-    assert {"collar", "clothes_top", "waistband"} <= set(authored["BodySway"]["targets"])
+    assert authored["NeckBand"]["targets"] == ["neck", "collar"]
+    assert {"clothes_top", "waistband"} <= set(authored["BodySway"]["targets"])
     overlap = (set(authored["NeckBand"]["targets"])
                & set(authored["BodySway"]["targets"]))
     assert overlap == set(), f"两个变形器抢同一批成员：{sorted(overlap)}"
@@ -1697,9 +1697,17 @@ def test_neck_moves_to_the_graded_band_without_a_gap():
     from live2d_builder.exporter.moc3_pipeline import resolve_membership
     owned = resolve_membership(list(built.values()), SINGER_LAYERS)
     assert owned["neck"] == "NeckBand"
-    assert owned["collar"] == "BodySway"
     assert owned["clothes_top"] == "BodySway"
+    assert owned["collar"] == "NeckBand"
     assert owned["waistband"] == "BodySway"
+
+
+def test_neck_band_can_own_collar_when_the_neckline_pose_requires_it():
+    from live2d_builder.bones.deformers import DeformerHierarchy
+    authored = {entry["name"]: entry
+                for entry in DeformerHierarchy.DEFAULT_WARP_DEFORMERS}
+    assert "collar" in authored["NeckBand"]["targets"]
+    assert "collar" not in authored["BodySway"]["targets"]
 
 
 def test_authored_head_field_chain_stops_at_the_measured_depth_three():

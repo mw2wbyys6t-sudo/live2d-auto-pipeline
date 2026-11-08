@@ -1132,37 +1132,111 @@ def _head_follow_deform(points, rect, mesh_rect, values, options):
 
 NECK_BAND_ROWS_MIN = 4          # 带内至少 4 行，否则连续过渡退化成二值
 
+#: 颈胸场的**横向**衰减：颈部半宽之内满权重（脖子本身不能被削），再往外保留一段
+#: 满权重（留给脖子自己的摆动/键形位移），最后用**升余弦**降到 0。倍数以颈部半宽
+#: 为单位。
+#:
+#: 为什么必须有横向衰减：转头是绕颈轴的一整块刚体，只看 y 的话肩线（离颈轴
+#: 250~330px）也会跟着转。实测（G 轨，ParamAngleZ=30 + ParamBodyAngleZ=10）
+#: 整件上衣挂上去以后 clothes_top↔arm_L 撕到 112.4px、Core 洞数 1116→1731 ——
+#: 衣服从肩膀上滑走，比原来的脸↔衣服缝更糟。横向衰减让领口跟头、肩线留在身上。
+#:
+#: 为什么是升余弦而不是直线：点阵之间是双线性插值，直线在折点处留下与步长成正比
+#: 的权重误差（90px 过渡、53px 格距时约 0.2 ⇒ 30px）；升余弦两端一阶导为 0，
+#: 同一套点阵下误差降到 1/5 左右。
+NECK_BAND_SIDE_PLATEAU = 2.0
+NECK_BAND_SIDE_FADE = 1.6
 
-def neck_band_weight(y: float, boundary_y: float, band_bottom_y: float) -> float:
-    """颈胸过渡带里的头部场权重：头下缘 1，带底 0，中间线性且带外夹取。"""
+
+def neck_band_side_weight(x: float, axis_x: float, half_span: float,
+                          core_span: Optional[float] = None) -> float:
+    """离颈轴的横向权重：颈轴附近为 1，向外用升余弦降到 0。
+
+    给了 ``core_span`` 时（几何切分场景）用「核心半宽 → 切分线」这一段做过渡，
+    并且**在切分线上严格归零**：切缝两侧因此没有相对位移，缝不会张开。不给时退回
+    按 ``NECK_BAND_SIDE_PLATEAU/FADE`` 的旧口径，行为与单轴版本一致。
+    """
+    if half_span is None or float(half_span) <= 1e-6:
+        return 1.0
+    half_span = float(half_span)
+    offset = abs(float(x) - float(axis_x))
+    if core_span is not None:
+        core = min(max(float(core_span), 0.0), half_span)
+        if offset <= core:
+            return 1.0
+        if offset >= half_span:
+            return 0.0
+        return 0.5 + 0.5 * math.cos(math.pi * (offset - core) / (half_span - core))
+    plateau = NECK_BAND_SIDE_PLATEAU * half_span
+    fade = NECK_BAND_SIDE_FADE * half_span
+    if offset <= plateau:
+        return 1.0
+    if fade <= 1e-6 or offset >= plateau + fade:
+        return 0.0
+    return 0.5 + 0.5 * math.cos(math.pi * (offset - plateau) / fade)
+
+
+def neck_band_weight(y: float, boundary_y: float, band_bottom_y: float,
+                     x: Optional[float] = None, axis_x: Optional[float] = None,
+                     half_span_x: Optional[float] = None,
+                     core_span_x: Optional[float] = None) -> float:
+    """颈胸过渡带权重：纵向（头下缘 1 → 带底 0）× 横向（颈轴 1 → 切分线 0）。
+
+    不给横向参数时就是原来的单轴权重 —— 调用方拿不到颈轴信息时行为不变。
+    """
     span = float(band_bottom_y) - float(boundary_y)
     if span <= 1e-6:
         return 0.0
-    return min(1.0, max(0.0, (float(band_bottom_y) - float(y)) / span))
+    vertical = min(1.0, max(0.0, (float(band_bottom_y) - float(y)) / span))
+    if vertical <= 0.0 or x is None or axis_x is None or half_span_x is None:
+        return vertical
+    return vertical * neck_band_side_weight(x, axis_x, half_span_x, core_span_x)
+
+
+def _snap_band_bottom(bottom: float, rect: tuple, n_rows: int) -> float:
+    """把带底对齐到控制点阵里**不大于它的那一行**。
+
+    点阵行是均匀的，带底落在两行之间时，带底以下的格点仍带着正权重，插值到带底
+    不为 0 —— 同一件衣服的下缘会相对腰带滑开（实测 5% 余量下约 6px）。对齐到行
+    以后，带底及其以下的每一行权重都是 0，插值结果严格为 0。
+    """
+    y0, y1 = float(rect[1]), float(rect[3])
+    step = (y1 - y0) / max(1, n_rows - 1)
+    if step <= 1e-6:
+        return float(bottom)
+    steps = math.floor((float(bottom) - y0) / step + 1e-9)
+    steps = min(max(steps, 0), n_rows - 1)
+    return y0 + steps * step
 
 
 def _neck_band_deform(points, rect, mesh_rect, values, options):
-    """在同一个 warp 点阵里按格点高度混合头部场，带底完全不受头转影响。"""
+    """在同一个 warp 点阵里按格点位置混合头部场：头下缘满权重，带底与肩线归零。"""
     head = options.get("head")
     if not head:
         return list(points)
     px, py, shift_x, shift_y, depth = head
     boundary = float(options.get("boundary_y", py))
     bottom = float(options.get("band_bottom_y", rect[3]))
+    axis_x = options.get("band_axis_x")
+    half_span = options.get("band_half_span_x")
+    core_span = options.get("band_core_half_x")
     angles = options.get("head_angles") or {}
     out = []
     for x, y in points:
-        weight = neck_band_weight(float(y), boundary, bottom)
+        weight = neck_band_weight(float(y), boundary, bottom,
+                                  x=float(x), axis_x=axis_x, half_span_x=half_span,
+                                  core_span_x=core_span)
         if weight <= 0.0:
-            out.append([x, y])
-            continue
-        theta = [math.radians(values.get(role, 0.0) * angles.get(role, 0.0))
-                 for role in ("angle_x", "angle_y", "angle_z")]
-        sx, cx = math.sin(theta[0]), math.cos(theta[0])
-        sy, cy = math.sin(theta[1]), math.cos(theta[1])
-        sz, cz = math.sin(theta[2]), math.cos(theta[2])
-        out.append(_head_transform(x, y, px, py, shift_x, shift_y,
-                                   sx, cx, sy, cy, sz, cz, depth, weight))
+            head_point = [x, y]
+        else:
+            theta = [math.radians(values.get(role, 0.0) * angles.get(role, 0.0))
+                     for role in ("angle_x", "angle_y", "angle_z")]
+            sx, cx = math.sin(theta[0]), math.cos(theta[0])
+            sy, cy = math.sin(theta[1]), math.cos(theta[1])
+            sz, cz = math.sin(theta[2]), math.cos(theta[2])
+            head_point = _head_transform(x, y, px, py, shift_x, shift_y,
+                                         sx, cx, sy, cy, sz, cz, depth, weight)
+        out.append(head_point)
     return out
 
 
@@ -1484,8 +1558,9 @@ def head_field_covered_ids(entries: List[Dict],
     owners = head_field_deformers(entries, mesh_ids)
     if not owners:
         return set()
-    return {mesh_id for mesh_id, name in
-            resolve_membership(entries, mesh_ids).items() if name in owners}
+    membership = resolve_membership(entries, mesh_ids)
+    covered = {mesh_id for mesh_id, name in membership.items() if name in owners}
+    return covered
 
 
 def head_field_available(bone_positions: Dict[str, Any],
@@ -1578,7 +1653,8 @@ def build_deformers(specs: List[MeshSpec],
                 profile, param_ids = "lift", param_ids[:1]
             missing_head = False
             if profile in ("eye_head", "head", "neck_band"):
-                angle_ids = param_ids[1:] if profile == "eye_head" else param_ids
+                angle_ids = (param_ids[1:] if profile == "eye_head" else
+                             param_ids[:3] if profile == "neck_band" else param_ids)
                 head_options = _head_options(
                     bone_positions or {}, width, height, head_span,
                     parameters_by_id or {}, angle_ids)
@@ -1596,6 +1672,10 @@ def build_deformers(specs: List[MeshSpec],
                 n_rows = max(n_rows, NECK_BAND_ROWS_MIN)
                 skipped.append(f"{name}(缺头下缘：颈胸过渡场不生成)")
                 axes, grids = (), [DeformerGrid(0.0, _lattice(rect, n_cols, n_rows))]
+            elif profile == "neck_band" and missing_head:
+                n_rows = max(n_rows, NECK_BAND_ROWS_MIN)
+                skipped.append(f"{name}(头部信息不全：缺 Head 关节 / head_span / 角度参数)")
+                axes, grids = (), [DeformerGrid(0.0, _lattice(rect, n_cols, n_rows))]
             elif missing_head:
                 # 只剩空壳的「跟随头部」会让成员网格白占一个变形器名额，
                 # 静态网格 + 如实记录才是本来的行为。
@@ -1608,7 +1688,31 @@ def build_deformers(specs: List[MeshSpec],
                     # 必须在 _profile_grids 生成点阵之前抬行数，否则 rows 与点数不一致。
                     n_rows = max(n_rows, NECK_BAND_ROWS_MIN)
                     options["boundary_y"] = float(head_bottom)
-                    options["band_bottom_y"] = float(mesh_rect[3])
+                    # 带底与颈轴都取 ``axis_layer``（默认由条目声明）那一层的范围，
+                    # 不是全体成员的下缘：衣服整件挂进来以后，用成员下缘会把过渡带
+                    # 拉到腰上，脖子与衣服下缘的权重都跟着变。
+                    axis_layer = str(entry.get("axis_layer") or "")
+                    axis_member = next(
+                        (m for m in members
+                         if axis_layer and _norm(m.mesh_id) == _norm(axis_layer)),
+                        None)
+                    band_rect = mesh_rect
+                    if axis_member is not None:
+                        band_rect = _rest_rect([axis_member])
+                        options["band_axis_x"] = (
+                            float(band_rect[0]) + float(band_rect[2])) / 2.0
+                        options["band_half_span_x"] = max(
+                            1.0, (float(band_rect[2]) - float(band_rect[0])) / 2.0)
+                        options["band_core_half_x"] = options["band_half_span_x"]
+                    # 几何切分时，过渡片只覆盖到切分线为止：横向权重必须在那条线上
+                    # 严格归零，否则紧贴切线的两片顶点各走各的，缝会张开
+                    # （实测颈右侧 474 像素竖缝）。切分方把两条半宽写进条目。
+                    if entry.get("side_span") is not None:
+                        options["band_half_span_x"] = float(entry["side_span"])
+                    if entry.get("core_span") is not None:
+                        options["band_core_half_x"] = float(entry["core_span"])
+                    options["band_bottom_y"] = _snap_band_bottom(
+                        band_rect[3], rect, n_rows)
                 axes, grids = _profile_grids(
                     profile, param_ids, rect, n_cols, n_rows, mesh_rect,
                     parameters_by_id or {}, options)
@@ -1745,6 +1849,254 @@ def drivable_parameters(builder_result: Dict[str, Any]) -> Dict[str, List[float]
     return {pid: sorted(values) for pid, values in keys.items()}
 
 
+#: 过渡片在颈轴两侧各占多少个「颈部半宽」。超出这条竖带的衣料仍留在 ``BodySway``：
+#: 肩线跟着头转会和挂在 ``ShoulderLift_*`` 上的手臂脱开 —— 实测只按 y 切时 Core
+#: 姿态在右肩开出 730 像素的新透明区（``clothes_top_neck`` ↔ ``arm_L`` 87.9px）。
+CLOTHES_TRANSITION_SIDE_SPAN = 1.6
+
+
+def _clip_half_plane(points: List[tuple], axis: str, value: float,
+                     keep_le: bool, tag: str) -> List[tuple]:
+    """Sutherland–Hodgman：把多边形裁到一条轴对齐半平面。
+
+    ``keep_le=True`` 保留 ``coord <= value`` 的一侧。交点键里带 ``tag``：同一个
+    三角形可能被两条平行平面各切一刀，只用边做键会让两个不同的交点塌成一个。
+    """
+    out: List[tuple] = []
+    slot = 0 if axis == "x" else 1
+    count = len(points)
+    for i in range(count):
+        current = points[i]
+        following = points[(i + 1) % count]
+        cv = float(current[1][slot])
+        fv = float(following[1][slot])
+        c_in = cv <= value if keep_le else cv >= value
+        f_in = fv <= value if keep_le else fv >= value
+        if c_in:
+            out.append(current)
+        if c_in == f_in:
+            continue
+        t = (value - cv) / (fv - cv)
+        normal = None
+        if current[2] is not None and following[2] is not None:
+            normal = [a + (b - a) * t for a, b in zip(current[2], following[2])]
+        weights = None
+        if current[3] is not None and following[3] is not None:
+            weights = [a + (b - a) * t for a, b in zip(current[3], following[3])]
+        norm = None
+        if current[4] is not None and following[4] is not None:
+            norm = [a + (b - a) * t for a, b in zip(current[4], following[4])]
+        key = ("e", tag) + tuple(sorted((repr(current[0]), repr(following[0]))))
+        out.append((key,
+                    [current[1][0] + (following[1][0] - current[1][0]) * t,
+                     current[1][1] + (following[1][1] - current[1][1]) * t],
+                    normal, weights, norm))
+    return out
+
+
+def _clip_mesh(mesh: Dict[str, Any],
+               planes: List[tuple]) -> Optional[Dict[str, Any]]:
+    """按若干 ``(axis, value, keep_le, tag)`` 半平面裁剪三角网格。
+
+    全被裁掉时返回 ``None``。顶点法线、蒙皮权重都按交点线性插值 —— 共享边界两侧
+    用的是同一条边、同一个 ``tag``，插出来的位置逐点相同，接缝不会因裁切而错开。
+    """
+    raw_vertices = mesh.get("vertices")
+    if raw_vertices is None or len(raw_vertices) == 0:
+        return None
+    vertices = [[float(v[0]), float(v[1])] for v in raw_vertices]
+    raw_normals = mesh.get("vertices_norm")
+    normals = ([[float(n[0]), float(n[1])] for n in raw_normals]
+               if raw_normals is not None else None)
+    skin = mesh.get("weights") or {}
+    bone_names = list(skin.get("bone_names") or [])
+    raw_weights = skin.get("weights")
+    weights = ([[float(w) for w in row] for row in raw_weights]
+               if raw_weights is not None and len(raw_weights) == len(vertices)
+               else None)
+    width = float(mesh.get("width") or 0)
+    height = float(mesh.get("height") or 0)
+    span_x = width or 1.0
+    span_y = height or 1.0
+
+    out_v: List[List[float]] = []
+    out_normals: List[Optional[List[float]]] = []
+    out_weights: List[Optional[List[float]]] = []
+    triangles: List[List[int]] = []
+    index_of: Dict[Any, int] = {}
+
+    def add(point) -> int:
+        key = point[0]
+        existing = index_of.get(key)
+        if existing is not None:
+            return existing
+        index_of[key] = len(out_v)
+        out_v.append([float(point[1][0]), float(point[1][1])])
+        out_normals.append(None if point[2] is None
+                           else [float(point[2][0]), float(point[2][1])])
+        out_weights.append(None if point[3] is None
+                           else [float(w) for w in point[3]])
+        return len(out_v) - 1
+
+    for tri in mesh.get("indices") or []:
+        polygon = []
+        for vi in map(int, tri):
+            polygon.append((("v", vi), vertices[vi],
+                            normals[vi] if normals is not None else None,
+                            weights[vi] if weights is not None else None,
+                            [vertices[vi][0] / span_x, vertices[vi][1] / span_y]))
+        for axis, value, keep_le, tag in planes:
+            if len(polygon) < 3:
+                break
+            polygon = _clip_half_plane(polygon, axis, float(value), keep_le, tag)
+        if len(polygon) < 3:
+            continue
+        first = add(polygon[0])
+        for i in range(1, len(polygon) - 1):
+            b, c = add(polygon[i]), add(polygon[i + 1])
+            if len({first, b, c}) == 3:
+                triangles.append([first, b, c])
+    if not triangles:
+        return None
+
+    result: Dict[str, Any] = {
+        "vertices": out_v,
+        "vertices_norm": (out_normals if normals is not None
+                          else [[x / span_x, y / span_y] for x, y in out_v]),
+        "indices": triangles,
+        "width": width,
+        "height": height,
+    }
+    if weights is not None and all(row is not None for row in out_weights):
+        result["weights"] = {"bone_names": bone_names, "weights": out_weights}
+    return result
+
+
+def _merge_meshes(parts: List[Optional[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+    """把互不重叠的几片网格并成一个（顶点表直接拼接，索引整体平移）。"""
+    usable = [part for part in parts if part]
+    if not usable:
+        return None
+    if len(usable) == 1:
+        return usable[0]
+    merged: Dict[str, Any] = {
+        "vertices": [], "vertices_norm": [], "indices": [],
+        "width": usable[0]["width"], "height": usable[0]["height"],
+    }
+    bone_names: Optional[List[str]] = None
+    merged_weights: List[List[float]] = []
+    keep_weights = True
+    for part in usable:
+        offset = len(merged["vertices"])
+        merged["vertices"].extend([list(v) for v in part["vertices"]])
+        merged["vertices_norm"].extend(
+            [list(n) for n in part.get("vertices_norm") or []])
+        merged["indices"].extend(
+            [[a + offset, b + offset, c + offset] for a, b, c in part["indices"]])
+        skin = part.get("weights") or {}
+        rows = skin.get("weights")
+        if not bone_names and skin.get("bone_names"):
+            bone_names = list(skin["bone_names"])
+        if keep_weights and rows is not None:
+            merged_weights.extend([list(row) for row in rows])
+        else:
+            keep_weights = False
+    if keep_weights and bone_names and len(merged_weights) == len(merged["vertices"]):
+        merged["weights"] = {"bone_names": bone_names, "weights": merged_weights}
+    return merged
+
+
+def split_mesh_at_y(mesh: Dict[str, Any], cut_y: float) -> tuple:
+    """精确裁切三角网格，返回图像坐标 y<=cut_y 与 y>=cut_y 两片。"""
+    return (_clip_mesh(mesh, [("y", cut_y, True, "y")]),
+            _clip_mesh(mesh, [("y", cut_y, False, "y")]))
+
+
+def split_mesh_region(mesh: Dict[str, Any], cut_y: float,
+                      left: float, right: float) -> tuple:
+    """把网格切成「颈带内的上片」与「其余」两片。
+
+    上片 = ``y <= cut_y`` 且 ``left <= x <= right``；其余 = 上片之外的全部（左右
+    两条竖带 + 下半部），并成一个网格。两片面积并集严格等于原网格。
+    """
+    inside = _clip_mesh(mesh, [("y", cut_y, True, "y"),
+                               ("x", left, False, "left"),
+                               ("x", right, True, "right")])
+    outside = _merge_meshes([
+        _clip_mesh(mesh, [("y", cut_y, True, "y"), ("x", left, True, "left")]),
+        _clip_mesh(mesh, [("y", cut_y, True, "y"), ("x", right, False, "right")]),
+        _clip_mesh(mesh, [("y", cut_y, False, "y")]),
+    ])
+    return inside, outside
+
+
+
+def _mesh_bottom_y(mesh: Dict[str, Any]) -> float:
+    raw = mesh.get("vertices")
+    if raw is None or len(raw) == 0:
+        return float("-inf")
+    return max(float(vertex[1]) for vertex in raw)
+
+
+def split_clothes_top_transition(meshes: Dict[str, Dict[str, Any]],
+                                 atlas_uvs: Dict[str, Dict[str, Any]],
+                                 entries: List[Dict],
+                                 overlap_px: float = 12.0) -> tuple:
+    """沿 neck 底缘下方切 clothes_top；窄上片挂 NeckBand，其余留 BodySway。"""
+    neck = meshes.get("neck")
+    clothes = meshes.get("clothes_top")
+    neck_uv = atlas_uvs.get("neck")
+    clothes_uv = atlas_uvs.get("clothes_top")
+    band = next((entry for entry in entries
+                 if entry.get("name") == "NeckBand"), None)
+    body = next((entry for entry in entries
+                 if entry.get("name") == "BodySway"), None)
+    if not (neck and clothes and neck_uv and clothes_uv and band and body):
+        return dict(meshes), dict(atlas_uvs), [dict(e) for e in entries], ""
+    cut_y = _mesh_bottom_y(neck) + float(overlap_px)
+    raw_vertices = clothes.get("vertices")
+    ys = [float(v[1]) for v in raw_vertices] if raw_vertices is not None else []
+    if not ys or not (min(ys) < cut_y < max(ys)):
+        return dict(meshes), dict(atlas_uvs), [dict(e) for e in entries], ""
+    neck_vertices = neck.get("vertices")
+    neck_xs = ([float(v[0]) for v in neck_vertices]
+               if neck_vertices is not None else [])
+    if not neck_xs:
+        return dict(meshes), dict(atlas_uvs), [dict(e) for e in entries], ""
+    axis = (min(neck_xs) + max(neck_xs)) / 2.0
+    core = max(1.0, (max(neck_xs) - min(neck_xs)) / 2.0)
+    side = core * CLOTHES_TRANSITION_SIDE_SPAN
+    upper, lower = split_mesh_region(clothes, cut_y, axis - side, axis + side)
+    if upper is None or lower is None:
+        return dict(meshes), dict(atlas_uvs), [dict(e) for e in entries], ""
+    split_meshes = {}
+    for name, mesh in meshes.items():
+        if name == "clothes_top":
+            split_meshes["clothes_top_neck"] = upper
+            split_meshes["clothes_top"] = lower
+        else:
+            split_meshes[name] = mesh
+    split_uvs = dict(atlas_uvs)
+    split_uvs["clothes_top_neck"] = dict(clothes_uv)
+    split_entries = [dict(e) for e in entries]
+    for entry in split_entries:
+        if entry.get("name") == "NeckBand":
+            targets = list(entry.get("targets") or [])
+            if "clothes_top_neck" not in targets:
+                targets.append("clothes_top_neck")
+            entry["targets"] = targets
+            # 横向权重的定义域：颈轴附近满权重，到切分线严格降到 0
+            entry["core_span"] = core
+            entry["side_span"] = side
+        elif entry.get("name") == "BodySway":
+            targets = [t for t in entry.get("targets") or []
+                       if _norm(str(t)) != "clothes_top"]
+            targets.append("clothes_top")
+            entry["targets"] = targets
+    return (split_meshes, split_uvs, split_entries,
+            f"clothes_top seam y={cut_y:.3f} x=[{axis - side:.1f},{axis + side:.1f}]")
+
+
 def build_rig_spec(
     builder_result: Dict[str, Any],
     atlas_uvs: Dict[str, Dict[str, float]],
@@ -1754,6 +2106,12 @@ def build_rig_spec(
     if not meshes:
         raise UnsupportedRig("至少需要一个网格")
 
+    entries = [dict(entry) for entry in
+               ((builder_result.get("deformer_tree") or {}).get("deformers") or [])]
+    meshes, atlas_uvs, entries, split_note = split_clothes_top_transition(
+        meshes, atlas_uvs, entries)
+    if split_note:
+        log.info(f"颈胸网格细分：{split_note}")
     extents = set()
     specs: List[MeshSpec] = []
     params = _parameter_specs(builder_result)
@@ -1771,7 +2129,7 @@ def build_rig_spec(
     # 主干已经接住头部三轴的层名（HeadRig 与 NeckBand 闭包；BodySway 那条带没有
     # 头部三轴，不在守卫根里）。归属必须在**烘焙之前**按层名解析一次：变形器装配
     # 在循环之后才改写 ``mesh.deformer_id``，等到那时候再问就晚了。
-    deformer_entries = (builder_result.get("deformer_tree") or {}).get("deformers") or []
+    deformer_entries = entries
     covered = head_field_covered_ids(
         deformer_entries, meshes.keys(),
         head_available=head_field_available(bone_positions, head_span,
@@ -1955,9 +2313,8 @@ def build_rig_spec(
     if not keyformed:
         log.info("本次导出没有可烘焙的参数键形（无蒙皮权重或无 Z 轴参数）")
 
-    deformers = (builder_result.get("deformer_tree") or {}).get("deformers") or []
     deformer_specs, uncompiled, static = build_deformers(
-        specs, list(deformers), width, height,
+        specs, list(deformer_entries), width, height,
         parameters_by_id=params_by_id, bone_positions=bone_positions,
         head_span=head_span, head_bottom=head_bottom)
     warps = [d for d in deformer_specs if isinstance(d, WarpDeformerSpec)]

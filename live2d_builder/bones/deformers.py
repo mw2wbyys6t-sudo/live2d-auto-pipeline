@@ -691,13 +691,22 @@ class DeformerHierarchy:
          "parameters": ["ParamBodyAngleX", "ParamBodyAngleY",
                         "ParamBodySway", "ParamBreath"],
          "targets": ["clothes_top", "clothes_inner", "clothes_outer",
-                     "waistband", "collar", "chest", "body"]},
-        # 颈胸过渡只接住 neck：face↔neck 的可见缝归零；collar/clothes_top 留在
-        # BodySway，避免把梯度缝搬到可见胸肩。
+                     "waistband", "chest", "body"]},
+        # 导出阶段把 clothes_top 沿 neck 下缘 + 12px 重叠裁成一个窄片，登记为
+        # clothes_top_neck 并挂进这条带；原 clothes_top 的下片仍留在 BodySway。
+        # 单独挂整件上衣曾让肩线跟头、与手臂撕开 112.4px；横向渐隐方案因为
+        # 键形先于变形器、权重坐标被 body-Z 移出场，在 Core 上洞数增到 1219。
+        # 几何重叠片是最小可验变体：交线沿 NeckBand 现有 neck 网格下缘，带内空间
+        # 不再需要外推到肩线；12px 重叠给变形近似留容差。领口 collar 同样由 NeckBand
+        # 接住，否则 neck/过渡片随头转、领口仍随躯干，复合姿态会留下黑色楔缝。
+        #
+        # 控制网格沿颈宽密布，覆盖网格只含 neck 与窄过渡片；切分段不会把躯干下缘
+        # 拉进变形框。每行/列数量依实测输入尺寸微调，静止几何仍由网格本身保持。
         {"name": "NeckBand", "parent": "Neck", "under": "BodySway",
-         "rows": 4, "cols": 2, "type": "warp", "profile": "neck_band",
+         "rows": 10, "cols": 21, "type": "warp", "profile": "neck_band",
+         "axis_layer": "neck",
          "parameters": ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
-         "targets": ["neck"]},
+         "targets": ["neck", "collar"]},
         {"name": "SkirtSway",      "parent": "Skirt", "rows": 4, "cols": 3,
          "type": "warp", "targets": ["skirt"]},
         # ---- 表情形变：参数写死在说明里（这些效果没有对应骨骼，无从推导）----
@@ -880,6 +889,7 @@ class DeformerHierarchy:
                 mirror=bool(spec.get("mirror", False)),
                 # 变形器父级（不是骨骼）：不在这里透传，作者写的 under 就到此为止
                 under=spec.get("under", ""),
+                axis_layer=spec.get("axis_layer", ""),
             )
             self._deformers.append(d)
             self._by_name[d["name"]] = d
@@ -931,6 +941,7 @@ class DeformerHierarchy:
         profile: str = "",
         mirror: bool = False,
         under: str = "",
+        axis_layer: str = "",
     ) -> Dict:
         """Create a warp (free-form) deformer with an R*C control grid.
 
@@ -984,6 +995,10 @@ class DeformerHierarchy:
         if under:
             # 没有 under 就不冒出这个键：条目字典的形状保持今天的样子
             out["under"] = under
+        if axis_layer:
+            # 二维颈胸场的参照层（见 moc3_pipeline.neck_band_side_weight）：
+            # 同样必须在这里显式接住，否则 ``out`` 的固定键集会把作者写的丢静默。
+            out["axis_layer"] = axis_layer
         return out
 
     def create_rotation_deformer(
