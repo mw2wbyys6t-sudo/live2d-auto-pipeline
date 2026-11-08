@@ -67,7 +67,10 @@ jobs:
           # so these must be present or pytest fails collection.
           pip install "fastapi>=0.110.0" "uvicorn>=0.27.0" "python-multipart>=0.0.32"
           # Install test deps
-          pip install pytest pytest-asyncio pytest-cov
+          # httpx2：starlette 1.10 起 TestClient 改为 `import httpx2 as httpx`，
+          # 只装 `httpx` 会在收集期报 "testclient module requires the httpx2
+          # package"，tests/integration/test_api_contract.py 等因此全部 ERROR。
+          pip install pytest pytest-asyncio pytest-cov httpx2
           # Install optional deps with --no-deps to avoid pulling large model packages
           pip install edge-tts || true
           # py-moc3：容器结构参考与交叉校验（纯 Python，CI 安全）。
@@ -248,10 +251,11 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          # httpx 必须显式安装：tests/integration 经 api_server 导入
-          # starlette.TestClient，缺少 httpx 会在收集期报
-          # "testclient module requires the httpx2 package"（与主 CI job 一致）。
-          pip install Pillow numpy requests urllib3 httpx psd-tools scipy scikit-learn opencv-python onnxruntime
+          # httpx2 必须显式安装：tests/integration 经 api_server 导入
+          # starlette.TestClient，starlette 1.10 起它 `import httpx2 as httpx`，
+          # 只装 httpx 会在收集期报 "testclient module requires the httpx2
+          # package"（与主 CI job 一致）。
+          pip install Pillow numpy requests urllib3 httpx httpx2 psd-tools scipy scikit-learn opencv-python onnxruntime
           pip install pytest pytest-asyncio
           # api_server.py import chain (used by the integration suite that runs here)
           pip install fastapi uvicorn python-multipart

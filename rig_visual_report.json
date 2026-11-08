@@ -1,0 +1,48 @@
+{
+  "state": "FAIL",
+  "manifest": "model.json",
+  "started_at": "2026-11-08T14:39:52.092325+00:00",
+  "finished_at": "2026-11-08T14:39:52.092377+00:00",
+  "pose": {
+    "ParamAngleZ": 30.0
+  },
+  "checks": [
+    {
+      "id": "rest_sha_match",
+      "status": "INFO",
+      "measured": null,
+      "threshold": null,
+      "evidence": null
+    },
+    {
+      "id": "rest_opaque_match",
+      "status": "BLOCKED",
+      "measured": null,
+      "threshold": null,
+      "evidence": null
+    },
+    {
+      "id": "rest_changed_px",
+      "status": "BLOCKED",
+      "measured": null,
+      "threshold": 64,
+      "evidence": null
+    },
+    {
+      "id": "new_transparent_px",
+      "status": "BLOCKED",
+      "measured": null,
+      "threshold": 200,
+      "evidence": null
+    }
+  ],
+  "recorded": {},
+  "renders": {
+    "rest": "rest.png",
+    "pose": "pose.png"
+  },
+  "blockers": [
+    "stub",
+    "stub"
+  ]
+}

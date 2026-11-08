@@ -4,6 +4,7 @@
 tests/integration/test_moc3_deformer_acceptance.py 与 tools/probe_warp_st_identity.py）。
 """
 import base64
+import logging
 import math
 from pathlib import Path
 
@@ -1492,25 +1493,29 @@ def test_reordered_deformer_table_compiles_to_the_same_bytes():
             == compile_static_rig(_nested_pair_spec(child_first=False)).to_bytes())
 
 
-def test_compile_logs_the_reorder(capfd):
+def test_compile_logs_the_reorder(caplog):
     """发生重排时必须**记一条 log**：槽位下标进产物字节，无声搬动没法复盘。
 
-    走 ``capfd`` 而不是 ``caplog``：``core.logger`` 自己在 import 时就绑好了
-    StreamHandler，pytest 换 ``sys.stderr`` 换不到它（仓库里断言日志的写法同样是
-    按控制台输出读的）。
+    走 ``caplog`` 而不是 ``capfd``：``core.logger`` 在 import 时就把
+    ``RichHandler(console=Console(stderr=True))`` 绑到了当时的 stderr 上，
+    rich 的缓冲与 fd 重定向不同步 —— 实测 ``capfd.readouterr()`` 读到空串，
+    而 pytest 的 ``Captured log call`` 里明明有这条记录。按 logging 记录断言
+    才与终端是不是 TTY 无关（本地失败、CI 恰好通过的那种"环境相关测试"）。
 
     C1 提交（d964f240）不带这条：它成对依赖 moc3_model.compile_static_rig 的重排
     log，那半属 C2 的审查小修。备份 F:\\tmp\\task3-stepC-wip-7c29bf3b.patch。
     """
+    logger_name = "live2d.exporter.moc3_model"
+    caplog.set_level(logging.INFO, logger=logger_name)
+
     compile_static_rig(_nested_pair_spec(child_first=True))
-    out = capfd.readouterr()
-    text = out.out + out.err
+    text = caplog.text
     assert "parent-first" in text, text
     assert "['L0', 'L1']" in text, text        # 规范化**以后**的顺序要点名
 
+    caplog.clear()
     compile_static_rig(_nested_pair_spec(child_first=False))
-    quiet = capfd.readouterr()
-    assert "parent-first" not in quiet.out + quiet.err, (
+    assert "parent-first" not in caplog.text, (
         "作者已经写对顺序时不许有噪音 —— 否则这条 log 会变成没人读的白噪声")
 
 
