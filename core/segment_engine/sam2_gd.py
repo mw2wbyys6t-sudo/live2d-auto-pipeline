@@ -415,11 +415,14 @@ class Sam2GroundingDinoSegmenter:
         for query, phrase in self.PART_PROMPTS.items():
             raw = self._detect_query(rgb, phrase)
             kept = []
+            max_area_ratio = self.max_box_area_ratio
+            if query in {"clothes_top", "clothes_bottom"}:
+                max_area_ratio = max(max_area_ratio, 0.60)
             for d in raw:
                 area = (d.box[2] - d.box[0]) * (d.box[3] - d.box[1])
                 if area < self.min_box_area_ratio * img_area:
                     continue
-                if area > self.max_box_area_ratio * img_area:
+                if area > max_area_ratio * img_area:
                     self.dropped_boxes.append(
                         f"{query}: whole-frame box at {d.score:.2f}"
                     )

@@ -84,6 +84,33 @@ class TestBoxFiltering:
         assert [d.box for d in out["face"]] == [(20.0, 20.0, 60.0, 60.0)]
         assert seg.dropped_boxes and "face" in seg.dropped_boxes[0]
 
+    @pytest.mark.parametrize(
+        "part,box,expected_count",
+        [
+            ("clothes_bottom", (10, 10, 90, 56), 1),
+            ("clothes_top", (10, 10, 88, 60), 1),
+            ("clothes_bottom", (0, 0, 100, 70), 0),
+            ("clothes_top", (0, 0, 100, 70), 0),
+            ("clothes_bottom", (0, 0, 100, 100), 0),
+            ("face", (10, 10, 90, 80), 0),
+        ],
+    )
+    def test_clothing_area_limit_keeps_large_garments_but_rejects_frame_boxes(
+        self, monkeypatch, part, box, expected_count
+    ):
+        seg = self._seg_with_canned_raw(
+            monkeypatch,
+            {Sam2GroundingDinoSegmenter.PART_PROMPTS[part]: [det(*box, 0.5)]},
+        )
+
+        out = seg.detect(make_image(100, 100))
+
+        assert len(out[part]) == expected_count
+        if expected_count:
+            assert out[part][0].box == tuple(float(v) for v in box)
+        else:
+            assert seg.dropped_boxes and part in seg.dropped_boxes[0]
+
     def test_tiny_boxes_are_dropped(self, monkeypatch):
         phrase = Sam2GroundingDinoSegmenter.PART_PROMPTS["nose"]
         seg = self._seg_with_canned_raw(monkeypatch, {
