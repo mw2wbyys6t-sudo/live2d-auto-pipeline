@@ -1103,9 +1103,11 @@ class SemanticSegmenter:
         hair = hair | (non_skin & bluish)
 
         shoulder_y = fy1 + int(face_h * 0.9)
-        # 同色发/裙的唯一分界：身体中轴、腰线以下的蓝色是下装，不是头发。
-        # 中轴两侧垂下来的长发保留（长发的落点可以低到大腿）。
-        hair = hair & ~(torso_core & (yy > waist_y) & (B > R + 12))
+        # 同色发/裙的唯一分界：身体中轴、腰线以下归下装，不是头发。
+        # 不能只排除蓝色像素：浅色长发与白/浅色裙子同色系时，裙子不满足
+        # “蓝通道主导”，会被整块并进后发层（实测 clothes_bottom 只剩 1014
+        # 像素、裙摆跟着头动）。中轴两侧垂下来的长发保留（落点可到大腿）。
+        hair = hair & ~(torso_core & (yy > waist_y))
         hair = hair & ~features
         if not hair.any() or int(hair.sum()) > int(non_skin.sum()) * 0.85:
             # 发色没区分开（银发/纯黑发等）：退回按位置切
@@ -1637,9 +1639,65 @@ class SemanticSegmenter:
         count, labels, stats, centroids = cv2.connectedComponentsWithStats(
             mask.astype(np.uint8), 8
         )
+        class ComponentMask:
+            def __init__(self, local, shape, x, y, label=None):
+                self._local = local
+                self.shape = shape
+                self._x = x
+                self._y = y
+                self._label = label
+
+            def __array__(self, dtype=None, copy=None):
+                if copy is False:
+                    raise ValueError("ComponentMask requires a copy to materialize an array")
+                full = np.zeros(self.shape, dtype=bool if dtype is None else dtype)
+                height, width = self._local.shape
+                local = self._local if self._label is None else self._local == self._label
+                full[self._y : self._y + height, self._x : self._x + width] = local
+                return full
+
+            def any(self, axis=None):
+                local = self._local if self._label is None else self._local == self._label
+                if axis is None:
+                    return bool(local.any())
+                if axis in (1, -1):
+                    rows = np.zeros(self.shape[0], dtype=bool)
+                    rows[self._y : self._y + local.shape[0]] = local.any(axis=1)
+                    return rows
+                if axis in (0, -2):
+                    cols = np.zeros(self.shape[1], dtype=bool)
+                    cols[self._x : self._x + local.shape[1]] = local.any(axis=0)
+                    return cols
+                return np.asarray(self).any(axis=axis)
+
+            def __and__(self, other):
+                return np.asarray(self) & other
+
+            def __rand__(self, other):
+                return other & np.asarray(self)
+
+            def __or__(self, other):
+                return np.asarray(self) | np.asarray(other)
+
+            def __ror__(self, other):
+                return np.asarray(other) | np.asarray(self)
+
+        bbox_bytes = sum(
+            int(stat[cv2.CC_STAT_WIDTH]) * int(stat[cv2.CC_STAT_HEIGHT])
+            for stat in stats[1:]
+        )
+        shared_labels = bbox_bytes > labels.nbytes
         out: List[Tuple[np.ndarray, int, float, float]] = []
         for label in range(1, count):
-            comp = labels == label
+            x = int(stats[label, cv2.CC_STAT_LEFT])
+            y = int(stats[label, cv2.CC_STAT_TOP])
+            width = int(stats[label, cv2.CC_STAT_WIDTH])
+            height = int(stats[label, cv2.CC_STAT_HEIGHT])
+            local = labels[y : y + height, x : x + width]
+            comp = ComponentMask(
+                local if shared_labels else local == label,
+                mask.shape, x, y, label if shared_labels else None,
+            )
             out.append(
                 (
                     comp,
