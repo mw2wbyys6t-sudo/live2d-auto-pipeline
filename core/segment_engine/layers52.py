@@ -107,6 +107,180 @@ LIVE2D_52_LAYERS: List[Dict] = [
     {"id": 51, "name_cn": "头发_高光_前", "name_en": "Hair_Highlight_Front", "group": "hair_front", "draw_order": 114, "required": False},
 ]
 
+#: See-through 官方部位解析模型 ``l2d_sam_iter2`` 输出的 19 个语义部位。
+#: 顺序与模型 logits 通道严格一致，不可调整。
+VALID_BODY_PARTS_V2: Tuple[str, ...] = (
+    "hair", "headwear", "face", "eyes", "eyewear", "ears", "earwear",
+    "nose", "mouth", "neck", "neckwear", "topwear", "handwear",
+    "bottomwear", "legwear", "footwear", "tail", "wings", "objects",
+)
+
+#: 19 类部位 → 52 层的映射状态。
+MAP_DIRECT = "direct"            # 52 层有直接对应层，一个 mask 原位落层
+MAP_NEEDS_SPLIT = "needs_split"  # 52 层把该部位拆成多层，需二次拆分
+MAP_UNMAPPED = "unmapped"        # 52 层没有对应层，保留原标签
+
+#: ``VALID_BODY_PARTS_V2`` → 52 层映射表。
+#:
+#: 约定：
+#:
+#: * ``primary`` 是**唯一**落位层。19 类每个类只产出一个 mask，绝不把同一个
+#:   mask 复制到多个 52 层，否则 Live2D 里同像素会被重复绘制。
+#: * ``standard_ids`` 只描述「该部位在 52 层里理论上被拆成哪些层」，用于报告，
+#:   不代表真的会写入这些层。
+#: * ``status == MAP_UNMAPPED`` 时 ``primary`` 为 ``None``，调用方必须保留原始
+#:   部件标签与图层，不得硬塞进某个 52 层。
+BODY_PARTS_19_TO_52: Dict[str, Dict] = {
+    "hair": {
+        "status": MAP_NEEDS_SPLIT,
+        "standard_ids": (1, 2, 3, 4, 47, 48, 49, 50, 51),
+        "primary": 1,
+        "note": "整头头发需按后发/侧发/刘海/呆毛二次拆分；未拆分时整体落后发层 1",
+    },
+    "headwear": {
+        "status": MAP_UNMAPPED,
+        "standard_ids": (),
+        "primary": None,
+        "note": "52 层无头饰层，保留原标签（可另存为扩展层或并入配饰 22）",
+    },
+    "face": {
+        "status": MAP_DIRECT,
+        "standard_ids": (23,),
+        "primary": 23,
+        "note": "脸部基础层",
+    },
+    "eyes": {
+        "status": MAP_NEEDS_SPLIT,
+        "standard_ids": (33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44),
+        "primary": 33,
+        "note": "需拆成眼白/虹膜/瞳孔/高光/睫毛并按左右分侧；未拆分时整体落眼白_右 33",
+    },
+    "eyewear": {
+        "status": MAP_UNMAPPED,
+        "standard_ids": (),
+        "primary": None,
+        "note": "52 层无眼镜层，保留原标签",
+    },
+    "ears": {
+        "status": MAP_NEEDS_SPLIT,
+        "standard_ids": (25, 26),
+        "primary": 25,
+        "note": "需按左右拆到 25/26；未拆分时整体落耳朵_左 25",
+    },
+    "earwear": {
+        "status": MAP_UNMAPPED,
+        "standard_ids": (),
+        "primary": None,
+        "note": "52 层无耳饰层，保留原标签",
+    },
+    "nose": {
+        "status": MAP_DIRECT,
+        "standard_ids": (27,),
+        "primary": 27,
+        "note": "鼻子层",
+    },
+    "mouth": {
+        "status": MAP_NEEDS_SPLIT,
+        "standard_ids": (28, 29, 30, 31, 32),
+        "primary": 28,
+        "note": "需拆成口腔/舌/牙/上下唇；未拆分时整体落 28，用于口型绑定前需补拆",
+    },
+    "neck": {
+        "status": MAP_DIRECT,
+        "standard_ids": (5,),
+        "primary": 5,
+        "note": "脖子层",
+    },
+    "neckwear": {
+        "status": MAP_UNMAPPED,
+        "standard_ids": (),
+        "primary": None,
+        "note": "52 层无颈饰层，保留原标签（可并入配饰 22）",
+    },
+    "topwear": {
+        "status": MAP_NEEDS_SPLIT,
+        "standard_ids": (20, 21),
+        "primary": 21,
+        "note": "52 层分衣服内/外层；整件上衣未拆分时落外层 21",
+    },
+    "handwear": {
+        "status": MAP_UNMAPPED,
+        "standard_ids": (),
+        "primary": None,
+        "note": "52 层无手套/袖套层，保留原标签",
+    },
+    "bottomwear": {
+        "status": MAP_UNMAPPED,
+        "standard_ids": (),
+        "primary": None,
+        "note": "52 层无下装/裙层（仅有腿 8-13），保留原标签",
+    },
+    "legwear": {
+        "status": MAP_UNMAPPED,
+        "standard_ids": (),
+        "primary": None,
+        "note": "52 层无袜层，保留原标签",
+    },
+    "footwear": {
+        "status": MAP_UNMAPPED,
+        "standard_ids": (),
+        "primary": None,
+        "note": "52 层的 12/13 是脚部皮肤而非鞋，保留原标签",
+    },
+    "tail": {
+        "status": MAP_UNMAPPED,
+        "standard_ids": (),
+        "primary": None,
+        "note": "52 层无尾巴层，保留原标签",
+    },
+    "wings": {
+        "status": MAP_UNMAPPED,
+        "standard_ids": (),
+        "primary": None,
+        "note": "52 层无翅膀层，保留原标签",
+    },
+    "objects": {
+        "status": MAP_UNMAPPED,
+        "standard_ids": (),
+        "primary": None,
+        "note": "52 层无道具层，保留原标签",
+    },
+}
+
+
+def resolve_body_part_19(name: str) -> Optional[Dict]:
+    """把 19 类部位名解析成 :data:`BODY_PARTS_19_TO_52` 中的条目。
+
+    只接受模型的规范类名（大小写不敏感）。带左右后缀的部件名（如
+    ``eye_left``）仍走 :class:`Layer52Generator` 里既有的精确/子串映射，
+    避免 ``eyes_left`` 被误判成右侧眼白。
+    """
+    return BODY_PARTS_19_TO_52.get(str(name or "").strip().lower())
+
+
+def _is_word_char(ch: str) -> bool:
+    """仅把 ASCII 字母数字视为「词内字符」，中文等宽字符不参与边界判定。"""
+    return ch.isascii() and ch.isalnum()
+
+
+def _matches_as_word(haystack: str, needle: str) -> bool:
+    """``needle`` 是否在 ``haystack`` 里以完整单词出现。
+
+    子串匹配必须过这一关，否则 ``topwear`` 会因为包含 ``ear`` 被当成耳朵。
+    """
+    start = 0
+    while True:
+        idx = haystack.find(needle, start)
+        if idx < 0:
+            return False
+        end = idx + len(needle)
+        left_ok = idx == 0 or not _is_word_char(haystack[idx - 1])
+        right_ok = end == len(haystack) or not _is_word_char(haystack[end])
+        if left_ok and right_ok:
+            return True
+        start = idx + 1
+
+
 # Standard Live2D parameter definitions.
 #
 # The "groups" key matches the schema used by
@@ -247,6 +421,11 @@ class Layer52Generator:
 
         Uses heuristic matching based on color, position, and size to assign
         K-means layers to standard positions. Returns a complete mapping plan.
+
+        ``l2d_sam_iter2`` 输出的 19 类部位名先走 :data:`BODY_PARTS_19_TO_52`：
+        直接映射的落单层，需要拆分的先落 ``primary`` 单层并登记到
+        ``split_required``，52 层没有槽位的部件登记到 ``unmapped_parts``
+        并保留原标签，不占用任何 52 层。
         """
         mappings: List[Layer52Mapping] = []
         used_standard_ids = set()
@@ -421,34 +600,66 @@ class Layer52Generator:
             "背景": [0],
         }
 
-        def _match(pn: str) -> Tuple[List[int], List[str]]:
-            """Return (preferred std IDs, fallback groups) for a part_name."""
+        def _match(pn: str) -> Tuple[List[int], List[str], Optional[Dict]]:
+            """Return (preferred std IDs, fallback groups, 19-class spec).
+
+            ``spec`` 非空表示该名字命中了 :data:`BODY_PARTS_19_TO_52`，
+            调用方据此区分「直接映射 / 需二次拆分 / 无对应层」。
+            """
             pn_lower = pn.lower().strip()
-            # 1. exact direct map
+            # 1. 19 类部位表（唯一权威，避免被 direct_map 的子串规则干扰）
+            spec = resolve_body_part_19(pn_lower)
+            if spec is not None:
+                primary = spec["primary"]
+                return ([primary] if primary is not None else []), [], spec
+            # 2. exact direct map
             if pn_lower in direct_map:
-                return direct_map[pn_lower], []
-            # 2. substring direct map (longest match wins)
+                return direct_map[pn_lower], [], None
+            # 3. substring direct map（最长优先，且必须整词命中）
             best_ids: List[int] = []
             best_len = 0
             for key, ids in direct_map.items():
-                if len(key) > best_len and key in pn_lower:
+                if len(key) > best_len and _matches_as_word(pn_lower, key):
                     best_ids = ids
                     best_len = len(key)
             if best_ids:
-                return best_ids, []
-            # 3. keyword → group fallback
+                return best_ids, [], None
+            # 4. keyword → group fallback
             groups: List[str] = []
             for keyword, grps in part_keywords.items():
                 if keyword in pn:
                     groups.extend(grps)
             if not groups:
                 groups = ["clothes", "body"]
-            return [], groups
+            return [], groups, None
+
+        unmapped_parts: List[Dict] = []
+        split_required: List[Dict] = []
 
         for layer in layers_info:
             part_name = layer.get("part_name", "未分类")
             source = layer.get("path", "")
-            preferred_ids, fallback_groups = _match(part_name)
+            preferred_ids, fallback_groups, spec = _match(part_name)
+
+            if spec is not None and spec["status"] == MAP_UNMAPPED:
+                # 52 层没有对应层：保留原始标签与图层，不做任何 52 层占位，
+                # 免得把下装/饰品硬塞进耳朵或配饰后产生错误遮挡。
+                unmapped_parts.append({
+                    "part_name": part_name,
+                    "path": source,
+                    "status": MAP_UNMAPPED,
+                    "reason": spec["note"],
+                })
+                continue
+
+            if spec is not None and spec["status"] == MAP_NEEDS_SPLIT:
+                split_required.append({
+                    "part_name": part_name,
+                    "path": source,
+                    "primary": spec["primary"],
+                    "standard_ids": list(spec["standard_ids"]),
+                    "reason": spec["note"],
+                })
 
             assigned = False
             # Try preferred standard IDs first (in listed order)
@@ -490,6 +701,15 @@ class Layer52Generator:
             "total_layers": len(mappings),
             "mapped_layers": sum(1 for m in mappings if m.mapped),
             "missing_required": [asdict(m) for m in missing_required],
+            # 19 类部位里 52 层没有槽位的部件：原样保留，供下游单独处理
+            "unmapped_parts": unmapped_parts,
+            # 19 类部位里 52 层要求二次拆分的部件：记录单一落位与拆分目标
+            "split_required": split_required,
+            # 映射表随结果一并输出，便于核对每个部位的落层依据
+            "body_parts_19_map": {
+                name: {**spec, "standard_ids": list(spec["standard_ids"])}
+                for name, spec in BODY_PARTS_19_TO_52.items()
+            },
             "physics_config": self.physics_config,
             "parameters": self.standard_params,
         }
@@ -545,6 +765,19 @@ class Layer52Generator:
             f.write(f"Total standard layers: {mapping_result['total_layers']}\n")
             f.write(f"Mapped layers: {mapping_result['mapped_layers']}\n")
             f.write(f"Missing required layers: {len(mapping_result['missing_required'])}\n\n")
+
+            if mapping_result.get("split_required"):
+                f.write("Parts needing a secondary split (single fallback layer):\n")
+                for item in mapping_result["split_required"]:
+                    f.write(f"  - {item['part_name']} -> layer {item['primary']} "
+                            f"(split into {item['standard_ids']})\n")
+                f.write("\n")
+
+            if mapping_result.get("unmapped_parts"):
+                f.write("Unmapped parts (no 52-layer slot; original label kept):\n")
+                for item in mapping_result["unmapped_parts"]:
+                    f.write(f"  - {item['part_name']}: {item['reason']}\n")
+                f.write("\n")
 
             f.write("Layer Structure (back to front):\n")
             f.write("-" * 70 + "\n")
