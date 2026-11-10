@@ -40,7 +40,14 @@ class LayerComposer:
     """
 
     STANDARD_LAYER_ORDER: List[str] = [
+        # --- l2d_sam_iter2 的 19 类部位名 ---
+        # 这些名字来自 See-through 的部位解析模型，跟本表原有的语义名字并存。
+        # 不列进来的名字会被 reorder_layers 按字母序追加到最后（=画在所有层之上），
+        # 遮挡关系也会反过来，所以每个 19 类名都必须在正确位置显式出现。
+        "wings",
+        "tail",
         "scalp",
+        "hair",          # 19 类只给一整块头发，按后发处理（见 layers52 的 primary=1）
         "hair_back",
         "hair_mid",
         # 刘海（hair_front / hair_bangs）**不在这里**：见下方眼睑之后的位置。
@@ -55,6 +62,8 @@ class LayerComposer:
         # 显形——实测眼睛被脸盖成几块碎片。
         "face_base",
         "face",
+        # 19 类的耳朵（52 层里排在脸之后、五官之前）
+        "ears",
         # 腮红：合成层，画在脸皮上、五官之下。静止时**不可见**（不透明度 0），
         # 由 ParamCheek 淡入 —— 见 REST_INVISIBLE_PARTS。
         "cheek",
@@ -71,17 +80,25 @@ class LayerComposer:
         # 眼泪：合成层，画在眼睛之上。静止时**不可见**（不透明度 0），
         # 由 ParamTears × ParamTearsL/R 淡入。
         "tear_left", "tear_right",
+        # 19 类的眼镜：压在眼睛之上、刘海之下。
+        "eyewear",
         # 刘海：必须排在闭眼图之后（画在闭眼图前），否则闭眼图的补色会盖住刘海。
         "hair_front", "hair_bangs",
+        # 19 类的头饰：帽子压在头发之上。
+        "headwear",
         "eyebrows", "eyebrow_L", "eyebrow_R",
         "nose", "nose_mouth",
         # 口内：合成层，必须在嘴线**之前**（先画腔体，再画嘴唇）。
         "mouth_cavity", "mouth",
         "neck",
         "clothes_top",
+        # 19 类的上衣：与 clothes_top 同层，二者不同时出现（后端二选一）
+        "topwear",
         "clothes_inner",
         "waistband",
         "collar",
+        # 19 类的颈饰：围巾/领带压在领口之上
+        "neckwear",
         "sleeve_L",
         "sleeve_R",
         "cuff_L",
@@ -92,6 +109,8 @@ class LayerComposer:
         "hands",
         "hand_L",
         "hand_R",
+        # 19 类的手套/袖套：压在手臂与手之上
+        "handwear",
         "skirt",
         "skirt_back",
         "bottomwear_back",
@@ -104,21 +123,37 @@ class LayerComposer:
         "legs",
         "leg_L",
         "leg_R",
+        # 19 类的下装：压住裸腿、被袜子与鞋压住
+        "bottomwear",
         "legwear",
         "sock_L",
         "sock_R",
+        # 19 类的鞋
+        "footwear",
         "boot_L",
         "boot_R",
         "boot_cuff_L",
         "boot_cuff_R",
+        # 19 类的耳饰：与配饰同层
+        "earwear",
         "accessories",
         "tail_ears",
         "effects",
+        # 19 类的道具：最前排
+        "objects",
     ]
 
     # Mask names that should receive amodal completion (regions typically
     # occluded by other parts in front of them).
-    AMODAL_PARTS = {"hair_back", "hair_mid", "clothes_top", "clothes_inner", "neck"}
+    #:
+    #: 19 类部位名同样要在这里登记，否则后面被压住的身体/衣服不会补画，
+    #: 一做呼吸/摆臂就会从层缝里露出背景。前排层（handwear/footwear 等）不登记，
+    #: 它们是被别的层遮挡的对象、不是需要补画的底层。
+    AMODAL_PARTS = {
+        "hair_back", "hair_mid", "clothes_top", "clothes_inner", "neck",
+        # l2d_sam_iter2
+        "hair", "topwear", "bottomwear", "legwear", "neckwear",
+    }
 
     #: 脸底层。它必须是**干净皮肤**——下面的五官由各自的网格驱动（眨眼、说话），
     #: 脸层里若留着同样的五官像素，那些参数就会"改了但看不出来"。
@@ -127,8 +162,15 @@ class LayerComposer:
     FACE_PARTS = ("face", "face_base")
 
     #: 画在脸上的五官层。导出脸底层时这些区域的像素要被肤色补掉。
+    #:
+    #: 19 类的 ``eyes`` 也要列上：l2d_sam_iter2 实测在同一张立绘上
+    #: ``face ∩ eyes`` = 539px（占眼睛的 32%），不擦掉的话眨眼时脸上会留着一副
+    #: 没被压扁的眼睛。
     FACE_FEATURE_PARTS = (
-        "eyes_left", "eyes_right", "eyebrows", "nose", "mouth",
+        "eyes", "eyes_left", "eyes_right", "eyebrows", "nose", "mouth",
+        # split_limb_parts 会把 19 类的 ``eyes`` 按中线改成 ``eye_white_L/R``；
+        # 若随后眼白/瞳孔拆分失败，导出的就是这两个带大写后缀的名字。
+        "eye_white_L", "eye_white_R",
         "eyewhite_left", "eyewhite_right", "irides_left", "irides_right",
         "eyelash_left", "eyelash_right", "eye_left", "eye_right",
         "eye_iris_left", "eye_iris_right", "eye_white_left", "eye_white_right",
@@ -142,6 +184,14 @@ class LayerComposer:
     #: 前排层」，否则遮挡检测要求输入已经重叠，AmodalCompleter 永远不会触发。
     #: 12px 覆盖常见抗锯齿/描边宽度，又不足以把相隔一整段肢体的层误判成遮挡。
     OCCLUSION_HARD_CUT_MARGIN = 12
+
+    #: 遮挡补画的膨胀比上限：待补像素 / 本层可见像素。
+    #:
+    #: 遮挡区目前取「前排层的整块掩码」，对贴身的小部件会失控：实测脖子上方
+    #: 只有 583px 可见，却因为整件上衣都被算成遮挡区而补到 38,611px（66 倍），
+    #: 呼吸一动就会从领口露出一大块假脖子。超过这个倍数说明「遮挡区」其实是
+    #: 别的大部件，不是本层被压住的部分——此时保留原层，宁可有缝也不造假层。
+    AMODAL_MAX_EXPANSION = 20.0
 
     #: 合成上眼睑：层名 -> 可以作为"眼睛可见区域"的候选层（按优先级）。
     #:
@@ -302,6 +352,17 @@ class LayerComposer:
                         front = front & adjacent_region
                     occluded_mask |= front
             occluded_mask &= ~mask  # only pixels we don't already own
+
+            # 膨胀比守卫：见 AMODAL_MAX_EXPANSION 的说明。
+            visible_px = int(mask.sum())
+            if visible_px and int(occluded_mask.sum()) > self.AMODAL_MAX_EXPANSION * visible_px:
+                log.warning(
+                    f"'{part}' 的遮挡区 {int(occluded_mask.sum())}px 是可见区 "
+                    f"{visible_px}px 的 "
+                    f"{int(occluded_mask.sum()) / visible_px:.0f} 倍，判定为误把整个"
+                    f"前排部件当成遮挡区，跳过补画（保留原层）"
+                )
+                occluded_mask = np.zeros((h, w), dtype=bool)
 
             completed = False
             if part in self.AMODAL_PARTS and occluded_mask.any():

@@ -181,12 +181,17 @@ class SemanticSegmenter:
 
         Raises:
             core.segment_engine.sam2_gd.ModelUnavailable: for
-                ``model_type="sam2_gd"`` when torch/CUDA/weights are missing.
-                That backend never degrades into the HSV fallback below.
+                ``model_type="sam2_gd"`` / ``"l2d_sam"`` / ``"l2d_sam_iter2"``
+                when torch/weights/source are missing. Those backends never
+                degrade into the HSV fallback below.
         """
         if self.model_type == "sam2_gd":
             from core.segment_engine.sam2_gd import Sam2GroundingDinoSegmenter
             return Sam2GroundingDinoSegmenter(device=self.device).segment(image)
+
+        if self.model_type in ("l2d_sam", "l2d_sam_iter2"):
+            from core.segment_engine.l2d_sam import L2dSamSegmenter
+            return L2dSamSegmenter(device=self.device).segment(image)
 
         if image.mode != "RGBA":
             image = image.convert("RGBA")
@@ -296,11 +301,18 @@ class SemanticSegmenter:
 
         Raises:
             core.segment_engine.sam2_gd.ModelUnavailable: for
-                ``model_type="sam2_gd"`` when the models cannot be loaded.
+                ``model_type="sam2_gd"`` / ``"l2d_sam"`` / ``"l2d_sam_iter2"``
+                when the models cannot be loaded.
         """
         if self.model_type == "sam2_gd":
             from core.segment_engine.sam2_gd import Sam2GroundingDinoSegmenter
             return Sam2GroundingDinoSegmenter(device=self.device).layer(
+                image, output_dir=output_dir, label_layers=label_layers, depth_map=depth_map
+            )
+
+        if self.model_type in ("l2d_sam", "l2d_sam_iter2"):
+            from core.segment_engine.l2d_sam import L2dSamSegmenter
+            return L2dSamSegmenter(device=self.device).layer(
                 image, output_dir=output_dir, label_layers=label_layers, depth_map=depth_map
             )
 

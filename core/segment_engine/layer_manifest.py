@@ -68,6 +68,10 @@ _METHOD_TO_SOURCE: Dict[str, str] = {
     "color": SOURCE_COLOR_CLUSTER,
     "color_cluster": SOURCE_COLOR_CLUSTER,
     "semantic": SOURCE_SEMANTIC,
+    # l2d_sam_iter2 是部位级学习分割，不能因为名字没登记就落进「纯颜色启发式
+    # 兜底」——那会让 layer_manifest.json 把真实模型结果标成严重降级。
+    "l2d_sam_iter2": SOURCE_SEMANTIC,
+    "l2d_sam": SOURCE_SEMANTIC,
     "semantic_fg_gated_color": SOURCE_SEMANTIC_FG_GATED,
     "semantic_hsv_fallback": SOURCE_SEMANTIC_HSV_FALLBACK,
     "custom_segmentation": SOURCE_CUSTOM,
@@ -167,6 +171,9 @@ _UNKNOWN_SPEC = {
 
 ALIASES: Dict[str, Tuple[str, Optional[str]]] = {
     "scalp": ("hair_back", None),
+    # l2d_sam_iter2 只给一整块头发，没有前后之分；未二次拆分时按后发登记，
+    # 与 layers52 的 primary=1 保持一致。
+    "hair": ("hair_back", None),
     "hair_front": ("hair_bangs", None),
     "hair_mid": ("hair_bangs", None),
     "face": ("face_base", None),

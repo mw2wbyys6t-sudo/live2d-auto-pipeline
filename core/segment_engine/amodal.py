@@ -43,6 +43,16 @@ class AmodalCompleter:
     face) or ``clothes`` (partially hidden by arms).
     """
 
+    #: 超过这个像素数的遮挡区改走扩散补画。
+    #:
+    #: Telea 沿边界法向推色，小洞效果好；但被脸/衣服整块压住的洞（几万像素）
+    #: 会推出放射状条纹，动起来非常明显。扩散解在洞内是调和函数，颜色从四周
+    #: 平滑过渡，平涂风格的动漫色块上几乎看不出补痕。
+    LARGE_HOLE_PIXELS = 4096
+    #: 扩散迭代上限与收敛阈值（单通道灰度差）。
+    DIFFUSION_MAX_ITERS = 512
+    DIFFUSION_TOL = 0.05
+
     def __init__(self, device: str = "auto") -> None:
         """Initialize the completer.
 
@@ -135,7 +145,10 @@ class AmodalCompleter:
                 x0, x1 = max(0, int(xs.min()) - pad), min(w, int(xs.max()) + pad + 1)
                 sub = np.ascontiguousarray(rgb[y0:y1, x0:x1])
                 sub_unknown = np.ascontiguousarray(unknown[y0:y1, x0:x1])
-                rgb[y0:y1, x0:x1] = self._inpaint_cv2(sub, sub_unknown)
+                if int((sub_unknown > 0).sum()) >= self.LARGE_HOLE_PIXELS:
+                    rgb[y0:y1, x0:x1] = self._diffusion_fill(sub, sub_unknown > 0)
+                else:
+                    rgb[y0:y1, x0:x1] = self._inpaint_cv2(sub, sub_unknown)
             except Exception as exc:
                 log.warning(f"OpenCV inpainting failed ({exc}); using simple fill")
                 rgb = self._simple_fill(rgb, occ, known=known)
@@ -151,6 +164,55 @@ class AmodalCompleter:
         return Image.fromarray(out, "RGBA")
 
     # --------------------------------------------------------------- internal
+
+    def _diffusion_fill(
+        self,
+        image: np.ndarray,
+        hole: np.ndarray,
+        max_iters: Optional[int] = None,
+        tol: Optional[float] = None,
+    ) -> np.ndarray:
+        """用各向同性扩散补画大片遮挡区（Laplace 调和填充）。
+
+        已知像素在迭代中保持钉死，未知像素反复取 3x3 邻域均值，收敛后洞内是
+        调和函数：颜色从四周平滑过渡，不产生 Telea 那样的放射状条纹。
+
+        Args:
+            image: RGB uint8 数组 ``(H, W, 3)``。
+            hole: 布尔数组 ``(H, W)``，True 表示要补的像素。
+            max_iters: 迭代上限，默认 :attr:`DIFFUSION_MAX_ITERS`。
+            tol: 收敛阈值（灰度平均变化），默认 :attr:`DIFFUSION_TOL`。
+
+        Returns:
+            补画后的 RGB uint8 数组，形状同 ``image``。
+        """
+        out = np.asarray(image, dtype=np.uint8).copy()
+        fill = np.asarray(hole, dtype=bool)
+        if not fill.any() or fill.all():
+            # 全未知时没有边界条件，直接给中性灰
+            if fill.all():
+                out[fill] = (128, 128, 128)
+            return out
+        if not HAS_CV2:  # pragma: no cover - 依赖 cv2.blur
+            return self._simple_fill(out, fill, known=~fill)
+
+        max_iters = self.DIFFUSION_MAX_ITERS if max_iters is None else int(max_iters)
+        tol = self.DIFFUSION_TOL if tol is None else float(tol)
+
+        original = out.astype(np.float32)
+        cur = original.copy()
+        # 未知像素先取可见区均值做初值，收敛更快，也避免纯黑初值在大洞里
+        # 需要几百轮才扩散到边界色。
+        cur[fill] = original[~fill].mean(axis=0)
+
+        for i in range(max_iters):
+            blurred = cv2.blur(cur, (3, 3))
+            prev = cur[fill].copy()
+            cur[fill] = blurred[fill]
+            cur[~fill] = original[~fill]  # 已知像素始终钉死
+            if i % 8 == 0 and np.abs(cur[fill] - prev).mean() < tol:
+                break
+        return np.clip(cur, 0, 255).astype(np.uint8)
 
     def _inpaint_cv2(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
         """Inpaint using OpenCV's Telea algorithm.
