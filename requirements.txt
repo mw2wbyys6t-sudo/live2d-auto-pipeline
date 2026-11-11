@@ -59,8 +59,8 @@ pygame>=2.5.0; python_version < "3.14"
 pygame-ce>=2.5.8; python_version >= "3.14"
 
 # ====== Image Processing ======
-# opencv-python>=4.9.0.80: 捆绑的 libwebp 已含 CVE-2023-4863(堆缓冲区溢出)修复
-opencv-python>=4.9.0.80
+# opencv-python>=5.0.0.93: 捆绑的 libwebp 已含 CVE-2023-4863(堆缓冲区溢出)修复
+opencv-python>=5.0.0.93
 # 前景分割运行时按平台分流：Windows 用 DirectML 版（实测 ISNet 分层 1149ms → 163ms，
 # 掩码逐像素一致），其余平台用 CPU 版（DirectML 只发 Windows wheel）。
 # ⚠️ 不能同装：两个发行名共用 onnxruntime/ 目录，后装的会静默覆盖前装的，
