@@ -71,7 +71,7 @@
 - 朴素 normal source-over 重合成与参考合成在内容区的 RGB MAE 为 32.07/255，证明剪贴、组蒙版和非 normal blending 不能丢失。
 - 560/636 个叶名是通用编号，自动识别必须利用组路径和几何，不能依赖叶层名称。
 
-研究产物当前保存在 `F:\tmp\reference_moc3_report.json`、`F:\tmp\reference_physics_metrics.json`、`F:\tmp\reference_part_map.json` 和 `F:\tmp\psd_gold_analysis\report.json`。这些文件是研究证据，不是产品运行时依赖。
+研究产物保存在仓库外的本机临时目录（如 `reference_moc3_report.json`、`reference_physics_metrics.json`、`reference_part_map.json`、`psd_gold_analysis/report.json`）。这些文件是研究证据，不是产品运行时依赖，也不随仓库分发。
 
 ## 4. 目标与非目标
 
