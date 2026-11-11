@@ -294,7 +294,7 @@ const CharacterDetailPage: NextPage = () => {
                   </span>
                 )}
                 {embedding === 'processing' && (
-                  <span className="inline-flex items-center gap-1.5 text-xs text-amber-300">
+                  <span className="inline-flex items-center gap-1.5 text-xs text-amber-700">
                     <Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing
                   </span>
                 )}

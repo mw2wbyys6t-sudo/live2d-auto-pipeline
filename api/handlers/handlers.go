@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 
@@ -516,6 +517,38 @@ func (h *Handler) ListGenerations(c *gin.Context) {
 		"generations": items,
 		"count":       len(items),
 	}})
+}
+
+// UpdateGeneration 修改作品名称 / 分类（PATCH /api/generations）。
+// 只动记录里的元数据，不碰磁盘产物。
+func (h *Handler) UpdateGeneration(c *gin.Context) {
+	var req models.WorkMetaRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "参数错误: " + err.Error()})
+		return
+	}
+	record, err := services.UpdateGenerationMeta(h.cfg, req.ID, req.Name, req.Category)
+	if err != nil {
+		c.JSON(http.StatusNotFound, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Message: "已更新", Data: record})
+}
+
+// CreateGeneration 登记一份"已有图片"的作品（POST /api/generations）。
+// 用于「不想生成、直接从分层开始」的链路：只落记录，分层仍走 /api/segment。
+func (h *Handler) CreateGeneration(c *gin.Context) {
+	var req models.CreateWorkRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: "参数错误: " + err.Error()})
+		return
+	}
+	record, err := services.RecordUploadedWork(h.cfg, req.ImagePath, "", req.Name, req.Category)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, models.Response{Success: false, Error: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, models.Response{Success: true, Message: "作品已登记", Data: record})
 }
 
 // ListLayers 把分层目录的 layer_guide.json 转成前端可直接加载的图层列表。
@@ -1148,6 +1181,19 @@ func (h *Handler) ExportLive2D(c *gin.Context) {
 		req.CharacterID = "character"
 	}
 
+	// 多模型：同一作品下每个模型各自一个目录（<work_id>/<model_name>），
+	// 否则同名作品（都叫 character）会互相覆盖，只剩最后一个模型。
+	// workID 允许是前端按产物路径推导的临时 id，这里先对齐成后端记录 id。
+	workID := services.ResolveWorkID(h.cfg, req.WorkID, req.LayersDir)
+	if req.OutputDir == "" && workID != "" && h.cfg != nil {
+		dirName := safeModelSegment(req.ModelName)
+		if dirName == "" {
+			dirName = time.Now().Format("20060102-150405")
+		}
+		req.OutputDir = filepath.Join(h.cfg.Output.BaseDir, "live2d_exports",
+			safeModelSegment(workID), dirName)
+	}
+
 	// Zip download mode (used by the web preview's Export button).
 	if req.Download {
 		modelDir, err := h.resolveExportModelDir(c.Request.Context(), req)
@@ -1215,7 +1261,48 @@ func (h *Handler) ExportLive2D(c *gin.Context) {
 	}
 	runtimeReady, _ := data["runtime_ready"].(bool)
 	services.RecordLatestExport(h.cfg, model3JSON, outputDir, runtimeReady)
+	// 作品下挂模型：模型库里"一个作品多个模型"就是这个数组。
+	if workID != "" && runtimeReady && model3JSON != "" {
+		modelName := strings.TrimSpace(req.ModelName)
+		if modelName == "" {
+			modelName = "模型 " + time.Now().Format("01-02 15:04")
+		}
+		services.AppendWorkModel(h.cfg, workID, map[string]interface{}{
+			"id":            "m_" + safeModelSegment(workID) + "_" + safeModelSegment(modelName),
+			"name":          modelName,
+			"model3_json":   model3JSON,
+			"model3_url":    services.OutputURLFor(h.cfg, model3JSON),
+			"model_dir":     filepath.Dir(model3JSON),
+			"runtime_ready": runtimeReady,
+			"created_at":    time.Now().Format(time.RFC3339),
+		})
+	}
 	c.JSON(http.StatusOK, models.Response{Success: true, Message: "模型导出成功", Data: data})
+}
+
+// safeModelSegment 把用户起的模型名 / 作品 id 变成可做目录名的片段：
+// 保留字母、数字、CJK 与 -_，其余折叠成 '-'，并限制长度。
+func safeModelSegment(raw string) string {
+	raw = strings.TrimSpace(raw)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range raw {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_':
+			b.WriteRune(r)
+			lastDash = false
+		case r == '-' || r == ' ' || r == '/' || r == '\\' || r == ':' || r == '.':
+			if !lastDash && b.Len() > 0 {
+				b.WriteRune('-')
+				lastDash = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if runes := []rune(out); len(runes) > 48 {
+		out = string(runes[:48])
+	}
+	return out
 }
 
 // unwrapPythonResult 摊平 runInlinePython 的 {"result": ...} 包装。

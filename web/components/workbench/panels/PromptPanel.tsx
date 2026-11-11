@@ -2,42 +2,14 @@ import { KeyboardEvent } from 'react';
 import { AlertTriangle, Info, Link2, Link2Off, Loader2, Wand2, XCircle } from 'lucide-react';
 import { useWorkbench } from '../../../lib/workbench-context';
 import { codePointLength, isGenerateShortcut, sliceCodePoints } from '../../../lib/ime';
-import type { Resolution } from '../../../types';
+import {
+  PROMPT_ENGINES,
+  PROMPT_TAG_GROUPS as TAG_GROUPS,
+  PROMPT_TEMPLATES as TEMPLATES,
+  RESOLUTIONS,
+} from '../../../lib/catalog';
 
 const MAX_PROMPT = 2000;
-const RESOLUTIONS: Resolution[] = [512, 768, 1024, 2048];
-
-const TAG_GROUPS: Array<{ group: string; tags: string[] }> = [
-  { group: '风格', tags: ['日系动漫风格', '赛璐璐上色', '厚涂质感', '水彩风格', '赛博朋克', '国风插画'] },
-  { group: '人物', tags: ['少女', '少年', '双马尾', '长发', '猫耳', '水手服', '和服', '异色瞳'] },
-  { group: '表情', tags: ['微笑', '害羞', '温柔注视', '认真', '惊讶'] },
-  { group: '构图', tags: ['半身像', '正面视角', '居中构图', '留白背景'] },
-  { group: '光照', tags: ['柔和光影', '逆光', '边缘光', '午后阳光'] },
-  { group: '质量', tags: ['高清细节', '精致五官', '清晰线条', '大师作品'] },
-];
-
-const TEMPLATES: Array<{ name: string; prompt: string }> = [
-  {
-    name: '甜美少女',
-    prompt:
-      '一位粉色双马尾少女，蓝色眼睛，身穿水手服，面带微笑，日系动漫风格，柔和光影，半身像，干净背景，高清细节',
-  },
-  {
-    name: '古风少年',
-    prompt:
-      '一位古风少年，长发束冠，身穿青白色长袍，手持折扇，神情温和，国风插画，淡雅配色，半身像，留白背景，精致细节',
-  },
-  {
-    name: '赛博少女',
-    prompt:
-      '一位银色短发的未来少女，机械义肢，霓虹灯背景，赛博朋克风格，冷色调边缘光，正面半身构图，高清细节',
-  },
-  {
-    name: '温柔学姐',
-    prompt:
-      '一位温柔的大姐姐，栗色长发，针织毛衣，手捧书本，午后阳光，日系动画风格，柔和色调，半身像',
-  },
-];
 
 const LANG_LABEL: Record<string, string> = {
   zh: '中文',
@@ -86,11 +58,15 @@ export default function PromptPanel() {
   return (
     <div className="space-y-5">
       <section>
-        <div className="flex items-center justify-between mb-1.5">
-          <label htmlFor="prompt-input" className="text-xs font-medium text-gray-400">
-            提示词 <span className="text-gray-600">（中文直接写）</span>
+        <div className="mb-1.5 flex items-center justify-between">
+          <label htmlFor="prompt-input" className="section-label">
+            提示词 <span className="text-haze-600">（中文直接写）</span>
           </label>
-          <span className={`text-[10px] tabular-nums ${length > MAX_PROMPT * 0.9 ? 'text-amber-400' : 'text-gray-600'}`}>
+          <span
+            className={`text-[10px] tabular-nums ${
+              length > MAX_PROMPT * 0.9 ? 'text-amber-600' : 'text-haze-600'
+            }`}
+          >
             {length}/{MAX_PROMPT}
           </span>
         </div>
@@ -101,21 +77,17 @@ export default function PromptPanel() {
           onKeyDown={onKeyDown}
           rows={6}
           placeholder="例如：一位粉色双马尾少女，蓝色眼睛，身穿水手服，日系动漫风格，柔和光影，半身像，高清细节"
-          className="w-full px-3 py-2.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white placeholder:text-gray-600 focus:outline-none focus:border-pink-500 transition-colors resize-none leading-relaxed"
+          className="field resize-none text-sm leading-relaxed"
         />
-        <p className="mt-1 text-[10px] text-gray-600">Ctrl/⌘ + Enter 开始生成 · 输入法组词时的回车不会误触</p>
+        <p className="mt-1 text-[10px] text-haze-600">Ctrl/⌘ + Enter 开始生成 · 输入法组词时的回车不会误触</p>
 
         <div className="mt-3 space-y-2">
           {TAG_GROUPS.map((group) => (
             <div key={group.group} className="flex items-start gap-2">
-              <span className="w-8 shrink-0 pt-1 text-[10px] text-gray-600">{group.group}</span>
+              <span className="w-8 shrink-0 pt-0.5 text-[10px] text-haze-600">{group.group}</span>
               <div className="flex flex-wrap gap-1">
                 {group.tags.map((tag) => (
-                  <button
-                    key={tag}
-                    onClick={() => appendPromptTag(tag)}
-                    className="px-1.5 py-0.5 rounded border border-gray-700 bg-gray-900 text-[11px] text-gray-400 hover:border-pink-500/50 hover:text-pink-300 transition-colors"
-                  >
+                  <button key={tag} onClick={() => appendPromptTag(tag)} className="chip px-2 py-0.5 text-[11px]">
                     {tag}
                   </button>
                 ))}
@@ -124,15 +96,15 @@ export default function PromptPanel() {
           ))}
         </div>
 
-        <div className="mt-3 flex items-center gap-2">
-          <span className="text-[10px] text-gray-600 shrink-0">模板</span>
+        <div className="mt-3 flex items-start gap-2">
+          <span className="shrink-0 pt-1 text-[10px] text-haze-600">模板</span>
           <div className="flex flex-wrap gap-1">
             {TEMPLATES.map((template) => (
               <button
                 key={template.name}
                 onClick={() => setPrompt(template.prompt)}
                 title={`用模板替换当前提示词：${template.prompt}`}
-                className="px-2 py-1 rounded-md border border-gray-700 bg-gray-900 text-[11px] text-gray-300 hover:border-purple-500/50 hover:text-purple-300 transition-colors"
+                className="chip border-iris-500/25 bg-iris-500/[0.06] px-2 py-1 text-[11px] text-iris-600 hover:border-iris-500/45 hover:text-iris-200"
               >
                 {template.name}
               </button>
@@ -142,7 +114,7 @@ export default function PromptPanel() {
       </section>
 
       <section>
-        <label htmlFor="negative-prompt" className="text-xs font-medium text-gray-400 block mb-1.5">
+        <label htmlFor="negative-prompt" className="section-label mb-1.5 block">
           负向提示词
         </label>
         <textarea
@@ -151,68 +123,66 @@ export default function PromptPanel() {
           onChange={(e) => setNegativePrompt(e.target.value)}
           rows={2}
           placeholder="低清晰度，错误的人体结构，多余手指，模糊…"
-          className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-pink-500 transition-colors resize-none"
+          className="field resize-none leading-relaxed"
         />
       </section>
 
       <section>
-        <div className="text-xs font-medium text-gray-400 mb-1.5">分辨率</div>
-        <div className="flex gap-1">
+        <div className="section-label mb-1.5">分辨率</div>
+        <div className="flex gap-1 rounded-xl border border-black/[0.07] bg-ink-950/50 p-1">
           {RESOLUTIONS.map((r) => (
             <button
               key={r}
               onClick={() => setResolution(r)}
-              className={`flex-1 py-1.5 rounded-md text-xs border transition-colors tabular-nums ${
+              className={`flex-1 rounded-lg py-1.5 text-xs transition-colors ${
                 resolution === r
-                  ? 'bg-pink-500/20 border-pink-500/50 text-pink-300'
-                  : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700'
+                  ? 'bg-sakura-500/15 text-sakura-600 ring-1 ring-inset ring-sakura-500/30'
+                  : 'text-haze-400 hover:bg-black/[0.04] hover:text-haze-200'
               }`}
             >
-              {r}²
+              <span className="tabular-nums">{r}²</span>
             </button>
           ))}
         </div>
       </section>
 
       <section>
-        <div className="text-xs font-medium text-gray-400 mb-1.5">生图引擎</div>
-        <select
-          value={engine}
-          onChange={(e) => setEngine(e.target.value)}
-          className="w-full px-2.5 py-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-white focus:outline-none focus:border-pink-500"
-        >
-          <option value="auto">自动选择（云端优先）</option>
-          <option value="comfyui">ComfyUI（本地 · 免费 · 可微调）</option>
-          <option value="sd_webui">SD WebUI（本地 · 免费 · 可微调）</option>
+        <div className="section-label mb-1.5">生图引擎</div>
+        <select value={engine} onChange={(e) => setEngine(e.target.value)} className="field">
+          {PROMPT_ENGINES.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
         </select>
 
         {engine !== 'auto' && (
           <div className="mt-2 space-y-2">
             <div>
-              <label htmlFor="engine-model" className="text-[10px] text-gray-500 block mb-1">
-                底模文件名 <span className="text-gray-600">（留空 = 用引擎当前默认模型）</span>
+              <label htmlFor="engine-model" className="mb-1 block text-[10px] text-haze-500">
+                底模文件名 <span className="text-haze-600">（留空 = 用引擎当前默认模型）</span>
               </label>
               <input
                 id="engine-model"
                 value={imageModel}
                 onChange={(e) => setImageModel(e.target.value)}
                 placeholder="例如 illustriousXL_v01.safetensors"
-                className="w-full px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-pink-500"
+                className="field"
               />
             </div>
             <div>
-              <label htmlFor="engine-lora" className="text-[10px] text-gray-500 block mb-1">
-                LoRA 文件名 <span className="text-gray-600">（角色一致性，留空 = 不注入）</span>
+              <label htmlFor="engine-lora" className="mb-1 block text-[10px] text-haze-500">
+                LoRA 文件名 <span className="text-haze-600">（角色一致性，留空 = 不注入）</span>
               </label>
               <input
                 id="engine-lora"
                 value={lora}
                 onChange={(e) => setLora(e.target.value)}
                 placeholder="例如 char_style_v1.safetensors"
-                className="w-full px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-md text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-pink-500"
+                className="field"
               />
             </div>
-            <p className="text-[10px] leading-relaxed text-gray-600">
+            <p className="text-[10px] leading-relaxed text-haze-600">
               底模放 models/checkpoints，LoRA 放 models/loras。6GB 显存建议先用 SD1.5
               二次元底模调提示词，定稿再换 SDXL（启动 ComfyUI 时加 --lowvram）。
             </p>
@@ -223,17 +193,27 @@ export default function PromptPanel() {
       <section>
         <button
           onClick={() => setConsistency(!consistency)}
-          className={`w-full flex items-center justify-between p-2.5 rounded-lg border transition-colors ${
-            consistency ? 'bg-purple-500/10 border-purple-500/40' : 'bg-gray-900 border-gray-800'
+          className={`flex w-full items-center justify-between rounded-xl border p-2.5 transition-colors ${
+            consistency
+              ? 'border-iris-500/40 bg-iris-500/[0.08]'
+              : 'border-black/[0.07] bg-ink-950/40 hover:border-black/[0.14]'
           }`}
         >
-          <span className="flex items-center gap-2 text-xs text-gray-300">
-            {consistency ? <Link2 className="w-4 h-4 text-purple-400" /> : <Link2Off className="w-4 h-4 text-gray-500" />}
+          <span className="flex items-center gap-2 text-xs text-haze-200">
+            {consistency ? (
+              <Link2 className="h-4 w-4 text-iris-600" />
+            ) : (
+              <Link2Off className="h-4 w-4 text-haze-500" />
+            )}
             角色一致性
           </span>
-          <span className={`w-9 h-5 rounded-full relative transition-colors ${consistency ? 'bg-purple-500' : 'bg-gray-700'}`}>
+          <span
+            className={`relative h-5 w-9 rounded-full transition-colors ${
+              consistency ? 'bg-iris-500' : 'bg-black/15'
+            }`}
+          >
             <span
-              className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${
+              className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${
                 consistency ? 'left-[18px]' : 'left-0.5'
               }`}
             />
@@ -243,7 +223,7 @@ export default function PromptPanel() {
           <select
             value={characterId}
             onChange={(e) => setCharacterId(e.target.value)}
-            className="mt-2 w-full px-2.5 py-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-white focus:outline-none focus:border-pink-500"
+            className="field mt-2"
           >
             <option value="">— 选择角色（可选）—</option>
             {characters.map((character) => (
@@ -256,18 +236,18 @@ export default function PromptPanel() {
       </section>
 
       {sentDiffers && (
-        <section className="rounded-lg border border-gray-700 bg-gray-900/60 p-2.5 space-y-1">
-          <div className="flex items-center gap-1.5 text-[11px] text-gray-400">
-            <Info className="w-3.5 h-3.5" />
+        <section className="card space-y-1 p-2.5">
+          <div className="flex items-center gap-1.5 text-[11px] text-haze-400">
+            <Info className="h-3.5 w-3.5" />
             上次实际发送
-            <span className="px-1 rounded bg-gray-800 text-[10px] text-gray-300">
+            <span className="rounded bg-black/[0.05] px-1 text-[10px] text-haze-300">
               {LANG_LABEL[current?.promptLang || 'unknown'] || current?.promptLang}
             </span>
           </div>
-          <p className="text-[11px] text-gray-500 leading-relaxed break-words">{current?.promptSent}</p>
+          <p className="break-words text-[11px] leading-relaxed text-haze-500">{current?.promptSent}</p>
           {current?.promptMismatch && (
-            <p className="flex items-start gap-1 text-[11px] text-amber-400/90">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <p className="flex items-start gap-1 text-[11px] text-amber-700/90">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               上游生成服务对中文支持有限；原文不会被改写，但效果可能不稳。可改用英文关键词，或换用中文原生的生成模型。
             </p>
           )}
@@ -276,35 +256,25 @@ export default function PromptPanel() {
 
       <section className="space-y-2">
         {generation.error && (
-          <p className="flex items-start gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-2 text-[11px] text-red-300">
-            <XCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <p className="flex items-start gap-1.5 rounded-xl border border-rose-400/30 bg-rose-500/10 px-2.5 py-2 text-[11px] text-rose-600">
+            <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             {generation.error}
           </p>
         )}
         {generation.message && !generation.error && (
-          <p className="text-[11px] text-gray-500">{generation.message}</p>
+          <p className="text-[11px] text-haze-500">{generation.message}</p>
         )}
         {generation.running ? (
-          <button
-            onClick={cancelGenerate}
-            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-red-500/10 border border-red-500/40 text-red-300 text-sm font-medium hover:bg-red-500/20 transition-colors"
-          >
-            <Loader2 className="w-4 h-4 animate-spin" /> 停止生成
+          <button onClick={cancelGenerate} className="btn-danger w-full py-2.5 text-sm">
+            <Loader2 className="h-4 w-4 animate-spin" /> 停止生成
           </button>
         ) : (
-          <button
-            onClick={() => void generate()}
-            disabled={!prompt.trim()}
-            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-pink-500 to-purple-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg hover:shadow-pink-500/30 transition-all"
-          >
-            <Wand2 className="w-4 h-4" /> 开始生成
+          <button onClick={() => void generate()} disabled={!prompt.trim()} className="btn-primary w-full py-2.5 text-sm">
+            <Wand2 className="h-4 w-4" /> 开始生成
           </button>
         )}
         {current?.layersDir && (
-          <button
-            onClick={() => setStage('layers')}
-            className="w-full px-3 py-2 rounded-lg bg-gray-900 border border-gray-700 text-xs text-gray-300 hover:bg-gray-800 transition-colors"
-          >
+          <button onClick={() => setStage('layers')} className="btn-ghost w-full py-2">
             查看图层
           </button>
         )}

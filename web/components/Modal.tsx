@@ -36,21 +36,21 @@ export default function Modal({ open, onClose, title, children, footer, size = '
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
       <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="absolute inset-0 bg-[#1a1030]/35 backdrop-blur-sm"
         onClick={onClose}
         aria-hidden="true"
       />
       <div
-        className={`relative w-full ${SIZE_MAP[size]} bg-[#1a1a23] border border-gray-800 rounded-2xl shadow-2xl shadow-black/50 animate-scale-in max-h-[90vh] flex flex-col`}
+        className={`relative w-full ${SIZE_MAP[size]} bg-white border border-black/10 rounded-2xl shadow-2xl shadow-black/20 animate-scale-in max-h-[90vh] flex flex-col`}
         role="dialog"
         aria-modal="true"
       >
         {title && (
-          <div className="flex items-center justify-between p-5 border-b border-gray-800">
-            <h3 className="text-lg font-semibold text-white">{title}</h3>
+          <div className="flex items-center justify-between p-5 border-b border-black/[0.08]">
+            <h3 className="text-lg font-semibold text-haze-100">{title}</h3>
             <button
               onClick={onClose}
-              className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+              className="p-1.5 rounded-lg text-haze-500 hover:text-haze-100 hover:bg-black/[0.05] transition-colors"
               aria-label="Close"
             >
               <X className="w-5 h-5" />
@@ -59,7 +59,7 @@ export default function Modal({ open, onClose, title, children, footer, size = '
         )}
         <div className="p-5 overflow-y-auto flex-1">{children}</div>
         {footer && (
-          <div className="p-5 border-t border-gray-800 flex items-center justify-end gap-2">
+          <div className="p-5 border-t border-black/[0.08] flex items-center justify-end gap-2">
             {footer}
           </div>
         )}

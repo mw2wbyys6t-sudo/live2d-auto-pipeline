@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import Link from 'next/link';
 import {
   Image as ImageIcon,
   Layers as LayersIcon,
@@ -7,9 +8,10 @@ import {
   Box,
   Check,
   AlertTriangle,
+  Boxes,
 } from 'lucide-react';
 import { useWorkbench } from '../../lib/workbench-context';
-import { formatWorkTime, promptExcerpt } from '../../lib/workbench';
+import { formatWorkTime, workDisplayName } from '../../lib/workbench';
 import { APP_VERSION } from '../../lib/brand';
 
 interface WorkpieceRailProps {
@@ -25,17 +27,25 @@ export default function WorkpieceRail({ className = '', onNavigate }: WorkpieceR
   const sorted = useMemo(() => works, [works]);
 
   return (
-    <aside className={`w-[248px] shrink-0 border-r border-gray-800 bg-[#14141c] flex flex-col min-h-0 ${className}`}>
-      <div className="h-11 px-3 border-b border-gray-800 flex items-center justify-between">
-        <p className="text-xs font-medium text-gray-400">作品</p>
-        <div className="flex items-center gap-1">
+    <aside className={`panel-rail flex w-[260px] shrink-0 flex-col min-h-0 ${className}`}>
+      <div className="flex h-11 items-center justify-between border-b border-black/[0.07] px-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium tracking-wide text-haze-200">作品库</span>
+          <span className="rounded-full bg-black/[0.05] px-1.5 py-px text-[10px] tabular-nums text-haze-500">
+            {works.length}
+          </span>
+        </div>
+        <div className="flex items-center gap-0.5">
+          <Link href="/models" className="btn-icon p-1.5" title="打开模型库" aria-label="打开模型库">
+            <Boxes className="h-3.5 w-3.5" />
+          </Link>
           <button
             onClick={() => void refreshWorks()}
             title="刷新作品列表"
             aria-label="刷新作品列表"
-            className="p-1.5 rounded-md text-gray-500 hover:text-white hover:bg-gray-800 transition-colors"
+            className="btn-icon p-1.5"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={() => {
@@ -43,24 +53,26 @@ export default function WorkpieceRail({ className = '', onNavigate }: WorkpieceR
               onNavigate?.();
             }}
             title="开始一个新作品"
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] bg-pink-500/15 border border-pink-500/40 text-pink-300 hover:bg-pink-500/25 transition-colors"
+            className="btn-soft px-2 py-1"
           >
-            <Plus className="w-3 h-3" /> 新建
+            <Plus className="h-3 w-3" /> 新建
           </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+      <div className="flex-1 space-y-1.5 overflow-y-auto p-2">
         {worksLoading ? (
           <div className="space-y-1.5">
             {[0, 1, 2].map((i) => (
-              <div key={i} className="h-16 rounded-lg bg-gray-800/40 animate-shimmer" />
+              <div key={i} className="h-[68px] animate-shimmer rounded-xl bg-black/[0.04]" />
             ))}
           </div>
         ) : sorted.length === 0 ? (
-          <div className="p-4 rounded-lg border border-dashed border-gray-800 text-center">
-            <ImageIcon className="w-6 h-6 text-gray-700 mx-auto mb-2" />
-            <p className="text-[11px] text-gray-500 leading-relaxed">
+          <div className="rounded-xl border border-dashed border-black/10 px-4 py-6 text-center">
+            <div className="mx-auto mb-2.5 flex h-10 w-10 items-center justify-center rounded-xl border border-black/[0.08] bg-black/[0.03]">
+              <ImageIcon className="h-5 w-5 text-haze-600" />
+            </div>
+            <p className="text-[11px] leading-relaxed text-haze-500">
               还没有作品。
               <br />
               写一段中文提示词，生成第一张角色立绘。
@@ -76,42 +88,56 @@ export default function WorkpieceRail({ className = '', onNavigate }: WorkpieceR
                   selectWork(work.id);
                   onNavigate?.();
                 }}
-                className={`w-full flex items-center gap-2.5 p-2 rounded-lg border text-left transition-colors ${
+                aria-current={active ? 'true' : undefined}
+                className={`relative flex w-full items-center gap-2.5 rounded-xl p-2 text-left transition-colors ${
                   active
-                    ? 'bg-pink-500/10 border-pink-500/40'
-                    : 'bg-[#1a1a23] border-gray-800 hover:border-gray-700'
+                    ? 'ring-gradient bg-sakura-500/[0.07] shadow-glow-sakura'
+                    : 'border border-transparent bg-black/[0.02] hover:bg-black/[0.05]'
                 }`}
               >
-                <div className="w-11 h-11 rounded-md overflow-hidden bg-gray-900 border border-gray-800 shrink-0 flex items-center justify-center">
+                {active && (
+                  <span className="absolute left-0 top-1/2 h-7 w-[2px] -translate-y-1/2 rounded-full bg-gradient-to-b from-sakura-400 to-iris-500" />
+                )}
+                <div className="flex h-[60px] w-[48px] shrink-0 items-center justify-center overflow-hidden rounded-lg border border-black/[0.08] bg-ink-950">
                   {work.imageUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={work.imageUrl} alt="" className="w-full h-full object-cover" />
+                    <img src={work.imageUrl} alt="" className="h-full w-full object-cover" />
                   ) : (
-                    <LayersIcon className="w-4 h-4 text-gray-600" />
+                    <LayersIcon className="h-4 w-4 text-haze-600" />
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className={`text-xs truncate ${active ? 'text-white' : 'text-gray-300'}`}>
-                    {promptExcerpt(work.prompt, 16)}
+                  <p className={`truncate text-xs ${active ? 'text-haze-100' : 'text-haze-200'}`}>
+                    {workDisplayName(work, 16)}
                   </p>
-                  <p className="text-[10px] text-gray-500 mt-0.5">{formatWorkTime(work.createdAt)}</p>
-                  <div className="flex items-center gap-2 mt-1 text-[9px] text-gray-500">
+                  <p className="mt-0.5 flex items-center gap-1 truncate text-[10px] tabular-nums text-haze-500">
+                    {work.category && (
+                      <span className="rounded bg-iris-500/10 px-1 py-px text-[9px] text-iris-600">
+                        {work.category}
+                      </span>
+                    )}
+                    <span>{formatWorkTime(work.createdAt)}</span>
+                    {work.models.length > 0 && (
+                      <span className="text-haze-600">· {work.models.length} 个模型</span>
+                    )}
+                  </p>
+                  <div className="mt-1 flex items-center gap-1">
                     {work.layersDir && (
-                      <span className="inline-flex items-center gap-0.5">
-                        <Check className="w-2.5 h-2.5 text-emerald-400" /> 分层
+                      <span className="inline-flex items-center gap-0.5 rounded-full bg-mint-400/10 px-1.5 py-px text-[9px] text-mint-600">
+                        <Check className="h-2.5 w-2.5" /> 分层
                       </span>
                     )}
                     {work.model3Url && (
-                      <span className="inline-flex items-center gap-0.5">
-                        <Box className="w-2.5 h-2.5 text-blue-400" /> 模型
+                      <span className="inline-flex items-center gap-0.5 rounded-full bg-iris-500/10 px-1.5 py-px text-[9px] text-iris-600">
+                        <Box className="h-2.5 w-2.5" /> 模型
                       </span>
                     )}
                     {work.fallback && (
                       <span
-                        className="inline-flex items-center gap-0.5 text-amber-400"
+                        className="inline-flex items-center gap-0.5 rounded-full bg-amber-400/10 px-1.5 py-px text-[9px] text-amber-700"
                         title={work.fallbackReason || '本地占位图，非 AI 生成'}
                       >
-                        <AlertTriangle className="w-2.5 h-2.5" /> 占位图
+                        <AlertTriangle className="h-2.5 w-2.5" /> 占位图
                       </span>
                     )}
                   </div>
@@ -122,7 +148,7 @@ export default function WorkpieceRail({ className = '', onNavigate }: WorkpieceR
         )}
       </div>
 
-      <div className="px-3 py-2 border-t border-gray-800 text-[10px] text-gray-600 flex items-center justify-between">
+      <div className="flex items-center justify-between border-t border-black/[0.07] px-3 py-2 text-[10px] tabular-nums text-haze-600">
         <span>{works.length} 件作品</span>
         <span>v{APP_VERSION}</span>
       </div>

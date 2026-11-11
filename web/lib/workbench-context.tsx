@@ -100,6 +100,12 @@ interface WorkbenchValue {
   refreshWorks: () => Promise<void>;
   selectWork: (id: string) => void;
   startNew: () => void;
+  /** 作品改名（写入后端记录，模型库与左栏共用） */
+  renameWork: (id: string, name: string) => Promise<void>;
+  /** 设置作品分类（空串 = 未分类） */
+  setWorkCategory: (id: string, category: string) => Promise<void>;
+  /** 登记一份"已有图片"的作品并跳到分层阶段 */
+  startFromImage: (imagePath: string, name?: string, category?: string) => Promise<Workpiece | null>;
 
   stage: StageId;
   inspector: InspectorTab;
@@ -152,7 +158,8 @@ interface WorkbenchValue {
 
   exportState: ExportState;
   toggleExportFormat: (format: ExportFormat) => void;
-  startExport: () => Promise<void>;
+  /** 导出模型；modelName 决定同一作品下多个模型各自的目录与显示名。 */
+  startExport: (modelName?: string) => Promise<void>;
   downloadExport: (download: ExportDownload) => Promise<void>;
   resetExport: () => void;
 
@@ -242,6 +249,10 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
 
   const [stage, setStageState] = useState<StageId>('generate');
   const [inspector, setInspectorState] = useState<InspectorTab>('prompt');
+  // 作品 / 当前选中项的镜像：refreshWorks 里要做"本地 id → 后端 id"的对齐，
+  // 又不想因为依赖 works/current 让这个回调每次重建成新函数。
+  const worksRef = useRef<Workpiece[]>([]);
+  const currentRef = useRef<Workpiece | null>(null);
 
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
@@ -296,6 +307,12 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     () => works.find((work) => work.id === currentId) ?? null,
     [works, currentId],
   );
+  useEffect(() => {
+    worksRef.current = works;
+  }, [works]);
+  useEffect(() => {
+    currentRef.current = current;
+  }, [current]);
 
   const selectedLayer = useMemo(
     () => layers.find((layer) => layer.id === selectedLayerId) ?? null,
@@ -323,14 +340,48 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
   const refreshWorks = useCallback(async () => {
     const records = await apiClient.listGenerations(50);
     const remote = records.map(workFromRecord).filter(isWorkpiece);
-    setWorks((prev) => {
-      const localById = new Map(prev.map((work) => [work.id, work]));
-      const merged = remote.map((work) => mergeRemote(localById.get(work.id), work));
-      const remoteIds = new Set(remote.map((work) => work.id));
-      // 导入/上传产生的本地作品不在生成历史里，必须原样保留。
-      const localOnly = prev.filter((work) => !remoteIds.has(work.id));
-      return [...merged, ...localOnly].sort(byCreatedDesc);
+    const prev = worksRef.current;
+    const localById = new Map(prev.map((work) => [work.id, work]));
+    // 本地刚生成/导入的作品 id 还是"按产物路径推导"的临时值，后端记录则是 w_…；
+    // 用产物路径做一次身份对齐，让本地作品接管后端 id，避免同一作品出现两条。
+    const localByIdentity = new Map<string, Workpiece>();
+    prev.forEach((work) => {
+      const key = work.layersDir || work.model3Json || work.imagePath;
+      if (key) localByIdentity.set(key, work);
     });
+    const merged = remote.map((work) => {
+      const local =
+        localById.get(work.id) ||
+        [work.layersDir, work.model3Json, work.imagePath]
+          .map((key) => (key ? localByIdentity.get(key) : undefined))
+          .find(Boolean);
+      return mergeRemote(local, work);
+    });
+    const remoteIds = new Set(remote.map((work) => work.id));
+    // 导入/上传产生、后端尚未登记的作品必须原样保留。
+    const localOnly = prev.filter(
+      (work) =>
+        !remoteIds.has(work.id) &&
+        ![work.layersDir, work.model3Json, work.imagePath].some(
+          (key) => key && remote.some((item) => item.layersDir === key || item.model3Json === key || item.imagePath === key),
+        ),
+    );
+    const next = [...merged, ...localOnly].sort(byCreatedDesc);
+    setWorks(next);
+
+    // 当前选中项若换了 id（本地临时 id → 后端 id），同步过来，别让右栏空掉。
+    const cur = currentRef.current;
+    if (cur) {
+      const adopted =
+        next.find((work) => work.id === cur.id) ||
+        next.find(
+          (work) =>
+            (cur.layersDir && work.layersDir === cur.layersDir) ||
+            (cur.model3Json && work.model3Json === cur.model3Json) ||
+            (cur.imagePath && work.imagePath === cur.imagePath),
+        );
+      if (adopted && adopted.id !== cur.id) setCurrentId(adopted.id);
+    }
   }, []);
 
   // ---------- 首次加载：后端历史 + 草稿 ----------
@@ -522,6 +573,50 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     setStage('generate');
   }, [setStage, setSourceFileState]);
 
+  // ---------- 作品元数据（命名 / 分类） ----------
+  const renameWork = useCallback(
+    async (id: string, name: string) => {
+      setWorks((prev) => prev.map((work) => (work.id === id ? { ...work, name } : work)));
+      try {
+        await apiClient.updateWork(id, { name });
+      } catch {
+        // 后端没写成功就回源，避免界面显示一个并不存在的名字。
+        void refreshWorks();
+      }
+    },
+    [refreshWorks],
+  );
+
+  const setWorkCategory = useCallback(
+    async (id: string, category: string) => {
+      setWorks((prev) => prev.map((work) => (work.id === id ? { ...work, category } : work)));
+      try {
+        await apiClient.updateWork(id, { category });
+      } catch {
+        void refreshWorks();
+      }
+    },
+    [refreshWorks],
+  );
+
+  /** 「已有图片」链路：登记作品 → 选中它 → 直接进分层阶段。 */
+  const startFromImage = useCallback(
+    async (imagePath: string, name = '', category = '') => {
+      const record = await apiClient.createWork(imagePath, name, category);
+      const work = record ? workFromRecord(record) : null;
+      if (work) {
+        upsertWork(work);
+        setCurrentId(work.id);
+        setPrompt(work.prompt);
+        setCharacterId(work.characterId);
+        setSourceFileState(null);
+        setStage('layers');
+      }
+      return work;
+    },
+    [upsertWork, setStage, setSourceFileState],
+  );
+
   // ---------- 生成 ----------
   const generate = useCallback(async () => {
     const text = prompt.trim();
@@ -661,6 +756,21 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       if (!imagePath) {
         throw new Error('还没有可分层的主图：先在「生成」产出一张立绘，或在右侧上传图片。');
       }
+      // 上传出来的新图片先在后端登记成作品：否则它只活在前端内存里，
+      // 后续导出模型时没有可挂载的作品，刷新一次就丢。
+      let registeredId = '';
+      let registeredName = '';
+      let registeredCategory = '';
+      if (!work) {
+        try {
+          const created = await apiClient.createWork(imagePath);
+          registeredId = created?.id || '';
+          registeredName = created?.name || '';
+          registeredCategory = created?.category || '';
+        } catch {
+          registeredId = '';
+        }
+      }
       const result: SegmentResult = await apiClient.segmentImage(imagePath, segmentation.method);
       const width = upload?.width || work?.width || 1024;
       const height = upload?.height || work?.height || 1024;
@@ -695,7 +805,11 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
             height,
           }
         : {
-            id: result.layers_dir || `upload-${Date.now()}`,
+            id: registeredId || result.layers_dir || `upload-${Date.now()}`,
+            name: registeredName,
+            category: registeredCategory,
+            models: [],
+            source: 'upload',
             characterId: '',
             prompt: '',
             imagePath,
@@ -721,6 +835,7 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       setSourceFileState(null);
       setLayersReloadKey((key) => key + 1);
       setStage('layers');
+      void refreshWorks();
     } catch (err) {
       setSegmentation((prev) => ({
         ...prev,
@@ -737,6 +852,10 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       const height = result.canvas?.[1] || 1024;
       const work: Workpiece = {
         id: result.layers_dir || `import-${Date.now()}`,
+        name: '',
+        category: '',
+        models: [],
+        source: 'upload',
         characterId: '',
         prompt: '',
         imagePath: '',
@@ -824,7 +943,7 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     setExportState((prev) => ({ ...prev, job: null, error: null, blocker: '' }));
   }, []);
 
-  const startExport = useCallback(async () => {
+  const startExport = useCallback(async (modelName?: string) => {
     const work = current;
     if (!work) {
       setExportState((prev) => ({ ...prev, error: '先选择一个作品再导出。' }));
@@ -922,6 +1041,7 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
               work.characterId || '',
               format,
               work.layersDir || undefined,
+              { workId: work.id, modelName: (modelName || work.name || '').trim() || undefined },
             );
             if (!result.success) {
               throw new Error(result.blocker || '模型导出失败');
@@ -996,7 +1116,9 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     if (runtimeReady === false && blocker) {
       setExportState((prev) => ({ ...prev, blocker }));
     }
-  }, [current, characters, exportState.formats, exportState.job?.status]);
+    // 后端已把模型挂到作品下（多模型），回源一次让模型库/预览立刻看到。
+    void refreshWorks();
+  }, [current, characters, exportState.formats, exportState.job?.status, refreshWorks]);
 
   const downloadExport = useCallback(
     async (download: ExportDownload) => {
@@ -1071,6 +1193,9 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       refreshWorks,
       selectWork,
       startNew,
+      renameWork,
+      setWorkCategory,
+      startFromImage,
       stage,
       inspector,
       setStage,
@@ -1130,6 +1255,9 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       refreshWorks,
       selectWork,
       startNew,
+      renameWork,
+      setWorkCategory,
+      startFromImage,
       stage,
       inspector,
       setStage,

@@ -81,6 +81,22 @@ popd
 echo [OK] Go 二进制已生成 api\live2d-api.exe
 echo.
 
+REM ---- 第 4.5 步：构建桌面启动页 ----
+echo [4.5/5] 构建桌面启动页（Vue + Vite）...
+if not exist "desktop\launch\node_modules" (
+    echo [!] desktop\launch 依赖未安装，正在安装...
+    pushd desktop\launch
+    call npm install
+    if errorlevel 1 (popd & echo [X] 启动页依赖安装失败 & exit /b 1)
+    popd
+)
+pushd desktop\launch
+call npm run build
+if errorlevel 1 (popd & echo [X] 启动页构建失败 & exit /b 1)
+popd
+echo [OK] desktop\dist\index.html
+echo.
+
 REM ---- 第 5 步：启动 Tauri ----
 echo [5/5] 启动 Tauri 开发窗口...
 echo.

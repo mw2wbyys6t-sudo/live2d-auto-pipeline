@@ -13,7 +13,7 @@ const EMOTION_META: Record<Emotion, { label: string; color: string }> = {
   happy: { label: 'Happy', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
   sad: { label: 'Sad', color: 'bg-blue-500/20 text-blue-300 border-blue-500/30' },
   angry: { label: 'Angry', color: 'bg-red-500/20 text-red-300 border-red-500/30' },
-  surprised: { label: 'Surprised', color: 'bg-amber-500/20 text-amber-300 border-amber-500/30' },
+  surprised: { label: 'Surprised', color: 'bg-amber-500/20 text-amber-700 border-amber-500/30' },
   shy: { label: 'Shy', color: 'bg-pink-500/20 text-pink-300 border-pink-500/30' },
   thinking: { label: 'Thinking', color: 'bg-purple-500/20 text-purple-300 border-purple-500/30' },
   excited: { label: 'Excited', color: 'bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/30' },

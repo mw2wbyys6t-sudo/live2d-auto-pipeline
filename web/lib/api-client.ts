@@ -567,6 +567,7 @@ export class APIClient {
     characterId: string,
     format: ExportFormat,
     layersDir?: string,
+    opts?: { workId?: string; modelName?: string },
   ): Promise<{
     model3_json?: string;
     texture?: string;
@@ -583,6 +584,10 @@ export class APIClient {
       format,
     };
     if (layersDir) payload.layers_dir = layersDir;
+    // 作品 id + 模型名：后端据此把每个模型导出到独立目录并挂到作品下，
+    // 同一作品可以保留多个模型，不会互相覆盖。
+    if (opts?.workId) payload.work_id = opts.workId;
+    if (opts?.modelName) payload.model_name = opts.modelName;
     const res = await this.request<unknown>('/api/export/live2d', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -678,7 +683,11 @@ export class APIClient {
   /** 环境自检（P2）：解释器/脚本目录/产物可写/面捕三件套/回环绑定。 */
   async getDiagnostics(): Promise<DiagnosticsReport | null> {
     try {
-      const res = await this.request<unknown>('/api/diagnostics', undefined, 15_000);
+      // 后端要现起 Python 探解释器、枚举 GPU 运行时、再列一次图像上游；
+      // 实测热机 11.5s（冷启动更久），旧的 15s 上限一碰上 Next rewrites
+      // 代理或冷启动就超时，页面停在「正在检查…」。给 60s 并把失败原因
+      // 交回页面显示（见 health.tsx）。
+      const res = await this.request<unknown>('/api/diagnostics', undefined, 60_000);
       return extractData<DiagnosticsReport>(res);
     } catch {
       return null;
@@ -757,6 +766,34 @@ export class APIClient {
     } catch {
       return [];
     }
+  }
+
+  /** 作品改名 / 分类（PATCH /api/generations）。只改记录，不动磁盘产物。 */
+  async updateWork(
+    id: string,
+    patch: { name?: string; category?: string },
+  ): Promise<GenerationRecord | null> {
+    const payload: Record<string, unknown> = { id };
+    if (patch.name !== undefined) payload.name = patch.name;
+    if (patch.category !== undefined) payload.category = patch.category;
+    const res = await this.request<unknown>('/api/generations', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+    return extractData<GenerationRecord>(res) ?? null;
+  }
+
+  /** 登记一份"已有图片"的作品：从分层开始，不经过生成。 */
+  async createWork(
+    imagePath: string,
+    name = '',
+    category = '',
+  ): Promise<GenerationRecord | null> {
+    const res = await this.request<unknown>('/api/generations', {
+      method: 'POST',
+      body: JSON.stringify({ image_path: imagePath, name, category }),
+    });
+    return extractData<GenerationRecord>(res) ?? null;
   }
 
   /** 读取分层目录的图层索引（layer_guide.json 的 Web 版）。 */
@@ -1040,6 +1077,17 @@ export interface LatestGeneration {
   psd_url: string;
   model3_json: string;
   created_at: string;
+  /** 作品 id（后端生成；旧记录按产物路径哈希推导） */
+  id?: string;
+  /** 作品名：用户起的名字，用于区分多个作品 */
+  name?: string;
+  /** 自定义分类 */
+  category?: string;
+  /** 一个作品下的多个模型（多模型 / 模型命名） */
+  models?: WorkModelEntry[];
+  updated_at?: string;
+  /** 来源：generate（生成）| upload（已有图片） */
+  source?: string;
   /** Go 后端补充的派生字段：Web 可加载的 model3.json 地址 */
   model3_url?: string;
   /** Go 后端补充的派生字段：模型目录（桌宠部署 model_dir） */
@@ -1053,6 +1101,17 @@ export interface LatestGeneration {
   /** 占位图标记：见 GenerationRecord。 */
   fallback?: boolean;
   fallback_reason?: string;
+}
+
+/** 一个作品下的一次导出产物。同一作品可以有多份，各自命名。 */
+export interface WorkModelEntry {
+  id: string;
+  name: string;
+  model3_json: string;
+  model3_url?: string;
+  model_dir?: string;
+  created_at?: string;
+  runtime_ready?: boolean;
 }
 
 /** 作品历史接口 /api/generations 返回的单条记录（与 latest_generation 同契约）。 */

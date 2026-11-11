@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict
 
 from core.logger import get_logger
+from core.segment_engine.layer_manifest import _split_suffix
 
 log = get_logger("layers52")
 
@@ -516,7 +517,7 @@ class Layer52Generator:
             "hair_back_left": [3],
             "hair_back_right": [4],
             "hair_mid": [2],
-            "hair_front": [51],
+            "hair_front": [49, 47, 48, 51],
             "bangs": [49],
             "sidehair_right": [47],
             "sidehair_left": [48],
@@ -528,14 +529,20 @@ class Layer52Generator:
             "body": [6, 7],
             "chest": [6],
             "waist": [7],
+            # 腰带是腰臀层的可见部分，不能落到「胸腔」或配饰
+            "waistband": [7],
             "skin": [23, 5, 6, 7],
             "clothes_inner": [20],
             "clothes_outer": [21],
             "clothes_top": [21],
+            # 领子属于内层衣物；不显式登记会被 group fallback 塞进任意衣服槽
+            "collar": [20],
             "clothes": [21, 20],
             "accessories": [22],
             "face": [23],
             "blush": [24],
+            # 合成器实际产出的腮红层名
+            "cheek": [24],
             "ear_left": [25],
             "ear_right": [26],
             "ear": [25, 26],
@@ -551,8 +558,16 @@ class Layer52Generator:
             "eye_white_left": [34],
             "sclera_right": [33],
             "sclera_left": [34],
+            # 合成器实际产出的整眼/眼白层名
+            "eyes": [33, 34],
+            "eyewhite": [33, 34],
+            "eyewhite_right": [33],
+            "eyewhite_left": [34],
             "iris_right": [35],
             "iris_left": [36],
+            "irides": [35, 36],
+            "irides_right": [35],
+            "irides_left": [36],
             "pupil_right": [37],
             "pupil_left": [38],
             "eye_highlight_right": [39],
@@ -630,14 +645,36 @@ class Layer52Generator:
                     best_len = len(key)
             if best_ids:
                 return best_ids, [], None
-            # 4. keyword → group fallback
+            # 4. keyword → group fallback。必须整词命中，否则 ``tear_left``
+            #    会因为包含 ``ear`` 被塞进耳朵层；中文没有词边界，等价于子串。
             groups: List[str] = []
             for keyword, grps in part_keywords.items():
-                if keyword in pn:
+                if _matches_as_word(pn_lower, keyword):
                     groups.extend(grps)
-            if not groups:
-                groups = ["clothes", "body"]
             return [], groups, None
+
+        # 52 层里没有槽位、但合成器会真实产出的层：保留原标签，不能硬塞。
+        no_slot_parts = {
+            "tear", "skirt", "skirt_hem", "clothes_bottom",
+            "sock", "boot", "shoe", "glove", "scarf",
+        }
+        # 不在 19 类表里、但同样需要二次拆分的真实层名。
+        split_hints: Dict[str, Tuple[Tuple[int, ...], int, str]] = {
+            "hair_back": ((2, 3, 4), 1, "整束后发可按左右/阴影拆成 2/3/4"),
+            "hair_front": ((47, 48, 49, 50, 51), 49, "整束前发需拆成侧发/刘海/呆毛/高光"),
+            "eyes": ((33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44), 33,
+                     "整眼需拆成眼白/虹膜/瞳孔/高光/睫毛并按左右分侧"),
+            "eye": ((33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44), 33,
+                    "整眼需拆成眼白/虹膜/瞳孔/高光/睫毛并按左右分侧"),
+        }
+        standard_side = {
+            layer["id"]: (
+                "L" if layer["name_en"].endswith("_Left")
+                else "R" if layer["name_en"].endswith("_Right")
+                else None
+            )
+            for layer in self.standard_layers
+        }
 
         unmapped_parts: List[Dict] = []
         split_required: List[Dict] = []
@@ -645,7 +682,8 @@ class Layer52Generator:
         for layer in layers_info:
             part_name = layer.get("part_name", "未分类")
             source = layer.get("path", "")
-            preferred_ids, fallback_groups, spec = _match(part_name)
+            base, side = _split_suffix(str(part_name or ""))
+            preferred_ids, fallback_groups, spec = _match(str(part_name or ""))
 
             if spec is not None and spec["status"] == MAP_UNMAPPED:
                 # 52 层没有对应层：保留原始标签与图层，不做任何 52 层占位，
@@ -658,18 +696,52 @@ class Layer52Generator:
                 })
                 continue
 
+            if spec is None and base in no_slot_parts:
+                unmapped_parts.append({
+                    "part_name": part_name,
+                    "path": source,
+                    "status": MAP_UNMAPPED,
+                    "reason": "52 层无对应槽位，保留原标签与图层",
+                })
+                continue
+
             if spec is not None and spec["status"] == MAP_NEEDS_SPLIT:
+                primary = spec["primary"]
+                # 19 类表里的 primary 是「右侧眼白 / 左侧耳朵」这类单侧默认值；
+                # 带左右后缀的层必须落到同侧，否则左右眼会写进同一层。
+                if side == "L" and primary == 33:
+                    primary = 34
+                elif side == "R" and primary == 25:
+                    primary = 26
                 split_required.append({
                     "part_name": part_name,
                     "path": source,
-                    "primary": spec["primary"],
+                    "primary": primary,
                     "standard_ids": list(spec["standard_ids"]),
                     "reason": spec["note"],
                 })
+                preferred_ids = [primary]
+            elif (spec is None and base in split_hints
+                  and (side is None or base in ("eyes", "eye"))):
+                targets, primary, note = split_hints[base]
+                if side == "L" and primary == 33:
+                    primary = 34
+                split_required.append({
+                    "part_name": part_name,
+                    "path": source,
+                    "primary": primary,
+                    "standard_ids": list(targets),
+                    "reason": note,
+                })
 
             assigned = False
-            # Try preferred standard IDs first (in listed order)
-            for sid in preferred_ids:
+            # 同侧优先：eyebrow_L/R、sidehair_L/R 这类名字在 direct_map 里
+            # 共享一组候选 ID，只看列表顺序会把左右写反。
+            ordered_ids = list(preferred_ids)
+            if side:
+                ordered_ids.sort(key=lambda sid: 0 if standard_side.get(sid) == side else 1)
+
+            for sid in ordered_ids:
                 if sid in used_standard_ids:
                     continue
                 for m in mappings:
@@ -683,8 +755,9 @@ class Layer52Generator:
                 if assigned:
                     break
 
-            # Fall back to first unmapped layer in target groups
-            if not assigned:
+            # 组内兜底只对「已知泛化名」生效（如 collar → clothes）；
+            # 未识别的新名字宁可如实记为 unmapped，也不占用任意 52 层。
+            if not assigned and fallback_groups:
                 for m in mappings:
                     if (not m.mapped
                             and m.standard_id not in used_standard_ids
@@ -693,7 +766,16 @@ class Layer52Generator:
                         m.source_file = source
                         m.notes = f"Auto-mapped (group fallback) from part: {part_name}"
                         used_standard_ids.add(m.standard_id)
+                        assigned = True
                         break
+
+            if not assigned:
+                unmapped_parts.append({
+                    "part_name": part_name,
+                    "path": source,
+                    "status": MAP_UNMAPPED,
+                    "reason": "无可用 52 层槽位（目标已被占用或名称无法识别）",
+                })
 
         # Build summary
         required_layers = [m for m in mappings if any(

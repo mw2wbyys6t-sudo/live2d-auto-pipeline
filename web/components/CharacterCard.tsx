@@ -55,7 +55,7 @@ export default function CharacterCard({ character, onDelete }: CharacterCardProp
             </div>
           )}
           {character.embeddingStatus === 'processing' && (
-            <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/40 text-[10px] font-semibold text-amber-300 uppercase tracking-wide">
+            <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/40 text-[10px] font-semibold text-amber-700 uppercase tracking-wide">
               Processing…
             </div>
           )}

@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, XCircle, Copy, RefreshCw, FolderOpen, Download, Ban } from 'lucide-react';
-import Layout from '../components/Layout';
 import { apiClient, type DiagnosticsReport, type OptionalModel } from '../lib/api-client';
 import { APP_NAME } from '../lib/brand';
 
@@ -12,17 +11,31 @@ export default function HealthPage() {
   const [report, setReport] = useState<DiagnosticsReport | null>(null);
   const [models, setModels] = useState<OptionalModel[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState('');
 
+  // 失败必须落到界面上：此前这里没有 try/catch，Promise.all 一旦被超时/断网
+  // 拒绝，setLoading(false) 永远不执行，页面就一直停在「正在检查…」——
+  // 用户看不出是后端慢、代理超时还是没有后端。
   const load = async () => {
     setLoading(true);
-    const [r, m] = await Promise.all([
+    setLoadError('');
+    // 两个请求互不依赖：一个失败不该把另一个的结果一起吞掉，更不能让
+    // setLoading(false) 被跳过（那就是此前「永远正在检查…」的根因）。
+    const [r, m] = await Promise.allSettled([
       apiClient.getDiagnostics(),
       apiClient.listOptionalModels(),
     ]);
-    setReport(r);
-    setModels(m);
+    if (r.status === 'fulfilled') {
+      setReport(r.value);
+      if (!r.value) {
+        setLoadError('后端未返回诊断结果（可能仍在启动，或探测超时）');
+      }
+    } else {
+      setLoadError(r.reason instanceof Error ? r.reason.message : '诊断请求失败');
+    }
+    if (m.status === 'fulfilled') setModels(m.value);
     setLoading(false);
   };
 
@@ -87,18 +100,19 @@ export default function HealthPage() {
   const total = report?.checks.length ?? 0;
 
   return (
-    <Layout title="环境自检">
-      <div className="max-w-2xl space-y-5">
+    // 页面外壳由 _app 统一提供（侧栏 + 顶栏），这里不能再套一层 Layout，
+    // 否则会出现双份侧栏与双份标题。
+    <div className="max-w-2xl space-y-5">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-bold">运行环境检查</h2>
-            <p className="text-sm text-gray-400 mt-1">
+            <h2 className="text-xl font-bold text-haze-100">运行环境检查</h2>
+            <p className="mt-1 text-sm text-haze-400">
               逐项核对本机解释器、产物目录、面捕组件与图像上游，全部通过即可正常生成与导出。
             </p>
           </div>
           <button
             onClick={load}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-sm"
+            className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-[10px] border border-black/[0.08] bg-black/[0.03] px-3 py-2 text-sm text-haze-200 hover:bg-black/[0.05]"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             刷新
@@ -108,15 +122,15 @@ export default function HealthPage() {
         {report && (
           <div className="rounded-xl border p-4 flex items-center gap-3">
             {passed === total ? (
-              <CheckCircle2 className="w-6 h-6 text-green-400" />
+              <CheckCircle2 className="w-6 h-6 text-mint-600" />
             ) : (
-              <XCircle className="w-6 h-6 text-red-400" />
+              <XCircle className="w-6 h-6 text-rose-600" />
             )}
             <div>
               <p className="font-semibold">
                 {passed}/{total} 项通过
               </p>
-              <p className="text-xs text-gray-400">
+              <p className="text-xs text-haze-400">
                 {passed === total
                   ? '环境就绪，可以开始生成。'
                   : '存在未通过项，请按下方提示处理后刷新。'}
@@ -126,64 +140,73 @@ export default function HealthPage() {
         )}
 
         <div className="space-y-2">
-          {loading && <p className="text-gray-400 text-sm">正在检查…</p>}
+          {loading && <p className="text-haze-400 text-sm">正在检查…</p>}
+          {!loading && loadError && (
+            <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 p-3 space-y-2">
+              <p className="text-rose-600 text-sm">检查失败：{loadError}</p>
+              <p className="text-xs text-haze-400">
+                后端可能还在启动、或探测耗时较长。稍后点「刷新」重试；若持续失败，
+                请确认应用已启动并查看日志目录里的 live2d.log。
+              </p>
+            </div>
+          )}
           {report?.checks.map((c) => (
             <div
               key={c.key}
-              className="flex items-start gap-3 rounded-xl border border-gray-800 bg-[#14141c] p-3"
+              className="flex items-start gap-3 rounded-xl border border-black/[0.07] bg-ink-800/80 p-3"
             >
               {c.ok ? (
-                <CheckCircle2 className="w-5 h-5 text-green-400 mt-0.5 shrink-0" />
+                <CheckCircle2 className="w-5 h-5 text-mint-600 mt-0.5 shrink-0" />
               ) : (
-                <XCircle className="w-5 h-5 text-red-400 mt-0.5 shrink-0" />
+                <XCircle className="w-5 h-5 text-rose-600 mt-0.5 shrink-0" />
               )}
               <div className="min-w-0">
                 <p className="text-sm font-medium">{c.label}</p>
-                {c.detail && <p className="text-xs text-gray-500 break-all mt-0.5">{c.detail}</p>}
+                {c.detail && <p className="text-xs text-haze-500 break-all mt-0.5">{c.detail}</p>}
                 {c.issues?.map((iss) => (
-                  <p key={iss} className="text-xs text-red-300 mt-0.5">{iss}</p>
+                  <p key={iss} className="text-xs text-rose-600 mt-0.5">{iss}</p>
                 ))}
               </div>
             </div>
           ))}
           {!loading && !report && (
-            <p className="text-red-300 text-sm">无法连接后端，请确认应用已启动。</p>
+            <p className="text-rose-600 text-sm">无法连接后端，请确认应用已启动。</p>
           )}
         </div>
 
         {/* 可选重模型按需下载（SAM2 等，断点续传 + 取消，落 %APPDATA%） */}
         {models && models.length > 0 && (
-          <div className="rounded-xl border border-gray-800 bg-[#14141c] p-4 space-y-3">
+          <div className="rounded-xl border border-black/[0.07] bg-ink-800/80 p-4 space-y-3">
             <p className="text-sm font-medium">可选增强模型（默认不下载）</p>
             {models.map((m) => (
-              <div key={m.name} className="space-y-2 rounded-lg bg-gray-900/60 p-3">
+              <div key={m.name} className="space-y-2 rounded-lg bg-black/[0.03] p-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-sm font-medium">{m.name}</p>
-                    <p className="text-xs text-gray-500">{m.note}</p>
-                    <p className="text-[11px] text-gray-600">
+                    <p className="text-xs text-haze-500">{m.note}</p>
+                    <p className="text-[11px] text-haze-600">
                       约 {m.size_hint_mb} MB · 需另装 {m.requires_pkg} · 落 %APPDATA% 缓存
                     </p>
                   </div>
                   {m.state === 'ready' ? (
-                    <span className="flex items-center gap-1 text-xs text-emerald-400 shrink-0">
+                    <span className="flex items-center gap-1 text-xs text-mint-600 shrink-0">
                       <CheckCircle2 className="w-4 h-4" /> 已就绪
                     </span>
                   ) : m.state === 'downloading' ? (
                     <button
                       onClick={() => cancelModel(m.name)}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-xs shrink-0"
+                      className="flex shrink-0 items-center gap-1 rounded-[10px] border border-black/[0.08] bg-black/[0.03] px-3 py-1.5 text-xs text-haze-300 hover:bg-black/[0.05]"
                     >
                       <Ban className="w-3.5 h-3.5" /> 取消
                     </button>
                   ) : m.state === 'error' ? (
                     // 后端已明确说明拿不到这个模型（如降级模式不支持在线下载）：
                     // 再摆一个「下载」按钮只会让用户点了没反应。
-                    <span className="text-xs text-red-300 shrink-0">不可用</span>
+                    <span className="text-xs text-rose-600 shrink-0">不可用</span>
                   ) : (
                     <button
                       onClick={() => startModel(m.name)}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-pink-500/20 border border-pink-500/40 hover:bg-pink-500/30 text-xs text-pink-200 shrink-0"
+                      className="flex shrink-0 items-center gap-1 rounded-[10px] border border-sakura-500/40 bg-sakura-500/15 px-3 py-1.5 text-xs text-sakura-600 hover:bg-sakura-500/25"
                     >
                       <Download className="w-3.5 h-3.5" /> 下载
                     </button>
@@ -191,34 +214,34 @@ export default function HealthPage() {
                 </div>
                 {m.state === 'downloading' && (
                   <div>
-                    <div className="h-1.5 rounded-full bg-gray-800 overflow-hidden">
-                      <div className="h-full bg-pink-500" style={{ width: `${m.progress}%` }} />
+                    <div className="h-1.5 overflow-hidden rounded-full bg-black/[0.08]">
+                      <div className="h-full bg-gradient-to-r from-sakura-500 to-iris-500" style={{ width: `${m.progress}%` }} />
                     </div>
-                    <p className="text-[11px] text-gray-500 mt-1">
+                    <p className="text-[11px] text-haze-500 mt-1">
                       {m.downloaded_mb.toFixed(1)} / {m.total_mb} MB · {m.progress.toFixed(0)}%
                     </p>
                   </div>
                 )}
                 {m.state === 'error' && (
-                  <p className="text-xs text-red-300">{m.message}</p>
+                  <p className="text-xs text-rose-600">{m.message}</p>
                 )}
                 {m.state === 'cancelled' && (
-                  <p className="text-xs text-amber-300">已取消；再次下载将从断点续传。</p>
+                  <p className="text-xs text-amber-700">已取消；再次下载将从断点续传。</p>
                 )}
               </div>
             ))}
             {actionError && (
-              <p className="text-xs text-red-300">操作失败：{actionError}</p>
+              <p className="text-xs text-rose-600">操作失败：{actionError}</p>
             )}
           </div>
         )}
 
-        <div className="rounded-xl border border-gray-800 bg-[#14141c] p-4 space-y-3 text-sm">
+        <div className="rounded-xl border border-black/[0.07] bg-ink-800/80 p-4 space-y-3 text-sm">
           <div className="flex items-center gap-2">
-            <FolderOpen className="w-4 h-4 text-gray-400" />
+            <FolderOpen className="w-4 h-4 text-haze-400" />
             <span className="font-medium">日志目录</span>
           </div>
-          <p className="text-xs text-gray-400 break-all">
+          <p className="text-xs text-haze-400 break-all">
             {/* 路径来自后端：写死过一次，结果在本机指向一个不存在的目录，
                 用户照着提示找不到 live2d.log。 */}
             {report?.log_dir
@@ -226,19 +249,18 @@ export default function HealthPage() {
               : <code>（未取到日志目录，请点「复制诊断信息」把 log_dir 一并发回）</code>}
             （出问题时把 live2d.log 与下方诊断信息一并反馈）
           </p>
-          <p className="text-[11px] text-gray-500 leading-relaxed">
+          <p className="text-[11px] text-haze-500 leading-relaxed">
             首次安装若弹 SmartScreen「Windows 已保护你的电脑」：点「更多信息」→「仍要运行」
             （本包未做代码签名，非病毒）；WebView2 缺失会引导在线安装。
           </p>
           <button
             onClick={copyDiagnostics}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-sm"
+            className="flex items-center gap-2 rounded-[10px] border border-black/[0.08] bg-black/[0.03] px-3 py-2 text-sm text-haze-200 hover:bg-black/[0.05]"
           >
             <Copy className="w-4 h-4" />
             {copied ? '已复制' : '复制诊断信息'}
           </button>
         </div>
-      </div>
-    </Layout>
+    </div>
   );
 }

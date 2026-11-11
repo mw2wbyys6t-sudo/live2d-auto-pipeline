@@ -99,6 +99,22 @@ if errorlevel 1 (echo [X] 运行时装配失败 & goto :FAILED)
 echo [OK] desktop\bundle\
 echo.
 
+REM ---- 第 5.5 步 ----
+echo [5.5/6] 构建桌面启动页（Vue + Vite）...
+if not exist "desktop\launch\node_modules" (
+    echo [!] desktop\launch 依赖未安装，正在安装...
+    pushd desktop\launch
+    call npm install
+    if errorlevel 1 (popd & echo [X] 启动页依赖安装失败 & goto :FAILED)
+    popd
+)
+pushd desktop\launch
+call npm run build
+if errorlevel 1 (popd & echo [X] 启动页构建失败 & goto :FAILED)
+popd
+echo [OK] desktop\dist\index.html
+echo.
+
 REM ---- 第 6 步 ----
 echo [6/6] cargo tauri build（编译 Rust release + 打包 NSIS）...
 echo.

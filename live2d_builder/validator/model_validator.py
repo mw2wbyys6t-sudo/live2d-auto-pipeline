@@ -343,9 +343,21 @@ class ModelValidator:
         model3_candidates = sorted(d.glob("*.model3.json"))
         if not model3_candidates:
             return {
-                "cubism_editor": {"compatible": False, "notes": ["No model3.json found"]},
-                "vtube_studio": {"compatible": False, "notes": ["No model3.json found"]},
-                "vseeface": {"compatible": False, "notes": ["No model3.json found"]},
+                "cubism_editor": {
+                    "compatible": False,
+                    "status": "missing_artifact",
+                    "notes": ["No model3.json found"],
+                },
+                "vtube_studio": {
+                    "compatible": False,
+                    "status": "missing_artifact",
+                    "notes": ["No model3.json found"],
+                },
+                "vseeface": {
+                    "compatible": False,
+                    "status": "missing_artifact",
+                    "notes": ["No model3.json found"],
+                },
             }
 
         model3_path = model3_candidates[0]
@@ -353,9 +365,21 @@ class ModelValidator:
             model3_data = json.loads(model3_path.read_text(encoding="utf-8"))
         except Exception as exc:
             return {
-                "cubism_editor": {"compatible": False, "notes": [f"Parse error: {exc}"]},
-                "vtube_studio": {"compatible": False, "notes": [f"Parse error: {exc}"]},
-                "vseeface": {"compatible": False, "notes": [f"Parse error: {exc}"]},
+                "cubism_editor": {
+                    "compatible": False,
+                    "status": "invalid_artifact",
+                    "notes": [f"Parse error: {exc}"],
+                },
+                "vtube_studio": {
+                    "compatible": False,
+                    "status": "invalid_artifact",
+                    "notes": [f"Parse error: {exc}"],
+                },
+                "vseeface": {
+                    "compatible": False,
+                    "status": "invalid_artifact",
+                    "notes": [f"Parse error: {exc}"],
+                },
             }
 
         param_ids = {
@@ -368,19 +392,25 @@ class ModelValidator:
 
         results: Dict[str, Any] = {}
 
+        # 注意：这里的 ``compatible`` 不是「产物有缺陷」，而是「仅凭运行时清单
+        # 无法确认 / 目标软件根本不加载该格式」。必须同时给出 ``status``，
+        # 否则 build_meta 里三项 false 会和 moc3 的 runtime_ready=true 看起来矛盾。
         # Runtime manifests cannot establish editor-project or SDK compatibility.
         results["cubism_editor"] = {
             "compatible": False,
+            "status": "not_applicable",
             "notes": ["Import PSD into Cubism Editor; model3.json is not an editable cmo3 project."],
         }
         structural = self.validate_all(str(d))
         results["vtube_studio"] = {
             "compatible": False,
+            "status": "unverified",
             "structurally_valid": structural["valid"],
             "notes": ["Actual SDK/runtime loading is required before compatibility can be confirmed."],
         }
         results["vseeface"] = {
             "compatible": False,
+            "status": "unsupported",
             "notes": ["VSeeFace uses VRM 3D avatars, not Cubism model3/moc3 packages."],
         }
 

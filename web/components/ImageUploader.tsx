@@ -89,12 +89,12 @@ export default function ImageUploader({
   return (
     <div className={className}>
       {preview ? (
-        <div className="relative group rounded-xl overflow-hidden border border-gray-800 bg-gray-900">
+        <div className="group relative overflow-hidden rounded-xl border border-black/[0.08] bg-ink-950">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={preview} alt="preview" className="w-full h-auto max-h-64 object-contain" />
+          <img src={preview} alt="preview" className="max-h-64 w-full object-contain" />
           <button
             onClick={onClear}
-            className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/60 text-white hover:bg-red-500 transition-colors opacity-0 group-hover:opacity-100"
+            className="absolute right-2 top-2 rounded-lg bg-ink-950/70 p-1.5 text-white opacity-0 backdrop-blur transition-colors hover:bg-rose-500 group-hover:opacity-100"
             aria-label="Remove image"
           >
             <X className="w-4 h-4" />
@@ -109,22 +109,22 @@ export default function ImageUploader({
           }}
           onDragLeave={() => setDragOver(false)}
           onDrop={onDrop}
-          className={`cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition-all ${
+          className={`cursor-pointer rounded-xl border border-dashed p-5 text-center transition-all ${
             dragOver
-              ? 'border-pink-500 bg-pink-500/10'
-              : 'border-gray-700 hover:border-gray-600 bg-gray-900/50 hover:bg-gray-900'
+              ? 'border-sakura-500/70 bg-sakura-500/[0.08]'
+              : 'border-black/[0.14] bg-black/[0.02] hover:border-sakura-500/40 hover:bg-black/[0.04]'
           }`}
         >
           <div className="flex flex-col items-center gap-2">
-            <div className="w-12 h-12 rounded-xl bg-gray-800 flex items-center justify-center">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-black/[0.08] bg-black/[0.03]">
               {dragOver ? (
-                <Upload className="w-5 h-5 text-pink-400" />
+                <Upload className="h-5 w-5 text-sakura-600" />
               ) : (
-                <ImageIcon className="w-5 h-5 text-gray-400" />
+                <ImageIcon className="h-5 w-5 text-haze-400" />
               )}
             </div>
-            <p className="text-sm text-gray-300">{label}</p>
-            <p className="text-xs text-gray-500">PNG, JPG, WebP · up to {maxSizeMB}MB</p>
+            <p className="text-xs text-haze-300">{label}</p>
+            <p className="text-[10px] text-haze-600">PNG, JPG, WebP · up to {maxSizeMB}MB</p>
           </div>
         </div>
       )}

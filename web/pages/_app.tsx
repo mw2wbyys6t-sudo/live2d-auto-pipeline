@@ -7,7 +7,9 @@ import { APP_NAME } from '../lib/brand';
 import '../styles/globals.css';
 
 const PAGE_TITLES: Record<string, string> = {
-  '/': '工作台',
+  '/': '启动',
+  '/studio': '工作台',
+  '/models': '模型库',
   '/characters': '角色库',
   '/generate': '生成',
   '/layers': '分层',
@@ -18,8 +20,8 @@ const PAGE_TITLES: Record<string, string> = {
   '/health': '环境自检',
 };
 
-/** 单页工作台自带外壳，不能再套一层带侧边栏的 Layout。 */
-const BARE_ROUTES = new Set(['/', '/generate', '/layers', '/live2d', '/preview', '/export']);
+/** 单页工作台自带外壳，不能再套一层带侧边栏的 Layout；启动页同理。 */
+const BARE_ROUTES = new Set(['/', '/studio', '/generate', '/layers', '/live2d', '/preview', '/export']);
 
 function resolveTitle(pathname: string): string {
   if (pathname.startsWith('/characters/')) return '角色编辑';

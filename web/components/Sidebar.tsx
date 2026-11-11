@@ -1,13 +1,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { APP_NAME, APP_VERSION } from '../lib/brand';
-import {
-  LayoutDashboard,
-  Users,
-  Sparkles,
-  MessageSquare,
-  Activity,
-} from 'lucide-react';
+import { Boxes, LayoutDashboard } from 'lucide-react';
 
 interface NavItem {
   href: string;
@@ -16,12 +10,10 @@ interface NavItem {
   match?: (pathname: string) => boolean;
 }
 
-// 生成/分层/预览/导出已并入单页工作台，侧栏只保留真正独立的页面。
+// 目前只有这两条真实链路可走；角色库 / AI 对话 / 环境自检先撤掉，等做完再放回来。
 const NAV_ITEMS: NavItem[] = [
-  { href: '/', label: '工作台', icon: LayoutDashboard, match: (p) => p === '/' },
-  { href: '/characters', label: '角色库', icon: Users, match: (p) => p.startsWith('/characters') },
-  { href: '/chat', label: 'AI 对话', icon: MessageSquare },
-  { href: '/health', label: '环境自检', icon: Activity, match: (p) => p.startsWith('/health') },
+  { href: '/studio', label: '工作台', icon: LayoutDashboard, match: (p) => p.startsWith('/studio') },
+  { href: '/models', label: '模型库', icon: Boxes, match: (p) => p.startsWith('/models') },
 ];
 
 interface SidebarProps {
@@ -36,62 +28,61 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
     <>
       {open && (
         <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 lg:hidden"
+          className="fixed inset-0 z-30 bg-[#241634]/25 backdrop-blur-sm lg:hidden"
           onClick={onClose}
           aria-hidden="true"
         />
       )}
       <aside
-        className={`fixed top-0 left-0 z-40 h-full w-64 bg-[#14141c] border-r border-gray-800 transform transition-transform duration-300 lg:translate-x-0 lg:static lg:z-auto ${
+        className={`fixed left-0 top-0 z-40 h-full w-64 transform border-r border-black/[0.07] bg-ink-850/95 transition-transform duration-300 lg:static lg:z-auto lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="flex flex-col h-full">
-          <div className="p-5 border-b border-gray-800">
-            <Link href="/" className="flex items-center gap-3 group">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center shadow-lg shadow-pink-500/30 group-hover:scale-105 transition-transform">
-                <Sparkles className="w-5 h-5 text-white" />
-              </div>
+        <div className="flex h-full flex-col">
+          <div className="border-b border-black/[0.07] p-5">
+            <Link href="/" className="group flex items-center gap-3">
+              {/* 与工作台顶栏同一枚应用图标，避免两套视觉符号 */}
+              <img
+                src="/app-icon.png"
+                alt={`${APP_NAME} 图标`}
+                width={40}
+                height={40}
+                className="h-10 w-10 shrink-0 rounded-[11px] bg-white object-contain p-[2px] ring-1 ring-black/10 shadow-md shadow-black/10 transition-transform group-hover:scale-105"
+              />
               <div>
-                <h1 className="text-sm font-bold text-white leading-tight">{APP_NAME}</h1>
-                <p className="text-[10px] text-gray-500 tracking-wider">中文角色工作台</p>
+                <h1 className="text-sm font-semibold leading-tight tracking-wide text-haze-100">{APP_NAME}</h1>
+                <p className="text-[10px] tracking-wider text-haze-500">中文角色工作台</p>
               </div>
             </Link>
           </div>
 
-          <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+          <nav className="flex-1 space-y-1 overflow-y-auto p-3">
             {NAV_ITEMS.map((item) => {
-              const active = item.match
-                ? item.match(router.pathname)
-                : router.pathname === item.href;
+              const active = item.match ? item.match(router.pathname) : router.pathname === item.href;
               const Icon = item.icon;
               return (
                 <Link
                   key={item.href}
                   href={item.href}
                   onClick={onClose}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
                     active
-                      ? 'bg-gradient-to-r from-pink-500/20 to-purple-500/10 text-pink-300 border border-pink-500/30 shadow-sm shadow-pink-500/10'
-                      : 'text-gray-400 hover:text-white hover:bg-gray-800/60 border border-transparent'
+                      ? 'ring-gradient bg-sakura-500/[0.08] text-sakura-600'
+                      : 'text-haze-400 hover:bg-black/[0.04] hover:text-haze-100'
                   }`}
                 >
-                  <Icon className={`w-4 h-4 ${active ? 'text-pink-400' : ''}`} />
+                  <Icon className={`h-4 w-4 ${active ? 'text-sakura-600' : 'text-haze-500'}`} />
                   <span>{item.label}</span>
-                  {active && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-pink-400 animate-pulse" />}
+                  {active && (
+                    <span className="ml-auto h-1.5 w-1.5 rounded-full bg-gradient-to-br from-sakura-400 to-iris-500" />
+                  )}
                 </Link>
               );
             })}
           </nav>
 
-          <div className="p-4 border-t border-gray-800">
-            <div className="rounded-lg bg-gradient-to-br from-pink-500/10 to-purple-500/10 border border-pink-500/20 p-3">
-              <p className="text-xs font-semibold text-pink-300 mb-1">使用提示</p>
-              <p className="text-[11px] text-gray-400 leading-relaxed">
-                工作台里用中文写提示词即可；开启角色一致性可在多次生成间保持同一张脸。
-              </p>
-            </div>
-            <p className="text-[10px] text-gray-600 text-center mt-3">v{APP_VERSION} · Made with ♥</p>
+          <div className="border-t border-black/[0.07] p-4">
+            <p className="text-center text-[10px] text-haze-600">v{APP_VERSION} · Made with ♥</p>
           </div>
         </div>
       </aside>

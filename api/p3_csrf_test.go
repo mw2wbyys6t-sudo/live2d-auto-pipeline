@@ -50,11 +50,30 @@ func TestCrossSiteGuard_BlocksCrossSiteStateChange(t *testing.T) {
 	}); code != http.StatusForbidden {
 		t.Fatalf("非白名单 Origin 的 POST 必须 403，实得 %d", code)
 	}
-	// DNS rebinding 形态：Origin 主机名伪造成回环端口
-	if code := guardPost(t, r, "127.0.0.1:8080", map[string]string{
+	// 服务绑到局域网地址时，回环 Origin 不再算「本地前端」
+	if code := guardPost(t, r, "192.168.1.20:8080", map[string]string{
 		"Origin": "http://127.0.0.1:9999",
 	}); code != http.StatusForbidden {
-		t.Fatalf("端口不一致的 Origin 必须 403，实得 %d", code)
+		t.Fatalf("Host 非回环时回环 Origin 必须 403，实得 %d", code)
+	}
+}
+
+// 开发前端换端口（3000 被占用、多实例并行）必须照常可写：
+// Chrome 对**同源 POST 也会带 Origin**，此前白名单只登记 3000，换端口即 403。
+func TestCrossSiteGuard_AllowsLoopbackOriginsOnAnyPort(t *testing.T) {
+	r := p3GuardRouter()
+	for _, origin := range []string{
+		"http://127.0.0.1:9999",
+		"http://localhost:3200",
+		"http://localhost:4173",
+	} {
+		t.Run(origin, func(t *testing.T) {
+			if code := guardPost(t, r, "127.0.0.1:8080", map[string]string{
+				"Sec-Fetch-Site": "same-site", "Origin": origin,
+			}); code != http.StatusOK {
+				t.Fatalf("回环来源 %s 应放行，实得 %d", origin, code)
+			}
+		})
 	}
 }
 

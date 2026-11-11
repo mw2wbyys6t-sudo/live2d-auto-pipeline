@@ -3,20 +3,21 @@ import dynamic from 'next/dynamic';
 import { Box, Camera, Download, Loader2, Mic, Network, RefreshCw } from 'lucide-react';
 import { useWorkbench } from '../../../lib/workbench-context';
 import { usePreviewRuntime } from '../../../lib/preview-runtime';
+import StageHeader from '../StageHeader';
 
 const ModelCanvas = dynamic(() => import('../../ModelCanvas'), {
   ssr: false,
   loading: () => (
-    <div className="flex items-center gap-2 text-xs text-gray-500">
-      <Loader2 className="w-4 h-4 animate-spin" /> 正在加载渲染器…
+    <div className="flex items-center gap-2 text-xs text-haze-500">
+      <Loader2 className="h-4 w-4 animate-spin text-sakura-600" /> 正在加载渲染器…
     </div>
   ),
 });
 
 const BG_CLASS: Record<string, string> = {
-  transparent: 'bg-[repeating-conic-gradient(#24242f_0%_25%,#16161d_0%_50%)] bg-[length:20px_20px]',
-  dark: 'bg-[#0b0b10]',
-  light: 'bg-[#f4f4f6]',
+  transparent: 'bg-[repeating-conic-gradient(#ffffff_0%_25%,#f1ecf9_0%_50%)] bg-[length:20px_20px]',
+  dark: 'bg-[#14101d]',
+  light: 'bg-[#f4f2f8]',
   sky: 'bg-gradient-to-b from-sky-300 to-indigo-200',
 };
 
@@ -70,46 +71,46 @@ export default function PreviewStage() {
     '当前作品模型';
 
   return (
-    <div className="h-full flex flex-col p-4 gap-3 min-h-0">
-      <header className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-white">Live2D 预览</h2>
-          <p className="text-[11px] text-gray-500 truncate">
-            表情、参数、面捕与麦克风都可以直接驱动模型；切走本阶段会自动释放摄像头与麦克风。
-          </p>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            onClick={() => rt.setBindingsOverlay(!rt.bindingsOverlay)}
-            title="显示变形器控制网格与绑定层级（数据来自 bindings.json）"
-            className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] transition-colors ${
-              rt.bindingsOverlay
-                ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-300'
-                : 'border-gray-700 bg-gray-900 text-gray-300 hover:bg-gray-800'
-            }`}
-          >
-            <Network className="w-3 h-3" /> 绑骨线
-          </button>
-          <button
-            onClick={rt.reloadModel}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-gray-700 bg-gray-900 text-[10px] text-gray-300 hover:bg-gray-800 transition-colors"
-          >
-            <RefreshCw className="w-3 h-3" /> 重载
-          </button>
-          <button
-            onClick={saveFrame}
-            disabled={!rt.modelUrl}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-[10px] text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-40 transition-colors"
-          >
-            <Download className="w-3 h-3" /> 当前帧
-          </button>
-        </div>
-      </header>
+    <div className="flex h-full min-h-0 flex-col gap-3 p-4">
+      <StageHeader
+        icon={<Box className="h-4 w-4" />}
+        title="Live2D 预览"
+        description="表情、参数、面捕与麦克风都可以直接驱动模型；切走本阶段会自动释放摄像头与麦克风。"
+        badge={
+          rt.modelUrl ? (
+            <span className="chip border-mint-400/40 bg-mint-400/10 text-mint-600">
+              <span className="h-1.5 w-1.5 rounded-full bg-mint-400" />
+              {rt.fps.toFixed(0)} FPS
+            </span>
+          ) : null
+        }
+        actions={
+          <>
+            <button
+              onClick={() => rt.setBindingsOverlay(!rt.bindingsOverlay)}
+              title="显示变形器控制网格与绑定层级（数据来自 bindings.json）"
+              className={`btn px-2.5 py-1.5 ${
+                rt.bindingsOverlay
+                  ? 'border border-cyan-400/40 bg-cyan-400/10 text-cyan-300'
+                  : 'btn-ghost'
+              }`}
+            >
+              <Network className="h-3 w-3" /> 绑骨线
+            </button>
+            <button onClick={rt.reloadModel} className="btn-ghost px-2.5 py-1.5">
+              <RefreshCw className="h-3 w-3" /> 重载
+            </button>
+            <button onClick={saveFrame} disabled={!rt.modelUrl} className="btn-mint px-2.5 py-1.5">
+              <Download className="h-3 w-3" /> 当前帧
+            </button>
+          </>
+        }
+      />
 
       <div
         ref={containerRef}
         onPointerMove={onPointerMove}
-        className={`flex-1 min-h-0 rounded-xl border border-gray-800 overflow-hidden relative ${BG_CLASS[rt.bg] || BG_CLASS.dark}`}
+        className={`stage-frame ${BG_CLASS[rt.bg] || BG_CLASS.dark}`}
       >
         {active && rt.modelUrl && (
           <ModelCanvas
@@ -152,60 +153,57 @@ export default function PreviewStage() {
 
         {rt.modelUrl ? (
           <>
-            <div className="absolute top-3 left-3 flex items-center gap-1.5">
-              <span className="px-2 py-1 rounded-md bg-black/50 text-[10px] text-gray-200">{modelName}</span>
-              <span className="px-2 py-1 rounded-md bg-black/50 text-[10px] text-emerald-300 tabular-nums">
+            <div className="absolute left-3 top-3 flex items-center gap-1.5">
+              <span className="rounded-md border border-black/[0.08] bg-ink-950/70 px-2 py-1 text-[10px] text-haze-200 backdrop-blur">
+                {modelName}
+              </span>
+              <span className="rounded-md border border-mint-400/25 bg-mint-400/10 px-2 py-1 text-[10px] tabular-nums text-mint-600 backdrop-blur">
                 {rt.fps.toFixed(0)} FPS
               </span>
               {rt.trackingOn && (
-                <span className="px-2 py-1 rounded-md bg-emerald-500/20 text-[10px] text-emerald-300 flex items-center gap-1">
-                  <Camera className="w-3 h-3" /> 面捕
+                <span className="flex items-center gap-1 rounded-md bg-mint-400/15 px-2 py-1 text-[10px] text-mint-600 backdrop-blur">
+                  <Camera className="h-3 w-3" /> 面捕
                 </span>
               )}
               {rt.micOn && (
-                <span className="px-2 py-1 rounded-md bg-emerald-500/20 text-[10px] text-emerald-300 flex items-center gap-1">
-                  <Mic className="w-3 h-3" /> 麦克风
+                <span className="flex items-center gap-1 rounded-md bg-mint-400/15 px-2 py-1 text-[10px] text-mint-600 backdrop-blur">
+                  <Mic className="h-3 w-3" /> 麦克风
                 </span>
               )}
             </div>
-            <p className="absolute bottom-3 left-3 text-[10px] text-gray-500/80">
+            <p className="absolute bottom-3 left-3 rounded-md bg-ink-950/70 px-2 py-1 text-[10px] text-haze-500 backdrop-blur">
               移动鼠标让视线跟随 · 右侧「参数」面板可调表情与手动参数
             </p>
             {rt.bindingsOverlay && (
-              <div className="absolute bottom-3 right-3 rounded-md bg-black/60 px-2.5 py-1.5 space-y-1 text-[10px] text-gray-300">
+              <div className="absolute bottom-3 right-3 space-y-1 rounded-lg border border-black/[0.08] bg-ink-950/80 px-2.5 py-1.5 text-[10px] text-haze-300 backdrop-blur">
                 <div className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-cyan-400" /> 变形器控制网格
+                  <span className="h-2 w-2 rounded-full bg-cyan-400" /> 变形器控制网格
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-amber-500" /> 绑定层级
+                  <span className="h-2 w-2 rounded-full bg-amber-500" /> 绑定层级
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-slate-400" /> 图层归属
+                  <span className="h-2 w-2 rounded-full bg-slate-400" /> 图层归属
                 </div>
-                {!rt.usesBindings && (
-                  <div className="text-amber-300">当前模型没有 bindings.json</div>
-                )}
+                {!rt.usesBindings && <div className="text-amber-700">当前模型没有 bindings.json</div>}
               </div>
             )}
             {rt.error && (
-              <div className="absolute top-3 right-3 max-w-[60%] rounded-lg bg-red-500/15 border border-red-500/40 px-2.5 py-1.5 text-[11px] text-red-300">
+              <div className="absolute right-3 top-3 max-w-[60%] rounded-lg border border-rose-400/35 bg-rose-500/15 px-2.5 py-1.5 text-[11px] text-rose-600 backdrop-blur">
                 {rt.error}
               </div>
             )}
           </>
         ) : (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-8">
-            <div className="w-14 h-14 rounded-2xl bg-gray-900/80 border border-gray-700 flex items-center justify-center mb-3">
-              <Box className="w-6 h-6 text-gray-500" />
+          <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center">
+            <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-black/[0.08] bg-black/[0.03]">
+              <Box className="h-6 w-6 text-haze-500" />
             </div>
-            <p className="text-sm text-gray-300">当前作品还没有可加载的模型</p>
-            <p className="text-[11px] text-gray-500 mt-1 max-w-sm leading-relaxed">
+            <p className="text-sm text-haze-200">当前作品还没有可加载的模型</p>
+            <p className="mt-1 max-w-sm text-[11px] leading-relaxed text-haze-500">
               先在「导出」构建 Live2D 模型包；导出完成后会自动回填到本作品，预览页也就有了模型。
             </p>
-            <button
-              onClick={() => setStage('export')}
-              className="mt-3 px-3 py-1.5 rounded-lg bg-pink-500/15 border border-pink-500/40 text-[11px] text-pink-300 hover:bg-pink-500/25 transition-colors"
-            >
+            <button onClick={() => setStage('export')} className="btn-soft mt-3">
               去导出
             </button>
           </div>

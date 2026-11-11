@@ -321,6 +321,7 @@ export class PhysicsEngine {
     for (const chain of this.chains) this.resetChain(chain.vertices);
     this.accumulator = 0;
     this.outputBase.clear();
+    this.heldOutputs.clear();
   }
 
   /**
@@ -333,6 +334,9 @@ export class PhysicsEngine {
    * 写入 0.4 时两种做法又完全一致 —— 差别只在「物理自己的输出要不要回流」。
    */
   private readonly outputBase = new Map<string, number>();
+
+  /** 最近一次子步写回的输出：子步间隔帧靠它保持，见 step()。 */
+  private readonly heldOutputs = new Map<string, number>();
 
   private outputDestinations(): string[] {
     const names = new Set<string>();
@@ -369,6 +373,11 @@ export class PhysicsEngine {
       steps++;
     }
     if (steps === MAX_SUBSTEPS) this.accumulator = 0;
+    // 渲染帧率高于物理 FPS 时会有不含子步的帧：不重放上次输出就会被帧首的
+    // restoreOutputs 撤成基准，输出隔帧归零（116 FPS 实测 58 Hz 闪烁）。
+    if (steps === 0) {
+      for (const [name, value] of this.heldOutputs) io.write(name, value);
+    }
   }
 
   private advance(dt: number, io: PhysicsListeners): void {
@@ -499,9 +508,11 @@ export class PhysicsEngine {
         const clamped = Math.max(range.min, Math.min(range.max, raw));
         const weight = output.weight / 100;
         const previous = io.read(output.destination);
-        io.write(output.destination, weight >= 1
+        const written = weight >= 1
           ? clamped
-          : previous * (1 - weight) + clamped * weight);
+          : previous * (1 - weight) + clamped * weight;
+        io.write(output.destination, written);
+        this.heldOutputs.set(output.destination, written);
       }
     }
     // 本帧读到的输入值成为下一帧的输入（内核的一帧滞后）

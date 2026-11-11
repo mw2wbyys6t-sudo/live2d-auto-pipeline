@@ -319,6 +319,25 @@ type ExportModelRequest struct {
 	ModelDir    string `json:"model_dir,omitempty"` // 已存在的模型目录（预览页直接打包下载）
 	Download    bool   `json:"download,omitempty"`  // true 时直接返回 zip 二进制流
 	Format      string `json:"format,omitempty"`    // 预留字段：当前只有 Live2D 包一种真实格式，本字段不被读取
+	// 作品与模型命名：同一作品可导出多个模型，各自落在
+	// output/live2d_exports/<work_id>/<model_name>/ 下，互不覆盖。
+	WorkID    string `json:"work_id,omitempty"`
+	ModelName string `json:"model_name,omitempty"`
+}
+
+// WorkMetaRequest 作品改名 / 分类（PATCH /api/generations）。
+// 指针字段为 nil 表示"本次不修改"，空串是合法值（清空分类）。
+type WorkMetaRequest struct {
+	ID       string  `json:"id"`
+	Name     *string `json:"name,omitempty"`
+	Category *string `json:"category,omitempty"`
+}
+
+// CreateWorkRequest 登记一份"已有图片"的作品（不经过生成阶段）。
+type CreateWorkRequest struct {
+	ImagePath string `json:"image_path"`
+	Name      string `json:"name,omitempty"`
+	Category  string `json:"category,omitempty"`
 }
 
 // 导出响应没有固定结构体：Handler 直接把 Python 构建结果（含摊平后的

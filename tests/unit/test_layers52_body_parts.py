@@ -144,3 +144,70 @@ def test_result_embeds_the_19_map_for_auditing():
     assert set(embedded) == set(VALID_BODY_PARTS_V2)
     assert embedded["topwear"]["primary"] == 21
     assert embedded["headwear"]["status"] == MAP_UNMAPPED
+
+
+# --- 合成器真实层名（eyewhite_*/irides_*/tear_*/skirt_hem_*） ---------------
+
+COMPOSER_LAYERS = [
+    "hair_back", "cheek", "irides_left", "waistband", "collar",
+    "clothes_top", "skirt_hem_L", "skirt_hem_R", "face", "tear_left",
+    "tear_right", "nose", "mouth_cavity", "eyes_right", "eyewhite_left",
+    "eyebrow_L", "eyebrow_R", "hair_front", "neck", "clothes_bottom",
+    "sock_L", "sock_R", "accessories",
+]
+
+
+def _map_names(names):
+    return Layer52Generator().map_layers_to_standard(
+        [{"part_name": name, "path": f"{name}.png"} for name in names]
+    )
+
+
+def test_composer_layer_names_map_to_the_correct_slot_and_side():
+    by_id = {
+        m["standard_id"]: m["source_file"].split("/")[-1].removesuffix(".png")
+        for m in _map_names(COMPOSER_LAYERS)["mappings"]
+        if m["mapped"]
+    }
+    # 语义不能被「候选列表第一个」抢走
+    assert by_id[5] == "neck"          # 不是 cheek
+    assert by_id[24] == "cheek"        # 腮红
+    assert by_id[36] == "irides_left"  # 虹膜左，不是胸腔
+    assert by_id[7] == "waistband"
+    assert by_id[20] == "collar"
+    assert by_id[49] == "hair_front"   # 前发不是高光
+    # 左右必须同侧
+    assert by_id[45] == "eyebrow_R"
+    assert by_id[46] == "eyebrow_L"
+    assert by_id[33] == "eyes_right"
+    assert by_id[34] == "eyewhite_left"
+
+
+def test_layers_without_a_52_slot_are_not_forced_into_ears_or_accessories():
+    result = _map_names(COMPOSER_LAYERS)
+    unmapped = {item["part_name"] for item in result["unmapped_parts"]}
+    assert {"tear_left", "tear_right", "skirt_hem_L", "skirt_hem_R",
+            "sock_L", "sock_R", "clothes_bottom"} <= unmapped
+
+    mapped_sources = {m["source_file"].split("/")[-1].removesuffix(".png")
+                      for m in result["mappings"] if m["mapped"]}
+    assert not ({"tear_left", "tear_right"} & mapped_sources)
+    # 耳朵层只允许真正的耳部件占用
+    assert not ({m["standard_id"] for m in result["mappings"]
+                 if m["mapped"]} & EAR_LAYERS)
+    assert "skirt_hem_L" not in mapped_sources
+
+
+def test_unrecognized_names_do_not_consume_arbitrary_layers():
+    result = _map_names(["mystery_part"])
+    assert result["mapped_layers"] == 0
+    assert [item["part_name"] for item in result["unmapped_parts"]] == ["mystery_part"]
+
+
+def test_whole_eye_and_front_hair_are_recorded_as_split_targets():
+    result = _map_names(["eyes_left", "hair_front"])
+    split = {item["part_name"]: item for item in result["split_required"]}
+    assert split["eyes_left"]["primary"] == 34
+    assert split["hair_front"]["primary"] == 49
+    assert split["hair_front"]["standard_ids"] == [47, 48, 49, 50, 51]
+

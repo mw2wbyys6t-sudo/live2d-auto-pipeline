@@ -503,24 +503,25 @@ def install_wheels(requirements: Path, wheels_dir: Path, site_packages: Path) ->
          "--no-cache-dir", "--upgrade", *pip_common_args(), "-r", str(resolved)])
 
 
-def prune_bytecode(app_dir: Path) -> int:
-    """删掉装配过程中在**随包源码树 app/** 里生成的字节码，返回删除条目数。
+def prune_bytecode(root_dir: Path) -> int:
+    """删掉装配过程中留在随包运行时里的字节码，返回删除条目数。
 
-    `app/` 只应该放源码：`.pyc` 是这台机器这次构建跑出来的产物，跟着安装包出去
-    没有意义（目标机会按自己的解释器重新生成），还让「包里的东西 == 当前源码」
-    这句话不成立。冒烟已经加了 `-B`，这里是第二层兜底。
+    ``.pyc`` 是构建机这次装配跑出来的产物（pip 安装 + 冒烟导入都会生成），
+    跟着安装包出去没有意义：目标机首次导入时会按自己的解释器重新生成。
+    不清理的话实测会带进 890 个 ``__pycache__`` 目录 / 8779 个 ``.pyc``，
+    既让安装包变脏，也让「包里的东西 == 当前源码 + 上游 wheel」这句话不成立。
 
-    刻意**只清 app/**，不动 python/Lib/site-packages —— 第三方 wheel 自带的字节码
-    是上游发布物的一部分，删不删是另一个决定，不该混在这一条修复里。
+    范围 = 整个 bundle（``app/`` 源码树 + ``python/Lib/site-packages``）。
+    清完不影响运行，冒烟已经用 ``-B`` 避免再次生成。
     """
-    if not app_dir.is_dir():
+    if not root_dir.is_dir():
         return 0
     removed = 0
-    for path in sorted(app_dir.rglob("__pycache__"), key=lambda p: -len(str(p))):
+    for path in sorted(root_dir.rglob("__pycache__"), key=lambda p: -len(str(p))):
         if path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
             removed += 1
-    for path in list(app_dir.rglob("*.pyc")) + list(app_dir.rglob("*.pyo")):
+    for path in list(root_dir.rglob("*.pyc")) + list(root_dir.rglob("*.pyo")):
         if path.is_file():
             try:
                 path.unlink()
@@ -812,10 +813,12 @@ def main() -> int:
     # ---- 5) 冒烟 + BUILD-INFO ----
     print("[5/5] 冒烟校验与 BUILD-INFO")
     smoke_info = {} if args.no_smoke_test else smoke_test(dest)
-    # 冒烟之后收口一次：随包源码树里不该有本机生成的字节码。
-    pruned = prune_bytecode(dest / "app")
+    # 冒烟之后收口一次：随包运行时（site-packages + app/）里不该有本机生成的字节码。
+    # 只扫 app/ 会漏掉 pip 安装留下的 __pycache__（实测 890 个目录 / 8779 个 .pyc），
+    # 那些纯属构建期残留，进安装包只会让产物变脏变大。
+    pruned = prune_bytecode(dest)
     if pruned:
-        print(f"  [prune] 清掉 app/ 内 {pruned} 项构建期字节码")
+        print(f"  [prune] 清掉随包运行时内 {pruned} 项构建期字节码")
 
     sizes = {
         "python": dir_size(dest / "python"),

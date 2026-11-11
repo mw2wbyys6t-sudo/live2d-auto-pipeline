@@ -1,28 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Camera, CameraOff, Loader2, Mic, MicOff, RefreshCw, RotateCcw, Sparkles } from 'lucide-react';
 import { useWorkbench } from '../../../lib/workbench-context';
-import { usePreviewRuntime, type PreviewBackground } from '../../../lib/preview-runtime';
+import { usePreviewRuntime } from '../../../lib/preview-runtime';
 import { clampToBounds, resolveBounds, resolveParameters } from '../../../lib/live2d-params';
+import { EXPRESSIONS, PREVIEW_BACKGROUNDS as BACKGROUNDS } from '../../../lib/catalog';
 import ParameterSlider from '../../ParameterSlider';
-import type { Emotion } from '../../../types';
-
-const EXPRESSIONS: Array<{ id: Emotion; label: string }> = [
-  { id: 'neutral', label: '中性' },
-  { id: 'happy', label: '开心' },
-  { id: 'sad', label: '难过' },
-  { id: 'angry', label: '生气' },
-  { id: 'surprised', label: '惊讶' },
-  { id: 'shy', label: '害羞' },
-  { id: 'thinking', label: '思考' },
-  { id: 'excited', label: '兴奋' },
-];
-
-const BACKGROUNDS: Array<{ id: PreviewBackground; label: string; css: string }> = [
-  { id: 'transparent', label: '透明', css: 'bg-[repeating-conic-gradient(#2a2a33_0%_25%,#1a1a22_0%_50%)] bg-[length:16px_16px]' },
-  { id: 'dark', label: '深色', css: 'bg-[#0b0b10]' },
-  { id: 'light', label: '浅色', css: 'bg-[#f4f4f6]' },
-  { id: 'sky', label: '天空', css: 'bg-gradient-to-b from-sky-300 to-indigo-200' },
-];
 
 export default function ParamsPanel() {
   const { current, setStage } = useWorkbench();
@@ -46,6 +28,10 @@ export default function ParamsPanel() {
 
   const currentModel = current?.model3Url || '';
   const modelValue = rt.manualModelUrl || currentModel;
+  // 本作品的模型排在前面，其余已导出模型放在后面，避免同名作品串台。
+  const workModels = current?.models ?? [];
+  const workModelUrls = new Set(workModels.map((model) => model.model3_url || '').filter(Boolean));
+  const otherModels = rt.models.filter((model) => !workModelUrls.has(model.model3_url));
 
   const setManualParam = (id: string, value: number) => {
     const next = clampToBounds(value, bounds.get(id));
@@ -65,53 +51,70 @@ export default function ParamsPanel() {
     rt.setIdle(true);
   };
 
+  const toggleCard = (active: boolean) =>
+    `inline-flex items-center justify-center gap-1 rounded-lg border px-1 py-1.5 text-[11px] transition-colors ${
+      active
+        ? 'border-mint-400/40 bg-mint-400/10 text-mint-600'
+        : 'border-black/[0.08] bg-black/[0.02] text-haze-400 hover:border-black/[0.16] hover:text-haze-200'
+    }`;
+
   return (
     <div className="space-y-5">
       <section className="space-y-2">
         <div className="flex items-center justify-between">
-          <div className="text-xs font-medium text-gray-400">模型</div>
+          <div className="section-label">模型</div>
           <button
             onClick={rt.reloadModel}
-            className="inline-flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300"
+            className="inline-flex items-center gap-1 text-[10px] text-haze-500 transition-colors hover:text-haze-200"
             title="强制重新加载当前模型"
           >
-            <RefreshCw className="w-3 h-3" /> 重载
+            <RefreshCw className="h-3 w-3" /> 重载
           </button>
         </div>
         <select
           value={modelValue}
           onChange={(e) => rt.setManualModelUrl(e.target.value === currentModel ? '' : e.target.value)}
-          className="w-full px-2.5 py-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-white focus:outline-none focus:border-pink-500"
+          className="field"
         >
           {currentModel && <option value={currentModel}>当前作品模型</option>}
-          {rt.models.map((model) => (
-            <option key={model.model3_json} value={model.model3_url}>
-              {model.name}
-            </option>
-          ))}
+          {workModels.length > 0 && (
+            <optgroup label="本作品模型">
+              {workModels.map((model) => (
+                <option key={model.id} value={model.model3_url || ''}>
+                  {model.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {otherModels.length > 0 && (
+            <optgroup label="全部已导出模型">
+              {otherModels.map((model) => (
+                <option key={model.model3_json} value={model.model3_url}>
+                  {model.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
           {!currentModel && rt.models.length === 0 && <option value="">暂无已导出模型</option>}
         </select>
         {!currentModel && (
-          <button
-            onClick={() => setStage('export')}
-            className="w-full px-3 py-2 rounded-lg bg-gray-900 border border-gray-700 text-[11px] text-gray-300 hover:bg-gray-800 transition-colors"
-          >
+          <button onClick={() => setStage('export')} className="btn-ghost w-full py-2">
             当前作品还没有模型 —— 去导出
           </button>
         )}
       </section>
 
       <section>
-        <div className="text-xs font-medium text-gray-400 mb-2">表情</div>
+        <div className="section-label mb-2">表情</div>
         <div className="grid grid-cols-4 gap-1">
           {EXPRESSIONS.map((emotion) => (
             <button
               key={emotion.id}
               onClick={() => rt.applyExpression(emotion.id)}
-              className={`py-1.5 rounded-md text-[11px] border transition-colors ${
+              className={`rounded-lg border py-1.5 text-[11px] transition-colors ${
                 rt.expression === emotion.id
-                  ? 'border-pink-500/50 bg-pink-500/10 text-pink-300'
-                  : 'border-gray-800 bg-gray-900 text-gray-400 hover:border-gray-700'
+                  ? 'border-sakura-500/40 bg-sakura-500/10 text-sakura-600'
+                  : 'border-black/[0.08] bg-black/[0.02] text-haze-400 hover:border-black/[0.16] hover:text-haze-200'
               }`}
             >
               {emotion.label}
@@ -122,9 +125,9 @@ export default function ParamsPanel() {
 
       {rt.motionGroups.length > 0 && (
         <section>
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs font-medium text-gray-400">动作</div>
-            <span className="text-[10px] text-gray-600">{rt.motionCount} 个动作</span>
+          <div className="mb-2 flex items-center justify-between">
+            <div className="section-label">动作</div>
+            <span className="text-[10px] tabular-nums text-haze-600">{rt.motionCount} 个动作</span>
           </div>
           <div className="flex flex-wrap gap-1">
             {rt.motionGroups.map((group) => (
@@ -132,7 +135,7 @@ export default function ParamsPanel() {
                 key={group}
                 onClick={() => rt.playMotion(group)}
                 title={`播放 ${group} 动作组`}
-                className="px-2 py-1 rounded-md text-[11px] border border-gray-800 bg-gray-900 text-gray-400 hover:border-gray-700 hover:text-gray-200 transition-colors"
+                className="chip px-2 py-1 text-[11px]"
               >
                 {group}
               </button>
@@ -142,59 +145,45 @@ export default function ParamsPanel() {
       )}
 
       <section>
-        <div className="text-xs font-medium text-gray-400 mb-2">输入</div>
+        <div className="section-label mb-2">输入</div>
         <div className="grid grid-cols-3 gap-1">
-          <button
-            onClick={() => void rt.toggleTracking()}
-            className={`inline-flex items-center justify-center gap-1 py-1.5 rounded-md text-[11px] border transition-colors ${
-              rt.trackingOn
-                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-                : 'border-gray-800 bg-gray-900 text-gray-400'
-            }`}
-          >
-            {rt.trackingOn ? <Camera className="w-3.5 h-3.5" /> : <CameraOff className="w-3.5 h-3.5" />}
+          <button onClick={() => void rt.toggleTracking()} className={toggleCard(rt.trackingOn)}>
+            {rt.trackingOn ? <Camera className="h-3.5 w-3.5" /> : <CameraOff className="h-3.5 w-3.5" />}
             面捕
           </button>
-          <button
-            onClick={() => void rt.toggleMic()}
-            className={`inline-flex items-center justify-center gap-1 py-1.5 rounded-md text-[11px] border transition-colors ${
-              rt.micOn
-                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-                : 'border-gray-800 bg-gray-900 text-gray-400'
-            }`}
-          >
-            {rt.micOn ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
+          <button onClick={() => void rt.toggleMic()} className={toggleCard(rt.micOn)}>
+            {rt.micOn ? <Mic className="h-3.5 w-3.5" /> : <MicOff className="h-3.5 w-3.5" />}
             麦克风
           </button>
           <button
             onClick={() => rt.setIdle(!rt.idle)}
-            className={`inline-flex items-center justify-center gap-1 py-1.5 rounded-md text-[11px] border transition-colors ${
+            className={`inline-flex items-center justify-center gap-1 rounded-lg border px-1 py-1.5 text-[11px] transition-colors ${
               rt.idle
-                ? 'border-purple-500/40 bg-purple-500/10 text-purple-300'
-                : 'border-gray-800 bg-gray-900 text-gray-400'
+                ? 'border-iris-500/40 bg-iris-500/10 text-iris-600'
+                : 'border-black/[0.08] bg-black/[0.02] text-haze-400 hover:border-black/[0.16] hover:text-haze-200'
             }`}
           >
-            <Sparkles className="w-3.5 h-3.5" />
+            <Sparkles className="h-3.5 w-3.5" />
             待机
           </button>
         </div>
         {rt.error && (
-          <p className="mt-2 text-[11px] text-amber-400/90 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-2">
+          <p className="mt-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-2.5 py-2 text-[11px] text-amber-700/90">
             {rt.error}
           </p>
         )}
       </section>
 
       <section>
-        <div className="text-xs font-medium text-gray-400 mb-2">背景</div>
+        <div className="section-label mb-2">背景</div>
         <div className="grid grid-cols-4 gap-1">
           {BACKGROUNDS.map((bg) => (
             <button
               key={bg.id}
               onClick={() => rt.setBg(bg.id)}
-              className={`h-8 rounded-md border text-[10px] transition-colors ${bg.css} ${
-                bg.id === 'light' || bg.id === 'sky' ? 'text-gray-700' : 'text-gray-200'
-              } ${rt.bg === bg.id ? 'border-pink-500' : 'border-gray-800'}`}
+              className={`h-8 rounded-lg border text-[10px] transition-colors ${bg.css} ${
+                bg.id === 'light' || bg.id === 'sky' ? 'text-gray-700' : 'text-haze-200'
+              } ${rt.bg === bg.id ? 'border-sakura-500/70 shadow-glow-sakura' : 'border-black/[0.08]'}`}
             >
               {bg.label}
             </button>
@@ -202,26 +191,26 @@ export default function ParamsPanel() {
         </div>
       </section>
 
-      <section className="rounded-lg border border-gray-800 bg-gray-900/60 p-2.5">
+      <section className="card p-2.5">
         <div className="grid grid-cols-2 gap-y-1 text-[11px]">
-          <span className="text-gray-500">帧率</span>
-          <span className="text-right tabular-nums text-gray-300">{fps.toFixed(0)} FPS</span>
-          <span className="text-gray-500">图层 / 参数</span>
-          <span className="text-right tabular-nums text-gray-300">
+          <span className="text-haze-500">帧率</span>
+          <span className="text-right tabular-nums text-haze-200">{fps.toFixed(0)} FPS</span>
+          <span className="text-haze-500">图层 / 参数</span>
+          <span className="text-right tabular-nums text-haze-200">
             {layersLoaded} / {paramsCount}
           </span>
-          <span className="text-gray-500">三角面</span>
-          <span className="text-right tabular-nums text-gray-300">{triangleCount.toLocaleString()}</span>
-          <span className="text-gray-500">网格几何</span>
-          <span className={`text-right ${hasMesh ? 'text-emerald-400' : 'text-amber-400'}`}>
+          <span className="text-haze-500">三角面</span>
+          <span className="text-right tabular-nums text-haze-200">{triangleCount.toLocaleString()}</span>
+          <span className="text-haze-500">网格几何</span>
+          <span className={`text-right ${hasMesh ? 'text-mint-600' : 'text-amber-600'}`}>
             {hasMesh ? '就绪' : '缺失'}
           </span>
-          <span className="text-gray-500">物理</span>
-          <span className={`text-right tabular-nums ${rt.physicsLoaded ? 'text-emerald-400' : 'text-amber-400'}`}>
+          <span className="text-haze-500">物理</span>
+          <span className={`text-right tabular-nums ${rt.physicsLoaded ? 'text-mint-600' : 'text-amber-600'}`}>
             {rt.physicsLoaded ? `${rt.physicsChains} 条链` : '未加载'}
           </span>
-          <span className="text-gray-500">动作</span>
-          <span className={`text-right tabular-nums ${rt.motionCount > 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+          <span className="text-haze-500">动作</span>
+          <span className={`text-right tabular-nums ${rt.motionCount > 0 ? 'text-mint-600' : 'text-amber-600'}`}>
             {rt.motionCount > 0 ? `${rt.motionCount} 个` : '无（用程序化待机）'}
           </span>
         </div>
@@ -229,20 +218,20 @@ export default function ParamsPanel() {
       </section>
 
       <section>
-        <div className="flex items-center justify-between mb-2">
-          <div className="text-xs font-medium text-gray-400">手动参数</div>
+        <div className="mb-2 flex items-center justify-between">
+          <div className="section-label">手动参数</div>
           <button
             onClick={resetParams}
-            className="inline-flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300"
+            className="inline-flex items-center gap-1 text-[10px] text-haze-500 transition-colors hover:text-haze-200"
           >
-            <RotateCcw className="w-3 h-3" /> 复位
+            <RotateCcw className="h-3 w-3" /> 复位
           </button>
         </div>
         {!rt.modelUrl ? (
-          <p className="text-[11px] text-gray-600">模型加载后显示参数表。</p>
+          <p className="text-[11px] text-haze-600">模型加载后显示参数表。</p>
         ) : (
           <div className="space-y-3">
-            {!meta && <p className="text-[11px] text-gray-600">正在读取模型参数…</p>}
+            {!meta && <p className="text-[11px] text-haze-600">正在读取模型参数…</p>}
             {params.map((param) => (
               <ParameterSlider
                 key={param.id}
@@ -256,8 +245,8 @@ export default function ParamsPanel() {
       </section>
 
       {rt.modelUrl && !hasMesh && (
-        <p className="flex items-center gap-1.5 text-[11px] text-amber-400/90">
-          <Loader2 className="w-3 h-3 animate-spin" /> 正在加载模型几何…
+        <p className="flex items-center gap-1.5 text-[11px] text-amber-600/90">
+          <Loader2 className="h-3 w-3 animate-spin" /> 正在加载模型几何…
         </p>
       )}
     </div>

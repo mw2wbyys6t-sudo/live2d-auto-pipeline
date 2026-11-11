@@ -142,12 +142,19 @@ func main() {
 	r.Use(rateLimitMiddleware(cfg))
 
 	// CORS 中间件
+	// 白名单与跨站护栏共用同一条判定（originAllowed）：否则会出现「护栏放行了
+	// 本机任意端口的开发前端，CORS 头却没回」——直连 API（NEXT_PUBLIC_API_URL）
+	// 时浏览器仍然拦掉响应，表现为「请求成功但界面无数据」。
+	corsAllowed := make(map[string]struct{}, len(cfg.Server.AllowedOrigins))
+	for _, o := range cfg.Server.AllowedOrigins {
+		corsAllowed[strings.TrimSuffix(strings.ToLower(strings.TrimSpace(o)), "/")] = struct{}{}
+	}
 	r.Use(func(c *gin.Context) {
 		origin := c.Request.Header.Get("Origin")
 		if origin != "" {
-			// 严格白名单：只有命中列表才回 CORS 头。空列表 = 不启用跨域，
-			// 而不是"放行所有"——否则任意站点都能携带凭据调用本服务。
-			if contains(cfg.Server.AllowedOrigins, origin) {
+			// 严格白名单 + 同源 + 本机回环：其它来源不回 CORS 头（空列表也不等于
+			// "放行所有"，否则任意站点都能携带凭据调用本服务）。
+			if originAllowed(origin, corsAllowed, c.Request.Host) {
 				c.Header("Access-Control-Allow-Origin", origin)
 				c.Header("Vary", "Origin")
 				c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
@@ -292,6 +299,8 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 
 		// 跨页面流水线接力 v0.10.1：最近生成 / 真实分层 / 图片上传
 		api.GET("/generations", h.ListGenerations)
+		api.POST("/generations", h.CreateGeneration)
+		api.PATCH("/generations", h.UpdateGeneration)
 		api.GET("/generations/latest", h.LatestGeneration)
 		api.GET("/generations/models", h.ListExportedModels)
 		api.GET("/layers", h.ListLayers)
@@ -645,8 +654,19 @@ func effectivePort(hostPort, scheme string) string {
 }
 
 // originAllowed 判定请求来源是否合法：
-//  1. 精确命中 CORS 白名单（dev 前端 localhost:3000 等）；
-//  2. 与被请求 Host 同源（主机名 + 端口完全一致，覆盖 Go 托管前端/Tauri）。
+//  1. 精确命中 CORS 白名单（部署在自定义域名后显式登记的来源）；
+//  2. 与被请求 Host 完全同源（主机名 + 端口一致，覆盖 Go 托管前端/Tauri）；
+//  3. 本机回环来源任意端口 —— 前端在局域网/本机换端口跑（3000 被占用、
+//     多实例并行开发）时必须照常可写。
+//
+// 第 3 条为什么安全：Origin 由浏览器设置，恶意站点拿不到 `http://127.0.0.1:*`
+// 这个来源；而**本机**另一个进程本来就能不带 Origin 直接调 API（curl），
+// 放行回环 Origin 不构成新的攻击面。同时还要求请求 Host 本身是回环，
+// 服务被显式绑到局域网地址时这条不生效（此时只有同源/白名单可用）。
+//
+// 注意：Chrome 对**同源 POST 也会带 Origin**（不是只有跨站才带），所以
+// 早先「同源请求不带 Origin，走 rewrites 不受影响」的假设不成立 —— 这正是
+// 开发端口一换就 403 的根因。
 func originAllowed(origin string, allowedExact map[string]struct{}, requestHost string) bool {
 	o := strings.ToLower(strings.TrimSpace(origin))
 	if o == "" {
@@ -659,16 +679,18 @@ func originAllowed(origin string, allowedExact map[string]struct{}, requestHost 
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return false
 	}
-	if canonicalHostname(u.Host) != canonicalHostname(requestHost) {
-		return false
+	if canonicalHostname(u.Host) == canonicalHostname(requestHost) &&
+		effectivePort(u.Host, u.Scheme) == effectivePort(requestHost, u.Scheme) {
+		return true
 	}
-	return effectivePort(u.Host, u.Scheme) == effectivePort(requestHost, u.Scheme)
+	return isLoopbackHost(canonicalHostname(u.Host)) &&
+		isLoopbackHost(canonicalHostname(requestHost))
 }
 
 // crossSiteGuardMiddleware 拦截针对本地无鉴权服务的跨站状态变更请求。
 // 规则（仅作用于非安全方法；OPTIONS 预检交给 CORS 中间件）：
-//   - 带 Origin 且非白名单/非同源 → 403（Chrome/Firefox/Safari 的跨站 POST
-//     必带 Origin，覆盖 multipart 表单与 fetch 简单请求）；
+//   - 带 Origin 且非白名单/非同源/非回环 → 403（Chrome/Firefox/Safari 的同源 POST
+//     也会带 Origin，所以这里必须把「本机任意端口的开发前端」算作合法来源）；
 //   - Fetch Metadata 显示 cross-site → 403（覆盖无 Origin 的旧浏览器路径）；
 //   - 完全无 Origin/Sec-Fetch-Site（curl、脚本、Tauri 原生调用）放行——
 //     CSRF 的威胁模型是浏览器环境，非浏览器客户端不受其约束。

@@ -1,4 +1,4 @@
-import type { GenerationRecord, LayersIndex, LatestGeneration } from './api-client';
+import type { GenerationRecord, LayersIndex, LatestGeneration, WorkModelEntry } from './api-client';
 import { modelDirFromRecord, modelUrlFromRecord, outputUrlFromPath } from './api-client';
 import type {
   GenerationResult,
@@ -13,6 +13,14 @@ export type InspectorTab = 'prompt' | 'layers' | 'params' | 'export';
 
 export interface Workpiece {
   id: string;
+  /** 用户起的作品名（用于区分多个作品/模型）；为空时前端退回显示提示词摘要 */
+  name: string;
+  /** 自定义分类 */
+  category: string;
+  /** 一个作品下的多个模型 */
+  models: WorkModelEntry[];
+  /** 来源：generate（生成）/ upload（已有图片） */
+  source: string;
   characterId: string;
   prompt: string;
   imagePath: string;
@@ -70,10 +78,14 @@ function workId(candidates: Array<string | undefined>): string {
 }
 
 export function workFromRecord(record: GenerationRecord | LatestGeneration): Workpiece | null {
-  const id = workId([record.layers_dir, record.model3_json, record.output_dir, record.image_path]);
+  const id = record.id || workId([record.layers_dir, record.model3_json, record.output_dir, record.image_path]);
   if (!id) return null;
   return {
     id,
+    name: record.name || '',
+    category: record.category || '',
+    models: Array.isArray(record.models) ? record.models : [],
+    source: record.source || '',
     characterId: record.character_id || '',
     prompt: record.prompt || '',
     imagePath: record.image_path || '',
@@ -101,6 +113,10 @@ export function workFromResult(result: GenerationResult, prompt: string): Workpi
   if (!id) return null;
   return {
     id,
+    name: '',
+    category: '',
+    models: [],
+    source: 'generate',
     characterId: result.characterId || '',
     prompt,
     imagePath: result.imagePath || '',
@@ -137,6 +153,24 @@ export function stageReady(work: Workpiece | null, stage: StageId): boolean {
       // 导出可以直接从分层目录构建，不必先有已导出的模型。
       return !!work.model3Url || !!work.layersDir;
   }
+}
+
+/** 作品展示名：优先用户命名，其次提示词摘要，最后按来源给个兜底。 */
+export function workDisplayName(work: Workpiece | null, max = 22): string {
+  if (!work) return '未命名作品';
+  const named = (work.name || '').trim();
+  if (named) return named;
+  if (work.prompt) return promptExcerpt(work.prompt, max);
+  return work.source === 'upload' ? '导入的立绘' : '未命名作品';
+}
+
+/** 自动阶段标签：按真实产物判断，缺产物就不打标签。 */
+export function workStageTags(work: Workpiece | null): Array<{ id: StageId; label: string }> {
+  if (!work) return [];
+  return STAGES.filter((stage) => stageReady(work, stage.id)).map((stage) => ({
+    id: stage.id,
+    label: stage.label,
+  }));
 }
 
 /** 流水线总进度：已完成步骤 + 当前步骤内部进度，封顶 99（完成后单独置 100）。 */

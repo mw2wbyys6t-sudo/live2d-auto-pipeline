@@ -133,6 +133,7 @@ class Live2DBuilder:
 
         # Step 1: Meshes
         log.step(1, self.TOTAL_STEPS, "Generating meshes")
+        self._mesh_skipped: List[str] = []
         self._meshes = self._generate_meshes(layers)
 
         # Step 2: UV layout
@@ -243,6 +244,16 @@ class Live2DBuilder:
                 f"Built '{cn}' 但不可部署 —— meshes: {nm}, expressions: {ne}, "
                 f"valid: {vv}; blocker: {moc3_result.get('blocker') or '未知原因'}")
 
+        # parameter_count 以**产出的 model3.json** 为准：param_defs 只是调用方
+        # 声明的参数（实测 4），绑定阶段会按标准参数表补齐（实测 34）。两边不
+        # 一致时验收页会显示「4 个参数」，而模型里明明有 34 个。
+        exported_param_count = 0
+        try:
+            with open(export_result["model3_json"], encoding="utf-8") as fh:
+                exported_param_count = len(json.load(fh).get("Parameters") or [])
+        except (OSError, TypeError, ValueError) as exc:
+            log.warning(f"读取 model3.json 参数数量失败，退回声明数: {exc}")
+
         # Save a build metadata file
         meta = {
             "character_name": self.character_name,
@@ -250,12 +261,25 @@ class Live2DBuilder:
             "elapsed_seconds": round(elapsed, 2),
             "layer_count": len(layers),
             "mesh_count": len(self._meshes),
+            # 有层却没有网格 = 成品缺一块 + model3.json 的 Parts 悬空引用。
+            # 以前只有 debug 行，验收页看不出来。
+            "mesh_skipped_layers": list(getattr(self, "_mesh_skipped", [])),
             "expression_count": len(expr_list),
-            "parameter_count": len(param_defs),
+            "parameter_count": exported_param_count or len(param_defs),
             "validation_valid": validation["valid"],
             "validation_errors": validation["errors"],
+            "runtime_ready": bool(moc3_result.get("runtime_ready")),
+            # 布尔值单独保留给旧消费者；status/notes 说明 false 的真实含义
+            # （not_applicable / unverified / unsupported），避免和 runtime_ready
+            # 被误读成互相矛盾。
             "compatibility": {
                 k: v["compatible"] for k, v in compatibility.items()
+            },
+            "compatibility_status": {
+                k: v.get("status", "unknown") for k, v in compatibility.items()
+            },
+            "compatibility_notes": {
+                k: list(v.get("notes") or []) for k, v in compatibility.items()
             },
             "output_dir": str(self.output_dir),
             "model3_json": export_result["model3_json"],
@@ -303,9 +327,14 @@ class Live2DBuilder:
         28x11 的渐变只被 10x5 的小块覆盖。
         """
         meshes: Dict[str, Dict] = {}
+        # 被跳过的层必须留痕：它们会从 meshes.json / moc3 里消失，但贴图与
+        # model3.json 的 Parts 仍会引用它（实测 skirt_hem_L 24→23 层、悬空引用，
+        # 而日志只有 debug 行）。这里改成 warning + 进 build_meta。
+        skipped: List[str] = []
         for name, layer in layers.items():
             if not isinstance(layer, Image.Image):
                 log.warning(f"Skipping non-image layer: {name}")
+                skipped.append(f"{name}(非图像图层)")
                 continue
             try:
                 if self._layer_opacity.get(name, 1.0) <= 0.0:
@@ -316,17 +345,31 @@ class Live2DBuilder:
                         grid_spacing=self.mesh_gen.internal_spacing,
                         contour_spacing=self.mesh_gen.contour_spacing,
                     )
+                if len(mesh["vertices"]) < 3 or len(mesh["indices"]) == 0:
+                    # 轮廓网格失败（细长/极薄/低对比的层常见）时退回铺满 alpha
+                    # 包围盒的规则网格 —— 比整层消失好：后者会在成品上留一个洞，
+                    # 而且模型与贴图清单对不上。
+                    fallback = self._patch_mesh(layer)
+                    if len(fallback["vertices"]) >= 3 and len(fallback["indices"]) > 0:
+                        mesh = fallback
+                        log.warning(
+                            f"图层 '{name}' 的轮廓网格退化，已退回包围盒规则网格")
                 if len(mesh["vertices"]) >= 3 and len(mesh["indices"]) > 0:
                     meshes[name] = mesh
                     nv = len(mesh["vertices"])
                     nt = len(mesh["indices"])
                     log.debug(f"Mesh '{name}': {nv} verts, {nt} tris")
                 else:
-                    log.debug(f"Skipping empty/too-small layer: {name}")
+                    log.warning(f"图层 '{name}' 没有可用网格，已跳过（成片上会缺这一层）")
+                    skipped.append(f"{name}(无可生成网格)")
             except Exception as exc:
                 log.error(f"Failed to generate mesh for '{name}': {exc}")
+                skipped.append(f"{name}({exc})")
 
+        self._mesh_skipped = skipped
         log.info(f"Generated meshes for {len(meshes)}/{len(layers)} layers")
+        if skipped:
+            log.warning(f"以下图层未生成网格：{skipped}")
         return meshes
 
     #: 淡入层网格的密度（列数 x 行数）。它们只是柔和渐变，不需要跟着轮廓走；

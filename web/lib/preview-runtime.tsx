@@ -103,7 +103,7 @@ export function PreviewProvider({ children }: { children: ReactNode }) {
   const [manualModelUrl, setManualModelUrl] = useState('');
   const [reloadNonce, setReloadNonce] = useState(0);
   const [models, setModels] = useState<ExportedModelInfo[]>([]);
-  const [bg, setBg] = useState<PreviewBackground>('dark');
+  const [bg, setBg] = useState<PreviewBackground>('light');
   const [idle, setIdle] = useState(true);
   const [params, setParams] = useState<ParamMap>(INITIAL_PARAMS);
   const [fps, setFps] = useState(0);

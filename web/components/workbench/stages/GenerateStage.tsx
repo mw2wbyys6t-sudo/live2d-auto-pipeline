@@ -1,84 +1,86 @@
-import { Download, ImageOff, Layers, Loader2, RefreshCw, Wand2 } from 'lucide-react';
+import { Download, ImageOff, Image as ImageIcon, Layers, Loader2, RefreshCw, Wand2 } from 'lucide-react';
 import { useWorkbench } from '../../../lib/workbench-context';
 import { promptExcerpt } from '../../../lib/workbench';
+import StageHeader from '../StageHeader';
 
 export default function GenerateStage() {
   const { current, generation, setStage, setInspector, generate } = useWorkbench();
   const imageUrl = current?.imageUrl || '';
 
   return (
-    <div className="h-full flex flex-col p-4 gap-3 min-h-0">
-      <header className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-white">角色立绘</h2>
-          <p className="text-[11px] text-gray-500 truncate">
-            {current ? promptExcerpt(current.prompt, 46) : '输入中文提示词，一次跑完生成 → 质检 → 分层 → 绑定'}
-          </p>
-        </div>
-        {imageUrl && (
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              onClick={() => void generate()}
-              disabled={generation.running}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-900 border border-gray-700 text-[11px] text-gray-300 hover:bg-gray-800 disabled:opacity-50 transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5" /> 重新生成
-            </button>
-            <a
-              href={imageUrl}
-              download={`${current?.characterId || 'character'}-${Date.now()}.png`}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-[11px] text-emerald-300 hover:bg-emerald-500/25 transition-colors"
-            >
-              <Download className="w-3.5 h-3.5" /> 保存图片
-            </a>
-            {current?.layersDir && (
-              <button
-                onClick={() => setStage('layers')}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pink-500/15 border border-pink-500/40 text-[11px] text-pink-300 hover:bg-pink-500/25 transition-colors"
-              >
-                <Layers className="w-3.5 h-3.5" /> 去分层
+    <div className="flex h-full min-h-0 flex-col gap-3 p-4">
+      <StageHeader
+        icon={<ImageIcon className="h-4 w-4" />}
+        title="角色立绘"
+        description={
+          current
+            ? promptExcerpt(current.prompt, 46)
+            : '输入中文提示词，一次跑完生成 → 质检 → 分层 → 绑定'
+        }
+        badge={
+          current?.fallback ? (
+            <span className="chip chip-active border-amber-400/40 bg-amber-400/10 text-amber-700">占位图</span>
+          ) : imageUrl ? (
+            <span className="chip tabular-nums">
+              {current?.width}×{current?.height}
+            </span>
+          ) : null
+        }
+        actions={
+          imageUrl ? (
+            <>
+              <button onClick={() => void generate()} disabled={generation.running} className="btn-ghost">
+                <RefreshCw className="h-3.5 w-3.5" /> 重新生成
               </button>
-            )}
-          </div>
-        )}
-      </header>
+              <a href={imageUrl} download={`${current?.characterId || 'character'}-${Date.now()}.png`} className="btn-mint">
+                <Download className="h-3.5 w-3.5" /> 保存图片
+              </a>
+              {current?.layersDir && (
+                <button onClick={() => setStage('layers')} className="btn-soft">
+                  <Layers className="h-3.5 w-3.5" /> 去分层
+                </button>
+              )}
+            </>
+          ) : null
+        }
+      />
 
-      <div className="flex-1 min-h-0 rounded-xl border border-gray-800 bg-[#0b0b10] overflow-hidden relative flex items-center justify-center">
+      <div className="stage-frame">
         {generation.running ? (
-          <div className="w-full max-w-sm px-6 space-y-3">
-            <div className="flex items-center gap-2 text-sm text-gray-300">
-              <Loader2 className="w-4 h-4 animate-spin text-pink-400" />
+          <div className="w-full max-w-sm space-y-4 px-6">
+            <div className="flex items-center gap-2 text-sm text-haze-200">
+              <Loader2 className="h-4 w-4 animate-spin text-sakura-600" />
               正在生成
             </div>
-            <ul className="space-y-1.5">
+            <ul className="space-y-2">
               {generation.steps.map((step) => (
-                <li key={step.id} className="flex items-center gap-2 text-[11px]">
+                <li key={step.id} className="flex items-center gap-2.5 text-[11px]">
                   <span
-                    className={`w-1.5 h-1.5 rounded-full ${
+                    className={`h-1.5 w-1.5 rounded-full ${
                       step.status === 'done'
-                        ? 'bg-emerald-400'
+                        ? 'bg-mint-400'
                         : step.status === 'active'
-                          ? 'bg-pink-400 animate-pulse'
+                          ? 'bg-sakura-400'
                           : step.status === 'error'
-                            ? 'bg-red-400'
-                            : 'bg-gray-700'
+                            ? 'bg-rose-400'
+                            : 'bg-black/15'
                     }`}
                   />
-                  <span className={step.status === 'active' ? 'text-gray-200' : 'text-gray-500'}>{step.label}</span>
-                  <span className="ml-auto tabular-nums text-gray-600">
+                  <span className={step.status === 'active' ? 'text-haze-100' : 'text-haze-500'}>{step.label}</span>
+                  <span className="ml-auto tabular-nums text-haze-600">
                     {step.status === 'done' ? '完成' : step.status === 'active' ? `${step.progress || 0}%` : ''}
                   </span>
                 </li>
               ))}
             </ul>
-            {generation.message && <p className="text-[10px] text-gray-600">{generation.message}</p>}
+            {generation.message && <p className="text-[10px] text-haze-600">{generation.message}</p>}
           </div>
         ) : imageUrl ? (
-          <div className="relative w-full h-full flex items-center justify-center p-3">
+          <div className="relative flex h-full w-full items-center justify-center p-4">
             {/* 占位图必须显眼地自报身份：后端 success=true 只说明"跑完了"，
                 不说明"画出了人物"。实测安装包把本地几何占位图当正常立绘展示。 */}
             {current?.fallback && (
-              <div className="absolute top-3 left-3 right-3 z-10 rounded-lg border border-amber-500/40 bg-amber-950/85 px-3 py-2 text-[11px] leading-relaxed text-amber-200">
+              <div className="absolute left-3 right-3 top-3 z-10 rounded-xl border border-amber-400/35 bg-ink-950/90 px-3 py-2 text-[11px] leading-relaxed text-amber-700 backdrop-blur">
                 <span className="font-medium">离线占位图 —— 这不是 AI 生成的人物。</span>
                 {current.fallbackReason ? ` ${current.fallbackReason}` : ''}
                 <span> 在「设置」里配置可用的图像服务后重试。</span>
@@ -88,33 +90,30 @@ export default function GenerateStage() {
             <img
               src={imageUrl}
               alt={current?.prompt || '生成结果'}
-              className="max-w-full max-h-full object-contain rounded-lg shadow-2xl shadow-black/50"
+              className="relative max-h-full max-w-full rounded-xl object-contain shadow-2xl shadow-black/20 ring-1 ring-black/10"
             />
-            <div className="absolute left-3 bottom-3 flex items-center gap-2 text-[10px] text-gray-500 bg-black/40 rounded px-2 py-1">
-              <span>
+            <div className="absolute bottom-3 left-3 flex items-center gap-2 rounded-lg bg-ink-950/75 px-2 py-1 text-[10px] text-haze-400 backdrop-blur">
+              <span className="tabular-nums">
                 {current?.width}×{current?.height}
               </span>
-              <span className="w-px h-3 bg-gray-700" />
-              <span className="truncate max-w-[320px]">{promptExcerpt(current?.prompt || '', 40)}</span>
+              <span className="h-3 w-px bg-black/10" />
+              <span className="max-w-[320px] truncate">{promptExcerpt(current?.prompt || '', 40)}</span>
             </div>
           </div>
         ) : (
-          <div className="flex flex-col items-center text-center px-8">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-pink-500/20 to-purple-500/20 border border-pink-500/30 flex items-center justify-center mb-4">
-              <Wand2 className="w-7 h-7 text-pink-400" />
+          <div className="flex max-w-sm flex-col items-center px-8 text-center">
+            <div className="ring-gradient mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-sakura-500/20 to-iris-500/20">
+              <Wand2 className="h-7 w-7 text-sakura-600" />
             </div>
-            <p className="text-sm text-gray-300 font-medium">还没有作品</p>
-            <p className="text-xs text-gray-500 mt-1 max-w-sm leading-relaxed">
+            <p className="text-sm font-medium text-haze-200">还没有作品</p>
+            <p className="mt-1.5 text-xs leading-relaxed text-haze-500">
               在右侧写一句中文描述（例如「一位穿水手服的粉发少女，日系动漫风格」），点「开始生成」。
             </p>
-            <button
-              onClick={() => setInspector('prompt')}
-              className="mt-4 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-900 border border-gray-700 text-[11px] text-gray-300 hover:bg-gray-800 transition-colors"
-            >
-              <Wand2 className="w-3.5 h-3.5" /> 去写提示词
+            <button onClick={() => setInspector('prompt')} className="btn-soft mt-4">
+              <Wand2 className="h-3.5 w-3.5" /> 去写提示词
             </button>
-            <p className="mt-3 flex items-center gap-1 text-[10px] text-gray-600">
-              <ImageOff className="w-3 h-3" /> 生成的图片与图层会保存在 output 目录
+            <p className="mt-3 flex items-center gap-1 text-[10px] text-haze-600">
+              <ImageOff className="h-3 w-3" /> 生成的图片与图层会保存在 output 目录
             </p>
           </div>
         )}

@@ -9,7 +9,6 @@ use tauri::{AppHandle, Emitter, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 
 const BACKEND_HOST: &str = "127.0.0.1";
 const BACKEND_PORT: u16 = 8080;
-const BACKEND_URL: &str = "http://localhost:8080";
 const HEALTH_TIMEOUT_SECS: u64 = 30;
 
 /// 页面级兜底脚本：即使以后前端误写 `target="_blank"` 或调用 `window.open`，
@@ -70,6 +69,9 @@ fn is_allowed_navigation(url: &Url) -> bool {
 
 struct AppState {
     backend: Mutex<Option<Child>>,
+    /// 后端启动失败的原因。启动页会主动查询它，避免「事件比页面监听更早」
+    /// 导致用户对着启动页干等 30 秒。
+    backend_error: Mutex<Option<String>>,
 }
 
 fn backend_addr() -> String {
@@ -186,44 +188,49 @@ fn check_backend() -> bool {
     is_backend_online()
 }
 
+/// 启动页轮询：后端已判定失败时立即拿到原因，不必等到前端超时。
+#[tauri::command]
+fn backend_error(state: tauri::State<AppState>) -> Option<String> {
+    state.backend_error.lock().unwrap().clone()
+}
+
 pub fn run() {
     let already_running = is_backend_online();
 
     tauri::Builder::default()
         .manage(AppState {
             backend: Mutex::new(None),
+            backend_error: Mutex::new(None),
         })
-        .invoke_handler(tauri::generate_handler![check_backend])
+        .invoke_handler(tauri::generate_handler![check_backend, backend_error])
         .setup(move |app| {
-            let backend_ok = if already_running {
+            let handle = app.handle().clone();
+
+            // 先把后端拉起来，但不再阻塞窗口创建：启动页需要立刻可见。
+            // 之前 wait_for_backend 在 setup 里同步等待，最多 30 秒没有任何 UI，
+            // 用户看到的就是「点了图标没反应」。
+            let spawned = if already_running {
                 true
             } else {
-                let child = spawn_backend(app.handle());
-                if child.is_some() {
-                    wait_for_backend(HEALTH_TIMEOUT_SECS);
+                let child = spawn_backend(&handle);
+                let ok = child.is_some();
+                if !ok {
+                    *app.state::<AppState>().backend_error.lock().unwrap() = Some(
+                        "没有找到 Go 后端可执行文件 live2d-api.exe。\n请确认安装目录完整，或重新运行安装包。"
+                            .to_string(),
+                    );
                 }
-                let state: tauri::State<AppState> = app.state();
-                *state.backend.lock().unwrap() = child;
-                is_backend_online()
+                *app.state::<AppState>().backend.lock().unwrap() = child;
+                ok
             };
 
-            let window = if backend_ok {
-                WebviewWindowBuilder::new(
-                    app,
-                    "main",
-                    WebviewUrl::External(BACKEND_URL.parse().unwrap()),
-                )
-            } else {
-                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-            };
-
-            window
+            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Pygmalion Studio")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(800.0, 600.0)
                 .center()
                 // 三层防护，保证桌面壳在任何操作下都不会拉起系统浏览器：
-                // 1) 导航白名单：非本机后端 / 非内置兜底页的跳转一律取消；
+                // 1) 导航白名单：非本机后端 / 非内置启动页的跳转一律取消；
                 // 2) 新窗口请求一律拒绝（window.open、target=_blank、中键等）；
                 // 3) 页面脚本兜底：把新窗口意图改写成当前内核内跳转。
                 .on_navigation(is_allowed_navigation)
@@ -231,10 +238,26 @@ pub fn run() {
                 .initialization_script(IN_APP_NAVIGATION_GUARD)
                 .build()?;
 
-            if !backend_ok {
-                let _ = app.emit("backend-error", serde_json::json!({
-                    "message": "Go API backend not found.\n\nDevelopment:\n  cd api && go build -o live2d-api.exe .\n\nRelease:\n  Run scripts\\build_tauri_release.bat"
-                }));
+            if !already_running {
+                if spawned {
+                    // 等待逻辑放到后台线程：启动页负责展示进度，后端就绪后通知页面跳转。
+                    std::thread::spawn(move || {
+                        if wait_for_backend(HEALTH_TIMEOUT_SECS) {
+                            let _ = handle.emit("backend-ready", ());
+                        } else {
+                            let message = "Go API 在 30 秒内没有就绪。\n请检查 8080 端口是否被占用，或查看 logs 目录。";
+                            let state: tauri::State<AppState> = handle.state();
+                            *state.backend_error.lock().unwrap() = Some(message.to_string());
+                            let _ = handle.emit("backend-error", serde_json::json!({
+                                "message": message
+                            }));
+                        }
+                    });
+                } else {
+                    let _ = app.emit("backend-error", serde_json::json!({
+                        "message": "没有找到 Go 后端可执行文件 live2d-api.exe。\n请确认安装目录完整，或重新运行安装包。"
+                    }));
+                }
             }
 
             Ok(())

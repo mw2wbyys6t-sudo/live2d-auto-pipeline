@@ -260,8 +260,10 @@ func DefaultConfig() *Config {
 			WriteTimeout:       180 * time.Second,
 			ReadHeaderTimeout:  5 * time.Second,
 			IdleTimeout:        120 * time.Second,
-			// CORS 白名单：默认只放行本地工作台。空列表 = 不启用跨域
-			//（同源请求本就不带 Origin，走 Next.js rewrites 代理时不受影响）。
+			// CORS 白名单：登记**非回环**来源（自定义域名、反向代理后的前端）。
+			// 本机回环来源（localhost / 127.0.0.1 / [::1]）由 originAllowed 按
+			// 「任意端口」放行 —— 开发时前端常因 3000 被占用换到 3001/3200，
+			// 而 Chrome 对同源 POST 也会带 Origin，只登记固定端口会直接 403。
 			// 绝不可默认 "*"：它会与 Allow-Credentials:true 形成任意站点携带凭据的漏洞。
 			AllowedOrigins: []string{"http://localhost:3000", "http://127.0.0.1:3000"},
 		},

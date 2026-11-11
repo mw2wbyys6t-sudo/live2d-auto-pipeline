@@ -1,0 +1,19 @@
+{
+  "name": "pygmalion-launch",
+  "private": true,
+  "version": "0.10.11",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 3210",
+    "build": "vite build",
+    "preview": "vite preview --port 3211"
+  },
+  "dependencies": {
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.0.7",
+    "vite-plugin-singlefile": "^2.3.4"
+  }
+}

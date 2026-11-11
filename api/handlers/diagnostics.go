@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 
@@ -42,22 +43,34 @@ func (h *Handler) GetDiagnostics(c *gin.Context) {
 	trackerExe := trackerPath != ""
 	trackerModel, trackerDll := checkTrackerAssets(trackerPath)
 
-	// 诊断页是用户排查环境的入口，结论必须是**当下**的，不能吃 /api/health
-	// 那 30s 缓存 —— 用户刚装完依赖点开诊断，看到旧结论会以为没装上。
-	h.pythonBridge.InvalidatePythonEnvironment()
-	pyOK, pyIssues := h.pythonBridge.CheckPythonEnvironment()
-
-	// GPU 行同理要「当下」结论：用户刚在设置页装好 CUDA / DirectML 运行时，
-	// 再点诊断就该看到变化，而不是 30s 缓存里的旧答案。
-	h.pythonBridge.InvalidateGPUProbe()
-	gpuCheck := gpuDiagnosticCheck(h.pythonBridge.ProbeGPU(c.Request.Context()))
-
-	// 图像上游：自检页的副标题承诺「全部通过即可正常生成与导出」，那么当唯一
-	// 可用通道是免密上游时不能报绿 —— 实测（2026-10-30 装机版）九项全绿、
-	// 页面写着「环境就绪，可以开始生成」，而唯一的 pollinations 每次返回 402，
-	// 用户最后拿到的是一张几何占位图，且界面上没有任何地方说这件事。
-	providers, _, provErr := h.pythonBridge.ListImageProviders(c.Request.Context())
-	imgCheck := imageProviderCheck(providers, provErr)
+	// 三项探测互相独立，串行执行会把自检拖到 10s 以上（实测 11.5s：解释器 ~1s、
+	// GPU/运行时枚举 ~6s、图像上游 ~3s），而前端只等 15s —— 一旦机器冷启动或
+	// 前端走 Next rewrites 代理，就会超时并停在「正在检查…」。并发后墙钟 ≈ 最慢
+	// 的那一项；三项各自有 TTL 缓存，这里仍先失效以拿到**当下**结论。
+	var (
+		pyOK     bool
+		pyIssues []string
+		gpuCheck models.DiagnosticCheck
+		imgCheck models.DiagnosticCheck
+		wg       sync.WaitGroup
+	)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		h.pythonBridge.InvalidatePythonEnvironment()
+		pyOK, pyIssues = h.pythonBridge.CheckPythonEnvironment()
+	}()
+	go func() {
+		defer wg.Done()
+		h.pythonBridge.InvalidateGPUProbe()
+		gpuCheck = gpuDiagnosticCheck(h.pythonBridge.ProbeGPU(c.Request.Context()))
+	}()
+	go func() {
+		defer wg.Done()
+		providers, _, provErr := h.pythonBridge.ListImageProviders(c.Request.Context())
+		imgCheck = imageProviderCheck(providers, provErr)
+	}()
+	wg.Wait()
 
 	checks := []models.DiagnosticCheck{
 		{Key: "backend", Label: "Go 后端", OK: true, Detail: Version},

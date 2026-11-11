@@ -1,6 +1,8 @@
 package services
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -27,6 +29,7 @@ func RecordLatestGeneration(cfg *config.Config, resp *models.GenerateImageRespon
 		return
 	}
 	record := map[string]interface{}{
+		"id":               newWorkID(),
 		"character_id":     resp.CharacterID,
 		"image_path":       resp.ImagePath,
 		"image_url":        outputURLForPath(cfg, resp.ImagePath, resp.ImageURL),
@@ -109,6 +112,7 @@ func enrichLatestGeneration(cfg *config.Config, record map[string]interface{}) {
 	if psdPath != "" && (record["psd_url"] == "" || record["psd_url"] == nil) {
 		record["psd_url"] = OutputURLFor(cfg, psdPath)
 	}
+	ensureWorkIdentity(cfg, record)
 }
 
 // GetLatestGeneration 返回最近一次成功生成的产物。
@@ -417,4 +421,248 @@ func findNewestModel3(baseDir string) (string, error) {
 		return "", fmt.Errorf("尚未有任何生成记录或可用的 Live2D 模型")
 	}
 	return newest, nil
+}
+
+// ======================================================================
+// 作品与多模型：id / 名称 / 分类 / 一个作品多个模型
+// ======================================================================
+
+// newWorkID 生成新作品的稳定 id。旧记录没有 id，按产物路径哈希推导（见 workIDFor），
+// 因此改名、加模型都能落到同一条记录上。
+func newWorkID() string {
+	return fmt.Sprintf("w_%d", time.Now().UnixNano())
+}
+
+// workIDFor 返回记录的作品 id（不写回）。没有 id 的旧记录按身份字段做确定性哈希，
+// 保证多次读取、前后端之间拿到的是同一个值。
+func workIDFor(record map[string]interface{}) string {
+	if record == nil {
+		return ""
+	}
+	if id := stringField(record, "id"); id != "" {
+		return id
+	}
+	key := historyEntryKey(record)
+	if key == "" {
+		key = stringField(record, "created_at")
+	}
+	if key == "" {
+		return ""
+	}
+	sum := sha1.Sum([]byte(key))
+	return "w_" + hex.EncodeToString(sum[:])[:12]
+}
+
+// ensureWorkIdentity 补齐 id / 名称 / 分类 / 模型列表，让老记录也能被前端统一消费。
+func ensureWorkIdentity(cfg *config.Config, record map[string]interface{}) {
+	if record == nil {
+		return
+	}
+	if id := workIDFor(record); id != "" {
+		record["id"] = id
+	}
+	if _, ok := record["name"]; !ok {
+		record["name"] = ""
+	}
+	if _, ok := record["category"]; !ok {
+		record["category"] = ""
+	}
+	record["models"] = workModels(cfg, record)
+}
+
+// workModels 归一化模型列表。旧记录只有顶层 model3_json，补一条「默认模型」，
+// 这样"多模型"上线前导出的作品也能在模型库里正常显示。
+func workModels(cfg *config.Config, record map[string]interface{}) []map[string]interface{} {
+	list := make([]map[string]interface{}, 0, 2)
+	switch raw := record["models"].(type) {
+	case []map[string]interface{}:
+		list = append(list, raw...)
+	case []interface{}:
+		for _, item := range raw {
+			if entry, ok := item.(map[string]interface{}); ok {
+				list = append(list, entry)
+			}
+		}
+	}
+	if len(list) == 0 {
+		if model3 := stringField(record, "model3_json"); model3 != "" {
+			list = append(list, map[string]interface{}{
+				"id":            "m_default",
+				"name":          "默认模型",
+				"model3_json":   model3,
+				"model3_url":    OutputURLFor(cfg, model3),
+				"model_dir":     filepath.Dir(model3),
+				"created_at":    stringField(record, "created_at"),
+				"runtime_ready": record["runtime_ready"],
+			})
+		}
+	}
+	return list
+}
+
+func readLatestRecord(cfg *config.Config) map[string]interface{} {
+	data, err := os.ReadFile(latestGenerationPath(cfg))
+	if err != nil {
+		return nil
+	}
+	var record map[string]interface{}
+	if json.Unmarshal(data, &record) != nil {
+		return nil
+	}
+	return record
+}
+
+// syncLatestFields 当 latest_generation.json 指向同一个作品时，把字段同步过去，
+// 避免左栏（历史）与预览/桌宠（latest）各说各话。
+func syncLatestFields(cfg *config.Config, workID string, fields map[string]interface{}) {
+	latest := readLatestRecord(cfg)
+	if latest == nil || workIDFor(latest) != workID {
+		return
+	}
+	for key, value := range fields {
+		latest[key] = value
+	}
+	writeLatestGeneration(cfg, latest)
+}
+
+// UpdateGenerationMeta 修改作品名称 / 分类。指针为 nil 表示该字段不动，
+// 空串是合法值（清空分类）。返回更新后的完整记录。
+func UpdateGenerationMeta(cfg *config.Config, id string, name, category *string) (map[string]interface{}, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("服务未就绪")
+	}
+	if id == "" {
+		return nil, fmt.Errorf("缺少作品 id")
+	}
+	history := readGenerationHistory(cfg)
+	for _, item := range history {
+		if item == nil || workIDFor(item) != id {
+			continue
+		}
+		item["id"] = id
+		if name != nil {
+			item["name"] = strings.TrimSpace(*name)
+		}
+		if category != nil {
+			item["category"] = strings.TrimSpace(*category)
+		}
+		item["updated_at"] = time.Now().Format(time.RFC3339)
+		writeGenerationHistory(cfg, history)
+		syncLatestFields(cfg, id, map[string]interface{}{
+			"name":     item["name"],
+			"category": item["category"],
+		})
+		enrichLatestGeneration(cfg, item)
+		return item, nil
+	}
+	return nil, fmt.Errorf("作品不存在或已被清理")
+}
+
+// ResolveWorkID 接受前端传来的作品 id：先按 id 精确匹配；匹配不到（本地刚生成、
+// id 还是按产物路径推导的临时值）时退回到 layers_dir 反查，保证导出模型挂得上。
+func ResolveWorkID(cfg *config.Config, id, layersDir string) string {
+	if cfg == nil {
+		return id
+	}
+	history := readGenerationHistory(cfg)
+	for _, item := range history {
+		if item != nil && id != "" && workIDFor(item) == id {
+			return id
+		}
+	}
+	if layersDir != "" {
+		for _, item := range history {
+			if item != nil && stringField(item, "layers_dir") == layersDir {
+				return workIDFor(item)
+			}
+		}
+	}
+	return id
+}
+
+// AppendWorkModel 把一次成功导出的模型挂到作品下。同一模型（按 id 或 model3 路径）
+// 重复导出时原地替换，不会堆出多份。
+func AppendWorkModel(cfg *config.Config, workID string, entry map[string]interface{}) {
+	if cfg == nil || workID == "" || entry == nil {
+		return
+	}
+	history := readGenerationHistory(cfg)
+	for _, item := range history {
+		if item == nil || workIDFor(item) != workID {
+			continue
+		}
+		item["id"] = workID
+		list := workModels(cfg, item)
+		replaced := false
+		for i, existing := range list {
+			sameID := stringField(existing, "id") != "" && stringField(existing, "id") == stringField(entry, "id")
+			samePath := stringField(existing, "model3_json") != "" &&
+				stringField(existing, "model3_json") == stringField(entry, "model3_json")
+			if sameID || samePath {
+				list[i] = entry
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			list = append(list, entry)
+		}
+		item["models"] = list
+		// 顶层字段始终指向"最新导出的模型"，预览/桌宠/打包继续按老契约读取。
+		for _, key := range []string{"model3_json", "model3_url", "model_dir", "runtime_ready"} {
+			item[key] = entry[key]
+		}
+		item["updated_at"] = time.Now().Format(time.RFC3339)
+		writeGenerationHistory(cfg, history)
+		syncLatestFields(cfg, workID, map[string]interface{}{
+			"model3_json":   item["model3_json"],
+			"model3_url":    item["model3_url"],
+			"model_dir":     item["model_dir"],
+			"runtime_ready": item["runtime_ready"],
+		})
+		return
+	}
+}
+
+// RecordUploadedWork 登记一份"已有图片"的作品：不经过生成阶段，直接从分层开始。
+// 名字只是给用户区分用的，允许为空（前端会回退显示提示词摘要）。
+func RecordUploadedWork(cfg *config.Config, imagePath, imageURL, name, category string) (map[string]interface{}, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("服务未就绪")
+	}
+	if imagePath == "" {
+		return nil, fmt.Errorf("缺少图片路径")
+	}
+	if _, err := os.Stat(imagePath); err != nil {
+		return nil, fmt.Errorf("图片不存在：%s", imagePath)
+	}
+	record := map[string]interface{}{
+		"id":           newWorkID(),
+		"character_id": "",
+		"image_path":   imagePath,
+		"image_url":    outputURLForPath(cfg, imagePath, imageURL),
+		"layers_dir":   "",
+		"psd_path":     "",
+		"model3_json":  "",
+		"output_dir":   "",
+		"width":        0,
+		"height":       0,
+		"prompt":       "",
+		"name":         strings.TrimSpace(name),
+		"category":     strings.TrimSpace(category),
+		"source":       "upload",
+		"created_at":   time.Now().Format(time.RFC3339),
+	}
+	// 同一张图已经登记过（可能已经分层/建模）就复用原记录，
+	// 不能因为再次导入把 layers/models 覆盖掉。
+	key := historyEntryKey(record)
+	for _, item := range readGenerationHistory(cfg) {
+		if item != nil && key != "" && historyEntryKey(item) == key {
+			enrichLatestGeneration(cfg, item)
+			return item, nil
+		}
+	}
+	appendGenerationHistory(cfg, record)
+	enrichLatestGeneration(cfg, record)
+	return record, nil
 }

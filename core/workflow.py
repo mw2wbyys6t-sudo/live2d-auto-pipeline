@@ -737,6 +737,10 @@ class WorkflowEngine:
                     "compatibility": {
                         k: v.get("compatible") for k, v in rig_result.get("compatibility", {}).items()
                     },
+                    "compatibility_status": {
+                        k: v.get("status", "unknown")
+                        for k, v in rig_result.get("compatibility", {}).items()
+                    },
                     # moc3 验收结论必须透传：早先这里复制了 8 个字段却独独丢掉 moc3，
                     # 导致本层拿不到内核结论，只能在收尾处硬编码一句假 blocker。
                     "moc3": rig_result.get("moc3") or {},

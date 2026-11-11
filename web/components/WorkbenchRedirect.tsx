@@ -8,12 +8,12 @@ export default function WorkbenchRedirect({ stage }: { stage: StageId }) {
   const router = useRouter();
 
   useEffect(() => {
-    void router.replace(`/?stage=${stage}`);
+    void router.replace(`/studio?stage=${stage}`);
   }, [router, stage]);
 
   return (
-    <div className="h-screen flex items-center justify-center text-xs text-gray-500">
-      <Loader2 className="w-4 h-4 animate-spin mr-2" /> 正在进入工作台…
+    <div className="flex h-screen items-center justify-center text-xs text-haze-500">
+      <Loader2 className="mr-2 h-4 w-4 animate-spin text-sakura-600" /> 正在进入工作台…
     </div>
   );
 }
