@@ -23,7 +23,13 @@ from live2d_builder.mesh.uv_unwrapper import UVUnwrapper
 from live2d_builder.bones.deformers import BoneHierarchy, DeformerHierarchy
 from live2d_builder.blendshapes.parameters import ParameterSet, STANDARD_PARAMETERS
 from live2d_builder.blendshapes.expressions import ExpressionBuilder
-from live2d_builder.physics.config import PhysicsBuilder
+from live2d_builder.layer_naming import (
+    ANIMAL_EAR_KEYWORDS,
+    HAIR_KEYWORDS,
+    TAIL_KEYWORDS,
+    matches_keywords,
+)
+from live2d_builder.physics.config import PhysicsBuilder, is_skirt_layer
 from live2d_builder.exporter.model3_exporter import Model3Exporter
 from live2d_builder.exporter.texture_atlas import TextureAtlas
 from live2d_builder.validator.model_validator import ModelValidator
@@ -451,10 +457,13 @@ class Live2DBuilder:
 
     def _generate_physics(self, layers: Dict[str, Image.Image]) -> Dict[str, Any]:
         """Build physics3.json configuration for hair, body, breath, etc."""
-        hair_layers = [n for n in layers if "hair" in n.lower()]
-        skirt_layers = [n for n in layers if "skirt" in n.lower()]
-        has_ears = any("animal_ear" in n.lower() or "kemomimi" in n.lower() for n in layers)
-        has_tail = any("tail" in n.lower() for n in layers)
+        # 全部走 layer_naming 的整词匹配：中文（头发_后）、下划线（hair_back）、
+        # 单词（bottomwear）、序号前缀（000_hair）都能命中；`tail` 也不会因为
+        # `detail` 里含 tail 就误判成尾巴。
+        hair_layers = [n for n in layers if matches_keywords(n, HAIR_KEYWORDS)]
+        skirt_layers = [n for n in layers if is_skirt_layer(n)]
+        has_ears = any(matches_keywords(n, ANIMAL_EAR_KEYWORDS) for n in layers)
+        has_tail = any(matches_keywords(n, TAIL_KEYWORDS) for n in layers)
 
         self.physics.reset()
         if hair_layers:

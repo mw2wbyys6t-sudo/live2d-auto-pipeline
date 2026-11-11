@@ -12,13 +12,23 @@ resistance, mobility, and delay parameters for:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.logger import get_logger
+from live2d_builder.layer_naming import (
+    HAIR_BACK_KEYWORDS,
+    SKIRT_KEYWORDS,
+    matches_keywords,
+)
 
 # 摆长（内部无量纲值）到 Cubism 顶点 Radius/Y 的长度单位。官方 Haru 的发型
 # 子顶点 Radius 是 8 这个量级，而我们的摆长在 0.15~1.2 之间。
 _PENDULUM_UNIT = 10.0
+
+#: 后发左右两束的层名写法（与 ``part_split.split_hair_strands`` 产出一致；
+#: 中文别名给 PSD 手工命名的素材兜底）。
+HAIR_SIDE_L_KEYWORDS = ("hair_back_left", "左后发")
+HAIR_SIDE_R_KEYWORDS = ("hair_back_right", "右后发")
 
 
 def _as_percent(weight: float) -> float:
@@ -45,6 +55,15 @@ def geometry_spring_params(height_px: float) -> Tuple[float, float]:
     stiffness = min(0.9, max(0.05, rigidity / 100.0))
     length_scale = max(0.5, min(2.0, h / 200.0))
     return stiffness, length_scale
+
+
+#: 下装层名的识别关键词（与变形器共用同一张表，避免两处判定漂移）。
+SKIRT_LAYER_KEYWORDS: Tuple[str, ...] = SKIRT_KEYWORDS
+
+
+def is_skirt_layer(name: str) -> bool:
+    """该层名是否属于下装（裙 / 裤）。"""
+    return matches_keywords(name, SKIRT_LAYER_KEYWORDS)
 
 
 def prune_physics_to_parameters(physics_data: Dict[str, Any],
@@ -151,7 +170,7 @@ class PhysicsBuilder:
         ))
 
         # Hair back — longer, slower swing
-        if any("back" in n.lower() for n in hair_layers):
+        if any(matches_keywords(n, HAIR_BACK_KEYWORDS) for n in hair_layers):
             groups.append(self._make_pendulum_group(
                 group_id="HairBack",
                 name="后发摇摆 (Hair Back Swing)",
@@ -159,8 +178,11 @@ class PhysicsBuilder:
                     {"target": "Parameter", "id": "ParamAngleX", "weight": 8.0},
                     {"target": "Parameter", "id": "ParamBodyAngleX", "weight": 8.0},
                 ],
+                # 后发写自己的参数：HairFront 已经占了 ParamHairSwing。
+                # 两个组写同一参数时内核只保留一条，后发的慢摆会被整条丢掉
+                # （实测旧产物里 HairFront / HairBack 的输出完全一样）。
                 outputs=[
-                    {"target": "Parameter", "id": "ParamHairSwing", "weight": 100, "scale": 1.5, "reflect": False},
+                    {"target": "Parameter", "id": "ParamHairSwingBack", "weight": 100, "scale": 1.5, "reflect": False},
                 ],
                 pendulums=[
                     {"length": 0.80, "damping": 0.92, "stiffness": 0.15, "mass": 1.2},
@@ -168,6 +190,33 @@ class PhysicsBuilder:
                     {"length": 1.20, "damping": 0.97, "stiffness": 0.08, "mass": 0.8},
                 ],
                 vertices=4,
+                normalization_angle=90.0,
+            ))
+
+        # 后发左右两束：各一条独立的摆链与参数。侧束比中束短、离头更近，
+        # 摆起来比中束快一档；三条链共用 ParamHairSwingBack 时内核只保留一条
+        # 输出，侧束与中束的相位差会被抹平（四束拆分就白拆了）。
+        for suffix, keywords, param_id in (
+                ("L", HAIR_SIDE_L_KEYWORDS, "ParamHairSwingSideL"),
+                ("R", HAIR_SIDE_R_KEYWORDS, "ParamHairSwingSideR")):
+            if not any(matches_keywords(n, keywords) for n in hair_layers):
+                continue
+            groups.append(self._make_pendulum_group(
+                group_id=f"HairSide{suffix}",
+                name=f"侧发摇摆 (Hair Side {suffix} Swing)",
+                inputs=[
+                    {"target": "Parameter", "id": "ParamAngleX", "weight": 9.0},
+                    {"target": "Parameter", "id": "ParamBodyAngleX", "weight": 7.0},
+                ],
+                outputs=[
+                    {"target": "Parameter", "id": param_id,
+                     "weight": 100, "scale": 1.3, "reflect": False},
+                ],
+                pendulums=[
+                    {"length": 0.55, "damping": 0.88, "stiffness": 0.24, "mass": 1.0},
+                    {"length": 0.75, "damping": 0.93, "stiffness": 0.14, "mass": 0.9},
+                ],
+                vertices=3,
                 normalization_angle=90.0,
             ))
 
@@ -247,8 +296,11 @@ class PhysicsBuilder:
                 {"target": "Parameter", "id": "ParamBodyAngleX", "weight": 10.0},
                 {"target": "Parameter", "id": "ParamAngleX", "weight": 5.0},
             ],
+            # 输出必须是**裙摆自己的**参数：BodyBounce 已经写了 ParamBodySway，
+            # 两个组写同一个参数时内核只保留一条，裙摆这条会被整个丢掉 ——
+            # 这正是此前「physics3 里有 Skirt 组、裙子却一动不动」的原因。
             outputs=[
-                {"target": "Parameter", "id": "ParamBodySway", "weight": 80, "scale": 1.2, "reflect": False},
+                {"target": "Parameter", "id": "ParamSkirtSwing", "weight": 80, "scale": 1.2, "reflect": False},
             ],
             pendulums=[
                 {"length": 0.40, "damping": 0.88, "stiffness": 0.25, "mass": 1.0},
@@ -283,8 +335,10 @@ class PhysicsBuilder:
                     {"target": "Parameter", "id": "ParamAngleX", "weight": 8.0},
                     {"target": "Parameter", "id": "ParamAngleY", "weight": 6.0},
                 ],
+                # 兽耳写自己的参数：ParamHairSwing 归前发，两个组写同一参数时
+                # 内核只保留一条输出（兽耳这条会被整条丢掉）。
                 outputs=[
-                    {"target": "Parameter", "id": "ParamHairSwing", "weight": 50, "scale": 0.5, "reflect": False},
+                    {"target": "Parameter", "id": "ParamEarSwing", "weight": 50, "scale": 0.5, "reflect": False},
                 ],
                 pendulums=[
                     {"length": 0.25, "damping": 0.80, "stiffness": 0.40, "mass": 0.6},
@@ -301,8 +355,10 @@ class PhysicsBuilder:
                     {"target": "Parameter", "id": "ParamBodyAngleX", "weight": 10.0},
                     {"target": "Parameter", "id": "ParamBodyAngleY", "weight": 8.0},
                 ],
+                # 尾巴也必须有独立参数：ParamBodySway 归 BodyBounce，
+                # 两个组写同一参数时内核只保留一条（尾巴这条会被整条丢掉）。
                 outputs=[
-                    {"target": "Parameter", "id": "ParamBodySway", "weight": 100, "scale": 2.0, "reflect": False},
+                    {"target": "Parameter", "id": "ParamTailSwing", "weight": 100, "scale": 2.0, "reflect": False},
                 ],
                 pendulums=[
                     {"length": 0.50, "damping": 0.85, "stiffness": 0.20, "mass": 1.0},

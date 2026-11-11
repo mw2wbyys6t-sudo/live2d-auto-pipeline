@@ -64,6 +64,21 @@ export interface PreviewRuntimeValue {
   expression: string;
   applyExpression: (emotion: Emotion) => void;
 
+  /** 模型自带动作组（idle / tap_body …），没有动作时为空。 */
+  motionGroups: string[];
+  motionCount: number;
+  /** 物理链诊断：没加载 physics3.json 时 loaded=false。 */
+  physicsLoaded: boolean;
+  physicsChains: number;
+  /** 当前模型是否跑在绑定模式（有 bindings.json 才有绑骨线可看）。 */
+  usesBindings: boolean;
+  /** 绑骨线开关：变形器控制网格 + 变形器层级连线。 */
+  bindingsOverlay: boolean;
+  setBindingsOverlay: (on: boolean) => void;
+  /** 从播放器实例拉一次动作组/物理状态（命令式实例没有响应式通知）。 */
+  syncPlayerDiagnostics: () => void;
+  playMotion: (group: string) => void;
+
   trackingOn: boolean;
   micOn: boolean;
   toggleTracking: () => Promise<void>;
@@ -93,6 +108,12 @@ export function PreviewProvider({ children }: { children: ReactNode }) {
   const [params, setParams] = useState<ParamMap>(INITIAL_PARAMS);
   const [fps, setFps] = useState(0);
   const [expression, setExpression] = useState('neutral');
+  const [motionGroups, setMotionGroups] = useState<string[]>([]);
+  const [motionCount, setMotionCount] = useState(0);
+  const [physicsLoaded, setPhysicsLoaded] = useState(false);
+  const [physicsChains, setPhysicsChains] = useState(0);
+  const [usesBindings, setUsesBindings] = useState(false);
+  const [bindingsOverlay, setBindingsOverlayState] = useState(false);
   const [trackingOn, setTrackingOn] = useState(false);
   const [micOn, setMicOn] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,6 +166,36 @@ export function PreviewProvider({ children }: { children: ReactNode }) {
   const toggleIdle = useCallback((next: boolean) => {
     setIdle(next);
     playerRef.current?.setIdle(next);
+  }, []);
+
+  /**
+   * 拉一次动作组/物理状态。
+   *
+   * 动作与 physics3 是在 loadModel 之后异步加载的，播放器没有事件通知，只能由
+   * 预览阶段节流轮询。这里做了等值判断，内容没变就不 setState，避免每 500ms
+   * 重渲染整棵树。
+   */
+  const syncPlayerDiagnostics = useCallback(() => {
+    const player = playerRef.current;
+    if (!player) return;
+    const groups = player.motionGroupNames;
+    setMotionGroups((prev) =>
+      prev.length === groups.length && prev.every((name, i) => name === groups[i])
+        ? prev
+        : groups);
+    setMotionCount((prev) => (prev === player.motionCount ? prev : player.motionCount));
+    setPhysicsLoaded((prev) => (prev === player.physicsLoaded ? prev : player.physicsLoaded));
+    setPhysicsChains((prev) => (prev === player.physicsChains ? prev : player.physicsChains));
+    setUsesBindings((prev) => (prev === player.usesBindings ? prev : player.usesBindings));
+  }, []);
+
+  const playMotion = useCallback((group: string) => {
+    playerRef.current?.playMotion(group);
+  }, []);
+
+  const setBindingsOverlay = useCallback((on: boolean) => {
+    setBindingsOverlayState(on);
+    playerRef.current?.setBindingsOverlay(on);
   }, []);
 
   const stopNativeTracking = useCallback(() => {
@@ -275,6 +326,15 @@ export function PreviewProvider({ children }: { children: ReactNode }) {
       setFps,
       expression,
       applyExpression,
+      motionGroups,
+      motionCount,
+      physicsLoaded,
+      physicsChains,
+      usesBindings,
+      bindingsOverlay,
+      setBindingsOverlay,
+      syncPlayerDiagnostics,
+      playMotion,
       trackingOn,
       micOn,
       toggleTracking,
@@ -300,6 +360,15 @@ export function PreviewProvider({ children }: { children: ReactNode }) {
       fps,
       expression,
       applyExpression,
+      motionGroups,
+      motionCount,
+      physicsLoaded,
+      physicsChains,
+      usesBindings,
+      bindingsOverlay,
+      setBindingsOverlay,
+      syncPlayerDiagnostics,
+      playMotion,
       trackingOn,
       micOn,
       toggleTracking,

@@ -49,6 +49,9 @@ class LayerComposer:
         "scalp",
         "hair",          # 19 类只给一整块头发，按后发处理（见 layers52 的 primary=1）
         "hair_back",
+        # 后发左右两束（split_hair_parts 自适应拆出）：与后发同层，必须显式列名，
+        # 否则会按字母序落到最前 = 画在脸和衣服之上。
+        "hair_back_left", "hair_back_right",
         "hair_mid",
         # 刘海（hair_front / hair_bangs）**不在这里**：见下方眼睑之后的位置。
         # 原因：脸层在刘海位置是镂空的（分出来的脸只有可见皮肤），所以"刘海"原本
@@ -150,7 +153,8 @@ class LayerComposer:
     #: 一做呼吸/摆臂就会从层缝里露出背景。前排层（handwear/footwear 等）不登记，
     #: 它们是被别的层遮挡的对象、不是需要补画的底层。
     AMODAL_PARTS = {
-        "hair_back", "hair_mid", "clothes_top", "clothes_inner", "neck",
+        "hair_back", "hair_back_left", "hair_back_right", "hair_mid",
+        "clothes_top", "clothes_inner", "neck",
         # l2d_sam_iter2
         "hair", "topwear", "bottomwear", "legwear", "neckwear",
     }

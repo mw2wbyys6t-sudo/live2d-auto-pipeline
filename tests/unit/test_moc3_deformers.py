@@ -1247,11 +1247,14 @@ def test_space_map_uses_the_parents_rest_rect_for_every_keyform():
                    [(0.2, 0.2), (0.8, 0.2), (0.2, 0.8), (0.8, 0.8)])
 
 
-def test_warp_under_rotation_is_refused():
-    """跨 rotation 的顶点空间没实测过（官方有 59 条这类边），必须拒绝而不是猜。
+def test_warp_under_rotation_keeps_the_model_unit_grid_space():
+    """warp 挂在 rotation 之下：控制网格仍按**模型单位**写，成员网格仍写 (s,t)。
 
-    主干全用 warp，不碰这条；报错文案要点名「未实测」，否则后人会当成格式 bug
-    顺手改成「照 warp 的规矩办」。
+    这条替换了旧的「必须拒绝」用例。旧的实测结论（「内核不应用网格」）是探针
+    口径错误：把已经归一的 (s,t) 当画布像素传进 MeshSpec，编译器二次归一把网格
+    压成一个点，恒等与平移两种控制网格自然渲染出同一张图。重测（2026-11-10，
+    ``probe_rot_warp_spaces4.py``）：静止帧与「不挂变形器」逐字节相同，键形整体
+    放大 1.5 倍时像素数 6084 → 13924，说明网格真的被应用。
     """
     rotation = RotationDeformerSpec(
         deformer_id="Rot", keyforms=[RotationKeyform(0.0, angle=10.0)])
@@ -1264,13 +1267,57 @@ def test_warp_under_rotation_is_refused():
                     deformer_id="W")
     spec = RigSpec(meshes=[mesh], deformers=[rotation, warp],
                    pixels_per_unit=PPU)
-    with pytest.raises(UnsupportedRig, match="rotation") as caught:
-        compile_static_rig(spec)
-    # 报错必须**可操作**：这条边是作者在 DEFAULT_WARP_DEFORMERS 条目里写的
-    # ``under`` 解析出来的，不点名的话读的人只会去写出层找「谁把 rotation 设成父级」。
-    message = str(caught.value)
-    assert "under" in message, message
-    assert "W" in message and "Rot" in message, message
+    spec.validate()          # 不再拒绝
+    doc = compile_static_rig(spec)
+    # 控制网格没有被父级 st 归一碰到：仍是 ±1 单位（±100px ÷ PPU）
+    _assert_points(_unit_grid(doc, 0),
+                   [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)])
+    # 成员网格照旧按 warp 的静止矩形归一
+    _assert_points(_mesh_st(doc),
+                   [(0.2, 0.2), (0.8, 0.2), (0.2, 0.8), (0.8, 0.8)])
+
+
+def test_rotation_under_a_warp_shifts_its_subtree_by_the_parent_grid_min():
+    """「warp → rotation」边：内核把子树平移父 warp 静止格 min，origin 用父 warp 的 (s,t)。
+
+    官方 Core 实测（2026-11-10）：父 warp 静止格换成 −100..100 / 0..200 / −200..200 时，
+    恒等 rotation 的子树位移依次是 (−100,−100) / (0,0) / (−200,−200) —— 逐像素等于
+    「子坐标 + grid_min」，尺度不变。所以编译器必须**从子树坐标里扣掉这个 min**，
+    静止帧才与「不挂变形器」重合；origin 则按父 warp 的归一 (s,t) 走 (I−R) 换算
+    （``probe_rot_child_space.py``：单位口径会把整块转出画面）。
+    """
+    warp = WarpDeformerSpec(
+        deformer_id="W", rows=1, cols=1,
+        grids=[DeformerGrid(0.0, [(-100.0, -100.0), (100.0, -100.0),
+                                  (-100.0, 100.0), (100.0, 100.0)])])
+    rotation = RotationDeformerSpec(
+        deformer_id="Rot",
+        keyforms=[RotationKeyform(0.0, angle=0.0, origin=(0.0, 0.0)),
+                  RotationKeyform(1.0, angle=30.0, origin=(25.0, 10.0))],
+        parameter_id="ParamAngleZ", parent_deformer_id="W")
+    mesh = MeshSpec("Art", [(-60.0, -60.0), (60.0, -60.0), (-60.0, 60.0),
+                            (60.0, 60.0)], [(0, 1, 2), (0, 2, 3)],
+                    [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                    deformer_id="Rot")
+    spec = RigSpec(meshes=[mesh], deformers=[warp, rotation],
+                   parameters=[ParameterSpec("ParamAngleZ", 0.0, 1.0, 0.0)],
+                   pixels_per_unit=PPU)
+    spec.validate()
+    doc = compile_static_rig(spec)
+
+    # 网格顶点扣掉 grid_min（−100,−100）后按单位坐标写出
+    _assert_points(_mesh_st(doc),
+                   [(0.4, 0.4), (1.6, 0.4), (0.4, 1.6), (1.6, 1.6)])
+
+    # 第二个键形：st((25,10)) = (0.625, 0.55)，存的仍是 (I − R)·o
+    begins = doc.get("rotation_deformer.keyform_begin_indices")
+    origins = doc.get("rotation_deformer_keyform.origin_xs")
+    origin_ys = doc.get("rotation_deformer_keyform.origin_ys")
+    theta = math.radians(30.0)
+    cos, sin = math.cos(theta), math.sin(theta)
+    sx, sy = 0.625, 0.55
+    assert origins[begins[0] + 1] == pytest.approx(sx - (sx * cos - sy * sin), rel=1e-9)
+    assert origin_ys[begins[0] + 1] == pytest.approx(sy - (sx * sin + sy * cos), rel=1e-9)
 
 
 def test_warp_parent_cycle_is_refused():
@@ -1344,21 +1391,34 @@ def test_build_deformers_writes_parent_deformer_id():
 
 
 def test_build_deformers_writes_parent_deformer_id_for_rotation_entries():
-    """rotation 条目的 ``under`` 同样落地：公共表 ``deformer.parent_deformer_indices``
-    覆盖两张子表，只接 warp 那一半就等于留一条写不出父链的路。
+    """rotation 条目的 ``under`` 同样落地（rotation 挂 rotation / rotation 挂 warp）。
 
-    反方向（warp 挂在 rotation 下）不在这里放开：跨 rotation 的顶点空间没实测过，
-    编译器照旧拒绝（``test_warp_under_rotation_is_refused``）。
+    公共表 ``deformer.parent_deformer_indices`` 覆盖两张子表，只接 warp 那一半
+    就等于留一条写不出父链的路。跨类型的两条边都由官方 Core 逐像素验收
+    （见 ``test_rotation_under_a_warp_shifts_its_subtree_by_the_parent_grid_min``），
+    所以不再丢弃。
     """
     meshes = [_patch("face"), _patch("arm_L")]
+    entries = [
+        {"name": "RootRot", "type": "rotation", "parent": "Arm_L",
+         "pivot": [10.0, 5.0], "targets": []},
+        {"name": "ArmSwing", "type": "rotation", "parent": "Arm_L",
+         "pivot": [10.0, 5.0], "targets": ["arm_L"], "under": "RootRot"},
+    ]
+    deformers, _notes, _static = _build(meshes, entries, [])
+    by_id = {d.deformer_id: d for d in deformers}
+    assert by_id["ArmSwing"].parent_deformer_id == "RootRot"
+
+    # rotation 挂 warp 下：边保留，不再丢
     entries = [
         _entry("BodySway", [], "torso", ["face"]),
         {"name": "ArmSwing", "type": "rotation", "parent": "Arm_L",
          "pivot": [10.0, 5.0], "targets": ["arm_L"], "under": "BodySway"},
     ]
-    deformers, _notes, _static = _build(meshes, entries, [])
+    deformers, notes, _static = _build(meshes, entries, [])
     by_id = {d.deformer_id: d for d in deformers}
     assert by_id["ArmSwing"].parent_deformer_id == "BodySway"
+    assert not any("不能互相嵌套" in n for n in notes), notes
 
 
 def test_build_deformers_downgrades_when_parent_not_emitted():
@@ -1584,7 +1644,10 @@ SINGER_LAYERS = [
 
 def _authored_table():
     from live2d_builder.bones.deformers import DeformerHierarchy
-    return list(DeformerHierarchy.DEFAULT_WARP_DEFORMERS)
+    # warp 与 rotation 两张子表都是作者意图的一部分：HeadRotationZ 是 HeadRig 的父级，
+    # 只读 warp 表会让 ``resolve_deformer_parents`` 把这条边判成「未声明」。
+    return (list(DeformerHierarchy.DEFAULT_WARP_DEFORMERS)
+            + list(DeformerHierarchy.DEFAULT_ROTATION_DEFORMERS))
 
 
 def _authored(name):
@@ -1612,11 +1675,22 @@ def _authored_depth(name, entries=None):
 
 
 def test_head_rig_is_authored_as_the_only_head_rotation_owner():
+    """头的 X/Y 由 HeadRig 的 warp 承担，Z 由 HeadRotationZ（rotation）承担。
+
+    旧版这里要求 HeadRig 同时带 ParamAngleZ（用 warp 模拟刚体侧转）。rotation 与
+    warp 的嵌套规则实测清楚之后，Z 归回 rotation；HeadRig 因此只剩两轴，profile 也必须
+    跟着换成 ``head_xy`` —— ``_profile_grids`` 按参数个数精确匹配角色序列。
+    """
     head = _authored("HeadRig")
-    assert head["profile"] == "head"
-    assert head["parameters"] == ["ParamAngleX", "ParamAngleY", "ParamAngleZ"]
+    assert head["profile"] == "head_xy"
+    assert head["parameters"] == ["ParamAngleX", "ParamAngleY"]
     assert {"face", "nose", "accessories"} <= set(head["targets"])
-    # 头部三轴在**作者意图**里只出现在 HeadRig 一条上。基线这里会是
+    # 刚体侧转只有一条：HeadRotationZ（rotation），绕 Head 关节、挂在 BodySway 下。
+    rotation = _authored("HeadRotationZ")
+    assert rotation["type"] == "rotation"
+    assert rotation.get("pivot_bone") == "Head"
+    assert rotation.get("under") == "BodySway"
+    # 头部三轴在**作者意图**里只出现在 HeadRig / HeadRotationZ 上。基线这里会是
     # ['EyeBlink_L', 'EyeBlink_R', 'CheekFollow', 'TearFollow'] —— 四处各自再
     # 拟合一份，就是头内部那 27.1272px 的来源。
     # NeckBand 是同一场按高度衰减的过渡，不是另一份独立拟合的刚体头转。
@@ -1641,7 +1715,9 @@ def test_expression_deformers_inherit_head_instead_of_refitting_it():
     assert _authored("EyeBlink_R")["parameters"] == ["ParamEyeROpen"]
     # 头与颈场都只继承躯干场；把 HeadRig 再挂到 NeckBand 下会让 NeckBand 的
     # 高度梯度外插进整颗头，实测把头内部从 0.0018px 破坏到 5.04px。
-    assert _authored("HeadRig")["under"] == "BodySway"
+    # 头中间隔一条 HeadRotationZ（rotation）：整颗头跟着刚体侧转，HeadRig 只做 X/Y。
+    assert _authored("HeadRig")["under"] == "HeadRotationZ"
+    assert _authored("HeadRotationZ")["under"] == "BodySway"
     assert _authored("NeckBand")["under"] == "BodySway"
 
 
@@ -1650,7 +1726,7 @@ def test_cheek_and_tear_no_longer_need_their_own_head_field():
                for e in _authored_table())
     built = _built()
     assert "HeadRig" in built, "真实层名下 HeadRig 必须真的建出来（否则重蹈 rotation 的覆辙）"
-    assert built["HeadRig"]["profile"] == "head"
+    assert built["HeadRig"]["profile"] == "head_xy"
     assert set(built["HeadRig"]["targets"]) >= {"face", "nose", "accessories"}
 
 
@@ -1715,16 +1791,17 @@ def test_neck_band_can_own_collar_when_the_neckline_pose_requires_it():
     assert "collar" not in authored["BodySway"]["targets"]
 
 
-def test_authored_head_field_chain_stops_at_the_measured_depth_three():
-    """NeckBand 与 HeadRig 是 BodySway 的兄弟场，作者表最深仍是官方量过的 3。"""
+def test_authored_head_field_chain_stops_at_the_measured_depth_limit():
+    """作者表最深 4 级：BodySway → HeadRotationZ → HeadRig → 表情/头发。"""
     assert _authored_depth("BodySway") == 1
     assert _authored_depth("NeckBand") == 2
-    assert _authored_depth("HeadRig") == 2
+    assert _authored_depth("HeadRotationZ") == 2
+    assert _authored_depth("HeadRig") == 3
     for name in ("MouthOpen", "BrowMove_L", "EyeBlink_L", "HairFrontSwing",
                  "MouthCavity", "HairBackSwing"):
-        assert _authored_depth(name) == 3, name
+        assert _authored_depth(name) == 4, name
     deepest = max(_authored_depth(e["name"]) for e in _authored_table())
-    assert deepest <= 3, deepest
+    assert deepest <= 4, deepest
 
 
 def test_build_deformers_leaves_a_note_for_an_undeclared_under():
@@ -1881,3 +1958,56 @@ def test_the_rect_union_follows_the_landed_parents_only():
     assert [d.deformer_id for d in deformers] == ["HairBackSwing"]
     assert any("Ghost" in n for n in notes), notes
     assert _covers(_rect_of(deformers[0]), hair) == []
+
+
+# ----------------------------------------------------------------------
+# 头发摆链的「自适应分割数」：控制网格按发束静止尺寸补足分辨率
+# ----------------------------------------------------------------------
+
+_HAIR_SWAY = [ParameterSpec("ParamHairSwing", -1.0, 1.0, 0.0)]
+
+
+def _hair_deformer(height: float, rows: int = 3, cols: int = 2):
+    mesh = _patch("hair_front", 0.0, 0.0, 40.0, height)
+    entries = [_entry("HairFrontSwing", ["ParamHairSwing"], "hair_sway",
+                      ["hair_front"], rows=rows, cols=cols)]
+    deformers, notes, _static = _build([mesh], entries, _HAIR_SWAY)
+    assert notes == [], notes
+    return deformers[0]
+
+
+def test_short_hair_keeps_the_authored_grid():
+    """短发束不需要更多控制点：作者表的值是下限，自适应只增不减。"""
+    deformer = _hair_deformer(120.0, rows=3, cols=2)
+    assert deformer.rows + 1 == 3
+    assert deformer.cols + 1 == 2
+
+
+def test_long_hair_gets_more_control_rows():
+    """长发束按长度补足行数：固定 3 行摆出来是一折一折的直线段。"""
+    short = _hair_deformer(120.0)
+    long = _hair_deformer(520.0)
+    assert long.rows > short.rows
+    assert long.rows + 1 >= 5
+    # 行数增长不改键形数（只有参数驱动的姿态在变）
+    assert len(long.grids) == len(short.grids)
+
+
+def test_hair_grid_is_capped_so_very_long_hair_stays_finite():
+    from live2d_builder.exporter.moc3_pipeline import (
+        HAIR_GRID_MAX_COLS, HAIR_GRID_MAX_ROWS)
+    deformer = _hair_deformer(4000.0, rows=2, cols=2)
+    assert deformer.rows + 1 == HAIR_GRID_MAX_ROWS
+    assert deformer.cols + 1 <= HAIR_GRID_MAX_COLS
+
+
+def test_wide_strands_get_more_columns():
+    """宽发束（三束并排那种）横向也要更多控制点，否则摆起来是折线。"""
+    narrow = _hair_deformer(300.0, rows=2, cols=2)
+    mesh = _patch("hair_front", 0.0, 0.0, 400.0, 300.0)
+    entries = [_entry("HairFrontSwing", ["ParamHairSwing"], "hair_sway",
+                      ["hair_front"], rows=2, cols=2)]
+    deformers, notes, _static = _build([mesh], entries, _HAIR_SWAY)
+    assert notes == []
+    wide = deformers[0]
+    assert wide.cols > narrow.cols

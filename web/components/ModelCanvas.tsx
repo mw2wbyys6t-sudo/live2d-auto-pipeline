@@ -22,21 +22,25 @@ interface ModelCanvasProps {
   className?: string;
   wireframe?: boolean;
   onReady?: (player: Live2DPlayer) => void;
+  /** 模型本体与物理/动作/表情资源全部加载完成后触发（onReady 只代表实例就绪）。 */
+  onLoaded?: () => void;
   onFrame?: () => void;
   /** 模型加载失败时把原因交给调用方展示，不再静默留一张空白画布。 */
   onError?: (message: string) => void;
 }
 
 const ModelCanvas = forwardRef<ModelCanvasHandle, ModelCanvasProps>(function ModelCanvas(
-  { modelUrl, className = '', wireframe = false, onReady, onFrame, onError },
+  { modelUrl, className = '', wireframe = false, onReady, onLoaded, onFrame, onError },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<Live2DPlayer | null>(null);
   const onReadyRef = useRef(onReady);
+  const onLoadedRef = useRef(onLoaded);
   const onFrameRef = useRef(onFrame);
   const onErrorRef = useRef(onError);
   onReadyRef.current = onReady;
+  onLoadedRef.current = onLoaded;
   onErrorRef.current = onError;
   onFrameRef.current = onFrame;
 
@@ -113,6 +117,7 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, ModelCanvasProps>(function Mod
       .then(() => {
         if (!cancelled) {
           playerRef.current?.start();
+          onLoadedRef.current?.();
         }
       })
       .catch((err) => {

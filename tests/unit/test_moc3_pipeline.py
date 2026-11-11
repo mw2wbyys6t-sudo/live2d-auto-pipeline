@@ -849,13 +849,14 @@ def test_the_authored_table_does_not_double_apply_the_head_turn():
               "neck", "clothes_top", "waistband"):
         axes = [pid for pid, _k in (by_id[n].keyform_axes or ())]
         assert not [p for p in axes if p.startswith("ParamAngle")], (n, axes)
-    # 头部三轴只能由刚体 HeadRig 与分级 NeckBand 两级变形场持有；任何网格私自
-    # 再烘一份，都会恢复成各场各转的来源。
+    # 头部三轴只能由刚体 HeadRotationZ（rotation，Z）、HeadRig（warp，X/Y）与分级
+    # NeckBand 三级变形场持有；任何网格私自再烘一份，都会恢复成各场各转的来源。
     carriers = {d.deformer_id for d in spec.deformers
                 if any(pid in moc3_pipeline.HEAD_ANGLE_AXES
                        for pid, _k in d.axes_spec)}
-    assert carriers == {"HeadRig", "NeckBand"}, carriers
-    assert owner["HeadRig"].parent_deformer_id == "BodySway"
+    assert carriers == {"HeadRotationZ", "HeadRig", "NeckBand"}, carriers
+    assert owner["HeadRig"].parent_deformer_id == "HeadRotationZ"
+    assert owner["HeadRotationZ"].parent_deformer_id == "BodySway"
     assert owner["NeckBand"].parent_deformer_id == "BodySway"
 
 

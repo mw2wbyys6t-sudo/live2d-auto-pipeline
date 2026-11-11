@@ -30,10 +30,17 @@
 
 变形器：warp 已在真实产物里长期使用（静止网格 + 逐键点阵，成员顶点写 (s,t)），
 rotation 的写出路径也已实现（角度/枢轴/缩放按实测的 ``p' = R·p + offset`` 落表），
-只是今天的 ``DEFAULT_WARP_DEFORMERS`` 还建不出层名命中的 rotation 条目。不支持的
-形态出现即报错、不静默丢弃：warp 的父级是 rotation（跨 rotation 的顶点空间未实测）、
-以及父链成环。变形器表在写出前按父链做拓扑规范化（``parent_first_deformer_order``），
-所以 ``deformer.parent_deformer_indices`` 引用的槽位与作者的书写顺序无关。
+rotation 直接驱动美术网格时已通过官方 Core 逐像素验收。rotation 与 warp **可以互相
+嵌套**，两条边的坐标口径不同，均已用官方 Core 逐字节验收（2026-11-10）：
+
+  * ``warp`` 父=`rotation`：控制网格仍按模型单位写，成员网格按 (s,t)，与根级一致；
+  * ``rotation`` 父=`warp`：内核把整棵子树平移了父 warp 静止格的 min，且 origin 用
+    父 warp 的归一 (s,t) 表达 —— 前者由 ``deformer_origin_offsets`` 预先扣掉，后者
+    在 ``_write_deformers`` 里按父级类型分支。
+
+其余不支持的形态出现即报错、不静默丢弃：父链成环、父级既非 warp 也非 rotation。
+变形器表在写出前按父链做拓扑规范化（``parent_first_deformer_order``），所以
+``deformer.parent_deformer_indices`` 引用的槽位与作者的书写顺序无关。
 """
 from __future__ import annotations
 
@@ -263,6 +270,7 @@ class RigSpec:
                             part_ids: set) -> None:
         seen: set = set()
         ids = []
+        by_id = {d.deformer_id: d for d in self.deformers}
         for deformer in self.deformers:
             if deformer.deformer_id in seen:
                 raise UnsupportedRig(f"变形器 id 重复: {deformer.deformer_id}")
@@ -289,6 +297,19 @@ class RigSpec:
                 if deformer.parent_deformer_id == deformer.deformer_id:
                     raise UnsupportedRig(
                         f"{deformer.deformer_id}: 父变形器不能是自身")
+                parent_type = by_id[deformer.parent_deformer_id]
+                # rotation 与 warp 互为父子的两条边都**受支持**，但各自的坐标口径不同：
+                #   * warp 父=rotation：控制网格按模型单位存，成员网格按 (s,t)，
+                #     与根级 warp 相同（官方 Core 逐像素验收，2026-11-10）；
+                #   * rotation 父=warp：内核把整棵子树平移了父 warp 静止格的 min，
+                #     且 origin 用父 warp 的归一 (s,t) 表达 —— 两条都由
+                #     ``deformer_origin_offsets`` / ``_write_deformers`` 落地。
+                if isinstance(deformer, RotationDeformerSpec) and isinstance(
+                        parent_type, WarpDeformerSpec):
+                    reference_rect(parent_type, param_by_id)   # 退化网格要早点报
+                elif isinstance(deformer, WarpDeformerSpec) and isinstance(
+                        parent_type, RotationDeformerSpec):
+                    pass    # 两类边都不再拒绝
             if deformer.is_keyformed:
                 if not getattr(deformer, "axes", ()) and not deformer.parameter_id:
                     raise UnsupportedRig(
@@ -579,9 +600,110 @@ def parent_first_deformer_order(
     return ordered
 
 
+def deformer_origin_offsets(spec: RigSpec) -> Dict[str, tuple]:
+    """「rotation 父=warp」那条边让内核平移整棵子树的量（模型像素）。
+
+    官方 Core 实测（2026-11-10）：父 warp 的静止控制格为 −200..200 / −180..220 时，
+    一条**恒等**的 rotation（挂在它下面）把子网格整体挪到 (−200,−180) —— 位移量正好
+    是父 warp 静止格的 min；把控制格的尺寸换掉、位移量随之等于新 min，尺度不变。
+    所以内核把 rotation 及其整棵子树当成「以父 warp 静止格 min 为原点」的坐标来算。
+
+    写出去之前必须把该子树的所有坐标减去同一个 min，静止帧才与「不挂变形器」重合；
+    父 warp 自己的形变（键形）仍然作用在这棵子树之上，不需要额外处理。
+
+    返回 ``{deformer_id: (dx, dy)}``；没有这条边时为空字典（绝大多数模型）。
+    """
+    by_id = {d.deformer_id: d for d in spec.deformers}
+    param_by_id = {p.parameter_id: p for p in spec.parameters}
+    out: Dict[str, tuple] = {}
+    building: set = set()
+
+    def of(deformer_id: str) -> tuple:
+        if deformer_id in out:
+            return out[deformer_id]
+        deformer = by_id.get(deformer_id)
+        if deformer is None or not deformer.parent_deformer_id:
+            return (0.0, 0.0)
+        if deformer_id in building:
+            # 成环：validation / deformer_space_map 会点名报错，这里不抢话语权
+            return (0.0, 0.0)
+        building.add(deformer_id)
+        try:
+            parent = by_id.get(str(deformer.parent_deformer_id))
+            base = of(deformer.parent_deformer_id)
+            if (isinstance(deformer, RotationDeformerSpec)
+                    and isinstance(parent, WarpDeformerSpec)):
+                rect = reference_rect(parent, param_by_id)
+                # 父级写出去之后的静止格 min = 原始 min − base；子树还要再减 base，
+                # 净效果就是「父级**原始**静止格 min」，这里写成推导形式便于对照实测。
+                value = (base[0] + (rect[0] - base[0]),
+                         base[1] + (rect[1] - base[1]))
+            else:
+                value = base
+            out[deformer_id] = value
+            return value
+        finally:
+            building.discard(deformer_id)
+
+    for deformer in spec.deformers:
+        of(deformer.deformer_id)
+    return {key: value for key, value in out.items()
+            if abs(value[0]) > 1e-9 or abs(value[1]) > 1e-9}
+
+
+def apply_deformer_offsets(spec: RigSpec) -> RigSpec:
+    """把 ``deformer_origin_offsets`` 的平移预先扣进几何里。
+
+    只动「模型像素」口径的输入（网格顶点、网格键形顶点、warp 控制网格、rotation
+    枢轴）；(s,t) 之类的归一换算在写出时才发生，扣同一个平移后归一结果不变。
+    """
+    offsets = deformer_origin_offsets(spec)
+    if not offsets:
+        return spec
+
+    def shifted(points, deformer_id):
+        dx, dy = offsets.get(deformer_id, (0.0, 0.0))
+        if not dx and not dy:
+            return points
+        return [(float(x) - dx, float(y) - dy) for x, y in points]
+
+    meshes = []
+    for mesh in spec.meshes:
+        meshes.append(replace(
+            mesh,
+            vertices=shifted(mesh.vertices, mesh.deformer_id),
+            keyform_shapes=[
+                replace(shape,
+                        vertices=shifted(shape.vertices, mesh.deformer_id))
+                for shape in mesh.keyform_shapes]))
+    parent_of = {d.deformer_id: str(d.parent_deformer_id or "")
+                 for d in spec.deformers}
+    deformers = []
+    for deformer in spec.deformers:
+        if isinstance(deformer, WarpDeformerSpec):
+            deformers.append(replace(deformer, grids=[
+                DeformerGrid(grid.key_value,
+                             shifted(grid.points, deformer.deformer_id))
+                for grid in deformer.grids]))
+        else:
+            # 枢轴按**父级**的平移量扣，而不是自己的：父级是 warp 时 origin 走父 warp
+            # 的归一 (s,t)，那条边的 grid-min 平移只作用于子树的几何，不作用于 st
+            # （st 是相对父级静止格定义的，扣完再归一反而把枢轴推出网格）。
+            deformers.append(replace(deformer, keyforms=[
+                replace(keyform,
+                        origin=shifted([keyform.origin],
+                                       parent_of[deformer.deformer_id])[0])
+                for keyform in deformer.keyforms]))
+    return replace(spec, meshes=meshes, deformers=deformers)
+
+
 def compile_static_rig(spec: RigSpec) -> Moc3Container:
     """编译模型：静态几何 + 可选的参数形变键型。"""
     spec.validate()
+    # 「rotation 父=warp」那条边会让内核平移整棵子树，先把补偿扣进几何再算槽位/
+    # 空间基准，后面的规则（含 deformer_space_map 的逐级归一）就都作用在同一个
+    # 坐标系里，不需要各分支各自记账。
+    spec = apply_deformer_offsets(spec)
     # 表序规范化必须发生在**任何槽位被算出来之前**：warps/rotations 两张子表、
     # deformer.ids、deformer.parent_deformer_indices、art_mesh.parent_deformer_indices
     # 全部从这一份 spec.deformers 取索引，一起搬走才不会新旧索引混用。
@@ -728,7 +850,7 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
     _write_parts(doc, meshes)
     _write_deformers(doc, spec, warps, rotations, band_of_group,
                      warp_keyform_begin, warp_keyform_pos_begin,
-                     warp_keyform_opacities)
+                     warp_keyform_opacities, param_by_id)
     _write_meshes(doc, meshes, unique_vertex_counts, index_entry_counts,
                   uv_begin, index_begin, mesh_keyform_counts, mesh_keyform_begin,
                   band_of_group, spec)
@@ -837,6 +959,8 @@ def deformer_space_map(spec: RigSpec) -> Dict[str, Callable[[Sequence[float]], t
     根级例外，而且结构上单独一条分支：根 warp 以 0 为中心、单位就是模型像素
     （官方那唯一一个根 warp x∈[−0.8795, 0.8795]；实测「不挂变形器」与「一级恒等
     warp」的渲染逐字节相同 ``e035d547d377…``），所以 ``S_root`` 必须是恒等。
+    父级是 rotation 的 warp 也是恒等：rotation 不改变子级的坐标口径，控制网格照旧
+    按模型单位写（2026-11-10 官方 Core 实测，静止帧与「无变形器」逐字节相同）。
     写出层只对**父级非空**的分支调用本函数，根级的字节因此不可能被它改动 ——
     这条由黄金夹具 ``tests/unit/fixtures/moc3_root_level_flat_warps_golden.b64``
     （sha256 ``66ab863352dba657295fa45db39684070061ce1d0b0143f2be0f9c10eca5e8c8``、
@@ -890,19 +1014,22 @@ def deformer_space_map(spec: RigSpec) -> Dict[str, Callable[[Sequence[float]], t
             raise UnsupportedRig(
                 f"{deformer_id}: warp 父链成环（{building + [deformer_id]}），"
                 "空间基准无法逐级求出")
+        parent = types.get(parent_id)
+        if isinstance(parent, RotationDeformerSpec):
+            # 官方 Core 实测（2026-11-10，``probe_rot_warp_spaces4.py``）：warp 挂在
+            # rotation 之下**照常生效** —— 控制网格按模型单位存（与根级同口径），
+            # 成员网格按 (s,t)。此前「内核不应用」的结论是探针口径错误造成的：
+            # 当时把已经归一的 (s,t) 当画布像素传进 MeshSpec，编译器二次归一
+            # 把网格压成了一个点，两种控制网格自然渲染出同一张图。
+            maps[deformer_id] = _identity_space
+            written_rects[deformer_id] = reference_rect(deformer, param_by_id)
+            return maps[deformer_id], written_rects[deformer_id]
         building.append(deformer_id)
         try:
-            parent = types.get(parent_id)
             if parent is not None and not isinstance(parent, WarpDeformerSpec):
-                # 报错要**可操作**：这条边不是编译器自己造的，是作者在
-                # ``DEFAULT_WARP_DEFORMERS`` 条目里写的 ``under`` 解析出来的
-                # （moc3_pipeline.resolve_deformer_parents）。点名 under，读的人
-                # 才知道去哪儿改，而不是在写出层找「谁把 rotation 设成了父级」。
                 raise UnsupportedRig(
-                    f"{deformer_id}: warp 的父级 {parent_id} 是 rotation —— 跨"
-                    "rotation 的顶点空间基准未实测（官方 Core 那三条判据全在纯 warp "
-                    "链上量的，见上面 docstring），拒绝编译而不是猜一个；"
-                    f"这条父链来自条目 {deformer_id} 的 under")
+                    f"{deformer_id}: warp 的父级 {parent_id} 既不是 warp 也不是 "
+                    f"rotation，无法确定顶点空间")
             parent_map, parent_written = entry(parent_id)
         finally:
             building.pop()
@@ -940,7 +1067,8 @@ def _write_deformers(doc: Moc3Container, spec: RigSpec,
                      band_of_group: Dict[tuple, int],
                      warp_keyform_begin: List[int],
                      warp_keyform_pos_begin: List[int],
-                     warp_keyform_opacities: List[float]) -> None:
+                     warp_keyform_opacities: List[float],
+                     param_by_id: Optional[Dict[str, ParameterSpec]] = None) -> None:
     """写公共 deformer 表 + warp / rotation 两张子表（官方 Haru 实测的引用关系）。
 
     types: 0 = warp，1 = rotation；`specific_indices` 是**各自类型内**的稠密下标
@@ -953,6 +1081,7 @@ def _write_deformers(doc: Moc3Container, spec: RigSpec,
     n = len(deformers)
     ids = [d.deformer_id for d in deformers]
     first_part = spec.meshes[0].effective_part_id if spec.meshes else ""
+    types = {d.deformer_id: d for d in deformers}
     warp_slot = {d.deformer_id: i for i, d in enumerate(warps)}
     rotation_slot = {d.deformer_id: i for i, d in enumerate(rotations)}
     doc.set("deformer.ids", ids)
@@ -999,6 +1128,7 @@ def _write_deformers(doc: Moc3Container, spec: RigSpec,
         opacities: List[float] = []
         for deformer in rotations:
             begins.append(begin)
+            parent = types.get(str(deformer.parent_deformer_id or ""))
             for keyform in deformer.keyforms:
                 angles.append(float(keyform.angle))
                 # 实测（tools/probe_rotation_offset.py）内核做的是
@@ -1009,9 +1139,18 @@ def _write_deformers(doc: Moc3Container, spec: RigSpec,
                 # 早前在 60° 上「写 R(−A)·p 恰好命中」是巧合：
                 # I − R(A) = R(−A) 只在 cos A = 1/2 时成立 —— 这同时解释了
                 # 30°/120° 为何全部不命中。
-                offset = _pivot_to_offset(
-                    keyform.origin, unit,
-                    float(deformer.base_angle) + float(keyform.angle))
+                total_angle = float(deformer.base_angle) + float(keyform.angle)
+                if isinstance(parent, WarpDeformerSpec):
+                    # 父级是 warp：origin 的口径换成**父 warp 的归一 (s,t)**（无量纲，
+                    # 不再除 ppu）。官方 Core 实测（2026-11-10，
+                    # ``probe_rot_child_space.py``）：网格顶点仍是模型单位，只有
+                    # origin 走 (s,t)；用 (I − R)·st 写出去的 30° 与「顶点预旋 30°」
+                    # 逐字节一致，单位口径则整块跑出画面。
+                    rect = reference_rect(parent, param_by_id or {})
+                    (sx, sy), = to_grid_st([keyform.origin], rect)
+                    offset = _pivot_to_offset((sx, sy), 1.0, total_angle)
+                else:
+                    offset = _pivot_to_offset(keyform.origin, unit, total_angle)
                 origin_xs.append(offset[0])
                 origin_ys.append(offset[1])
                 scales.append(float(keyform.scale))

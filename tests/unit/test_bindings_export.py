@@ -171,22 +171,41 @@ def test_deformer_rest_comes_from_the_default_pose_not_the_first_key(tmp_path):
     assert doc["deformers"][0]["rest"] == [100.0, 60.0, 150.0, 100.0]
 
 
-def test_rotation_deformers_are_not_exported(tmp_path):
-    """rotation 变形器当前全是静态姿态，前端不做刚体旋转；导出会造出假活动。
+def test_rotation_deformers_are_exported_with_keyforms(tmp_path):
+    """rotation 变形器要进 bindings：前端靠它做刚体旋转。
 
-    它们不进 bindings，但必须留下计数，免得「文件里没有」被读成「模型没有」。
+    导出 ``angle/origin/scale`` 与 ``baseAngle``，坐标同其它项（图层图像坐标，
+    枢轴已加半画布）。只导 id 不导键形的话前端画不出转动，等于没绑定。
     """
     _manifest(tmp_path)
     rotation = RotationDeformerSpec(
-        deformer_id="HeadTurn",
-        keyforms=[RotationKeyform(0.0, angle=0.0, origin=(0.0, 0.0))])
+        deformer_id="HeadRotationZ",
+        parameter_id="ParamAngleZ",
+        keyforms=[RotationKeyform(-30.0, angle=-30.0, origin=(10.0, -20.0)),
+                  RotationKeyform(0.0, angle=0.0, origin=(10.0, -20.0)),
+                  RotationKeyform(30.0, angle=30.0, origin=(10.0, -20.0))])
+    spec = RigSpec(
+        meshes=_spec().meshes,
+        parameters=[ParameterSpec("ParamMouthOpenY", 0.0, 1.0, 0.0),
+                    ParameterSpec("ParamAngleZ", -30.0, 30.0, 0.0)],
+        canvas_width=200.0,
+        canvas_height=100.0,
+        deformers=[_mouth_deformer(), rotation])
     doc = json.loads(
-        write_bindings(_spec(deformers=[_mouth_deformer(), rotation]),
-                       str(tmp_path), "char").read_text(encoding="utf-8"))
+        write_bindings(spec, str(tmp_path), "char").read_text(encoding="utf-8"))
 
-    ids = [d["id"] for d in doc["deformers"]]
-    assert ids == ["MouthOpen"]
-    assert doc["skippedRotationDeformers"] == ["HeadTurn"]
+    entry = {d["id"]: d for d in doc["deformers"]}["HeadRotationZ"]
+    assert entry["type"] == "rotation"
+    assert entry["baseAngle"] == 0.0
+    assert entry["axes"] == [["ParamAngleZ", [-30.0, 0.0, 30.0]]]
+    # 枢轴 (10, -20) + 半画布 (100, 50) = (110, 30)
+    assert entry["keyforms"] == [
+        {"angle": -30.0, "origin": [110.0, 30.0], "scale": 1.0},
+        {"angle": 0.0, "origin": [110.0, 30.0], "scale": 1.0},
+        {"angle": 30.0, "origin": [110.0, 30.0], "scale": 1.0},
+    ]
+    # warp 项显式标类型，前端按 type 分流
+    assert {d["id"]: d for d in doc["deformers"]}["MouthOpen"]["type"] == "warp"
 
 
 def test_deformer_parent_is_exported_by_name(tmp_path):

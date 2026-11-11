@@ -49,17 +49,20 @@ export default function ParamsPanel() {
 
   const setManualParam = (id: string, value: number) => {
     const next = clampToBounds(value, bounds.get(id));
-    rt.setIdle(false);
-    rt.playerRef.current?.setParameters({ [id]: next });
+    // 只按住被拖的这一个参数，待机继续跑。以前这里会 setIdle(false)，
+    // 拖一次滑杆模型就永久停住，看起来像「绑骨没生效」。
+    rt.playerRef.current?.setParameters({ [id]: next }, Infinity);
     rt.publishParams({ [id]: next });
   };
 
   const resetParams = () => {
     const defaults: Record<string, number> = {};
     for (const param of params) defaults[param.id] = param.default;
-    rt.setIdle(true);
+    // 先解除手动保持再写默认值，否则这些参数仍被钉住，动作接管不了。
+    rt.playerRef.current?.clearParameterHolds();
     rt.playerRef.current?.setParameters(defaults);
     rt.publishParams(defaults);
+    rt.setIdle(true);
   };
 
   return (
@@ -116,6 +119,27 @@ export default function ParamsPanel() {
           ))}
         </div>
       </section>
+
+      {rt.motionGroups.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-medium text-gray-400">动作</div>
+            <span className="text-[10px] text-gray-600">{rt.motionCount} 个动作</span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {rt.motionGroups.map((group) => (
+              <button
+                key={group}
+                onClick={() => rt.playMotion(group)}
+                title={`播放 ${group} 动作组`}
+                className="px-2 py-1 rounded-md text-[11px] border border-gray-800 bg-gray-900 text-gray-400 hover:border-gray-700 hover:text-gray-200 transition-colors"
+              >
+                {group}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section>
         <div className="text-xs font-medium text-gray-400 mb-2">输入</div>
@@ -191,6 +215,14 @@ export default function ParamsPanel() {
           <span className="text-gray-500">网格几何</span>
           <span className={`text-right ${hasMesh ? 'text-emerald-400' : 'text-amber-400'}`}>
             {hasMesh ? '就绪' : '缺失'}
+          </span>
+          <span className="text-gray-500">物理</span>
+          <span className={`text-right tabular-nums ${rt.physicsLoaded ? 'text-emerald-400' : 'text-amber-400'}`}>
+            {rt.physicsLoaded ? `${rt.physicsChains} 条链` : '未加载'}
+          </span>
+          <span className="text-gray-500">动作</span>
+          <span className={`text-right tabular-nums ${rt.motionCount > 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+            {rt.motionCount > 0 ? `${rt.motionCount} 个` : '无（用程序化待机）'}
           </span>
         </div>
         <span className="hidden">{tick}</span>

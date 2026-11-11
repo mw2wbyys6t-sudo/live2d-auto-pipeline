@@ -213,6 +213,80 @@ def test_hair_splits_by_top_band_without_face() -> None:
     assert not (masks["hair_front"] & masks["hair_back"]).any()
 
 
+def test_back_hair_splits_into_three_strands_when_both_sides_seperate() -> None:
+    """后发三束（中/左/右）是四条摆链的完整形态：两侧都能分开时才切。"""
+    h, w = 60, 200
+    face = _rect(h, w, 90, 111, 5, 25)
+    front = _rect(h, w, 80, 120, 0, 8)          # 刘海已独立，不参与后发
+    back = (_rect(h, w, 10, 60, 10, 60)
+            | _rect(h, w, 70, 130, 10, 60)
+            | _rect(h, w, 140, 190, 10, 60))
+
+    masks, warnings = split_hair_parts(
+        {"hair_front": front, "hair_back": back, "face": face})
+
+    assert {"hair_back", "hair_back_left", "hair_back_right"} <= set(masks)
+    middle = masks["hair_back"]
+    left = masks["hair_back_left"]
+    right = masks["hair_back_right"]
+    # 三束互不重叠，且并集等于原后发（切分本身不丢像素）
+    assert not (middle & left).any()
+    assert not (middle & right).any()
+    assert not (left & right).any()
+    assert int((middle | left | right).sum()) == int(back.sum())
+    # 侧别约定：_L 是角色左 = 观察者右（列号大的一侧）
+    assert right[10:60, 10:60].all()
+    assert middle[10:60, 70:130].all()
+    assert left[10:60, 140:190].all()
+    assert any("三束" in w for w in warnings)
+
+
+def test_flat_back_hair_stays_single_strand() -> None:
+    """整块平发没有谷：不切。束数是自适应的，未验证的假缝比少一条摆链更糟。"""
+    h, w = 60, 200
+    front = _rect(h, w, 80, 120, 0, 8)
+    back = _rect(h, w, 10, 190, 10, 60)
+
+    masks, warnings = split_hair_parts({"hair_front": front, "hair_back": back})
+
+    assert "hair_back" in masks
+    assert "hair_back_left" not in masks
+    assert "hair_back_right" not in masks
+    assert int(masks["hair_back"].sum()) == int(back.sum())
+    assert not any("束" in w for w in warnings)
+
+
+def test_only_one_side_becomes_its_own_strand() -> None:
+    """一侧有谷、另一侧连着：切成两束（该侧 + 其余），不硬造第三条缝。"""
+    h, w = 60, 200
+    face = _rect(h, w, 90, 111, 5, 25)
+    front = _rect(h, w, 80, 120, 0, 8)
+    back = _rect(h, w, 10, 60, 10, 60) | _rect(h, w, 70, 190, 10, 60)
+
+    masks, warnings = split_hair_parts(
+        {"hair_front": front, "hair_back": back, "face": face})
+
+    assert "hair_back_right" in masks
+    assert "hair_back_left" not in masks
+    assert "hair_back" in masks
+    assert int(masks["hair_back"].sum() + masks["hair_back_right"].sum()) == int(back.sum())
+    assert any("两束" in w for w in warnings)
+
+
+def test_split_strands_feed_the_side_swing_chains() -> None:
+    """拆出来的左右束必须真的被两条侧摆变形器接住，否则拆了也没人消费。"""
+    from live2d_builder.bones.deformers import DeformerHierarchy
+
+    names = ["hair_back", "hair_back_left", "hair_back_right", "hair_front", "face"]
+    meshes = {n: {"vertices": [[0, 0], [10, 0], [10, 10], [0, 10]]} for n in names}
+    built = {d["name"]: d for d in DeformerHierarchy().build(
+        {}, meshes, layer_names=names)["deformers"]}
+
+    assert built["HairBackSwing"]["targets"] == ["hair_back"]
+    assert built["HairSideSwing_L"]["targets"] == ["hair_back_left"]
+    assert built["HairSideSwing_R"]["targets"] == ["hair_back_right"]
+
+
 def test_limb_crossing_midline_is_not_cut() -> None:
     # 左臂跨过中线，右臂在远处：按连通域/空隙拆分应保持每条手臂完整。
     arms = _rect(60, 100, 40, 57, 10, 30) | _rect(60, 100, 64, 77, 10, 30)

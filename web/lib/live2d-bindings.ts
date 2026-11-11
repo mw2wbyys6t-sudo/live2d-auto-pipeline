@@ -1,10 +1,11 @@
 /**
  * 自研渲染器的形变数据与求值。
  *
- * 数据来自导出期写出的 `{name}.bindings.json`，是 moc3 里键形/warp 变形器的
- * 可读投影，坐标**都是图层图像坐标**（左上原点、y 向下）。这里的函数只做三件
- * 事：多轴键形按 moc3 的展平序插值、把顶点按变形器网格双线性搬位置、把各层
- * 的不透明度一起插值。渲染器负责把结果写进顶点缓冲。
+ * 数据来自导出期写出的 `{name}.bindings.json`，是 moc3 里键形/warp/rotation
+ * 变形器的可读投影，坐标**都是图层图像坐标**（左上原点、y 向下）。这里的函数
+ * 只做四件事：多轴键形按 moc3 的展平序插值、把顶点按 warp 控制网格搬位置
+ * （格内是三角形分片线性，见 sampleWarpGrid）、按 rotation 键形绕枢轴做刚体
+ * 变换、把各层的不透明度一起插值。渲染器负责把结果写进顶点缓冲。
  *
  * 关键约定（与 exporter/bindings_export.py 对齐，改动必须两边同时改）：
  * - 多轴展平序 `index = i0 + n0*i1 + n0*n1*i2 + …`（第一个轴步长为 1）；
@@ -43,8 +44,10 @@ export interface BindingsMesh {
   keyforms?: BindingsKeyforms;
 }
 
-export interface BindingsDeformer {
+/** warp 变形器：控制点网格，按参数插值后把顶点搬位置（格内三角形分片线性）。 */
+export interface BindingsWarpDeformer {
   id: string;
+  type?: 'warp';
   rows: number;
   cols: number;
   parent: string;
@@ -55,13 +58,32 @@ export interface BindingsDeformer {
   grids: number[][];
 }
 
+/** rotation 键形：角度（度）、枢轴（图像坐标）、缩放。 */
+export interface BindingsRotationKeyform {
+  angle: number;
+  origin: [number, number];
+  scale: number;
+}
+
+/** rotation 变形器：整棵子树绕 origin 刚体旋转（与 moc3 同一套语义）。 */
+export interface BindingsRotationDeformer {
+  id: string;
+  type: 'rotation';
+  parent: string;
+  /** 总角度 = baseAngle + 键形 angle（内核就是这么求和的）。 */
+  baseAngle?: number;
+  axes: KeyformAxis[];
+  keyforms: BindingsRotationKeyform[];
+}
+
+export type BindingsDeformer = BindingsWarpDeformer | BindingsRotationDeformer;
+
 export interface BindingsDocument {
   version: number;
   canvas: { width: number; height: number; pixelsPerUnit: number };
   parameters: BindingsParameter[];
   meshes: BindingsMesh[];
   deformers: BindingsDeformer[];
-  skippedRotationDeformers?: string[];
 }
 
 /** 参数取值来源（缺省 0，与内核「未声明即静止值」一致）。 */
@@ -168,8 +190,15 @@ export function blendScalar(
 }
 
 /**
- * 变形器网格双线性采样。`grid` 是扁平控制点表（行优先、x 最快），
+ * 变形器网格采样。`grid` 是扁平控制点表（行优先、x 最快），
  * (u, v) 是网格内归一化位置。
+ *
+ * **格内是三角形分片线性，不是双线性**：官方 Core 的「网格形变」
+ * （moc3 `additional.quad_transforms=0`）沿 P10-P01 对角线把每格切成两半，
+ * 各用三个角点插值。实测（`tools/probe_warp_interpolation.py`，官方 Core 5-r.5）：
+ * 控制网格被拉成非仿射时，Core 渲染质心与三角形预测差 0.43%、与双线性差 9.49%。
+ * 仿射网格（整体平移）下两种插值结果相同 —— 仓库原有的对照用例全是仿射的，
+ * 结构性看不见这个差异。双线性是「quad 形变」（`quad_transforms=1`）的语义。
  *
  * **越出 0..1 的画按边界那一格线性外推，不夹取**（#72）：官方 Cubism Core 就是这么
  * 画的，实测挂在父级静止矩形外 160px 的一条边，Core 画在屏幕行 452（与「根本没有
@@ -178,6 +207,12 @@ export function blendScalar(
  * ::test_the_shipped_player_extrapolates_out_of_grid_art_like_the_core_and_the_ruler`
  * —— 那份 TS 与离线尺子 `tools/bindings_gap_probe.py:sample_warp_grid` 是同一只手
  * 移植的，改一边必须同步另一边，否则自研播放器与官方内核会画出不一样多的画面。
+ *
+ * **越界这一段的规则尚未钉死**（2026-11-11 实测）：#72 那条判据用的是恒等点阵，
+ * 恒等网格下各种外推退化成同一条映射，分不出差别；用**变形过**的网格实测，官方
+ * Core 把挂在矩形外 160px 的顶点放在模型 x≈562，本函数读 530（UR 三角形平面外推
+ * 是 650）—— 候选规则一个都没命中，差约 32 个模型单位。静止/仿射网格上的读数仍与
+ * 内核逐像素一致。
  */
 export function sampleWarpGrid(
   grid: Float32Array,
@@ -209,6 +244,31 @@ export function sampleWarpGrid(
   const i01 = r1 * rowStride + c0 * 2;
   const i11 = r1 * rowStride + c1 * 2;
 
+  if (cx >= 0 && cx <= cols && cy >= 0 && cy <= rows) {
+    // 格内：三角形分片线性（官方 Core 的「网格形变」语义，见本函数注释）
+    let w00: number;
+    let w10: number;
+    let w01: number;
+    let w11: number;
+    if (fx + fy < 1) {
+      w00 = 1 - fx - fy;
+      w10 = fx;
+      w01 = fy;
+      w11 = 0;
+    } else {
+      w00 = 0;
+      w10 = 1 - fy;
+      w01 = 1 - fx;
+      w11 = fx + fy - 1;
+    }
+    out.x =
+      grid[i00] * w00 + grid[i10] * w10 + grid[i01] * w01 + grid[i11] * w11;
+    out.y =
+      grid[i00 + 1] * w00 + grid[i10 + 1] * w10 +
+      grid[i01 + 1] * w01 + grid[i11 + 1] * w11;
+    return;
+  }
+
   const topX = grid[i00] + (grid[i10] - grid[i00]) * fx;
   const topY = grid[i00 + 1] + (grid[i10 + 1] - grid[i00 + 1]) * fx;
   const botX = grid[i01] + (grid[i11] - grid[i01]) * fx;
@@ -218,23 +278,70 @@ export function sampleWarpGrid(
   out.y = topY + (botY - topY) * fy;
 }
 
+/** rotation 变形器本帧的姿态（已按参数插值好的键形）。 */
+export interface RotationState {
+  angle: number;
+  origin: [number, number];
+  scale: number;
+}
+
+/**
+ * 按 rotation 的语义变换一个点。与 moc3 写出侧**同一个公式**：
+ *
+ *     p' = s·R(θ)·p + (I − R(θ))·origin      θ = baseAngle + 键形 angle
+ *
+ * 其中 ``(I − R)·origin`` 就是编译器写进 ``origin_xs/ys`` 的平移量
+ * （``tools/probe_rotation_offset.py`` 在 0°/30°/60°/−45° 上逐像素验证），
+ * ``scale`` 不参与平移项（官方那 253 个键形里 scale 全为 1，但我们照内核
+ * 语义复算，不假设它一定等于 1）。
+ */
+export function applyRotation(
+  x: number,
+  y: number,
+  baseAngle: number,
+  state: RotationState,
+  out: { x: number; y: number },
+): void {
+  const theta = ((baseAngle || 0) + state.angle) * (Math.PI / 180);
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  const s = state.scale ?? 1;
+  const [ox, oy] = state.origin;
+  out.x = s * (cos * x - sin * y) + (ox - (cos * ox - sin * oy));
+  out.y = s * (sin * x + cos * y) + (oy - (sin * ox + cos * oy));
+}
+
 /**
  * 把一个点依次穿过变形器链（先自己的网格，再逐级父变形器，直到根）。
  * `parent` 为空的字符串表示没有父级。
+ *
+ * 链上可能混着 warp 与 rotation：``resolveRotation`` 给出 rotation 本帧的姿态，
+ * 缺省（老产物/未求值）时按恒等处理 —— 不动比乱转安全。
  */
 export function applyDeformerChain(
   x: number,
   y: number,
   deformer: BindingsDeformer | undefined,
   resolve: (id: string) => BindingsDeformer | undefined,
-  resolveGrid: (d: BindingsDeformer) => Float32Array,
+  resolveGrid: (d: BindingsWarpDeformer) => Float32Array,
   out: { x: number; y: number },
+  resolveRotation?: (d: BindingsRotationDeformer) => RotationState | undefined,
 ): void {
   let px = x;
   let py = y;
   let current = deformer;
   let guard = 0;
   while (current && guard++ < 32) {
+    if (current.type === 'rotation') {
+      const state = resolveRotation ? resolveRotation(current) : undefined;
+      if (state) {
+        applyRotation(px, py, current.baseAngle || 0, state, out);
+        px = out.x;
+        py = out.y;
+      }
+      current = current.parent ? resolve(current.parent) : undefined;
+      continue;
+    }
     const [x0, y0, x1, y1] = current.rest;
     const w = x1 - x0;
     const h = y1 - y0;

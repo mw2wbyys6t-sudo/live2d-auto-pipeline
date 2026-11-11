@@ -467,6 +467,9 @@ class Layer52Generator:
             "background": ["bg"],
             "scalp": ["hair_back"],
             "hair_back": ["hair_back"],
+            # 后发自适应拆出的左右两束，对应 52 层的 Hair_Back_Left/Right
+            "hair_back_left": ["hair_back"],
+            "hair_back_right": ["hair_back"],
             "hair_mid": ["hair_back"],
             "hair_front": ["hair_front"],
             "sidehair": ["hair_front"],
@@ -509,6 +512,9 @@ class Layer52Generator:
             "background": [0],
             "scalp": [1],
             "hair_back": [1, 2, 3, 4],
+            # 后发左右两束直接落到 52 层的 Hair_Back_Left/Right
+            "hair_back_left": [3],
+            "hair_back_right": [4],
             "hair_mid": [2],
             "hair_front": [51],
             "bangs": [49],

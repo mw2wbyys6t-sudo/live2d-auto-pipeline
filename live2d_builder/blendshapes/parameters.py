@@ -52,8 +52,25 @@ STANDARD_PARAMETERS: List[Dict[str, Any]] = [
     {"id": "ParamTears",       "name": "Tears",       "min": 0.0,   "max": 1.0,  "default": 0.0, "groups": ["eyes"]},
     {"id": "ParamTearsL",      "name": "Tears L",     "min": 0.0,   "max": 1.0,  "default": 0.0, "groups": ["eyes"]},
     {"id": "ParamTearsR",      "name": "Tears R",     "min": 0.0,   "max": 1.0,  "default": 0.0, "groups": ["eyes"]},
-    {"id": "ParamHairSwing",   "name": "Hair Swing",  "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["hair_front", "hair_back"]},
+    {"id": "ParamHairSwing",   "name": "Hair Swing",  "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["hair_front"]},
+    # 后发单独一条：前发与后发是两条摆链（快摆 vs 慢摆），共用一个参数时内核
+    # 只保留一条输出，另一条等于白算 —— 实测导出的 physics3 里 HairFront 与
+    # HairBack 都写 ParamHairSwing。
+    {"id": "ParamHairSwingBack", "name": "Hair Swing Back", "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["hair_back"]},
+    # 后发拆成中/左/右三束后，侧束各要一条自己的参数：三条链共用
+    # ParamHairSwingBack 时内核只保留一条输出，侧束与中束的相位差被抹平，
+    # 四束拆分等于白拆（同类事故见上面 ParamHairSwing 的注释）。
+    {"id": "ParamHairSwingSideL", "name": "Hair Swing Side L", "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["hair_back"]},
+    {"id": "ParamHairSwingSideR", "name": "Hair Swing Side R", "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["hair_back"]},
     {"id": "ParamBodySway",    "name": "Body Sway",   "min": -10.0, "max": 10.0, "default": 0.0, "groups": ["body", "clothes"]},
+    # 裙摆单独一条参数：躯干与裙摆是两条独立的摆链，共用一个 ParamBodySway 时
+    # 物理内核只会保留其中一条输出，另一条等于白算（裙摆此前就是这样空转的）。
+    {"id": "ParamSkirtSwing",  "name": "Skirt Swing", "min": -10.0, "max": 10.0, "default": 0.0, "groups": ["lower", "clothes"]},
+    # 兽耳单独一条：AnimalEars 组此前写 ParamHairSwing，与 HairFront 抢同一个
+    # 参数，内核只保留一条输出；而且没有任何变形器读它，兽耳本来就不会摆。
+    {"id": "ParamEarSwing",    "name": "Ear Swing",   "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["ear"]},
+    # 尾巴同理：Tail 组此前也写 ParamBodySway，和 BodyBounce 抢同一个参数。
+    {"id": "ParamTailSwing",   "name": "Tail Swing",  "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["tail"]},
     {"id": "ParamShoulderL",   "name": "Shoulder L",  "min": -1.0,  "max": 1.0,  "default": 0.0, "groups": ["body"]},
     {"id": "ParamShoulderR",   "name": "Shoulder R",  "min": -1.0,  "max": 1.0,  "default": 0.0, "groups": ["body"]},
 ]

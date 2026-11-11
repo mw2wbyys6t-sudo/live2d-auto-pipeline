@@ -167,3 +167,33 @@ def test_driven_warp_moves_the_mesh(tmp_path):
     # 纯平移不改变面积；只允许亚像素取边带来的少量差异
     assert abs(moved["opaque_pixels"] - rest["opaque_pixels"]) \
         < rest["opaque_pixels"] * 0.02
+
+
+@requires_live2d
+@requires_pixels
+def test_the_core_samples_the_warp_grid_as_triangles_not_bilinear(tmp_path):
+    """官方 Core 的 warp 格内插值是**三角形分片线性**（不是双线性）。
+
+    `additional.quad_transforms=0`（网格形变）的语义是沿 P10-P01 对角线把每格
+    切成两半，各用三个角点插值；双线性是 quad 形变（=1）的语义。编译器固定
+    写 0，所以尺子与自研播放器都必须按三角形算。
+
+    为什么这条必须用**非仿射**控制网格：仿射网格（整体平移）下两种插值结果
+    完全相同，本文件里其它用例用的都是整体平移 —— 它们结构上就区分不了这个
+    差异，于是"内核做的是双线性"这个错误结论一直活到了现在。
+
+    判据与复现脚本：``tools/probe_warp_interpolation.py``。
+    """
+    import sys
+
+    tools_dir = Path(__file__).resolve().parents[2] / "tools"
+    if str(tools_dir) not in sys.path:
+        sys.path.insert(0, str(tools_dir))
+    import probe_warp_interpolation as probe
+
+    result = probe.measure(workdir=tmp_path)
+
+    assert result["ok"], result["reason"]
+    assert result["verdict"] == "triangle", result["errors"]
+    # 双线性必须被明确排除，否则这条判据不成立
+    assert result["errors"]["bilinear"]["error"] > 0.05, result["errors"]

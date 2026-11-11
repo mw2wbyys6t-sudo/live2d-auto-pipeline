@@ -1,6 +1,6 @@
 import { useEffect, useRef, type PointerEvent } from 'react';
 import dynamic from 'next/dynamic';
-import { Box, Camera, Download, Loader2, Mic, RefreshCw } from 'lucide-react';
+import { Box, Camera, Download, Loader2, Mic, Network, RefreshCw } from 'lucide-react';
 import { useWorkbench } from '../../../lib/workbench-context';
 import { usePreviewRuntime } from '../../../lib/preview-runtime';
 
@@ -33,7 +33,9 @@ export default function PreviewStage() {
   }, [active, setActive]);
 
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
-    if (rt.trackingOn || rt.micOn || !rt.idle) return;
+    // 待机开着也要跟随：视线本来就是待机的一部分，之前的 !rt.idle 让提示文案
+    // 里的「移动鼠标让视线跟随」永远失效。面捕/麦克风占用时不抢参数。
+    if (rt.trackingOn || rt.micOn) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     const y = ((e.clientY - rect.top) / rect.height) * 2 - 1;
@@ -78,6 +80,17 @@ export default function PreviewStage() {
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <button
+            onClick={() => rt.setBindingsOverlay(!rt.bindingsOverlay)}
+            title="显示变形器控制网格与绑定层级（数据来自 bindings.json）"
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] transition-colors ${
+              rt.bindingsOverlay
+                ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-300'
+                : 'border-gray-700 bg-gray-900 text-gray-300 hover:bg-gray-800'
+            }`}
+          >
+            <Network className="w-3 h-3" /> 绑骨线
+          </button>
+          <button
             onClick={rt.reloadModel}
             className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-gray-700 bg-gray-900 text-[10px] text-gray-300 hover:bg-gray-800 transition-colors"
           >
@@ -108,12 +121,30 @@ export default function PreviewStage() {
               // 否则待机动作与表情只在下一次点按钮时才生效。
               player.setIdle(rt.idle);
               player.setExpression(rt.expression);
+              player.setBindingsOverlay(rt.bindingsOverlay);
+            }}
+            onLoaded={() => {
+              // onReady 只代表实例就绪；表情/动作/物理是在 loadModel 里异步
+              // 加载完的，这里再推一次才不会丢掉切阶段前选中的表情。
+              const player = rt.playerRef.current;
+              if (!player) return;
+              player.setIdle(rt.idle);
+              player.setExpression(rt.expression);
+              player.setBindingsOverlay(rt.bindingsOverlay);
+              rt.syncPlayerDiagnostics();
             }}
             onFrame={() => {
+              const player = rt.playerRef.current;
+              if (!player) return;
               const now = performance.now();
               if (now - fpsClockRef.current < 500) return;
               fpsClockRef.current = now;
-              rt.setFps(rt.playerRef.current?.fps ?? 0);
+              rt.setFps(player.fps);
+              // 动作组/物理是在加载后才知道的，没有事件，只能节流轮询一次。
+              rt.syncPlayerDiagnostics();
+              // 把真实参数回推给面板：滑杆会跟着呼吸/眨眼/动作走，一眼能看出
+              // 模型确实在动，而不是停在导出时的姿态。
+              rt.publishParams(player.getAllParameters());
             }}
             onError={(message) => rt.setError(`模型加载失败：${message}`)}
           />
@@ -140,6 +171,22 @@ export default function PreviewStage() {
             <p className="absolute bottom-3 left-3 text-[10px] text-gray-500/80">
               移动鼠标让视线跟随 · 右侧「参数」面板可调表情与手动参数
             </p>
+            {rt.bindingsOverlay && (
+              <div className="absolute bottom-3 right-3 rounded-md bg-black/60 px-2.5 py-1.5 space-y-1 text-[10px] text-gray-300">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-cyan-400" /> 变形器控制网格
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" /> 绑定层级
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-slate-400" /> 图层归属
+                </div>
+                {!rt.usesBindings && (
+                  <div className="text-amber-300">当前模型没有 bindings.json</div>
+                )}
+              </div>
+            )}
             {rt.error && (
               <div className="absolute top-3 right-3 max-w-[60%] rounded-lg bg-red-500/15 border border-red-500/40 px-2.5 py-1.5 text-[11px] text-red-300">
                 {rt.error}

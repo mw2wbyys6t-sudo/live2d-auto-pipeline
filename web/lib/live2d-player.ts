@@ -1,6 +1,7 @@
 import {
   Application,
   Container,
+  Graphics,
   Mesh,
   MeshGeometry,
   MeshMaterial,
@@ -24,9 +25,12 @@ import {
   type BindingsDeformer,
   type BindingsDocument,
   type BindingsMesh,
+  type BindingsRotationDeformer,
+  type BindingsWarpDeformer,
+  type RotationState,
 } from './live2d-bindings';
 import { MotionPlayback, parseMotion, type MotionFile } from './live2d-motion';
-import { PhysicsEngine, parsePhysics3, type ParameterRange } from './live2d-physics';
+import { PhysicsEngine, parsePhysics3, type ParameterRange, type PhysicsListeners } from './live2d-physics';
 
 /** exp3.json 里一条参数项；Blend 决定它是叠加、乘算还是覆盖。 */
 interface ExpressionParameter {
@@ -92,7 +96,7 @@ interface ArtMeshEntry {
 }
 
 interface WarpEntry {
-  spec: BindingsDeformer;
+  spec: BindingsWarpDeformer;
   /** 键形控制点（局部坐标）。 */
   grids: Float32Array[];
   axes: Array<[string, number[]]>;
@@ -100,6 +104,14 @@ interface WarpEntry {
   scratch: Float32Array | null;
   /** 本帧求值结果。 */
   current: Float32Array | null;
+}
+
+/** 一个 rotation 变形器：逐键角度/枢轴/缩放 + 本帧插值结果。 */
+interface RotationEntry {
+  /** 父级与 baseAngle 从这里取；键形已换算到局部坐标。 */
+  spec: BindingsRotationDeformer;
+  keyforms: RotationState[];
+  current: RotationState;
 }
 
 /** 扁平 [x,y,...] 图像坐标 -> 局部坐标 Float32Array（减去画布半宽/半高）。 */
@@ -133,6 +145,34 @@ const PLANE_SEGMENTS = 5;
 const EXTERNAL_HOLD_SECONDS = 0.25;
 
 /**
+ * 变形器层级兜底表。
+ *
+ * 旧版本导出的产物里 ``bindings.deformers[].parent`` 全为空（当时只把父链
+ * 写进 moc3，没写进 bindings）。没有它，绑骨线就只剩一堆孤立节点。这里按
+ * 本项目固定的变形器名补一份层级，只用于**可视化**，不影响任何形变计算。
+ * 当前导出已写真实父级，有真实值时永远优先用真实值。
+ */
+const DEFORMER_PARENT_FALLBACK: Record<string, string> = {
+  HeadRig: 'BodySway',
+  NeckBand: 'BodySway',
+  HairFrontSwing: 'HeadRig',
+  HairBackSwing: 'HeadRig',
+  HairSideSwing_L: 'HeadRig',
+  HairSideSwing_R: 'HeadRig',
+  EarSwing: 'HeadRig',
+  MouthOpen: 'HeadRig',
+  MouthCavity: 'HeadRig',
+  EyeBlink_L: 'HeadRig',
+  EyeBlink_R: 'HeadRig',
+  BrowMove_L: 'HeadRig',
+  BrowMove_R: 'HeadRig',
+  ShoulderLift_L: 'BodySway',
+  ShoulderLift_R: 'BodySway',
+  SkirtSway: 'BodySway',
+  TailSwing: 'BodySway',
+};
+
+/**
  * Browser-side Live2D player using PixiJS.
  *
  * 两种渲染模式：
@@ -151,6 +191,8 @@ export class Live2DPlayer {
   private layers: LayerEntry[] = [];
   private artMeshes: ArtMeshEntry[] = [];
   private warps: Map<string, WarpEntry> = new Map();
+  /** rotation 变形器（HeadRotationZ 等）：按参数插值后做刚体变换。 */
+  private rotations: Map<string, RotationEntry> = new Map();
   /** 绑定模式的画布尺寸（图像坐标原点的换算基准）。 */
   private canvasSize: { width: number; height: number } | null = null;
   private params: Map<string, number> = new Map();
@@ -183,6 +225,14 @@ export class Live2DPlayer {
   private _frames = 0;
   private _lastFpsTime = 0;
   private readonly lerpSpeed = 0.15;
+  /** 程序化待机的时钟（秒）；只在没有动作文件时用于呼吸/眨眼。 */
+  private _idleClock = 0;
+  /** 绑骨线覆盖层（变形器控制网格 + 变形器层级连线）。 */
+  private overlay: Graphics | null = null;
+  private overlayEnabled = false;
+  private overlayTick = 0;
+  /** 当前适配缩放：覆盖层要把局部坐标换算到屏幕坐标。 */
+  private fitScale = 1;
 
   constructor(canvas: HTMLCanvasElement, options: Live2DPlayerOptions = {}) {
     this.canvas = canvas;
@@ -259,6 +309,11 @@ export class Live2DPlayer {
       return; // a newer loadModel replaced us
     }
 
+    // 覆盖层在 clearScene 里被清掉引用，加载完成后按用户开关恢复。
+    if (this.overlayEnabled) {
+      this.setBindingsOverlay(true);
+    }
+
     if (this.options.autoStart) {
       this.start();
     }
@@ -278,6 +333,11 @@ export class Live2DPlayer {
     this.layers = [];
     this.artMeshes = [];
     this.warps.clear();
+    this.rotations.clear();
+    // overlay 挂在 root 下，root 已被销毁；这里只清引用，保留用户的开关状态，
+    // 模型重新加载后由 loadModel 末尾重建。
+    this.overlay = null;
+    this.overlayTick = 0;
     this.canvasSize = null;
     this.params.clear();
     this.targetParams.clear();
@@ -289,6 +349,7 @@ export class Live2DPlayer {
     this.externalHold.clear();
     this.motionGroups.clear();
     this.motion = null;
+    this._idleClock = 0;
     this.physics = null;
     this.physicsDiagnostics = { chains: 0, loaded: false };
     this.resolvedParams = STANDARD_PARAMS.map((p) => ({ ...p }));
@@ -448,9 +509,24 @@ export class Live2DPlayer {
     }
 
     for (const spec of doc.deformers || []) {
+      if (spec.type === 'rotation') {
+        // 枢轴同样搬到局部坐标；键形逐帧按参数插值（角度/枢轴/缩放都是线性量）。
+        const keyforms: RotationState[] = (spec.keyforms || []).map((k) => ({
+          angle: k.angle,
+          origin: [k.origin[0] - halfW, k.origin[1] - halfH] as [number, number],
+          scale: k.scale,
+        }));
+        if (keyforms.length === 0) continue;
+        this.rotations.set(spec.id, {
+          spec,
+          keyforms,
+          current: { ...keyforms[0], origin: [...keyforms[0].origin] as [number, number] },
+        });
+        continue;
+      }
       // rest 决定顶点在网格里的 u/v；控制点已经搬到局部坐标，rest 不跟着搬
       // 就会把所有点算到网格外，整张网格塌成一个点。
-      const localSpec: BindingsDeformer = {
+      const localSpec: BindingsWarpDeformer = {
         ...spec,
         rest: [
           spec.rest[0] - halfW,
@@ -559,11 +635,158 @@ export class Live2DPlayer {
     }
     if (maxW <= 0 || maxH <= 0) return;
     const fit = Math.min(viewW / maxW, viewH / maxH) * 0.95;
+    this.fitScale = fit;
     for (const l of this.layers) {
       l.mesh.scale.set(fit, fit);
     }
     for (const a of this.artMeshes) {
       a.mesh.scale.set(fit, fit);
+    }
+  }
+
+  /**
+   * 打开/关闭绑骨线：变形器控制网格 + 变形器层级连线。
+   *
+   * 数据全部来自 bindings.json（`deformers[].grids` 实时控制点、`parent` 层级），
+   * 所以没有绑定表的老产物会画出空层，调用方据 :attr:`usesBindings` 提示。
+   */
+  setBindingsOverlay(enabled: boolean): void {
+    this.overlayEnabled = enabled;
+    if (!enabled) {
+      if (this.overlay) this.overlay.visible = false;
+      return;
+    }
+    const overlay = this.ensureOverlay();
+    if (!overlay) return;
+    overlay.visible = true;
+    this.drawBindingsOverlay();
+  }
+
+  get bindingsOverlayVisible(): boolean {
+    return this.overlayEnabled;
+  }
+
+  private ensureOverlay(): Graphics | null {
+    if (!this.root) return null;
+    if (!this.overlay || this.overlay.destroyed) {
+      this.overlay = new Graphics();
+    }
+    // 每次都重新 append：Pixi 会把它移到子节点末尾，保证覆盖层永在网格之上。
+    // 只在创建时 append 的话，「模型加载前就打开开关」会让覆盖层先入场景、
+    // 随后被 artMesh 盖住。
+    this.root.addChild(this.overlay);
+    return this.overlay;
+  }
+
+  /**
+   * 重绘覆盖层。控制点已经是「画布中心为原点」的局部坐标，这里只做
+   * ``屏幕中心 + 局部坐标 × fitScale`` 的换算，与网格变换保持一致。
+   */
+  private drawBindingsOverlay(): void {
+    const g = this.overlay;
+    const app = this.app;
+    if (!g || !app || !app.renderer) return;
+    g.clear();
+    if (this.warps.size === 0 && this.rotations.size === 0) return;
+
+    const res = this.options.resolution || 1;
+    const cx = (app.renderer.width / res) / 2;
+    const cy = (app.renderer.height / res) / 2;
+    const fit = this.fitScale;
+    const toScreen = (x: number, y: number): [number, number] =>
+      [cx + x * fit, cy + y * fit];
+
+    const centers = new Map<string, { x: number; y: number }>();
+
+    for (const [id, warp] of this.warps) {
+      const points = warp.current ?? warp.grids[0];
+      if (!points || points.length < 4) continue;
+      const rows = warp.spec.rows + 1;
+      const cols = warp.spec.cols + 1;
+      if (points.length < rows * cols * 2) continue;
+
+      // 控制网格：横线 + 竖线（青色半透明，实时跟随变形）
+      g.lineStyle(1, 0x22d3ee, 0.32);
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const i = (r * cols + c) * 2;
+          const [sx, sy] = toScreen(points[i], points[i + 1]);
+          if (c === 0) g.moveTo(sx, sy);
+          else g.lineTo(sx, sy);
+        }
+      }
+      for (let c = 0; c < cols; c++) {
+        for (let r = 0; r < rows; r++) {
+          const i = (r * cols + c) * 2;
+          const [sx, sy] = toScreen(points[i], points[i + 1]);
+          if (r === 0) g.moveTo(sx, sy);
+          else g.lineTo(sx, sy);
+        }
+      }
+
+      // 节点中心 = 控制点均值，供层级连线用
+      let sumX = 0;
+      let sumY = 0;
+      const count = points.length / 2;
+      for (let i = 0; i < points.length; i += 2) {
+        sumX += points[i];
+        sumY += points[i + 1];
+      }
+      centers.set(id, { x: cx + (sumX / count) * fit, y: cy + (sumY / count) * fit });
+    }
+
+    // rotation 没有控制网格：用枢轴当节点，并把它的父链也连出来（否则挂在
+    // rotation 下面的 warp 会因为「父级不在 centers 里」而丢线）。
+    for (const [id, rotation] of this.rotations) {
+      const [ox, oy] = rotation.current.origin;
+      const at = { x: cx + ox * fit, y: cy + oy * fit };
+      centers.set(id, at);
+      g.lineStyle(1, 0xa78bfa, 0.6);
+      g.drawCircle(at.x, at.y, 4);
+    }
+
+    // 变形器层级：子 -> 父（琥珀色），这是「绑骨链」本身
+    for (const warp of this.warps.values()) {
+      let parentId = warp.spec.parent
+        || DEFORMER_PARENT_FALLBACK[warp.spec.id]
+        || '';
+      // 父级本身没有成员网格时不会出现在 centers 里（例如角色没有躯干层），
+      // 这时向上找最近一个在场的祖先，避免整条链断开。
+      let parent = parentId ? centers.get(parentId) : undefined;
+      let hops = 0;
+      while (parentId && !parent && hops++ < 8) {
+        parentId = DEFORMER_PARENT_FALLBACK[parentId] || '';
+        parent = parentId ? centers.get(parentId) : undefined;
+      }
+      const child = centers.get(warp.spec.id);
+      if (!child || !parent) continue;
+      g.lineStyle(2, 0xf59e0b, 0.8);
+      g.moveTo(parent.x, parent.y);
+      g.lineTo(child.x, child.y);
+    }
+
+    // 图层归属：每个美术网格中心 -> 它挂的变形器（很淡，只用来读绑定关系）
+    g.lineStyle(1, 0x94a3b8, 0.16);
+    for (const entry of this.artMeshes) {
+      if (!entry.deformerId) continue;
+      const anchor = centers.get(entry.deformerId);
+      if (!anchor || entry.positions.length < 2) continue;
+      let sx = 0;
+      let sy = 0;
+      const count = entry.positions.length / 2;
+      for (let i = 0; i < entry.positions.length; i += 2) {
+        sx += entry.positions[i];
+        sy += entry.positions[i + 1];
+      }
+      const [mx, my] = toScreen(sx / count, sy / count);
+      g.moveTo(anchor.x, anchor.y);
+      g.lineTo(mx, my);
+    }
+
+    for (const point of centers.values()) {
+      g.beginFill(0xf59e0b, 0.9);
+      g.drawCircle(point.x, point.y, 3);
+      g.endFill();
     }
   }
 
@@ -697,13 +920,29 @@ export class Live2DPlayer {
     this.targetParams.set(name, clampToBounds(value, this.bounds.get(name)));
   }
 
-  setParameters(params: Record<string, number>): void {
+  /**
+   * 写入外部驱动的参数。
+   *
+   * @param holdSeconds 这批参数写入后多久交还给动作/物理。传
+   *   ``Infinity`` 表示一直保持，直到 :meth:`clearParameterHolds` ——
+   *   手动滑杆用它，这样调参不会把待机动作停掉。
+   */
+  setParameters(
+    params: Record<string, number>,
+    holdSeconds: number = EXTERNAL_HOLD_SECONDS,
+  ): void {
     for (const [k, v] of Object.entries(params)) {
-      if (typeof v === 'number') {
-        this.targetParams.set(k, clampToBounds(v, this.bounds.get(k)));
-        this.externalHold.set(k, EXTERNAL_HOLD_SECONDS);
-      }
+      if (typeof v !== 'number') continue;
+      // 手动保持的参数优先：鼠标视线、面捕、麦克风都不能把它按回去。
+      if (this.externalHold.get(k) === Infinity && holdSeconds !== Infinity) continue;
+      this.targetParams.set(k, clampToBounds(v, this.bounds.get(k)));
+      this.externalHold.set(k, holdSeconds);
     }
+  }
+
+  /** 解除手动保持，让动作/物理重新接管这些参数（参数面板的「复位」用）。 */
+  clearParameterHolds(): void {
+    this.externalHold.clear();
   }
 
   setExpression(name: string): void {
@@ -793,6 +1032,33 @@ export class Live2DPlayer {
     const files = this.motionGroups.get('idle') || this.motionGroups.values().next().value;
     if (!files || !files.length) return;
     this.motion = new MotionPlayback(files[0], 'idle', 0);
+  }
+
+  /**
+   * 没有动作文件时的兜底待机：呼吸 + 眨眼 + 轻微摆头。
+   *
+   * 有 motion 时完全让位（动作才是权威值），所以老产物不会因为缺 idle 就
+   * 变成一张静止图。只写 `targetParams`，仍走每帧低通，不会跳变。
+   */
+  private stepProceduralIdle(dt: number): void {
+    if (!this.idleEnabled || this.motion) return;
+    if (this.motionGroups.size > 0) return;
+    this._idleClock += dt;
+    const t = this._idleClock;
+    const write = (id: string, value: number) => {
+      if (this.externalHold.has(id) || !this.targetParams.has(id)) return;
+      this.targetParams.set(id, clampToBounds(value, this.bounds.get(id)));
+    };
+    write('ParamBreath', 0.5 + 0.5 * Math.sin(t * 1.4));
+    write('ParamAngleX', 6 * Math.sin(t * 0.45));
+    write('ParamAngleY', 4 * Math.sin(t * 0.33));
+    write('ParamAngleZ', 1.2 * Math.sin(t * 0.27));
+    // 每 3.6s 眨一次：前 0.075s 闭合，后 0.075s 张开。
+    const phase = t % 3.6;
+    let eyeOpen = 1;
+    if (phase > 3.45) eyeOpen = Math.abs(1 - (phase - 3.45) / 0.075);
+    write('ParamEyeLOpen', eyeOpen);
+    write('ParamEyeROpen', eyeOpen);
   }
 
   private paramDefault(name: string): number {
@@ -971,18 +1237,29 @@ export class Live2DPlayer {
     this.expressionBase.clear();
   }
 
-  /** 物理读的是平滑后的参数，写回直接落到 params + targetParams，避免下一帧被拉回。 */
-  private stepPhysics(dt: number): void {
-    const engine = this.physics;
-    if (!engine) return;
-    engine.step(dt, {
+  /** 物理的参数读写口：读平滑值，写回 params + targetParams。 */
+  private physicsListeners(): PhysicsListeners {
+    return {
       read: (name) => this.params.get(name) ?? 0,
       range: (name) => this.physicsRange(name),
       write: (name, value) => {
         this.params.set(name, value);
         this.targetParams.set(name, clampToBounds(value, this.bounds.get(name)));
       },
-    });
+    };
+  }
+
+  /**
+   * 物理输出是**当帧瞬态**：帧首由 restoreOutputs 撤回，这里先快照本帧基准。
+   * 内核每帧把参数还原成物理之前的值再跑物理，weight<100 的混合基准因此不含
+   * 上一帧的物理输出（实测 Breathing 链，见 tools/probe_breathing_split.py）。
+   */
+  private stepPhysics(dt: number): void {
+    const engine = this.physics;
+    if (!engine) return;
+    const io = this.physicsListeners();
+    engine.captureOutputs(io);
+    engine.step(dt, io);
   }
 
   getParameter(name: string): number {
@@ -1097,6 +1374,9 @@ export class Live2DPlayer {
 
   private update(deltaFrames: number): void {
     const dt = deltaFrames / 60;
+    // 帧首先撤掉上一帧的物理输出（内核 LoadParameters 语义）：物理输出只服务
+    // 当帧渲染，不回流成下一帧的混合基准。必须在动作/表情写入**之前**做。
+    if (this.physics) this.physics.restoreOutputs(this.physicsListeners());
     // 外部输入的让位窗口按帧推进：过期就把参数交还给动作。
     for (const [id, remain] of this.externalHold) {
       const left = remain - dt;
@@ -1106,6 +1386,7 @@ export class Live2DPlayer {
     // 顺序：动作写目标 → 表情叠在目标上 → 插值 → 物理（物理读平滑值、
     // 直接写回），这样次级运动总是滞后于主动作，和内核一致。
     this.updateMotion(dt);
+    this.stepProceduralIdle(dt);
     this.updateExpression(dt);
 
     // lerp toward targets
@@ -1121,6 +1402,13 @@ export class Live2DPlayer {
       this.updateArtMeshes();
     } else {
       this.updatePreviewLayers();
+    }
+
+    // 绑骨线：每两帧重绘一次。控制网格随参数实时变形，30fps 足够顺滑，
+    // 又不会把 Graphics 的重建开销压到每个渲染帧上。
+    if (this.overlayEnabled) {
+      this.overlayTick++;
+      if (this.overlayTick % 2 === 0) this.drawBindingsOverlay();
     }
 
     this._frames++;
@@ -1170,10 +1458,34 @@ export class Live2DPlayer {
         blendFlat(terms, warp.grids, warp.current);
       }
     }
+    // rotation 变形器同样一帧求一次：键形是角度/枢轴/缩放三个线性量，
+    // 按与网格键形相同的展平序插值权重混合（baseAngle 在 applyRotation 里加）。
+    for (const rotation of this.rotations.values()) {
+      const terms = keyformTerms(rotation.spec.axes || [], resolve);
+      const keys = rotation.keyforms;
+      if (terms.length === 0) {
+        rotation.current = { ...keys[0], origin: [...keys[0].origin] as [number, number] };
+        continue;
+      }
+      let angle = 0;
+      let ox = 0;
+      let oy = 0;
+      let scale = 0;
+      for (const term of terms) {
+        const k = keys[term.index] ?? keys[0];
+        angle += k.angle * term.weight;
+        ox += k.origin[0] * term.weight;
+        oy += k.origin[1] * term.weight;
+        scale += k.scale * term.weight;
+      }
+      rotation.current = { angle, origin: [ox, oy], scale };
+    }
     const deformerById = (id: string): BindingsDeformer | undefined =>
-      this.warps.get(id)?.spec;
-    const gridOf = (d: BindingsDeformer): Float32Array =>
+      this.warps.get(id)?.spec ?? this.rotations.get(id)?.spec;
+    const gridOf = (d: BindingsWarpDeformer): Float32Array =>
       this.warps.get(d.id)?.current ?? new Float32Array(0);
+    const rotationOf = (d: BindingsRotationDeformer): RotationState | undefined =>
+      this.rotations.get(d.id)?.current;
 
     for (const entry of this.artMeshes) {
       const positions = entry.positions;
@@ -1193,18 +1505,18 @@ export class Live2DPlayer {
         blendFlat(terms, entry.keyformVertices, positions);
       }
 
-      const warp = entry.deformerId
-        ? this.warps.get(entry.deformerId)
-        : undefined;
-      if (warp) {
+      // 网格可能直接挂在 warp 或 rotation 下（后者少见，但同样是合法绑定）。
+      const owner = entry.deformerId ? deformerById(entry.deformerId) : undefined;
+      if (owner) {
         for (let i = 0; i < positions.length; i += 2) {
           applyDeformerChain(
             positions[i],
             positions[i + 1],
-            warp.spec,
+            owner,
             deformerById,
             gridOf,
             point,
+            rotationOf,
           );
           positions[i] = point.x;
           positions[i + 1] = point.y;
@@ -1340,6 +1652,8 @@ export class Live2DPlayer {
     // frameCallbacks 属于播放器持有者（ModelCanvas 在构造时注册一次），
     // 这里不清空：清掉会让 onFrame 在首次加载后静默失效（帧率恒为 0）。
     this.clearScene();
+    this.overlay = null;
+    this.overlayEnabled = false;
     if (this.app) {
       // removeView=false：<canvas> 由 React 持有，Pixi 不能把它从 DOM 里摘走。
       // 实例销毁后这个 canvas 上的 WebGL 上下文不再复用 —— 调用方要么换新

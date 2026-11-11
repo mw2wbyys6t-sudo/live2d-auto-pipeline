@@ -106,7 +106,14 @@ def blend_flat(terms, tables, width):
 
 
 def sample_warp_grid(grid, rows, cols, u, v):
-    """变形器网格双线性采样（行优先、x 最快）。
+    """变形器网格采样（行优先、x 最快）。
+
+    **格内是三角形分片线性**，不是双线性：官方 Core 的「网格形变」
+    （moc3 ``additional.quad_transforms=0``）沿 P10-P01 对角线把每格切成两半，
+    各用三个角点插值。实测见 ``tools/probe_warp_interpolation.py``（官方 Core
+    5-r.5）：非仿射控制网格下 Core 渲染质心与三角形预测差 0.43%、与双线性差
+    9.49%。仿射网格下两者相同，所以仓库原有的仿射对照用例看不出差别。
+    双线性是「quad 形变」（``quad_transforms=1``）的语义。
 
     (u,v) **不夹取**，越界的那一段按边界那一格线性外推 —— 这是官方 Core 的行为
     （#72）。旧版这里写的是 `min(max(u,0),1)`，那是移植时自己加的假设：把挂在
@@ -114,11 +121,17 @@ def sample_warp_grid(grid, rows, cols, u, v):
     / `step4_ruler_vs_core.py`，判据已钉进
     ``tests/unit/test_bindings_gap_probe.py::test_art_outside_the_parent_grid_is_extrapolated_not_clamped``）：
     挂在父矩形外 160px 的边，Core 画在 452（与「根本没有变形器」的对照逐字节相同），
-    夹取版读 328 —— 124 屏幕像素的幻影正好等于越界量。嵌套主干第一次让这件事变得
-    可观测（hair_back 的 27/140 个顶点在 HeadRig 矩形之外），于是这把尺子报出
+    夹取版尺子却读 328 —— 124 屏幕像素的幻影正好等于越界量。嵌套主干第一次让这件事
+    变得可观测（hair_back 的 27/140 个顶点在 HeadRig 矩形之外），于是这把尺子报出
     「静止帧偏了 27.183px」，而同一批产物的 Core 静止 SHA 一直没动。
 
-    连续性：u=1 时新旧两版都给最后一列控制点，矩形之内的读数一个像素都不变。
+    **越界这一段的规则尚未钉死**（2026-11-11 实测）：上面那条 #72 判据用的是**恒等
+    点阵**——恒等网格下「外推」「仿射平面」「三角形平面外推」全都退化成同一条映射，
+    所以它分不出差别。用**变形过**的网格实测（``tools/probe_warp_interpolation.py``
+    的 ``measure_out_of_grid``）：官方 Core 把挂在矩形外 160px 的顶点放在模型
+    x≈562，而本函数读 530（UR 三角形平面外推是 650、全局平面拟合是 465~510）——
+    候选规则一个都没命中，差约 32 个模型单位。**别把这里的读数当内核语义用**；
+    静止/仿射网格上的读数仍然与内核逐像素一致（那正是 #72 覆盖的场景）。
     """
     cx = u * cols
     cy = v * rows
@@ -134,6 +147,25 @@ def sample_warp_grid(grid, rows, cols, u, v):
     i10 = r0 * stride + c1 * 2
     i01 = r1 * stride + c0 * 2
     i11 = r1 * stride + c1 * 2
+
+    if 0.0 <= cx <= cols and 0.0 <= cy <= rows:
+        # 格内：官方 Core 的「网格形变」（additional.quad_transforms=0）走
+        # **三角形分片线性** —— 沿 P10-P01 对角线把格子切成两半，各用三个角点。
+        # 实测（tools/probe_warp_interpolation.py，官方 Core 5-r.5）：控制网格被
+        # 拉成非仿射时，Core 渲染质心与三角形预测差 0.43%、与双线性差 9.49%。
+        # 仿射网格（整体平移）下两种插值相同 —— 仓库原有的对照用例全是仿射的，
+        # 结构性看不见这个差异。双线性是 quad 形变（quad_transforms=1）的语义。
+        if fx + fy < 1.0:
+            w00, w10, w01, w11 = 1.0 - fx - fy, fx, fy, 0.0
+        else:
+            w00, w10, w01, w11 = 0.0, 1.0 - fy, 1.0 - fx, fx + fy - 1.0
+        return (
+            grid[i00] * w00 + grid[i10] * w10 + grid[i01] * w01 + grid[i11] * w11,
+            grid[i00 + 1] * w00 + grid[i10 + 1] * w10
+            + grid[i01 + 1] * w01 + grid[i11 + 1] * w11,
+        )
+
+    # 越界：沿用既有的「边界格线性外推、不夹取」——见本函数 docstring 的 #72。
     top_x = grid[i00] + (grid[i10] - grid[i00]) * fx
     top_y = grid[i00 + 1] + (grid[i10 + 1] - grid[i00 + 1]) * fx
     bot_x = grid[i01] + (grid[i11] - grid[i01]) * fx

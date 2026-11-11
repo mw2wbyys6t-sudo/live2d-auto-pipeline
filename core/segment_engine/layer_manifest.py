@@ -105,7 +105,7 @@ GROUP_ORDER: List[Dict[str, str]] = [
 _GROUP_IDS = {g["id"] for g in GROUP_ORDER}
 
 PART_SPECS: Dict[str, Dict[str, Any]] = {
-    "hair_back": {"name_zh": "头发_后", "group": "head_hair", "z": 10, "sides": False},
+    "hair_back": {"name_zh": "头发_后", "group": "head_hair", "z": 10, "sides": True},
     "hair_bangs": {"name_zh": "头发_刘海", "group": "head_hair", "z": 60, "sides": False},
     "hair_side": {"name_zh": "头发_鬓发", "group": "head_hair", "z": 55, "sides": True},
     "hair_braid": {"name_zh": "头发_辫子", "group": "head_hair", "z": 12, "sides": True},

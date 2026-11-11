@@ -10,9 +10,10 @@
   * UV：图集摆放按图像坐标（左上原点）直接写入，不再翻 v —— live2d-py 不在
     上传时翻转纹理，翻了会让全部 UV 落进透明留白
 
-诚实性约定：管线里的 warp 变形器会编译进 moc3（静止形网格 + (s, t) 顶点）；
-不能表达的变形器（rotation、没有成员网格的）如实记入 ``dropped``，
-绝不把丢了绑定信息的产物标成完全体。
+诚实性约定：管线里的 warp 与 rotation 变形器都会编译进 moc3（warp = 静止形网格 +
+(s, t) 顶点；rotation = 角度/枢轴键形，可直接驱动网格也可作为 warp 的父级）；
+不能表达的变形器（没有成员网格的 warp、没有可用参数又没有子树的）如实记入
+``dropped`` / ``deformers_static``，绝不把丢了绑定信息的产物标成完全体。
 """
 from __future__ import annotations
 
@@ -299,6 +300,11 @@ MESH_KEYFORMS_ENABLED = True
 # 轴序按 F-06 实测定论（第一个轴步长为 1）：index = i_X + kX·i_Y + kX·kY·i_Z。
 # 幅度取网格自身尺寸的比例（相对值，随网格自适应；美术可调），并且**必须 X/Y/Z
 # 三参数都已声明才会生效** —— 这让本次升级是显式 opt-in，不会悄然改变既有导出。
+#
+# Z 仍留在这条带里：把 Z 搬进 rotation 变形器要求它成为 HeadRig 的父级，而
+# 「warp → rotation → warp」的顶点空间还没有用官方 Core 实测通（见
+# ``bones/deformers.py`` 的 ``HEAD_ROTATION`` 注释）。今天 Z 由 HeadRig 这条
+# warp 的 angle_z 单次承担，网格侧不再同时烘一份。
 HEAD_ANGLE_AXES = ("ParamAngleX", "ParamAngleY", "ParamAngleZ")
 HEAD_SHIFT_X = 0.04          # 转头(ParamAngleY)的水平弧位移 = 网格宽 × 比例 × sin θ
 HEAD_SHIFT_Y = 0.03          # 点头(ParamAngleX)的垂直弧位移 = 网格高 × 比例 × sin θ
@@ -913,6 +919,13 @@ BROW_BOW = 0.25
 #: 发梢横向摆幅（相对头发宽度），越靠下发梢摆得越远。
 HAIR_SWAY = 0.10
 
+#: 裙摆横向摆幅（相对裙摆宽度）。布料比头发重、视觉上摆得更明显，
+#: 但同样是腰线钉住、下摆最大。
+SKIRT_SWAY = 0.16
+
+#: 尾巴横向摆幅（相对尾巴宽度）。尾巴比头发长，甩动幅度更明显。
+TAIL_SWAY = 0.20
+
 #: 躯干：侧倾的横向位移、前后倾的纵向位移、呼吸抬升（均相对网格尺寸）。
 TORSO_LEAN_X = 0.05
 TORSO_LEAN_Y = 0.02
@@ -924,6 +937,30 @@ SHOULDER_LIFT = 0.12
 #: 张嘴时口内向下张开的幅度，相对嘴线网格高度。必须**明显大于** ``MOUTH_OPEN_STRETCH``：
 #: 口内与嘴唇同形同源，倍数一样就会永远正好被嘴唇盖住，做了等于没做。
 MOUTH_CAVITY_STRETCH = 4.0
+
+#: 头发摆链的**自适应分割数**：控制网格每多少画布像素加一行/一列。
+#:
+#: 作者表里的 rows/cols 是**下限**（按中等长度的头发定的），长发的束如果仍用同样
+#: 几行控制点，摆起来就是一折一折的直线段。这里按束的实际静止尺寸补足分辨率：
+#: 一条 500px 长的发束得到 6 行（5 个格子），150px 的短束仍是 3 行。
+#: 上限防止极长头发把变形器点数撑得过多（每个控制点都要 2 个 float 存在 moc3 里）。
+HAIR_ROW_SPAN_PX = 110.0
+HAIR_COL_SPAN_PX = 90.0
+HAIR_GRID_MAX_ROWS = 7
+HAIR_GRID_MAX_COLS = 4
+
+
+def adaptive_hair_grid(mesh_rect: tuple, n_rows: int, n_cols: int) -> tuple:
+    """按发束静止尺寸给出 (行数, 列数)；只增不减，作者表的值当下限。
+
+    行/列都是**控制点数**（与条目里的 ``grid_rows`` / ``grid_cols`` 同一口径）。
+    """
+    height = max(1.0, float(mesh_rect[3]) - float(mesh_rect[1]))
+    width = max(1.0, float(mesh_rect[2]) - float(mesh_rect[0]))
+    rows = int(round(height / HAIR_ROW_SPAN_PX)) + 1
+    cols = int(round(width / HAIR_COL_SPAN_PX)) + 1
+    return (min(max(rows, n_rows), HAIR_GRID_MAX_ROWS),
+            min(max(cols, n_cols), HAIR_GRID_MAX_COLS))
 
 
 def _centered_fraction(param: ParameterSpec, value: float) -> float:
@@ -1022,6 +1059,40 @@ def _hair_sway_deform(points, rect, mesh_rect, values, options):
     for x, y in points:
         depth = min(1.0, max(0.0, (y - top) / height))
         out.append((x + swing * HAIR_SWAY * width * depth ** 1.5, y))
+    return out
+
+
+def _skirt_sway_deform(points, rect, mesh_rect, values, options):
+    """裙摆摆动：腰线钉住，越靠下摆横向摆得越远。
+
+    和头发同一套深度加权，只是幅度换成 :data:`SKIRT_SWAY`：布料比头发重，
+    同样的参数幅度下摆得更明显，才看得出是两条独立的摆链。
+    """
+    width = max(1e-6, float(mesh_rect[2]) - float(mesh_rect[0]))
+    top = float(mesh_rect[1])
+    height = max(1e-6, float(mesh_rect[3]) - top)
+    swing = values.get("sway", 0.0)
+    out = []
+    for x, y in points:
+        depth = min(1.0, max(0.0, (y - top) / height))
+        out.append((x + swing * SKIRT_SWAY * width * depth ** 1.5, y))
+    return out
+
+
+def _tail_sway_deform(points, rect, mesh_rect, values, options):
+    """尾巴摆动：根部钉住，越靠末端横向摆得越远。
+
+    与头发/裙摆同一套深度加权；幅度单列成 :data:`TAIL_SWAY`，因为尾巴通常
+    比头发长、甩动更开，用同一个常量会看不出是独立的一条链。
+    """
+    width = max(1e-6, float(mesh_rect[2]) - float(mesh_rect[0]))
+    top = float(mesh_rect[1])
+    height = max(1e-6, float(mesh_rect[3]) - top)
+    swing = values.get("swing", 0.0)
+    out = []
+    for x, y in points:
+        depth = min(1.0, max(0.0, (y - top) / height))
+        out.append((x + swing * TAIL_SWAY * width * depth ** 1.5, y))
     return out
 
 
@@ -1141,8 +1212,9 @@ NECK_BAND_ROWS_MIN = 4          # 带内至少 4 行，否则连续过渡退化�
 #: 整件上衣挂上去以后 clothes_top↔arm_L 撕到 112.4px、Core 洞数 1116→1731 ——
 #: 衣服从肩膀上滑走，比原来的脸↔衣服缝更糟。横向衰减让领口跟头、肩线留在身上。
 #:
-#: 为什么是升余弦而不是直线：点阵之间是双线性插值，直线在折点处留下与步长成正比
-#: 的权重误差（90px 过渡、53px 格距时约 0.2 ⇒ 30px）；升余弦两端一阶导为 0，
+#: 为什么是升余弦而不是直线：点阵之间是**三角形分片线性**插值（官方 Core 的
+#: 网格形变语义，实测见 docs/native-runtime.md 第 3 条），直线在折点处留下与步长
+#: 成正比的权重误差（90px 过渡、53px 格距时约 0.2 ⇒ 30px）；升余弦两端一阶导为 0，
 #: 同一套点阵下误差降到 1/5 左右。
 NECK_BAND_SIDE_PLATEAU = 2.0
 NECK_BAND_SIDE_FADE = 1.6
@@ -1261,7 +1333,9 @@ def _head_options(bone_positions: Dict[str, Any], width: float, height: float,
     ``head`` 保持静态），不交半套形变。
     """
     joint = bone_positions.get("Head")
-    if joint is None or head_span is None or len(angle_ids) != 3:
+    # 轴数按调用方给的参数个数走：head 现在是 (X, Y) 两轴（Z 归 rotation），
+    # neck_band / eye_head 仍是三轴，不能写死 3。
+    if joint is None or head_span is None or not angle_ids:
         return None
     specs = [parameters_by_id.get(pid) for pid in angle_ids]
     if any(p is None for p in specs):
@@ -1295,9 +1369,15 @@ DEFORMER_PROFILES: Dict[str, tuple] = {
     # 头转用的 —— 那正是头内部各场各转各的来源；现在它是**整颗头唯一**的那一份
     # （HeadRig），挂在它下面的部件靠继承而不是靠各自拟合。
     "head": (("angle_x", "angle_y", "angle_z"), _head_follow_deform),
+    # Z 由 HeadRotationZ（rotation，HeadRig 的父级）承担之后，HeadRig 只剩 X/Y。
+    # profile 的角色序列必须与作者表给的参数个数一致（``_profile_grids`` 直接比长度），
+    # 所以两轴单独列一条，而不是让 ``head`` 去容忍 2 个参数。
+    "head_xy": (("angle_x", "angle_y"), _head_follow_deform),
     "neck_band": (("angle_x", "angle_y", "angle_z"), _neck_band_deform),
     "brow": (("y", "angle", "form"), _brow_deform),
     "hair_sway": (("swing",), _hair_sway_deform),
+    "skirt_sway": (("sway",), _skirt_sway_deform),
+    "tail_sway": (("swing",), _tail_sway_deform),
     "torso": (("angle_x", "angle_y", "sway", "breath"), _torso_deform),
     "lift": (("lift",), _lift_deform),
     "lift_lean": (("lift", "angle_x", "angle_y", "sway", "breath"), _lift_lean_deform),
@@ -1405,6 +1485,25 @@ def _edge_is_acyclic(name: str, raw: Dict[str, str]) -> bool:
     return True
 
 
+def _cross_type_edge(child_type: str, parent_type: str) -> bool:
+    """rotation 与 warp 互为父子 —— 两条边都由官方 Core 实测支持（2026-11-10）。
+
+    曾经这里返回 True（把边丢掉并留痕），依据是两条错误的探针结论：warp 父=rotation
+    时「内核不应用控制网格」、rotation 父=warp 时「静止帧对不上」。重做探针后确认
+    两处都是探针口径错误（把归一 (s,t) 当画布像素传进 MeshSpec，编译器二次归一
+    把网格压成一个点）：
+
+    * warp 父=rotation：控制网格按模型单位、成员网格按 (s,t)，静止帧与「不挂
+      变形器」逐字节相同，整体放大 1.5 倍的键形也照常生效；
+    * rotation 父=warp：内核把子树平移父 warp 静止格 min（``moc3_model`` 里由
+      ``deformer_origin_offsets`` 预先扣掉），origin 用父 warp 的 (s,t) 表达，
+      ±30° 与「顶点预旋」逐字节一致。
+
+    保留这个函数只是为了把「为什么不再丢」写在调用点旁边，判定恒为 False。
+    """
+    return False
+
+
 def resolve_deformer_parents(entries: List[Dict]) -> Dict[str, str]:
     """``entry["under"]`` -> 父变形器名；只保留指向已声明节点、且不构成环的边。
 
@@ -1426,6 +1525,13 @@ def resolve_deformer_parents(entries: List[Dict]) -> Dict[str, str]:
         under = str(entry.get("under") or "")
         if name and under and under in declared and under != name:
             raw[name] = under
+    # rotation 与 warp 互为父子的边**保留**：两条都由官方 Core 逐像素验收
+    # （见 ``_cross_type_edge``）。跨类型边的坐标口径差异（子树的 grid-min 平移、
+    # rotation origin 的 (s,t)）在 ``moc3_model`` 写出侧统一处理。
+    kinds = {str(entry.get("name") or ""): str(entry.get("type") or "")
+             for entry in entries}
+    raw = {name: under for name, under in raw.items()
+           if not _cross_type_edge(kinds.get(name, ""), kinds.get(under, ""))}
     return {name: under for name, under in raw.items()
             if _edge_is_acyclic(name, raw)}
 
@@ -1503,7 +1609,7 @@ def legal_deformer_parents(entries: List[Dict]) -> tuple:
 #: （眨眼 + 头部三轴一条带），作为**能力**保留在 ``DEFORMER_PROFILES`` 里，作者表
 #: 已经不用它了；这里一并认出来，免得有人改回去时守卫静默失效。``neck_band`` 是
 #: Task 5 扩进来的颈胸分级场，它那条带同样只有头部三轴。
-HEAD_FIELD_PROFILES = frozenset({"head", "eye_head", "neck_band"})
+HEAD_FIELD_PROFILES = frozenset({"head", "head_xy", "eye_head", "neck_band"})
 
 #: 负责把头送到各部件的那条主干变形器的**名字**。HeadRig 送整颗头，NeckBand 送脖子
 #: （Task 5 扩入）。BodySway 不在这里：它那条带是躯干 X/Y/摆动/呼吸，**没有**头部
@@ -1574,7 +1680,7 @@ def head_field_available(bone_positions: Dict[str, Any],
     这里只查与尺寸无关的那几条前提。两边前提不同步时，宁可这里更严：守卫让位、
     烘焙留下，画面最差也就是回到今天的样子。
     """
-    if head_span is None or len(angle_ids) != 3:
+    if head_span is None or len(angle_ids) != len(HEAD_ANGLE_AXES):
         return False
     if bone_positions.get("Head") is None:
         return False
@@ -1628,7 +1734,8 @@ def build_deformers(specs: List[MeshSpec],
             skipped.append(f"{name}(type={dtype})")
             continue
         members = members_by_name.get(name) or []
-        if not members:
+        # rotation 允许没有直接成员：它靠 under 链旋转整棵子树（HeadRotationZ）。
+        if not members and dtype == "warp":
             skipped.append(f"{name}(没有可挂的成员网格)")
             continue
         if dtype == "warp":
@@ -1644,6 +1751,9 @@ def build_deformers(specs: List[MeshSpec],
             mesh_rect = _rest_rect(members)
             profile = str(entry.get("profile") or "")
             param_ids = _profile_parameter_ids(entry)
+            if profile == "hair_sway":
+                # 自适应分割数：长发/宽发束按自身尺寸补足控制点，作者表的值是下限。
+                n_rows, n_cols = adaptive_hair_grid(mesh_rect, n_rows, n_cols)
             options = dict(entry)
             if profile in BODY_LEAN_PROFILES and body_rect is not None:
                 options["body_rect"] = body_rect
@@ -1652,7 +1762,11 @@ def build_deformers(specs: List[MeshSpec],
                 # 身体轴参数不全：退回「只抬肩」，别把抬肩一起丢掉
                 profile, param_ids = "lift", param_ids[:1]
             missing_head = False
-            if profile in ("eye_head", "head", "neck_band"):
+            # 头部场 profile 一律要算头部选项：用**同一个常量**（HEAD_FIELD_PROFILES，
+            # 里面本来就有 head_xy），别再在这里硬编码一份 —— 漏一项就等于该变形器
+            # 退化成恒等：options 里没有 head 项 → _apply_head 原样返回 → 控制网格
+            # 全等 → ParamAngleX/Y 在官方 Core 里逐像素无变化（头只能绕 Z 转）。
+            if profile in HEAD_FIELD_PROFILES:
                 angle_ids = (param_ids[1:] if profile == "eye_head" else
                              param_ids[:3] if profile == "neck_band" else param_ids)
                 head_options = _head_options(
@@ -1752,7 +1866,16 @@ def build_deformers(specs: List[MeshSpec],
                 grids=grids,
                 parent_deformer_id=parents.get(name, "")))
         elif dtype == "rotation":
-            pivot = entry.get("pivot") or (0.0, 0.0)
+            # 枢轴可以写死图像坐标，也可以指向骨骼名 —— Head 的实际位置只有
+            # 运行时（bone_positions）才知道，静态作者表写不出来。``pivot_bone``
+            # 优先：作者表里的 ``pivot`` 只是占位（build() 总会写一个 [0, 0]），
+            # 不覆盖的话骨骼枢轴永远用不上。
+            pivot = None
+            if entry.get("pivot_bone"):
+                pivot = (bone_positions or {}).get(str(entry["pivot_bone"]))
+            if pivot is None:
+                pivot = entry.get("pivot")
+            pivot = pivot or (0.0, 0.0)
             # 与网格顶点同一换算：图像坐标 -> 原点居中、y 向上的模型坐标
             origin = to_model_xy(pivot[0], pivot[1], width, height)
             # 就近匹配容差：画布最大边的 5%。自动绑骨生成的枢轴常因取整/比例换算
@@ -2318,11 +2441,12 @@ def build_rig_spec(
         parameters_by_id=params_by_id, bone_positions=bone_positions,
         head_span=head_span, head_bottom=head_bottom)
     warps = [d for d in deformer_specs if isinstance(d, WarpDeformerSpec)]
+    rotations = [d for d in deformer_specs if isinstance(d, RotationDeformerSpec)]
     if deformer_specs:
         linked = sum(1 for m in specs if m.deformer_id)
         log.info(f"变形器已编译进 moc3：{len(deformer_specs)} 个 "
                  f"{[d.deformer_id for d in deformer_specs]}"
-                 f"（warp {len(warps)}、rotation {len(static)}），挂上 {linked} 个网格")
+                 f"（warp {len(warps)}、rotation {len(rotations)}），挂上 {linked} 个网格")
     for note in uncompiled:
         log.info(f"变形器未编译（保持静态几何）：{note}")
     if static:

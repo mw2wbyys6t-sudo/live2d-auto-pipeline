@@ -104,9 +104,10 @@ python -m drivers.live2d_runtime "模型文件.model3.json" --frames 120 --param
 1. **挂在 warp 下的网格，顶点存的是网格内的 `(s, t)`，不是模型空间坐标。**
    官方证据：warp 下 80 个网格的顶点全在 ~[0,1]（越界点略超出，最大 1.35），
    而 rotation 下 4 个网格的顶点在像素模型空间（x [-230,233]）；warp 控制网格
-   自身与 rotation 的原点同在像素模型空间。内核做的是「(s,t) 经控制网格双线性
-   映回模型空间」。判据：静止形网格 + 按该网格换算的 `(s,t)` 必须与「没有变形器」
-   **逐像素相同** —— `tools/probe_warp_st_identity.py`、
+   自身与 rotation 的原点同在像素模型空间。内核做的是「(s,t) 经控制网格**三角形
+   分片线性**映回模型空间」（不是双线性，见下面第 3 条）。判据：静止形网格 +
+   按该网格换算的 `(s,t)` 必须与「没有变形器」**逐像素相同** ——
+   `tools/probe_warp_st_identity.py`、
    `tests/integration/test_moc3_deformer_acceptance.py` 都钉住了这一点
    （用非方形网格 + 非方形矩形，才能同时暴露行列序与 y 朝向）。
 2. **V3_03 起，deformer 表非空时 `additional.quad_transforms` 必须非空。**
@@ -116,6 +117,17 @@ python -m drivers.live2d_runtime "模型文件.model3.json" --frames 120 --param
    复现与长度规则实测：`tools/probe_deformer_header_variants.py`、
    `tools/probe_additional_rule.py`（只需非空，不要求每变形器一项；编译器按
    「每变形器一项、值为 0 = 网格形变」写出）。
+3. **格内插值是三角形分片线性，不是双线性**（`quad_transforms=0` 的语义）。
+   沿 P10-P01 对角线把每格切成两半，各用三个角点插值；双线性是 quad 形变
+   （`quad_transforms=1`）的语义。实测见 `tools/probe_warp_interpolation.py`
+   （官方 Core 5-r.5）：控制网格被拉成**非仿射**时，Core 渲染质心与三角形预测
+   差 0.43%、与双线性预测差 9.49%。判据钉在
+   `tests/integration/test_moc3_deformer_acceptance.py
+   ::test_the_core_samples_the_warp_grid_as_triangles_not_bilinear`。
+   **这里此前写的是「双线性」，是错的** —— 那批探针用的都是整体平移（仿射）的
+   网格，而仿射下两种插值结果完全相同，结构上就区分不了；离线尺子
+   （`tools/bindings_gap_probe.py`）与自研播放器（`web/lib/live2d-bindings.ts`）
+   照着这个错误结论实现，于是在 warp 网格真正变形时与官方内核画出不同的画面。
 
 另外：**静止形 = 参数默认值对应的那一形控制网格**（`_rig((-30, 0, 30))` 在
 param=0 时与无变形器逐像素相同，param=+30 时整体平移 —— 见验收测试）。
@@ -204,6 +216,53 @@ param=0 时与无变形器逐像素相同，param=+30 时整体平移 —— 见
 `physics_verified=True` 才算 `runtime_ready`；没有可验链时记 `None`（不适用≠通过）。
 真实导出实测（语义图层预设）：6 条链全部 moved+lagged+settled，
 发摆峰值 1.47、身摆 0.73、呼吸→双肩 0.12。
+
+### 浏览器物理与内核的逐帧一致性（`web/lib/live2d-physics.ts`）
+
+自研播放器原先是弹簧-阻尼近似（刚度/阻尼按阶跃响应相关系数标定：头发 0.66、
+身体 0.53、呼吸 0.87）——形状像，但与内核不是同一个动力学。现在复刻的是内核
+自己的 **Verlet 位置约束链**（逆向 Cubism Editor 5.3 `CPhysicsFtlAlgorithm`：
+BASE_FPS=30、气动阻尼 5.0、移动阈值 0.001、半径约束、`|x|<阈值→0`）。
+
+判据：同一份 physics3.json、同一个输入阶跃，**逐帧比对输出参数**，
+`tests/integration/test_moc3_physics_parity.py` 覆盖 physics3 里的全部链。
+实测 8 条链偏差全部 ≤ 1e-6（`1 passed in 85.92s`）。三条只能靠跑才知道的事实：
+
+1. **重力/风的 Y 要取反解回内部空间。** physics3.json 写出的是内部值 y 取反
+   （内部 +Y 向下：子质点挂在父质点正下方 Radius 处）。不反解会让重力朝上、
+   整条链掀翻，实测轨迹直接打到 ±π。
+2. **内核的物理响应比参数写入晚一帧。** 阶跃当帧内核完全没反应，下一帧才出现
+   与自研实现首帧逐位相同的数值。引擎用 `previousInputs` 建模这条滞后，因此
+   比对是**同帧号对齐（位移 0）**。曾经闸门强制 `Core[1:]` 对 `TS[:-1]`，那是
+   引擎还没建模滞后时的写法；补上滞后后再位移一次等于把滞后算两遍，实测报出
+   2.85 的假偏差（= |1.62848 − (−1.2222)|，HairFront 链相邻两帧之差）。
+3. **物理输出是当帧瞬态，不回流成下一帧的混合基准。** 内核每帧先把参数还原成
+   物理之前的快照再跑物理，所以 `Weight<100` 的 `previous*(1-w)+raw*w` 里
+   `previous` **不含上一帧的物理输出**。三段分离实验
+   （`tools/probe_breathing_split.py`）钉死了这一点：
+   - A 原样（Weight=50、无人外部写）：内核恒为 `p_n = 0.5*raw_n`；把上一帧输出
+     当基准会算成 `p_n = 0.5*p_{n-1} + 0.5*raw_n`，Breathing 链峰值差 **80%**。
+   - B 把 Weight 改成 100：两边**逐位相同（0.000000）**⇒ Verlet 动力学与 0..1
+     参数（ParamBreath）的归一化都是对的，「归一化量纲」的猜测被证伪。
+   - C Weight=50 + 每帧外部写入 0.4：两边又逐位相同，且内核精确等于
+     `0.5*0.4 + 0.5*raw_n` ⇒ 差别只在「物理自己的输出要不要回流」。
+
+   落地：引擎提供 `restoreOutputs()`（帧首、动作/表情写入**之前**调用）与
+   `captureOutputs()`（紧接物理之前调用）；播放器 `update()` 与跑手
+   `tools/physics_trace_harness.mjs` 都按这个帧契约调用。
+
+闸门的 fail-safe 与变异验证：Core/TS 跑失败必须显式报出（不许静默跳过而让
+「偏差 0」变成死链的假绿）、链一条不漏、每条链的 Core 峰值必须非零、阶跃当帧
+必须还没响应（相位签名）。变异验证 `tools/probe_parity_alignment.py --mutate`
+（**不动仓库文件**，假 ROOT 指向副本）实测：
+
+- 引擎副本 `BASE_FPS` 30→33（延迟项直接进积分）：HairFront 链偏差 **0.175348**，
+  闸门抓到。曾选「气动阻尼 5.0→5.5」做变异，实测偏差恒 0 —— 该常数只在
+  **重力方向逐帧变化**时参与运算（段向量旋转角 = 重力方向变化量 / 阻尼），
+  恒定重力的阶跃探针里它根本不起作用，是无效变异而非闸门失灵。
+- 跑手副本去掉帧首还原（norestore）：只对输出权重 <100 的链敏感。
+  Breathing 链（Weight=50）偏差 **0.054647**，闸门抓到；HairFront（Weight=100
+  直赋，混合基准不参与）偏差 0 是**预期**，脚本按权重标注而不是误报「抓不到」。
 
 ### SAM2 + GroundingDINO 分层后端的实测定论（本机 GPU）
 

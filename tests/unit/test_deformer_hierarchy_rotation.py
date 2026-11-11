@@ -30,12 +30,18 @@ def _build(names):
     return DeformerHierarchy().build({}, _meshes(names), layer_names=names)
 
 
-def test_real_layer_names_produce_no_rotation_deformer():
-    """真实层名下只有 warp 变形器 —— 这条锁住「rotation 变形器未被创建」的事实。"""
+def test_real_layer_names_produce_only_the_head_rotation():
+    """真实层名下的 rotation 只有 ``HeadRotationZ``（眼球那两条依旧落空）。
+
+    ``HeadRotationZ`` 没有直接成员网格，靠 ``under`` 链转整颗 HeadRig 子树，
+    所以它不依赖层名匹配 —— 真实层名下必须建出来。眼球两条的 targets 仍与分层
+    产出对不上，继续留在 ``rotation_skipped`` 里等改名。
+    """
     out = _build(REAL_LAYER_NAMES)
     types = {d["name"]: d["type"] for d in out["deformers"]}
     assert types, "warp 变形器应当照常建出来"
-    assert set(types.values()) == {"warp"}, types
+    assert set(types.values()) == {"warp", "rotation"}, types
+    assert [n for n, t in types.items() if t == "rotation"] == ["HeadRotationZ"]
     assert "EyeTrack_L" not in types and "EyeTrack_R" not in types
 
 
@@ -73,7 +79,8 @@ def test_rotation_deformer_is_still_created_when_targets_really_exist():
     names = REAL_LAYER_NAMES + ["eyeball_l", "eyeball_r"]
     out = _build(names)
     rotation = [d for d in out["deformers"] if d["type"] == "rotation"]
-    assert [d["name"] for d in rotation] == ["EyeTrack_L", "EyeTrack_R"]
+    assert [d["name"] for d in rotation] == [
+        "HeadRotationZ", "EyeTrack_L", "EyeTrack_R"]
     assert out["rotation_skipped"] == []
 
 
@@ -96,11 +103,14 @@ def test_expression_fade_layers_follow_the_single_head_field():
     改成「这三层真的挂在 HeadRig 上」，语义不变、持有者唯一化。
     """
     names = REAL_LAYER_NAMES + ["cheek", "tear_left", "tear_right"]
-    warp = {d["name"]: d for d in _build(names)["deformers"] if d["type"] == "warp"}
+    out = _build(names)
+    warp = {d["name"]: d for d in out["deformers"] if d["type"] == "warp"}
     assert "CheekFollow" not in warp and "TearFollow" not in warp
-    assert warp["HeadRig"]["profile"] == "head"
-    assert warp["HeadRig"]["parameters"] == [
-        "ParamAngleX", "ParamAngleY", "ParamAngleZ"]
+    # Z 归 HeadRotationZ（rotation），HeadRig 只剩 X/Y —— profile 也必须两轴。
+    assert warp["HeadRig"]["profile"] == "head_xy"
+    assert warp["HeadRig"]["parameters"] == ["ParamAngleX", "ParamAngleY"]
+    rotation = {d["name"]: d for d in out["deformers"] if d["type"] == "rotation"}
+    assert rotation["HeadRotationZ"]["under"] == "BodySway"
     assert {"cheek", "tear_left", "tear_right"} <= set(warp["HeadRig"]["targets"])
 
 

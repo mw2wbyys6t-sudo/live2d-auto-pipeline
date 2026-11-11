@@ -63,6 +63,17 @@ class MeshGenerator:
     #: 差别"的上限，把线段数交给 ``_subdivide_boundary`` 按间距补点控制。
     CONTOUR_EPSILON_PX = 1.0
 
+    #: 内部网格松弛（借鉴 Cubism 自动网格：半权重 Laplacian，迭代 100 次）。
+    #: 边界顶点钉在轮廓上不动，内部顶点向邻居重心靠拢，把三角形拉向等边，
+    #: 提高最小内角；任何一步若会让三角形翻转或塌缩就停在上一个合法状态。
+    RELAX_ITERATIONS = 100
+    RELAX_WEIGHT = 0.5
+
+    #: 内部网格点距轮廓的最小余量（×grid_spacing）。借鉴 Cubism 的 innerMargin：
+    #: 贴着轮廓的内部点会和密集的轮廓点挤出狭长三角形，留出余量让边界三角形由
+    #: 轮廓点＋第一圈真正的内部点构成，最坏内角才不会塌下去。
+    INNER_MARGIN_FACTOR = 0.25
+
     def _tiny_feature_mesh(self, mask: np.ndarray, w: int, h: int) -> Dict:
         """小部件兜底：用 alpha 包围盒的 **3×2 面片**代替 Delaunay 网格。
 
@@ -238,15 +249,34 @@ class MeshGenerator:
         # Subdivided boundary (insert extra points between consecutive contour pts)
         vertices = self._subdivide_boundary(vertices, target_spacing=contour_spacing)
 
-        # Interior grid
+        # Hexagonal staggered interior grid (borrowed from Cubism auto-mesh):
+        # odd rows offset half a step, row spacing = step*sqrt(3)/2. Delaunay of a
+        # staggered lattice yields near-equilateral triangles instead of the right
+        # triangles a square grid produces, so the texture samples more evenly
+        # when the mesh deforms.
         ys, xs = np.where(mask > 0)
         if len(xs) > 0:
             x_min, x_max = int(xs.min()), int(xs.max())
             y_min, y_max = int(ys.min()), int(ys.max())
-            for y in range(y_min + grid_spacing, y_max, grid_spacing):
-                for x in range(x_min + grid_spacing, x_max, grid_spacing):
-                    if 0 <= y < h and 0 <= x < w and mask[y, x] > 0:
+            step = float(grid_spacing)
+            row_step = step * math.sqrt(3.0) / 2.0
+            margin = self.INNER_MARGIN_FACTOR * step
+            dist = cv2.distanceTransform(
+                np.asarray(mask).astype(np.uint8), cv2.DIST_L2, 3)
+            row = 0
+            y = y_min + row_step
+            while y < y_max:
+                offset = step / 2.0 if row % 2 else 0.0
+                x = x_min + step + offset
+                yi = int(round(y))
+                while x < x_max:
+                    xi = int(round(x))
+                    if (0 <= yi < h and 0 <= xi < w and mask[yi, xi] > 0
+                            and dist[yi, xi] >= margin):
                         vertices.append((float(x), float(y)))
+                    x += step
+                y += row_step
+                row += 1
 
         mesh = self._build_delaunay(vertices, mask, w, h)
         if int(mask.sum()) <= self.TINY_FEATURE_PIXELS:
@@ -264,6 +294,8 @@ class MeshGenerator:
                         f"(was {len(mesh['vertices'])} verts / "
                         f"{len(mesh['indices'])} tris)")
                 mesh = quad
+        else:
+            mesh = self._relax_interior(mesh, mask)
         return mesh
 
     # ------------------------------------------------------------------
@@ -505,6 +537,91 @@ class MeshGenerator:
                 t = k / (n_sub + 1)
                 result.append((p0[0] + dx * t, p0[1] + dy * t))
         return result
+
+    def _relax_interior(self, mesh: Dict, mask: np.ndarray) -> Dict:
+        """半权重 Laplacian 松弛：只移动内部顶点，边界钉死，绝不翻转三角形。
+
+        边界顶点＝关联到"只被一个三角形使用的边"的顶点（即覆盖区域的轮廓），
+        它们保持不动，所以轮廓覆盖（接缝/外扩那套验收）不受影响。内部顶点每轮
+        向邻居重心移动 ``RELAX_WEIGHT`` 倍距离；候选位置若落在掩码外则该点不动，
+        若整批移动会让任何三角形反向或塌缩则停在上一个合法状态。连通关系不变，
+        只改顶点坐标，最后按新坐标重算归一化值。
+        """
+        verts = np.asarray(mesh["vertices"], dtype=float).copy()
+        indices = mesh["indices"]
+        n = len(verts)
+        if n < 4 or len(indices) == 0:
+            return mesh
+        tris = np.asarray(indices, dtype=int)
+
+        neighbors = [set() for _ in range(n)]
+        edge_count: Dict[Tuple[int, int], int] = {}
+        for a, b, c in tris:
+            for i, j in ((a, b), (b, c), (c, a)):
+                neighbors[int(i)].add(int(j))
+                neighbors[int(j)].add(int(i))
+                key = (int(i), int(j)) if i < j else (int(j), int(i))
+                edge_count[key] = edge_count.get(key, 0) + 1
+        boundary = set()
+        for (i, j), cnt in edge_count.items():
+            if cnt == 1:
+                boundary.add(i)
+                boundary.add(j)
+        interior = [i for i in range(n) if i not in boundary and neighbors[i]]
+        if not interior:
+            return mesh
+
+        def signed_areas(p: np.ndarray) -> np.ndarray:
+            a = p[tris[:, 0]]
+            b = p[tris[:, 1]]
+            c = p[tris[:, 2]]
+            return ((b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1])
+                    - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0]))
+
+        sign0 = np.sign(signed_areas(verts))
+        if self.FILTER_PAD_PX > 0:
+            k = 2 * self.FILTER_PAD_PX + 1
+            inside_mask = cv2.dilate(
+                np.asarray(mask).astype(np.uint8), np.ones((k, k), np.uint8))
+        else:
+            inside_mask = np.asarray(mask).astype(np.uint8)
+        mh, mw = inside_mask.shape
+        nbr_list = [sorted(neighbors[i]) for i in interior]
+
+        for _ in range(self.RELAX_ITERATIONS):
+            cand = verts.copy()
+            moved = False
+            for i, nbrs in zip(interior, nbr_list):
+                mean = verts[nbrs].mean(axis=0)
+                nx = verts[i, 0] + self.RELAX_WEIGHT * (mean[0] - verts[i, 0])
+                ny = verts[i, 1] + self.RELAX_WEIGHT * (mean[1] - verts[i, 1])
+                xi = int(round(nx))
+                yi = int(round(ny))
+                if 0 <= yi < mh and 0 <= xi < mw and inside_mask[yi, xi] > 0:
+                    cand[i, 0] = nx
+                    cand[i, 1] = ny
+                    moved = True
+            if not moved:
+                break
+            area1 = signed_areas(cand)
+            if (np.any(np.sign(area1) != sign0)
+                    or np.any(np.abs(area1) <= self.DEGENERATE_AREA2_EPSILON)):
+                break
+            verts = cand
+
+        norm = verts.copy()
+        if mesh["width"] > 0 and mesh["height"] > 0:
+            norm[:, 0] /= mesh["width"]
+            norm[:, 1] /= mesh["height"]
+        else:
+            norm = np.zeros_like(verts)
+        return {
+            "vertices": verts,
+            "vertices_norm": norm,
+            "indices": indices,
+            "width": mesh["width"],
+            "height": mesh["height"],
+        }
 
     def _build_delaunay(
         self,

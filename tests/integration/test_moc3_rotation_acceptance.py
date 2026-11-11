@@ -24,11 +24,13 @@ from drivers.live2d_runtime.moc3_verify import (
 )
 from live2d_builder.exporter.moc3_lint import lint_document
 from live2d_builder.exporter.moc3_model import (
+    DeformerGrid,
     MeshSpec,
     ParameterSpec,
     RigSpec,
     RotationDeformerSpec,
     RotationKeyform,
+    WarpDeformerSpec,
     compile_static_rig,
 )
 
@@ -255,6 +257,88 @@ def test_driven_rotation_rests_at_default_and_moves_both_ways(tmp_path):
         _rotate(_VERTS, -30.0))]), "ref_m")
     assert at_plus["pixels_sha256"] == ref_plus["pixels_sha256"]
     assert at_minus["pixels_sha256"] == ref_minus["pixels_sha256"]
+
+
+@requires_live2d
+@requires_pixels
+def test_rotation_between_two_warps_matches_pre_rotated_geometry(tmp_path):
+    """``warp → rotation → warp``：整条链必须与「顶点预旋」逐像素相同。
+
+    这是头部真实链路的形状（BodySway → HeadRotationZ → HeadRig）。两类跨类型边
+    各有自己的坐标口径：
+
+    * rotation 父=warp：内核把整棵子树平移父 warp 静止格的 min，origin 用父 warp
+      的归一 (s,t) —— 编译器在 ``deformer_origin_offsets`` / ``_write_deformers``
+      里分别落地；
+    * warp 父=rotation：控制网格按模型单位、成员网格按 (s,t)。
+
+    任何一处错（没扣 grid-min、origin 用单位口径、网格没写 (s,t)），静止帧就会
+    偏出画面或 ±30° 与参照对不上 —— 旧版探针正是在这里被网格二次归一的假象误导。
+    """
+    body_rect = (-200.0, -180.0, 200.0, 220.0)
+    head_rect = (-80.0, 0.0, 80.0, 160.0)
+    pivot = (0.0, 20.0)
+
+    def lattice(rect, n=2):
+        x0, y0, x1, y1 = rect
+        xs = [x0 + (x1 - x0) * i / n for i in range(n + 1)]
+        ys = [y0 + (y1 - y0) * i / n for i in range(n + 1)]
+        return [(x, y) for y in ys for x in xs]
+
+    sway = WarpDeformerSpec(
+        "BodySway", 2, 2,
+        [DeformerGrid(0.0, lattice(body_rect)), DeformerGrid(1.0, lattice(body_rect))],
+        parameter_id="ParamSway")
+    tilt = RotationDeformerSpec(
+        "Tilt",
+        [RotationKeyform(-30.0, angle=-30.0, origin=pivot),
+         RotationKeyform(0.0, angle=0.0, origin=pivot),
+         RotationKeyform(30.0, angle=30.0, origin=pivot)],
+        parameter_id=_PARAM, parent_deformer_id="BodySway")
+    head = WarpDeformerSpec(
+        "HeadRig", 2, 2,
+        [DeformerGrid(-30.0, lattice(head_rect)),
+         DeformerGrid(0.0, lattice(head_rect)),
+         DeformerGrid(30.0, lattice(head_rect))],
+        parameter_id="ParamHeadX",
+        parent_deformer_id="Tilt")
+
+    params = [ParameterSpec(_PARAM, -30.0, 30.0, 0.0),
+              ParameterSpec("ParamSway", 0.0, 1.0, 0.0),
+              ParameterSpec("ParamHeadX", -30.0, 30.0, 0.0)]
+    verts = [(-40.0, 40.0), (40.0, 40.0), (-40.0, 120.0), (40.0, 120.0)]
+
+    def chained():
+        return RigSpec(
+            meshes=[MeshSpec("Head", list(verts), [(0, 1, 3), (0, 3, 2)],
+                             [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)],
+                             deformer_id="HeadRig")],
+            parameters=params, canvas_width=_CANVAS, canvas_height=_CANVAS,
+            pixels_per_unit=_PPU, deformers=[sway, tilt, head])
+
+    plain = _render(tmp_path, RigSpec(
+        meshes=[MeshSpec("Head", list(verts), [(0, 1, 3), (0, 3, 2)],
+                         [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)])],
+        parameters=params, canvas_width=_CANVAS, canvas_height=_CANVAS,
+        pixels_per_unit=_PPU), "chain_plain")
+    rest = _render(tmp_path, chained(), "chain_rest",
+                   {_PARAM: 0.0, "ParamSway": 0.0, "ParamHeadX": 0.0})
+    assert rest["pixels_sha256"] == plain["pixels_sha256"], (
+        f"静止帧对不上：{plain['alpha_bbox']} vs {rest['alpha_bbox']}")
+
+    for degrees in (-30.0, 30.0):
+        tag = str(degrees).replace("-", "m").replace(".", "p")
+        reference = _render(tmp_path, RigSpec(
+            meshes=[MeshSpec("Head", list(_rotate(verts, degrees, about=pivot)),
+                             [(0, 1, 3), (0, 3, 2)],
+                             [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)])],
+            parameters=params, canvas_width=_CANVAS, canvas_height=_CANVAS,
+            pixels_per_unit=_PPU), f"chain_ref{tag}")
+        got = _render(tmp_path, chained(), f"chain{tag}",
+                      {_PARAM: degrees, "ParamSway": 0.0, "ParamHeadX": 0.0})
+        assert got["pixels_sha256"] == reference["pixels_sha256"], (
+            f"{degrees}° 的链式旋转与预旋参照不同：{reference['alpha_bbox']} vs "
+            f"{got['alpha_bbox']}")
 
 
 @requires_live2d

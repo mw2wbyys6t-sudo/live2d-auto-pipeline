@@ -99,6 +99,17 @@ EYE_SOURCES: Dict[str, str] = {
 #: Hair masks that must end up split into front/back.
 HAIR_FRONT = "hair_front"
 HAIR_BACK = "hair_back"
+#: 后发两侧的独立束（角色左 = 观察者右）。四条摆链靠这三个名字分工：
+#: ``hair_back`` 走 ParamHairSwingBack，左右两束各自一条侧摆链。
+HAIR_BACK_LEFT = "hair_back_left"
+HAIR_BACK_RIGHT = "hair_back_right"
+
+#: 后发分束的**自适应门槛**：每一束（含中间那束）至少要占后发总像素的这个比例，
+#: 否则不切 —— 窄发/整块发被硬切成三份只会多出两条假缝。
+HAIR_STRAND_MIN_RATIO = 0.12
+#: 分割谷的判定：候选列的占用像素数 ≤ 该侧平均占用的这个比例才算「能分开」。
+#: 1.0 表示不要求谷深（等于硬切），太松会把一整块平发切成三份。
+HAIR_VALLEY_RATIO = 0.75
 
 
 def _bbox_center_x(mask: np.ndarray) -> Optional[float]:
@@ -361,16 +372,142 @@ def split_eye_parts(
     return result, warnings
 
 
+def _valley_candidates(columns: np.ndarray, lo: int, hi: int) -> List[int]:
+    """``[lo, hi)`` 内按占用升序给出候选切列（最多 3 个，且必须真的形成谷）。
+
+    「谷」的判据是占用 ≤ 该侧平均占用的 ``HAIR_VALLEY_RATIO``。没有这个判据时
+    一整块平直的后发也会被切成三份，凭空多出两条会在摆动时张开的假缝。
+    """
+    if hi <= lo:
+        return []
+    segment = columns[lo:hi]
+    mean = float(segment.mean()) or 1.0
+    picked: List[int] = []
+    for offset in np.argsort(segment)[:3]:
+        if int(segment[offset]) > HAIR_VALLEY_RATIO * mean:
+            continue
+        picked.append(lo + int(offset))
+    return picked
+
+
+def split_hair_strands(
+    mask: np.ndarray,
+    midline: float,
+) -> Tuple[Dict[str, np.ndarray], List[str]]:
+    """把后发按「能分开的束」切成 中/左/右，束数自适应（1~3）。
+
+    四条头发摆链的名字分工是固定的：``hair_back``（中）走慢摆，
+    ``hair_back_left`` / ``hair_back_right`` 各走一条侧摆。但**不能无条件**切成
+    三束 —— 窄发或整块平发被硬切，静止时看不出来，摆起来就会从切缝裂开。
+    所以这里的束数由几何决定：
+
+    * 两侧各找到一个「谷」且三束都够大 → 3 束（四束头发的完整形态）；
+    * 只有一侧分得开 → 2 束（该侧独立，其余留在 ``hair_back``）；
+    * 都不成立 → 原样返回，交给 ``split_hair_parts`` 保留单束 ``hair_back``。
+
+    返回的掩码**互不重叠且并集等于输入**，所以切分本身不丢像素。
+    """
+    mask = np.asarray(mask, dtype=bool)
+    if mask.ndim != 2 or not mask.any():
+        return {}, []
+
+    total = int(mask.sum())
+    minimum = max(1, int(total * HAIR_STRAND_MIN_RATIO))
+    columns = mask.sum(axis=0).astype(np.int64)
+    occupied = np.where(columns > 0)[0]
+    if occupied.size < 3:
+        return {}, []
+    x0, x1 = int(occupied.min()), int(occupied.max())
+    if x1 - x0 < 4:
+        return {}, []
+
+    def part_px(lo: int, hi: int) -> int:
+        return int(columns[lo:hi].sum())
+
+    def band(lo: int, hi: int) -> np.ndarray:
+        """``[lo, hi)`` 列范围的原尺寸掩码 —— 切列不能把数组裁窄，
+        否则和其它层做按位与/或时形状对不上。"""
+        out = np.zeros_like(mask)
+        out[:, max(0, lo):max(0, hi)] = mask[:, max(0, lo):max(0, hi)]
+        return out
+
+    mid = int(round(float(midline)))
+    mid = min(max(mid, x0 + 1), x1 - 1) if x1 - x0 >= 2 else x0
+
+    # 三束：左切点在中线左边、右切点在中线右边；三束都必须 ≥ minimum。
+    best3 = None
+    for left_cut in _valley_candidates(columns, x0 + 1, mid):
+        for right_cut in _valley_candidates(columns, mid + 1, x1):
+            parts = (part_px(x0, left_cut), part_px(left_cut, right_cut),
+                     part_px(right_cut, x1 + 1))
+            if min(parts) < minimum:
+                continue
+            score = int(columns[left_cut]) + int(columns[right_cut])
+            if best3 is None or score < best3[0]:
+                best3 = (score, left_cut, right_cut)
+    if best3 is not None:
+        _, left_cut, right_cut = best3
+        return {
+            HAIR_BACK_RIGHT: band(0, left_cut),
+            HAIR_BACK: band(left_cut, right_cut),
+            HAIR_BACK_LEFT: band(right_cut, mask.shape[1]),
+        }, ["后发按谷切成中/左/右三束（自适应：三束都够大）"]
+
+    # 两束：只在分得开的那一侧切一刀，其余仍归 hair_back。
+    best2 = None
+    for cut in _valley_candidates(columns, x0 + 1, mid):
+        if part_px(x0, cut) >= minimum and part_px(cut, x1 + 1) >= minimum:
+            if best2 is None or int(columns[cut]) < best2[0]:
+                best2 = (int(columns[cut]), cut, HAIR_BACK_RIGHT)
+    for cut in _valley_candidates(columns, mid + 1, x1):
+        if part_px(cut, x1 + 1) >= minimum and part_px(x0, cut) >= minimum:
+            if best2 is None or int(columns[cut]) < best2[0]:
+                best2 = (int(columns[cut]), cut, HAIR_BACK_LEFT)
+    if best2 is not None:
+        _, cut, side_name = best2
+        if side_name == HAIR_BACK_RIGHT:
+            outside, rest = band(0, cut), band(cut, mask.shape[1])
+        else:
+            outside, rest = band(cut, mask.shape[1]), band(0, cut)
+        return {side_name: outside, HAIR_BACK: rest}, [
+            f"后发只有一侧能分开，切成两束（{side_name} + {HAIR_BACK}）"]
+
+    return {}, []
+
+
 def split_hair_parts(
     part_masks: Dict[str, np.ndarray],
 ) -> Tuple[Dict[str, np.ndarray], List[str]]:
-    """Ensure hair is split into distinct front/back masks.
+    """Ensure hair is split into distinct front/back masks（并尽量拆出左右两束）。
 
     Some backends emit one hair mask and copy it into both slots, which draws
     the same pixels twice. When the two masks are identical (or one is
     missing), the hair mass is split against the face box: hair covering the
     face is front hair, the rest is back hair.
+
+    前后确定以后，后发再交给 :func:`split_hair_strands` 按几何拆成中/左/右 ——
+    束数自适应，拆不开就保持单束。
     """
+    result, warnings = _ensure_hair_front_back(part_masks)
+    back = result.get(HAIR_BACK)
+    if back is None:
+        return result, warnings
+    back_mask = np.asarray(back, dtype=bool)
+    if not back_mask.any():
+        return result, warnings
+    midline = estimate_midline(result, back_mask.shape[1])
+    strands, strand_warnings = split_hair_strands(back_mask, midline)
+    if strands:
+        result.pop(HAIR_BACK, None)
+        result.update(strands)
+        warnings.extend(strand_warnings)
+    return result, warnings
+
+
+def _ensure_hair_front_back(
+    part_masks: Dict[str, np.ndarray],
+) -> Tuple[Dict[str, np.ndarray], List[str]]:
+    """把「同一块掩码同时当刘海和后发」的情况拆成前后两份。"""
     result: Dict[str, np.ndarray] = dict(part_masks)
     warnings: List[str] = []
 

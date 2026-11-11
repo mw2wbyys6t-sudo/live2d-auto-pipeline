@@ -86,24 +86,24 @@
 这部分最值得注意 —— 仓库用 `runtime_ready` / `dropped` / `deformers_static` 等字段**如实标注**能力状态，
 请以产物里的这些字段为准，不要以「导出成功」推断「能动画」。
 
-- **rotation 变形器在真实流水线里不会被创建**——注意这**不是**「已支持但没绑参数」，
-  两者的修法完全不同。三条实测原因（2026-10-21，用 `Work/base` 的真实 32 层跑
-  `DeformerHierarchy.build()` 复核）：
+- **眼球跟随用的两条 rotation 变形器在真实流水线里不会被创建**——注意这**不是**
+  「已支持但没绑参数」，两者的修法完全不同。三条实测原因（2026-10-21，用 `Work/base`
+  的真实 32 层跑 `DeformerHierarchy.build()` 复核）：
   1. 生成器 `DEFAULT_ROTATION_DEFORMERS` 声明的 targets 是 `eyeball_l` / `eye_left`，
      而分层阶段实际产出的层名是 `eyewhite_left` / `irides_left` / `eyelid_left`，
-     `_matched_targets` 恒为空 → rotation 变形器 **0 个**；
+     `_matched_targets` 恒为空 → 这两条 rotation 变形器不建；
   2. 枢轴 `(-35,-40)` 取自 `_DEFAULT_BONE_POSITIONS` 的**比例兜底**值，不是图像坐标；
   3. 即便前两条都修好，`_driving_rotation_parameter` 也只在 Head / Body / 双臂 / 三束
      头发里找 Z 轴参数，而眼球对应的是 `ParamEyeBallX/Y`（平移，非旋转），永远绑不上。
+  头部侧倾那条 `HeadRotationZ` 不依赖层名（`allow_empty_targets`，转整棵 HeadRig 子树），
+  现在会真的建出来并绑到 `ParamAngleZ`（见下面「rotation 与 warp 可以互相嵌套」）。
 
   「枢轴命中即绑定逐键键形」这条逻辑本身是好的（`tests/unit/test_moc3_pipeline.py`
-  有覆盖），绑定失败时也会如实记入 `deformers_static`。**真正承载转动的两条路径是
-  网格键形**：`head_angle_keyforms`（`ParamAngleX/Y/Z` 三轴 → face/hair/mouth/nose）
-  与 `eye_track_keyforms`（`ParamEyeBallX/Y` 双轴 + `Eyeball_L/R` 权重 → 眼白/虹膜）。
-  被跳过时现在会带 `rotation_skipped`（名字 + 原因 + 期望层名）并打 warning，
-  不再静默消失，见 `tests/unit/test_deformer_hierarchy_rotation.py`。
-  要让 rotation 变形器真正投入使用，必须换一个不被 warp 占用、语义确实是刚体旋转的
-  部件（例如手臂绕肩/绕肘），那是美术决策，不做推断。
+  有覆盖），绑定失败时也会如实记入 `deformers_static`。被跳过时现在会带
+  `rotation_skipped`（名字 + 原因 + 期望层名）并打 warning，不再静默消失，
+  见 `tests/unit/test_deformer_hierarchy_rotation.py`。
+  眼球的跟随实际由 `eye_track_keyforms`（`ParamEyeBallX/Y` 双轴 + `Eyeball_L/R` 权重
+  → 眼白/虹膜）承担 —— 那是平移而非旋转，用 rotation 变形器语义本就不对。
 - **warp 变形器**已可编译并过官方内核 + 逐像素验收。
 - **网格键形（逐顶点键形带）已开启**（`moc3_pipeline.MESH_KEYFORMS_ENABLED = True`），
   保留为急停开关。曾经整体关闭的现象是：模型里有 ≥2 个网格带键形时，官方 Cubism Core 在
@@ -270,6 +270,26 @@
   中间那一列顶点是必需的：4 角面片的形变只能是双线性插值，"两端动、中间不动"的口型/眉角
   会退化成整体平移（实测嘴整体上移 4px）。
   复核：`tests/unit/test_rig_mesh.py::TestTinyFeatureMesh`。
+- **rotation 与 warp 可以互相嵌套**（2026-11-10 官方 Core 逐字节复核，取代此前的「不能嵌套」
+  结论）。此前两条「不支持」的判据都是探针口径错误：把已经归一的 `(s, t)` 当画布像素传进
+  `MeshSpec`，编译器二次归一把网格压成一个点，于是「恒等网格」与「平移网格」渲染出同一张图。
+  重测后的规则，均已落进编译器并有像素验收：
+  1. `warp` 父=`rotation`：控制网格按**模型单位**存、成员网格按 `(s, t)`，与根级一致；静止帧
+     与「不挂变形器」逐字节相同，键形整体放大 1.5 倍时像素数 6084 → 13924。
+  2. `rotation` 父=`warp`：内核把整棵子树平移**父 warp 静止格的 min**（父格换尺寸/换位置时
+     位移随之等于新 min，尺度不变），所以写出前由 `deformer_origin_offsets` 从子树坐标里扣掉；
+     它的 `origin` 用**父 warp 的归一 (s,t)** 表达，而不是模型单位（单位口径会把整块转出画面）。
+  头部侧倾因此改由 `HeadRotationZ`（rotation）承担：`BodySway → HeadRotationZ → HeadRig`，
+  `HeadRig` 只剩 X/Y（`profile="head_xy"`），Z 不再由 warp 的 `angle_z` 模拟。
+  复核：`tests/integration/test_moc3_rotation_acceptance.py::test_rotation_between_two_warps_matches_pre_rotated_geometry`
+  （静止帧 + ±30° 与「顶点预旋」逐字节相同）、
+  `tests/unit/test_moc3_deformers.py::test_warp_under_rotation_keeps_the_model_unit_grid_space` /
+  `::test_rotation_under_a_warp_shifts_its_subtree_by_the_parent_grid_min`。
+- **单键形（band=0）的 warp 在内核里不生效**（2026-11-10 官方 Core 实测）：只有一个控制
+  网格、没有参数绑定的 warp，把整张网格平移 +30px 后渲染结果与恒等网格逐字节相同 ——
+  内核按「带」取键形，band 0 是空带，这条变形器等于没挂。本管线的静态回退网格都是
+  **恒等点阵**（参数不可用时 `_lattice(rect, ...)`），所以静止画面不受影响；但如果以后
+  有人想用「一个已经形变的网格」表达静态姿态，必须至少给两个键形（静止 + 目标）并绑参数。
 - **glue 类型变形器不支持**，会被记入 `deformers_uncompiled` 并压住 `runtime_ready`。
 - **真实美术观感未签核**：几何判据（画得出、位置尺度对）已闭环，但「像不像原画」仍需人工确认（F-05）。
 

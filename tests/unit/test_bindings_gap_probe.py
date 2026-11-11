@@ -403,6 +403,59 @@ def test_offline_chain_matches_official_core_on_a_nested_chain(tmp_path):
 
 
 # ======================================================================
+# warp 格内插值：官方 Core 是**三角形分片线性**，不是双线性
+# ======================================================================
+
+
+class TestWarpGridInterpolationFollowsTheCore:
+    """warp 变形器格内插值必须按 P10-P01 对角线分裂的三角形算。
+
+    实测（``tools/probe_warp_interpolation.py``，官方 Cubism Core 5-r.5）：
+    控制网格被拉成**非仿射**（只把一个角点拉出去）时，Core 渲染出的质心与
+    三角形预测差 0.43%，与双线性预测差 9.49%。
+
+    为什么仓库一直没人发现：仿射网格（整体平移）下两种插值结果**完全相同**，
+    而仓库所有 Core 对照用例用的都是整体平移 —— 结构性看不见这个差异。
+
+    ``quad_transforms=0``（网格形变）走三角形；``=1``（quad 形变）才走双线性。
+    编译器固定写 0（``moc3_model.py`` 的 ``additional.quad_transforms``），
+    所以尺子与自研播放器都必须按三角形算。
+    """
+
+    @staticmethod
+    def _non_affine_grid():
+        """一格 2x2 控制点，只把右上角拉出去 —— 破坏平行四边形关系。"""
+        return [-100.0, -60.0, 100.0, -60.0,
+                -100.0, 60.0, 400.0, 60.0]
+
+    def test_lower_left_triangle_uses_p00_p10_p01(self):
+        grid = self._non_affine_grid()
+        # (u,v)=(0.35,0.35) → fu+fv=0.7 < 1 → 落在 P00 一侧，用 P00/P10/P01
+        got = probe_mod.sample_warp_grid(grid, 1, 1, 0.35, 0.35)
+        # 三角形：P00(1-fu-fv) + P10·fu + P01·fv（不含 P11）
+        assert got == pytest.approx((-30.0, -18.0)), got
+        # 双线性会给出 (6.75, -18.0)：差 36.75 个模型单位
+        bilinear_x = (-100.0 * 0.65 * 0.65 + 100.0 * 0.35 * 0.65
+                      + (-100.0) * 0.65 * 0.35 + 400.0 * 0.35 * 0.35)
+        assert abs(got[0] - bilinear_x) > 30.0, "双线性没被排除，判据失效"
+
+    def test_upper_right_triangle_uses_p11_p01_p10(self):
+        grid = self._non_affine_grid()
+        # (u,v)=(0.65,0.65) → fu+fv=1.3 > 1 → 落在 P11 一侧
+        got = probe_mod.sample_warp_grid(grid, 1, 1, 0.65, 0.65)
+        # 三角形：P11(fu+fv-1) + P01(1-fu) + P10(1-fv)
+        expect = (400.0 * 0.3 + (-100.0) * 0.35 + 100.0 * 0.35,
+                  60.0 * 0.3 + 60.0 * 0.35 + (-60.0) * 0.35)
+        assert got == pytest.approx(expect), got
+
+    def test_affine_grid_is_unaffected(self):
+        """整体平移（仿射）下两种插值相同 —— 仓库原有的对照用例必须照样过。"""
+        grid = [-100.0, -60.0, 100.0, -60.0, -100.0, 60.0, 100.0, 60.0]
+        got = probe_mod.sample_warp_grid(grid, 1, 1, 0.35, 0.35)
+        assert got == pytest.approx((-30.0, -18.0)), got
+
+
+# ======================================================================
 # #72：越出父级静止矩形的画（art outside parent grid）
 #
 # 上面那些用例的几何**全部**落在父级静止矩形之内，所以它们看不见这个缺陷：
@@ -591,6 +644,60 @@ def test_the_shipped_player_extrapolates_out_of_grid_art_like_the_core_and_the_r
         1, 1, 0.5, -0.8)
     assert got["x"] == pytest.approx(want[0], abs=1e-3), (got, want)
     assert got["y"] == pytest.approx(want[1], abs=1e-3), (got, want)
+
+
+# ----------------------------------------------------------------------
+# 播放器格内采样：必须与尺子、与官方 Core 同为三角形分片线性
+# ----------------------------------------------------------------------
+
+_PLAYER_IN_GRID_HARNESS = """
+import { pathToFileURL } from 'node:url';
+const mod = await import(pathToFileURL(process.env.TS_PATH).href);
+// 刻意非仿射：只把右上角拉出去。双线性与三角形在此必然给出不同结果。
+const grid = new Float32Array([-100, -60, 100, -60, -100, 60, 400, 60]);
+const pts = [[0.35, 0.35], [0.65, 0.65], [0.5, 0.1]];
+const samples = [];
+for (const [u, v] of pts) {
+  const o = { x: NaN, y: NaN };
+  mod.sampleWarpGrid(grid, 1, 1, u, v, o);
+  samples.push([o.x, o.y]);
+}
+console.log(JSON.stringify({ samples }));
+"""
+
+
+def _player_sampler_in_grid():
+    """用 node 跑 shipped 播放器里的 sampleWarpGrid（非仿射网格的格内采样）。"""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("需要 node 才能跑 shipped 播放器里那一份采样器")
+    ts = ROOT / "web" / "lib" / "live2d-bindings.ts"
+    assert ts.is_file(), ts
+    env = dict(os.environ, TS_PATH=str(ts))
+    proc = subprocess.run([node, "--input-type=module", "-e",
+                           _PLAYER_IN_GRID_HARNESS],
+                          capture_output=True, text=True, encoding="utf-8",
+                          env=env, timeout=120)
+    assert proc.returncode == 0, proc.stderr[-500:]
+    lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("{")]
+    assert lines, proc.stdout[-500:]
+    return json.loads(lines[-1])["samples"]
+
+
+def test_the_shipped_player_samples_in_grid_like_the_core_and_the_ruler():
+    """浏览器那一半：播放器格内采样必须与尺子一致（三角形分片线性）。
+
+    两处实现是同一只手移植的，改一边不改另一边，浏览器预览就会与官方内核
+    画出不一样的变形 —— 这正是"动起来观感不一致"的来源。
+    """
+    grid = [-100.0, -60.0, 100.0, -60.0, -100.0, 60.0, 400.0, 60.0]
+    samples = _player_sampler_in_grid()
+    for (u, v), (gx, gy) in zip([(0.35, 0.35), (0.65, 0.65), (0.5, 0.1)], samples):
+        want = probe_mod.sample_warp_grid(grid, 1, 1, u, v)
+        assert gx == pytest.approx(want[0], abs=1e-3), (u, v, gx, want)
+        assert gy == pytest.approx(want[1], abs=1e-3), (u, v, gy, want)
+    # 双线性在这个网格上给出 (6.75, -18.0)；Core 实测走的是三角形 (-30, -18)
+    assert samples[0][0] == pytest.approx(-30.0, abs=1e-3), samples
 
 
 # ----------------------------------------------------------------------

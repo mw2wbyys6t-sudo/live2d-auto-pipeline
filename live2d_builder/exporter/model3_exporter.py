@@ -32,7 +32,17 @@ from live2d_builder.exporter.moc3_model import DEFAULT_PIXELS_PER_UNIT
 from live2d_builder.exporter.texture_atlas import TextureAtlas
 from live2d_builder.blendshapes.parameters import ParameterSet
 from live2d_builder.blendshapes.expressions import ExpressionBuilder
-from live2d_builder.physics.config import PhysicsBuilder, prune_physics_to_parameters
+from live2d_builder.layer_naming import (
+    ANIMAL_EAR_KEYWORDS,
+    HAIR_KEYWORDS,
+    TAIL_KEYWORDS,
+    matches_keywords,
+)
+from live2d_builder.physics.config import (
+    PhysicsBuilder,
+    is_skirt_layer,
+    prune_physics_to_parameters,
+)
 
 log = get_logger("exporter.model3")
 
@@ -526,10 +536,11 @@ class Model3Exporter:
     def _build_default_physics(self, layers: Dict[str, Image.Image]) -> Dict[str, Any]:
         """Build a default physics configuration based on available layers."""
         self._physics.reset()
-        hair = [n for n in layers if "hair" in n.lower()]
-        skirt = [n for n in layers if "skirt" in n.lower()]
-        has_ears = any("ear" in n.lower() and "animal" in n.lower() for n in layers)
-        has_tail = any("tail" in n.lower() for n in layers)
+        # 与 pipeline 同一套判定（layer_naming 的整词匹配），避免两处规则漂移。
+        hair = [n for n in layers if matches_keywords(n, HAIR_KEYWORDS)]
+        skirt = [n for n in layers if is_skirt_layer(n)]
+        has_ears = any(matches_keywords(n, ANIMAL_EAR_KEYWORDS) for n in layers)
+        has_tail = any(matches_keywords(n, TAIL_KEYWORDS) for n in layers)
 
         if hair:
             self._physics.build_hair_physics(hair)

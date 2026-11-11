@@ -6,7 +6,9 @@ moc3 里的键形与 warp 变形器是二进制；前端要「按参数把顶点
 1. 坐标统一换成**图层图像坐标**（左上原点、y 向下），与 ``{name}.meshes.json``
    同一空间。模型坐标 = 图像坐标减半画布（见 ``to_model_xy`` 的实测结论：
    内核把 y 当向下为正），所以这里只做平移，**不翻 y**。
-2. 多轴带按 moc3 的展平序原样导出（第一个轴步长为 1），插值交给前端。
+2. 多轴带按 moc3 的展平序原样导出（第一个轴步长为 1），插值交给前端；
+   warp 导出控制点网格，rotation 导出 ``angle/origin/scale`` 键形（按同一个
+   ``p' = s·R·p + (I − R)·origin`` 由前端复算）。
 3. 引用挂进 model3.json 的 ``FileReferences.Bindings``（非标准键，官方内核
    只读它认识的字段，多余键不影响加载）。
 """
@@ -20,6 +22,7 @@ from core.logger import get_logger
 
 from live2d_builder.exporter.moc3_model import (
     RigSpec,
+    RotationDeformerSpec,
     WarpDeformerSpec,
 )
 
@@ -159,6 +162,7 @@ def _deformer_entry(deformer: WarpDeformerSpec, off_x: float,
     ys = [float(p[1]) for p in rest]
     return {
         "id": deformer.deformer_id,
+        "type": "warp",
         "rows": int(deformer.rows),
         "cols": int(deformer.cols),
         "parent": str(deformer.parent_deformer_id or ""),
@@ -174,19 +178,60 @@ def _deformer_entry(deformer: WarpDeformerSpec, off_x: float,
     }
 
 
+def _rotation_entry(deformer: RotationDeformerSpec, off_x: float,
+                    off_y: float) -> Dict[str, Any]:
+    """rotation 变形器：前端按 ``angle/origin/scale`` 自己做刚体变换。
+
+    坐标同样换成图层图像坐标（枢轴加半画布），角度单位与 moc3 一致（度）。
+    ``base_angle`` 必须一起导出：内核的总角度 = base + 键形角度，漏了它静止
+    姿态就不是 0 度，整颗头会一直偏着。
+    """
+    return {
+        "id": deformer.deformer_id,
+        "type": "rotation",
+        "parent": str(deformer.parent_deformer_id or ""),
+        "baseAngle": float(deformer.base_angle),
+        "axes": [[str(pid), _round(keys, _POSITION_DECIMALS)]
+                 for pid, keys in deformer.axes_spec],
+        "keyforms": [
+            {
+                "angle": float(k.angle),
+                "origin": [round(float(k.origin[0]) + off_x, _POSITION_DECIMALS),
+                           round(float(k.origin[1]) + off_y, _POSITION_DECIMALS)],
+                "scale": float(k.scale),
+            }
+            for k in deformer.keyforms
+        ],
+    }
+
+
 def build_bindings_document(spec: RigSpec) -> Dict[str, Any]:
     """RigSpec -> 可 JSON 化的绑定文档（坐标已换成图层图像坐标）。"""
     # to_model_xy 是 x - w/2, y - h/2（y 不翻转），逆变换就是加回半画布。
     off_x = float(spec.canvas_width) / 2.0
     off_y = float(spec.canvas_height) / 2.0
 
-    warps = [d for d in spec.deformers if isinstance(d, WarpDeformerSpec)]
-    skipped_rotation = [d.deformer_id for d in spec.deformers
-                        if not isinstance(d, WarpDeformerSpec)]
-    if skipped_rotation:
-        log.info(f"rotation 变形器不导出到 bindings（当前全为静态姿态）："
-                 f"{skipped_rotation}")
     defaults = {str(p.parameter_id): float(p.default) for p in spec.parameters}
+    # 按规格顺序导出（与 moc3 的拓扑序一致），父级名字两边对得上。
+    deformer_entries: List[Dict[str, Any]] = []
+    for deformer in spec.deformers:
+        if isinstance(deformer, WarpDeformerSpec):
+            deformer_entries.append(
+                _deformer_entry(deformer, off_x, off_y, defaults))
+        else:
+            deformer_entries.append(_rotation_entry(deformer, off_x, off_y))
+    # 父级必须指向本文档里真实存在的变形器。上游 legal_deformer_parents() 已经
+    # 裁过一遍，这里再查一次是因为「父级没落地」还有一条路径：某个变形器因为
+    # 没有成员网格被整条跳过，子级的边就悬空了。前端会照着 parent 画层级线，
+    # 指向空气的边等于把拓扑画错，所以宁可降级成根级并留痕。
+    known = {entry["id"] for entry in deformer_entries}
+    for entry in deformer_entries:
+        parent = str(entry.get("parent") or "")
+        if parent and parent not in known:
+            log.warning(
+                f"bindings: 变形器 {entry['id']} 的父级 {parent} 不在导出集合里，"
+                "按根变形器处理")
+            entry["parent"] = ""
 
     return {
         "version": BINDINGS_VERSION,
@@ -201,8 +246,7 @@ def build_bindings_document(spec: RigSpec) -> Dict[str, Any]:
             for p in spec.parameters
         ],
         "meshes": [_mesh_entry(m, off_x, off_y) for m in spec.meshes],
-        "deformers": [_deformer_entry(d, off_x, off_y, defaults) for d in warps],
-        "skippedRotationDeformers": skipped_rotation,
+        "deformers": deformer_entries,
     }
 
 

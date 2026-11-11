@@ -13,6 +13,14 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from core.logger import get_logger
+from live2d_builder.layer_naming import (
+    ANIMAL_EAR_KEYWORDS,
+    HAIR_BACK_KEYWORDS,
+    HAIR_KEYWORDS,
+    SKIRT_KEYWORDS,
+    TAIL_KEYWORDS,
+    matches_keywords,
+)
 
 log = get_logger("rigging.deformers")
 
@@ -96,6 +104,9 @@ class BoneHierarchy:
         "ArmBack_R":     {"parent": "Body",          "group": "arms",    "order": 27},
         "ForearmBack_R": {"parent": "ArmBack_R",     "group": "arms",    "order": 28},
         "Skirt":         {"parent": "Waist",         "group": "clothes", "order": 29},
+        # 尾巴挂在腰下：TailSwing 变形器的 parent 必须是真实存在的骨骼，
+        # 否则整条尾巴摆链在 moc3 里找不到归属。
+        "Tail":          {"parent": "Waist",         "group": "body",    "order": 36},
         "Leg_L":         {"parent": "Waist",         "group": "legs",    "order": 30},
         "Calf_L":        {"parent": "Leg_L",         "group": "legs",    "order": 31},
         "Foot_L":        {"parent": "Calf_L",        "group": "legs",    "order": 32},
@@ -139,6 +150,21 @@ class BoneHierarchy:
         "ear_left": "Ear_L",
         "ear_right": "Ear_R",
         "earwear": "Ear_L",
+        # 兽耳的常见写法：不映射就会落到默认骨骼（Face），头一晃整只耳朵像贴在脸上。
+        "animal_ear": "Ear_L",
+        "animal_ear_l": "Ear_L",
+        "animal_ear_r": "Ear_R",
+        "kemomimi": "Ear_L",
+        "kemomimi_l": "Ear_L",
+        "kemomimi_r": "Ear_R",
+        "cat_ear": "Ear_L",
+        "cat_ear_l": "Ear_L",
+        "cat_ear_r": "Ear_R",
+        "fox_ear": "Ear_L",
+        "fox_ear_l": "Ear_L",
+        "fox_ear_r": "Ear_R",
+        "兽耳": "Ear_L",
+        "猫耳": "Ear_L",
         "nose": "Nose",
         "mouth_cavity": "Mouth",
         "mouth_tongue": "Mouth",
@@ -184,6 +210,11 @@ class BoneHierarchy:
         "bottomwear": "Skirt",
         "skirt_hem": "Skirt",
         "skirt_side": "Skirt",
+        # ---- 尾巴 ----
+        "tail": "Tail",
+        "tail_l": "Tail",
+        "tail_r": "Tail",
+        "尾巴": "Tail",
         # ---- 配件 ----
         #
         # ``accessories`` 是分层器的**通用兜底桶**，里面可能是头饰、耳饰、项链、
@@ -446,10 +477,36 @@ class BoneHierarchy:
         if base in self.LAYER_BONE_MAP:
             return self.LAYER_BONE_MAP[base], "map"
 
+        # 词表只能穷举有限写法；中文与其它后端命名走关键词兜底，
+        # 否则「裙子」「尾巴」「cat_ear_L」都会掉到位置推断/默认骨骼。
+        keyword_bone = self._bone_from_keywords(norm, base, side)
+        if keyword_bone:
+            return keyword_bone, "keyword"
+
         inferred = self._infer_from_centroid(centroid, span)
         if inferred:
             return inferred, "position"
         return self.DEFAULT_BONE, "default"
+
+    @staticmethod
+    def _bone_from_keywords(norm: str, base: str, side: Optional[str]) -> str:
+        """按 layer_naming 的关键词表兜底骨骼；没命中返回空串。"""
+        probes = {norm, base}
+
+        def hit(keywords) -> bool:
+            return any(matches_keywords(probe, keywords) for probe in probes)
+
+        if hit(ANIMAL_EAR_KEYWORDS):
+            return "Ear_R" if side == "R" else "Ear_L"
+        if hit(TAIL_KEYWORDS):
+            return "Tail"
+        if hit(SKIRT_KEYWORDS):
+            return "Skirt"
+        if hit(HAIR_BACK_KEYWORDS):
+            return "Hair_Back"
+        if hit(HAIR_KEYWORDS):
+            return "Hair_Front"
+        return ""
 
     def _infer_from_centroid(
         self,
@@ -565,6 +622,7 @@ class BoneHierarchy:
             "ArmBack_R":     ( 90.0,  80.0),
             "ForearmBack_R": ( 130.0, 150.0),
             "Skirt":         (0.0,  220.0),
+            "Tail":          (0.0,  200.0),
             "Leg_L":         (-30.0, 240.0),
             "Calf_L":        (-30.0, 340.0),
             "Foot_L":        (-30.0, 440.0),
@@ -587,7 +645,11 @@ def normalise_layer_name(name: str) -> str:
     lookup falls through to the default bone and all layers end up
     parented to ``Face`` — which silently disables parameter keyforms.
     """
-    norm = name.strip().lower().replace(" ", "_").replace("-", "_")
+    norm = name.strip()
+    # 驼峰先拆开再小写：PSD 与部分后端导出 ``HairFront`` / ``hairBack``，
+    # 不拆就变成 ``hairfront``，骨骼表与变形器 targets 一个都命中不了。
+    norm = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", norm)
+    norm = norm.lower().replace(" ", "_").replace("-", "_")
     norm = re.sub(r"^\d+_", "", norm)
     return norm
 
@@ -648,15 +710,26 @@ class DeformerHierarchy:
         #     真实层名里可能出现，且都在头的外沿。
         # 淡入层只交出**几何归属**：ParamCheek / ParamTears 的不透明度键形照旧留在
         # 网格上（一个网格只能挂一条带，那是局部表情，本来就该相对父级动）。
-        # 头是挂在身子上的：``under: "BodySway"`` 让整颗头跟着躯干侧倾走，这条边
-        # 今天由各网格自己的 ``ParamBodyAngleZ`` 烘焙承担（撤烘焙时必须留住那一份，
-        # 见 moc3_pipeline.body_follow_band —— BodySway 的带里**没有** Z 轴）。
-        # 链深因此是 BodySway(1) → HeadRig(2) → 表情/头发(3)，正好停在官方 Core
-        # 量过的包络上（Task 1.5 只验到深度 3；上限守卫见 TRUNK_MAX_CHAIN_DEPTH）。
-        {"name": "HeadRig",  "parent": "Head", "under": "BodySway",
-         "rows": 4, "cols": 3, "type": "warp", "profile": "head",
-         "parameters": ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
+        # 头是挂在身子上的：``under: "BodySway"`` 让整颗头跟着躯干倾摆走。
+        # 中间插一条 ``HeadRotationZ``（rotation，绕 Head 关节转 ParamAngleZ）：
+        # BodySway(1) → HeadRotationZ(2) → HeadRig(3) → 表情/头发(4)，
+        # 正好停在官方 Core 量过的链深包络上（TRUNK_MAX_CHAIN_DEPTH = 4）。
+        #
+        # Z 侧倾从这条 warp 的 angle_z 挪到 HeadRotationZ 上：刚体旋转是 rotation
+        # 变形器的本职，warp 只是用逐点位移模拟它。两条边的坐标口径差异（rotation
+        # 子树被父 warp 平移、origin 用父 warp 的 (s,t)）已在 moc3_model 写出侧落地，
+        # 并用官方 Core 逐字节验收（BodySway→HeadRotationZ→HeadRig 链在 Z=±30°
+        # 与「顶点预旋同角度」完全一致）。
+        #
+        # 所以这条 warp 只剩 X/Y：profile 用 ``head_xy``（两轴），不能再写三轴 ——
+        # ``_profile_grids`` 按参数个数精确匹配角色序列，多一个少一个都会静默退回静态。
+        {"name": "HeadRig",  "parent": "Head", "under": "HeadRotationZ",
+         "rows": 4, "cols": 3, "type": "warp", "profile": "head_xy",
+         "parameters": ["ParamAngleX", "ParamAngleY"],
+         # ear_L / ear_R 是 19 类部位后端（l2d_sam_iter2）的层名写法；
+         # 不点名的话人类耳朵不随头转（ear_left/right 是旧管线写法）。
          "targets": ["face", "nose", "accessories", "ear_left", "ear_right",
+                    "ear_L", "ear_R",
                     "cheek", "tear_left", "tear_right",
                     "eyelid_left", "eyelid_right"]},
         # ---- 头发摆动：由 ParamHairSwing 驱动，发根钉住、发梢摆 ----
@@ -664,22 +737,50 @@ class DeformerHierarchy:
          "rows": 3, "cols": 3,
          "type": "warp", "profile": "hair_sway",
          "parameters": ["ParamHairSwing"],
-         "targets": ["hair_front", "hair_bangs", "hair_mid", "hair_side"]},
+         # 19 类部位解析后端（l2d_sam_iter2）只给一整块 ``hair``，没有前后之分。
+         # 不点名它就一个变形器都挂不上、ParamHairSwing 照算但没人消费 ——
+         # 预览里头发纹丝不动。整块只有一条摆链，挂前发这条（快摆）。
+         "targets": ["hair_front", "hair_bangs", "hair_mid", "hair_side", "hair"],
+         # 通用命名：HairFront / 前发 / hair1 都要能命中；后发从头发大类里剔除，
+         # 否则同一块后发会被前发与后发两条摆链同时声明。
+         "target_keywords": HAIR_KEYWORDS,
+         "exclude_keywords": HAIR_BACK_KEYWORDS},
+        # 后发是独立的慢摆链，读自己的 ParamHairSwingBack：
+        # 与 HairFront 共用 ParamHairSwing 时内核只保留一条输出（实测旧产物里
+        # 两个组的输出完全一样），后发的三级钟摆等于白算。
         {"name": "HairBackSwing",  "parent": "Head", "under": "HeadRig",
          "rows": 4, "cols": 2,
          "type": "warp", "profile": "hair_sway",
-         "parameters": ["ParamHairSwing"],
-         "targets": ["hair_back", "hair_shadow_back"]},
+         "parameters": ["ParamHairSwingBack"],
+         "targets": ["hair_back", "hair_shadow_back"],
+         "target_keywords": HAIR_BACK_KEYWORDS,
+         # 左右侧后发各有自己的摆链（HairSideSwing_L/R），这里不重复声明。
+         "exclude_keywords": ("hair_back_left", "hair_back_right", "左后发", "右后发")},
         {"name": "HairSideSwing_L", "parent": "Head", "under": "HeadRig",
          "rows": 2, "cols": 2,
          "type": "warp", "profile": "hair_sway",
-         "parameters": ["ParamHairSwing"],
+         # 侧束有自己的物理参数：与中束共用 ParamHairSwingBack 时内核只保留一条
+         # 输出，侧束与中束的相位差被抹平，四束拆分就白拆了。
+         "parameters": ["ParamHairSwingSideL"],
          "targets": ["hair_back_left"]},
         {"name": "HairSideSwing_R", "parent": "Head", "under": "HeadRig",
          "rows": 2, "cols": 2,
          "type": "warp", "profile": "hair_sway",
-         "parameters": ["ParamHairSwing"],
+         "parameters": ["ParamHairSwingSideR"],
          "targets": ["hair_back_right"]},
+        # ---- 兽耳摆动：由 ParamEarSwing 驱动（AnimalEars 物理组的输出）----
+        #
+        # 只点名**兽耳专属**层名：人类的 ear_left / ear_right 归 HeadRig，
+        # 一块网格只能挂一个变形器，两边都写会互相覆盖。
+        {"name": "EarSwing", "parent": "Head", "under": "HeadRig",
+         "rows": 2, "cols": 2,
+         "type": "warp", "profile": "hair_sway",
+         "parameters": ["ParamEarSwing"],
+         "targets": ["animal_ear", "animal_ear_L", "animal_ear_R",
+                     "kemomimi", "kemomimi_L", "kemomimi_R"],
+         # 通用命名：cat_ear / fox_ear / beast_ear / 猫耳；候选表里刻意不含
+         # 单独的 ``ear``，否则 19 类的 earwear（耳饰）会被当成会摆的兽耳。
+         "target_keywords": ANIMAL_EAR_KEYWORDS},
         # ---- 躯干：侧倾 / 前后倾 / 摆动 / 呼吸（胯部不动，越靠肩位移越大）----
         #
         # 脖子必须跟躯干挂在同一条变形器上：领口（``collar``）画在脖子上，只有领子
@@ -707,8 +808,29 @@ class DeformerHierarchy:
          "axis_layer": "neck",
          "parameters": ["ParamAngleX", "ParamAngleY", "ParamAngleZ"],
          "targets": ["neck", "collar"]},
-        {"name": "SkirtSway",      "parent": "Skirt", "rows": 4, "cols": 3,
-         "type": "warp", "targets": ["skirt"]},
+        # 裙摆：腰线钉住、下摆按 ParamSkirtSwing 横摆；under=BodySway 让整条裙子
+        # 先跟着躯干倾摆，再叠加自己的惯性摆动。
+        #
+        # targets 必须同时点名 19 类后端的 ``bottomwear`` 与旧管线的
+        # ``clothes_bottom`` / ``skirt_body``：少一个就是「physics3 里有 Skirt 组、
+        # 裙子却不动」。此前这条变形器既没有 parameters 也没有 profile，
+        # 只会被当成静止网格导出。
+        {"name": "SkirtSway",      "parent": "Skirt", "under": "BodySway",
+         "rows": 4, "cols": 3,
+         "type": "warp", "profile": "skirt_sway",
+         "parameters": ["ParamSkirtSwing"],
+         "targets": ["skirt", "bottomwear", "clothes_bottom", "skirt_body"],
+         # 通用命名：SkirtFront / 裙摆 / 短裙 都能命中。
+         "target_keywords": SKIRT_KEYWORDS},
+        # ---- 尾巴摆动：由 ParamTailSwing 驱动（Tail 物理组的输出）----
+        #
+        # ``tail`` 按整词匹配，``detail`` 不会误命中；中文层名（尾巴）走子串。
+        {"name": "TailSwing", "parent": "Tail", "under": "BodySway",
+         "rows": 3, "cols": 2,
+         "type": "warp", "profile": "tail_sway",
+         "parameters": ["ParamTailSwing"],
+         "targets": [],
+         "target_keywords": TAIL_KEYWORDS},
         # ---- 表情形变：参数写死在说明里（这些效果没有对应骨骼，无从推导）----
         #
         # 放在变形器层而不是网格键形层，是因为网格只能挂**一个**参数带：眼睛网格
@@ -805,12 +927,15 @@ class DeformerHierarchy:
                      "cuff_R", "hand_R"]},
     ]
 
-    # ---- rotation 变形器：当前**不会**被创建，保留定义只为标明意图 ----
+    # ---- rotation 变形器 ----
+    #
+    # 眼睛两条仍是「不落地」的定义（保留只为标明意图），HeadRotationZ 作为
+    # **可选能力**保留在 ``HEAD_ROTATION`` 里但**不进默认表** —— 原因见下。
     #
     # 三条实测结论（2026-10-21，用 Work/base 的真实 32 层跑 build() 验证）：
     # 1) targets 里的 ``eyeball_l`` / ``eye_left`` 与分层阶段实际产出的层名
     #    （``eyewhite_left`` / ``irides_left`` / ``eyelid_left``）不匹配，
-    #    ``_matched_targets`` 恒为空 —— 真实流水线里 rotation 变形器 **0 个**。
+    #    ``_matched_targets`` 恒为空 —— 真实流水线里这两条 rotation 变形器 **0 个**。
     # 2) pivot(-35,-40) 取自 ``_DEFAULT_BONE_POSITIONS`` 的**比例兜底**值，不是
     #    图像坐标；真实眼骨经质心换算后并不在这个点上（见 LIMITATIONS §3
     #    「骨骼枢轴必须是图像坐标」）。
@@ -819,12 +944,23 @@ class DeformerHierarchy:
     #    参数，而眼球对应的是 ParamEyeBallX/Y（平移，不是旋转），永远绑不上。
     #
     # 眼球跟随实际由 ``moc3_pipeline.eye_track_keyforms`` 用 ParamEyeBallX/Y 双轴
-    # 网格键形实现，头部三轴转动由 ``head_angle_keyforms`` 实现 —— 效果不缺，
-    # 缺的是「这两条不是 rotation 变形器」这件事被说清楚。
-    # 要让 rotation 变形器真正投入使用，必须换一个不被 warp 变形器占用、且语义
-    # 确实是刚体旋转的部件（例如手臂绕肩/绕肘），并同步调整网格归属。那是美术
-    # 决策，不能靠推断代替。
+    # 网格键形实现 —— 效果不缺，缺的是「这两条不是 rotation 变形器」这件事被说清楚。
+    #
+    #: 头部刚体侧倾：绕 Head 关节转 ParamAngleZ 的 rotation 定义。
+    #:
+    #: **已进默认表**。它没有直接成员网格（``allow_empty_targets``）：转的是整棵
+    #: HeadRig 子树。曾因「rotation 与 warp 不能互相嵌套」而撤下，那条结论是探针
+    #: 口径错误 —— 2026-11-10 用官方 Core 重测：warp 挂在 rotation 之下照常生效，
+    #: rotation 挂在 warp 之下只需按「父 warp 静止格 min 平移 + origin 用父 warp 的
+    #: (s,t)」写出，静止帧与 ±30° 都逐字节命中（``probe_head_rot_chain2.py``）。
+    HEAD_ROTATION: Dict = {
+        "name": "HeadRotationZ", "parent": "Head", "type": "rotation",
+        "pivot_bone": "Head", "under": "BodySway",
+        "allow_empty_targets": True, "targets": [],
+    }
+
     DEFAULT_ROTATION_DEFORMERS: List[Dict] = [
+        HEAD_ROTATION,
         {"name": "EyeTrack_L",     "parent": "Eye_L",  "pivot": (-35, -40),
          "type": "rotation", "targets": ["eyeball_l", "eye_left"]},
         {"name": "EyeTrack_R",     "parent": "Eye_R",  "pivot": (35, -40),
@@ -858,17 +994,45 @@ class DeformerHierarchy:
         # 这里曾自写一份只做大小写的，于是 PSD 导入的 ``000_hair_back`` 一个目标
         # 都命中不了 —— 实测同一批图 11 个 warp 变形器 → 0 个，构建照样报 valid。
         available_norm = {normalise_layer_name(n) for n in available}
+        # 归一后的层名 -> 原始写法：关键词命中后要把原始名交回下游（下游按
+        # 原始层名找网格）。
+        original_by_norm: Dict[str, str] = {}
+        for name in sorted(available):
+            original_by_norm.setdefault(normalise_layer_name(name), name)
+        # 一块网格只能挂一个变形器：先声明的先占用，后面的关键词不再抢。
+        claimed: set = set()
 
         def _matched_targets(spec: Dict) -> List[str]:
-            """目标里真的存在的层名（**大小写不敏感**）。
+            """目标里真的存在的层名（**大小写不敏感**），并支持关键词扩展。
 
             以前这里拿原始目标去比 ``available_norm``（已小写化），于是
             ``arm_L`` / ``sleeve_L`` 这种带大写侧别的目标永远命中不了，整个变形器
             被静默跳过——实测肩部抬落的变形器因此根本没建出来。
             这里保留原始写法返回，下游 ``build_deformers`` 用 ``_norm`` 匹配网格。
+
+            ``target_keywords`` / ``exclude_keywords`` 是给不同分层器的命名兜底的：
+            只写死 ``hair_back`` 时，K-means 的 ``头发_后``、PSD 的 ``000_hair``
+            一个都命中不了。关键词命中后仍然返回**原始层名**。
             """
-            return [t for t in spec["targets"]
-                    if normalise_layer_name(t) in available_norm]
+            matched: List[str] = []
+            for target in spec["targets"]:
+                norm = normalise_layer_name(target)
+                if norm in available_norm and norm not in claimed:
+                    matched.append(target)
+                    claimed.add(norm)
+
+            keywords = spec.get("target_keywords") or ()
+            exclusions = spec.get("exclude_keywords") or ()
+            if keywords:
+                for norm, original in original_by_norm.items():
+                    if norm in claimed:
+                        continue
+                    if exclusions and matches_keywords(original, exclusions):
+                        continue
+                    if matches_keywords(original, keywords):
+                        matched.append(original)
+                        claimed.add(norm)
+            return matched
 
         self._deformers = []
         self._by_name = {}
@@ -897,7 +1061,9 @@ class DeformerHierarchy:
         rotation_skipped: List[Dict] = []
         for spec in self.DEFAULT_ROTATION_DEFORMERS:
             targets = _matched_targets(spec)
-            if not targets:
+            # 纯父级 rotation（如 HeadRotationZ）没有直接成员：它靠 under 链
+            # 旋转整棵子树，targets 为空是正常状态，不算「未命中」。
+            if not targets and not spec.get("allow_empty_targets"):
                 # 不许静默跳过：targets 与真实分层产出长期不匹配（见
                 # DEFAULT_ROTATION_DEFORMERS 的说明）。静默会让「模型里没有
                 # rotation 变形器」被误读成「rotation 已支持但没绑参数」，
@@ -912,9 +1078,10 @@ class DeformerHierarchy:
             d = self.create_rotation_deformer(
                 name=spec["name"],
                 parent=spec["parent"],
-                pivot=spec["pivot"],
+                pivot=spec.get("pivot", (0.0, 0.0)),
                 targets=targets,
                 under=spec.get("under", ""),
+                pivot_bone=spec.get("pivot_bone", ""),
             )
             self._deformers.append(d)
             self._by_name[d["name"]] = d
@@ -1009,17 +1176,20 @@ class DeformerHierarchy:
         angle: float = 0.0,
         targets: Optional[List[str]] = None,
         under: str = "",
+        pivot_bone: str = "",
     ) -> Dict:
         """Create a rotation deformer pivoting around ``pivot``.
 
         Args:
             name:   Deformer identifier.
             parent: 骨骼名（Part/Bone 归属）。
-            pivot:  (x, y) pivot point in model space.
+            pivot:  (x, y) pivot point in image space.
             angle:  Default rotation in degrees.
-            targets: Layer names affected.
+            targets: Layer names affected；为空表示只靠 ``under`` 链作用整棵子树。
             under:  **变形器**父级名，语义同 :meth:`create_warp_deformer`
                     （导出阶段解析成 ``parent_deformer_id``）。
+            pivot_bone: 枢轴取该骨骼的实际位置（图像坐标），覆盖 ``pivot``。
+                    Head 这类关节位置只有运行时才知道，作者表写不出来。
 
         Returns:
             Deformer definition dict.
@@ -1032,6 +1202,8 @@ class DeformerHierarchy:
             "angle": float(angle),
             "targets": list(targets or []),
         }
+        if pivot_bone:
+            out["pivot_bone"] = pivot_bone
         if under:
             out["under"] = under
         return out

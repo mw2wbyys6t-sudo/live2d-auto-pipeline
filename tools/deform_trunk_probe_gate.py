@@ -149,8 +149,9 @@ def band_chain_rig() -> RigSpec:
 def band_parent_only_rig() -> RigSpec:
     """**拆掉恒等中间层**的同一个方块：直接挂在那个带键形的父级上。
 
-    oracle 刻意不是「手工展平」：展平要算仿射复合，而内核做的是父级点阵的双线性
-    重采样，两者在弯曲的父级上天生不等，那种 oracle 会造出假失败。拆层不算数学。
+    oracle 刻意不是「手工展平」：展平要算仿射复合，而内核做的是父级点阵的
+    三角形分片线性重采样，两者在弯曲的父级上天生不等，那种 oracle 会造出假失败。
+    拆层不算数学。
     """
     return _rig([band_parent()], "ProbeParent")
 
