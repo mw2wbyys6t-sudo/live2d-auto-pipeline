@@ -145,7 +145,7 @@ export default function LaunchScreen() {
               <span className="gradient-text">长成会呼吸的角色。</span>
             </h1>
             <p className="mt-4 max-w-xl text-[13px] leading-relaxed text-haze-400">
-              Pygmalion Studio 把生成、语义分层、Live2D 绑定与导出串成一条本地流水线。
+              {APP_NAME} 把生成、语义分层、Live2D 绑定与导出串成一条本地流水线。
               写一句描述，剩下的交给工作台；你随时可以回来继续上次的角色。
             </p>
 

@@ -106,7 +106,7 @@ export default function Workbench() {
           >
             <img
               src="/app-icon.png"
-              alt="Pygmalion Studio 图标"
+              alt={`${APP_NAME} 图标`}
               width={36}
               height={36}
               className="h-9 w-9 shrink-0 rounded-[10px] bg-white object-contain p-[2px] ring-1 ring-black/10 shadow-md shadow-black/15 transition-transform group-hover:scale-105"
