@@ -496,8 +496,8 @@ def _own_crate_licenses() -> Dict[str, str]:
     """本仓库自己发布的 crate → 其许可取自仓库内的 Cargo.toml。
 
     ``face_tracker`` 与 ``pygmalion-studio`` 没发布到 crates.io，registry
-    上查不到许可，但它们的许可就写在仓库的 ``Cargo.toml`` 里（ADR-001 Rev.4
-    的 Apache-2.0）。查不到不等于未知 —— 这里按第一方处理。
+    上查不到许可，但它们的许可就写在仓库的 ``Cargo.toml`` 里（ADR-001 Rev.5
+    的 AGPL-3.0-only）。查不到不等于未知 —— 这里按第一方处理。
     """
     out: Dict[str, str] = {}
     for rel in ("desktop/Cargo.toml", "native/face_tracker/Cargo.toml"):

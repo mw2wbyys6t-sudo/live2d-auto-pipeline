@@ -911,13 +911,22 @@ if meta_file.is_file():
 for issue in order_issues:
     sys.stderr.write("[warn] 层序错位: " + str(issue.get("message")) + "\n")
 
-# FF-15：产出物必须内含许可证全文（ADR-001 Rev.4）。与 Python 降级服务共用
+# FF-15：产出物必须内含许可证全文（ADR-001 Rev.5）。与 Python 降级服务共用
 # core/license_bundle.py 这一份真源，两条导出链路的产出物才会一致。
+# 写不进去就**阻断导出**：宁可让用户重试，也不能产出不合规的包。
 try:
     from core.license_bundle import install_license_bundle
-    install_license_bundle(Path(out_dir))
+    written = install_license_bundle(Path(out_dir))
 except Exception as exc:
-    sys.stderr.write("[warn] 许可文件写入失败: " + str(exc) + "\n")
+    sys.stderr.write("[error] 许可文件写入失败: " + str(exc) + "\n")
+    sys.exit(1)
+if not written:
+    sys.stderr.write("[error] 仓库根缺少 LICENSE，无法产出合规的导出包\n")
+    sys.exit(1)
+if (not any(n.startswith(("LICENSE", "COPYING")) for n in written)
+        or not any(n.startswith("NOTICE") for n in written)):
+    sys.stderr.write("[error] 导出包许可文件不完整: " + str(written) + "\n")
+    sys.exit(1)
 
 # 只回传路径与状态；网格 / 骨骼等中间数据可达数 MB，不进 API 响应。
 keys = ("output_dir", "model3_json", "moc3_ref", "textures", "texture_files",

@@ -406,7 +406,7 @@
 
 1. 打开 scan `126535209` 的 57 条 Flagged 与 7 条 Denied，记录依赖、许可证、公告或许可证文本及是否进入实际发行产物。
 2. 弱 copyleft（LGPL/MPL）按分发方式审阅；强 copyleft / 非商业条款保持 Deny，实际进入产物且不兼容时替换依赖。只有识别错误或对应组件未分发时才按单条 issue 处理，不做全局忽略。
-3. 将项目绑定到审阅后的 `Apache-2.0 Distribution` 策略。已存在项目不会仅因修改 `.fossa.yml` 的 `policy:` 字段而换策略。
+3. 将项目绑定到审阅后的 `AGPL-3.0 Distribution` 策略（旧名 `Apache-2.0 Distribution` 必须停用，否则会把项目自身的 AGPL-3.0 `LICENSE` 判违规）。已存在项目不会仅因修改 `.fossa.yml` 的 `policy:` 字段而换策略。
 4. 对同一提交重新扫描，确认 License Compliance 归零；未获 Maintainer Access 前，仓库侧无法代替这一步。
 
 完整策略与操作步骤见 **[docs/license-policy.md](license-policy.md)**。FOSSA API key 仍需账号持有人在 Organization Settings → Integrations → API 手动创建，且只显示一次。

@@ -20,14 +20,14 @@
 
 ## 1. 结论先说
 
-当前 GitHub legacy status 为 **65 条 License Compliance issue**（2026-10-29）；同一 FOSSA 扫描的公共摘要分为 **57 条 Flagged + 7 条 Denied**。逐项 issue 详情需要 Maintainer Access，不能把 65 条一概归因成“策略未配置”，更不能全部放行。
+当前 FOSSA 摘要为 **72 issues = 58 Flagged + 7 Denied + 5 Outdated + 2 Vulnerabilities**（2026-11-18 复核；上一轮 2026-10-29 为 65 条 License Compliance = 57 Flagged + 7 Denied）。逐项 issue 详情需要 Maintainer Access，不能把 58 条 Flagged 一概归因成“策略未配置”，更不能全部放行。
 
-2026-10-29 的本地清单：**714 项依赖**中 ALLOW 692 / REVIEW 22 / DENY 0 / 未知 0，另有 **2 项第一方组件**（自有 crate，不适用本策略）。这个结论**只覆盖 PyPI、npm、crates.io、Go 的包元数据**，没有覆盖 FOSSA 在 OpenCV、Pillow 等依赖内部发现的 GPL 等许可证文本，因此不能用来否定当前 7 条 Denied。
+上一轮 2026-10-29 的本地清单为 **714 项依赖**：ALLOW 692 / REVIEW 22 / DENY 0 / 未知 0，另有 **2 项第一方组件**（自有 crate，不适用本策略）。该清单只覆盖 PyPI、npm、crates.io、Go 的包元数据，不能替代 FOSSA 对依赖内嵌许可证文本的深扫。
 
 仓库侧与后台必须分开处理：
 
 - **仓库侧**：保留强 copyleft / 非商业条款的 Deny 规则；发现实际进入发行产物且不兼容的依赖时，替换或移除，而不是放宽策略。
-- **FOSSA 后台**：维护者逐条打开 57+7 项，核对依赖、许可证和发行产物。弱 copyleft 按 §3.2 审阅；Denied 只有在证明对应组件未进入产物或许可证识别有误时，才能按单条 issue 处理。
+- **FOSSA 后台**：维护者逐条打开 58+7 项，核对依赖、许可证和发行产物。弱 copyleft 按 §3.2 审阅；Denied 只有在证明对应组件未进入产物或许可证识别有误时，才能按单条 issue 处理。
 - **验收**：重新扫描同一提交，确认 License Compliance 为 0；若保留经审阅的例外，必须能看到逐条依据，不能只凭状态变绿。
 
 本地包元数据清单仍可复现，但它不是 FOSSA 深扫的替代品：
@@ -301,6 +301,26 @@ scipy 的 Kokkos mdspan（`Apache-2.0 WITH LLVM-exception`）只存在于 scipy 
 它会重新出现在依赖树里 —— 届时上游 GitHub 为 Apache-2.0，可用 FOSSA 的
 **依赖级规则**（按 dependency name 匹配 `segment-anything`）单独 Approve。
 
+### 3.4 专有组件：Live2D Cubism Core（不是 MIT，必须随 NOTICE 披露）
+
+`live2d-py==0.8.1` 的 PyPI 元数据写的是 `License-Expression: MIT`，但 wheel 内实际
+包含 `live2d/v3/_common.dll`、`live2d/v3/_v3cpp.pyd` 与 `FrameworkShaders` —— 这些是
+**Live2D Cubism Core**，著作权归 Live2D Inc.，不属于 MIT 包装层的授权范围。上游仓库
+也明确说明「本仓库不包含 Cubism Core 及 Framework（受许可限制）」。
+
+因此：
+
+- 不能把 `live2d-py` 笼统标成「MIT 宽松依赖」；正确表述是「包装层 MIT + Core 专有」。
+- 安装包随附 Core 时，分发条件由 **Live2D Cubism SDK Release License** 决定
+  （个人 / 小规模事业者通常可免费发布；规模或用途超出范围需另行取得 Live2D 授权）。
+- 根目录 `NOTICE` 第一节承载该署名与条款链接；FF-15 已把 `NOTICE` 纳入
+  `web/out`、`desktop/bundle`、`api/webui/dist` 与导出模型包的随附文件。
+- 若未来把 `live2d-py` 从安装包移出（改为用户自行安装并接受 Live2D EULA），需同时改
+  `requirements.desktop.txt` 与 `NOTICE`，并保持 `verify.py` 缺依赖时**如实失败而不是静默通过**。
+
+> 这也是 README 里「随包第三方组件均为宽松许可」那句话必须改写的原因：它既漏掉了
+> LGPL（pygame / edge-tts）与 scipy 随附的 GNU 运行时，也把专有的 Cubism Core 误归为 MIT。
+
 ---
 
 ## 4. CI 接线
@@ -338,7 +358,7 @@ export FOSSA_API_KEY=<你复制的 key>
 |---|---|---|---|
 | 依赖版本、CVE 治理 | ✅ | — | 已完成：`next` 16.4.0→16.4.1 等 |
 | SPDX 元数据补全（Cargo.toml 等） | ✅ | — | 已完成 |
-| 许可全文随产物分发（FF-15） | ✅ | — | 已完成：`scripts/check-license-bundle.sh` 闸门 |
+| 许可全文随产物分发（FF-15） | ✅ | — | 已完成：`scripts/check-license-bundle.sh` 闸门（LICENSE + NOTICE 逐字节校验） |
 | 分析范围收敛（排除归档/文档） | ✅ | — | 已完成：`.fossa.yml` 的 `paths.exclude` |
 | 许可策略的三档规则 | ❌ | ✅ | 只能后台建，仓库侧无法声明 |
 | 项目绑定哪个策略 | ❌ | ✅ | 官方明确：改 `.fossa.yml` 不生效 |
@@ -351,6 +371,8 @@ export FOSSA_API_KEY=<你复制的 key>
 
 | 文件 | 作用 |
 |---|---|
+| `LICENSE` | 项目自身 AGPL-3.0 全文（唯一真源） |
+| `NOTICE` | 第三方组件署名 + Live2D Cubism Core 专有条款（随产物分发） |
 | `.fossa.yml` | FOSSA 扫描配置（分析范围、项目定位符、策略名） |
 | `scripts/fossa_license_inventory.py` | 四生态依赖许可清单 + 策略建议生成器 |
 | `scripts/fossa_license_carrier_check.py` | FOSSA 报的 SPDX ID 在依赖里的**载体核对**（运行时 / 告知文件 / 文档 / 测试 / 无载体=误判） |

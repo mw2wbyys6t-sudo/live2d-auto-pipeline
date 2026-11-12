@@ -3,7 +3,7 @@
  * 复制到 web/out/，再由 api/webui/dist 内嵌进 Go 二进制）。
  *
  * 为什么走 prebuild 而不是把 LICENSE 直接提交进 web/public/：
- * 仓库根 LICENSE 是**唯一真源**（ADR-001 Rev.4）。提交一份副本就多一个会
+ * 仓库根 LICENSE 是**唯一真源**（ADR-001 Rev.5）。提交一份副本就多一个会
  * 漂移的副本 —— 改了根目录那份、忘了改副本，分发出去的许可文本就是旧的。
  * 这里在每次构建时从根目录复制，副本永远与真源一致。
  *
@@ -33,6 +33,10 @@ mkdirSync(publicDir, { recursive: true });
 const sources = [pick(LICENSE_NAMES), pick(NOTICE_NAMES)].filter(Boolean);
 if (sources.length === 0) {
   console.error('[license] 仓库根找不到 LICENSE —— 无法产出合规的 Web 构建包（FF-15）');
+  process.exit(1);
+}
+if (!pick(NOTICE_NAMES)) {
+  console.error('[license] 仓库根缺少 NOTICE —— 第三方署名必须随 Web 构建包分发（FF-15）');
   process.exit(1);
 }
 

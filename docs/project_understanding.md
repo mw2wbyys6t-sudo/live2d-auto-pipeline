@@ -84,7 +84,7 @@
 - `drivers/live2d_runtime/moc3_consistency.py:20`、`moc3_load.py`、`moc3_motion_probe.py`、`moc3_physics_probe.py` 同；
 - 集成测试 `find_spec("live2d.v3")` 守卫（test_moc3_official_acceptance.py:30 等）。
 
-**核实**：`live2d_py-0.8.1-cp311-abi3-win_amd64.whl`（0.64MB，MIT，Requires-Dist: pyopengl/pillow/numpy）含完整 `live2d/v3/`（`_v3cpp.pyd` + `_common.dll` + FrameworkShaders），API 面与 verify.py 调用逐一吻合。**决策：基础包钉 `live2d-py==0.8.1`（abi3，3.11/3.12/3.13 通吃）；1.0.0 迁移另立 ADR，不在本次降级风险内引入。** embeddable Python 选 3.12.x。
+**核实**：`live2d_py-0.8.1-cp311-abi3-win_amd64.whl`（0.64MB，包装层 MIT；内置 Cubism Core 为 Live2D Inc. 专有，不属 MIT 范围；Requires-Dist: pyopengl/pillow/numpy）含完整 `live2d/v3/`（`_v3cpp.pyd` + `_common.dll` + FrameworkShaders），API 面与 verify.py 调用逐一吻合。**决策：基础包钉 `live2d-py==0.8.1`（abi3，3.11/3.12/3.13 通吃）；1.0.0 迁移另立 ADR，不在本次降级风险内引入。** embeddable Python 选 3.12.x。
 
 ### 4.2 硬依赖核实（ast 静态扫描 + 导入守卫）
 
@@ -162,7 +162,7 @@ tauri-build.yml 仅 bundle `desktop/bin/*`（live2d-api.exe + face_tracker.exe�
 - **Go**：直接依赖仅 gin v1.12.0 + gzip v1.2.6；indirect 残留 mongo-driver v2.5.0、quic-go v0.59.0 零引用 → `go mod tidy` 缩供应链面。无已知高危版本。
 - **Python**：requirements 全部 `>=` 无上界（可被新版 break）；CVE 下限已注释（requests/urllib3/aiohttp/cryptography/python-multipart）。本次桌面清单改**精确钉版本 + hash**。
 - **npm**：仅 4 运行时依赖（next 16.4.0 / react 18.3.1 / pixi 7.4.3 / lucide-react），无 postinstall 脚本；pixi v8 被 dependabot 忽略（API 不兼容）。
-- **许可证**：项目 AGPL-3.0 + 商业授权双轨（ADR-001 Rev.5，2026-10-29）；待补：安装包随附 LICENSE、model3.zip 内嵌 LICENSE。live2d-py MIT、onnxruntime MIT、YuNet(OpenCV Zoo Apache-2.0)、ort BSD-3、nokhwa MIT、scipy/sklearn BSD、Pillow HPND、psd-tools MIT、py-moc3 MIT —— 第三方依赖均为宽松许可，可与 AGPL 组合（衍生整体按 AGPL 发布）；SAM2 权重（按需下载）遵循 Apache-2.0 模型许可。
+- **许可证**：项目 AGPL-3.0 + 商业授权双轨（ADR-001 Rev.5，2026-10-29）；安装包随附 `LICENSE` + `NOTICE`、导出 model3.zip 内嵌 `LICENSE` + `NOTICE`（FF-15 闸门已落地）。第三方许可分三类：① 宽松（onnxruntime / nokhwa / psd-tools / py-moc3 = MIT，YuNet = Apache-2.0，scipy / scikit-learn / soundfile = BSD，Pillow = MIT-CMU）；② 弱 copyleft（pygame / pygame-ce / edge-tts = LGPL，以 import 方式使用）；③ 带例外的 GNU 运行时（scipy 随附 libgfortran = GPL-3.0-or-later WITH GCC-exception-3.1、libquadmath = LGPL-2.1-or-later）。以上均可与 AGPL-3.0 组合（衍生整体按 AGPL 发布）。**特别项**：`live2d-py` 的 Python 包装层是 MIT，但其内置的 **Live2D Cubism Core 二进制为 Live2D Inc. 专有软件**，随安装包分发须遵守 Live2D Cubism SDK Release License（见根目录 `NOTICE` 第一节）。SAM2 权重（按需下载）遵循 Apache-2.0 模型许可。
 - **89 安全项**：以现有 p1-p4 测试契约为基线，本次不回退任何加固；新增面（打包后）：WebView2 缺失引导、杀软拦截中文提示、中文/空格/长路径/非 ASCII 用户名。
 
 ## 8. 风险登记表（交付视角）
@@ -194,7 +194,7 @@ tauri-build.yml 仅 bundle `desktop/bin/*`（live2d-api.exe + face_tracker.exe�
 
 ## 8c. 下载物可达性核实（2026-10-16）
 
-- `live2d_py-0.8.1-cp311-abi3-win_amd64.whl`（0.64MB，MIT）PyPI 200，含完整 live2d/v3（`_v3cpp.pyd`+`_common.dll`+shaders），API 面与 verify.py 吻合；
+- `live2d_py-0.8.1-cp311-abi3-win_amd64.whl`（0.64MB，包装层 MIT；内置 Cubism Core 为 Live2D 专有）PyPI 200，含完整 live2d/v3（`_v3cpp.pyd`+`_common.dll`+shaders），API 面与 verify.py 吻合；
 - `live2d_py-1.0.0-cp311-abi3-win_amd64.whl`（0.45MB）存在但**无 live2d.v3 模块**，不兼容本仓库验收链（§4.1）；
 - python.org FTP：`python-3.12.10-embed-amd64.zip` 200（11.1MB）；3.12.11+ 已从 FTP 下架（404），**基础包钉 3.12.10**；
 - YuNet `face_detection_yunet_2023mar.onnx`（opencv_zoo raw）与 onnxruntime-win-x64-1.31.0.zip（ort rc.14 要求 ≥1.31）URL 见 download_models.bat，P0 脚本加 SHA256。

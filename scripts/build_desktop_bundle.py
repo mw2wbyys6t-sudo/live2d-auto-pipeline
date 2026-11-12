@@ -571,6 +571,14 @@ def copy_license_bundle(dest: Path) -> None:
         sys.exit(f"❌ 许可文件写入失败（FF-15 要求产出物内含许可全文）：{exc}")
     if not written:
         sys.exit("❌ 仓库根找不到 LICENSE —— 无法产出合规的安装包（FF-15）")
+    names = {Path(name).name for name in written}
+    has_license = any(n.startswith(("LICENSE", "COPYING")) for n in names)
+    has_notice = any(n.startswith("NOTICE") for n in names)
+    if not has_license or not has_notice:
+        sys.exit(
+            "❌ 许可文件不完整（LICENSE 与 NOTICE 必须同时存在）—— "
+            "FF-15 要求第三方署名随安装包分发"
+        )
     print(f"    [许可] {', '.join(written)} → {dest}")
 
 

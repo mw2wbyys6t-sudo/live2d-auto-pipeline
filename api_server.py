@@ -2108,15 +2108,24 @@ async def export_live2d(req: ExportLive2DRequest, background_tasks: BackgroundTa
         readiness = runtime_readiness(result)
         ready = readiness["runtime_ready"]
 
-        # FF-15：产出物必须内含许可证全文（ADR-001 Rev.4）。缺了它，用户把
+        # FF-15：产出物必须内含许可证全文（ADR-001 Rev.5）。缺了它，用户把
         # 模型包再分发出去时就没有任何许可声明 —— 这是合规缺口，不是装饰。
         # 真正的真源在 core/license_bundle.py，Go 导出桥用的是同一份。
+        # 写不进去就**阻断导出**：宁可让用户重试，也不能产出不合规的包。
         try:
             from core.license_bundle import install_license_bundle
 
-            install_license_bundle(export_dir)
+            written = install_license_bundle(export_dir)
         except Exception as exc:
-            logging.getLogger("api_server").warning("产出物许可文件写入失败: %s", exc)
+            logging.getLogger("api_server").error("产出物许可文件写入失败: %s", exc)
+            return err("导出失败：许可文件写入失败", 500)
+        if not written:
+            logging.getLogger("api_server").error("仓库根缺少 LICENSE，无法产出合规的导出包")
+            return err("导出失败：缺少许可文件", 500)
+        if (not any(n.startswith(("LICENSE", "COPYING")) for n in written)
+                or not any(n.startswith("NOTICE") for n in written)):
+            logging.getLogger("api_server").error("导出包许可文件不完整：%s", written)
+            return err("导出失败：缺少许可文件", 500)
 
         # Live2D 预览页需要直接下载 ZIP 包。
         # M6：zip 写在系统临时目录（不落在可被 /output/ 直接访问的输出根），

@@ -59,9 +59,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
 ; 桌面程序（scripts/build_desktop.bat 产物）
 Source: "{#ProjectRoot}\dist\PygmalionStudio.exe"; DestDir: "{app}"; \
   Flags: ignoreversion
-; 许可证全文（FF-15：对外分发的安装包必须内含与仓库根逐字节一致的
-; AGPL-3.0 许可全文（ADR-001 Rev.5）；仓库根若有 NOTICE 也一并安装）
+; 许可证全文与第三方署名（FF-15：对外分发的安装包必须内含与仓库根逐字节一致的
+; AGPL-3.0 许可全文（ADR-001 Rev.5）；NOTICE 汇总第三方组件与 Live2D Core 条款）
 Source: "{#ProjectRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ProjectRoot}\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
 ; 便携 Python 与权重
 Source: "{#RuntimeDir}\python\*";  DestDir: "{app}\runtime\python";   \
   Flags: ignoreversion recursesubdirs createallsubdirs

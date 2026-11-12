@@ -3,7 +3,8 @@
 #
 # 契约（docs/architecture/index.md §4 FF-15 / ADR-001 Rev.5）：
 #   产出物（桌宠安装包、导出模型包、Web 构建包）内必须含 AGPL-3.0 许可全文，
-#   且文本与仓库根 LICENSE **逐字节一致**；仓库根若存在 NOTICE 则一并保留。
+#   且文本与仓库根 LICENSE **逐字节一致**；仓库根 NOTICE（第三方署名与
+#   Live2D Cubism Core 条款）也必须一并保留。
 #   失败即**阻断发布**。
 #
 # 用法：
@@ -45,7 +46,9 @@ if ! head -n 20 "$LICENSE_SRC" | grep -qi "AFFERO GENERAL PUBLIC LICENSE"; then
 fi
 ok "根目录 LICENSE 就位（$(wc -c < "$LICENSE_SRC") 字节，AGPL-3.0 全文）"
 if [ -n "$NOTICE_SRC" ]; then
-    ok "根目录 NOTICE 就位（$(wc -c < "$NOTICE_SRC") 字节，存在即随附）"
+    ok "根目录 NOTICE 就位（$(wc -c < "$NOTICE_SRC") 字节，第三方署名随产物分发）"
+else
+    fail "根目录缺少 NOTICE —— 第三方署名与 Live2D Cubism Core 条款必须随产物分发"
 fi
 
 # ---------- 校验单个产物 ----------

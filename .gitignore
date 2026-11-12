@@ -80,6 +80,11 @@ api/config.dev.json
 # 已 vendored 到 web/public/mediapipe/wasm 供离线使用；不入库，缺失时前端自动回退 CDN
 web/public/mediapipe/
 
+# FF-15：许可文件由 web/scripts/copy-license.mjs 在 prebuild 时从仓库根复制，
+# 入库副本会与唯一真源漂移，因此不提交。
+web/public/LICENSE
+web/public/NOTICE
+
 # 桌面版构建产物（由 scripts/build_desktop.bat 生成）
 dist/
 # 注意：`dist/` 会连同目录本身一起忽略，父目录被排除后其下的 `!...` 反选不生效。

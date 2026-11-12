@@ -28,9 +28,8 @@ from typing import List
 
 __all__ = ["license_files", "repo_root", "install_license_bundle"]
 
-#: 必须随产出物分发的文件。NOTICE 沿自 Apache-2.0 §4(d) 的条件义务，
-#: 现行 AGPL-3.0（ADR-001 Rev.5）下沿用同一规则：
-#: 仓库里没有就不强求，但一旦有了就必须一起带走。
+#: 必须随产出物分发的文件。NOTICE 承载第三方署名与 Live2D Cubism Core
+#: 专有条款；仓库里必须存在，缺失即视为不合规（FF-15）。
 _LICENSE_NAMES = ("LICENSE", "LICENSE.txt", "COPYING")
 _NOTICE_NAMES = ("NOTICE", "NOTICE.txt")
 
@@ -46,7 +45,7 @@ def repo_root() -> Path:
 
 
 def license_files() -> List[Path]:
-    """仓库根里必须随产出物分发的许可文件（LICENSE + 存在的 NOTICE）。"""
+    """仓库根里必须随产出物分发的许可文件（LICENSE + NOTICE）。"""
     root = repo_root()
     found: List[Path] = []
     for name in _LICENSE_NAMES:
