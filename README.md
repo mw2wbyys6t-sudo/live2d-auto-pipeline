@@ -137,6 +137,18 @@ scripts\build_tauri_release.bat
 | [LIMITATIONS](docs/LIMITATIONS.md) | 已知局限与规避 |
 | [CHANGELOG](CHANGELOG.md) | 版本变更 |
 
+## 致谢
+
+这个项目能跑起来，靠的不是我一个人。
+
+- 感谢 **Live2D** 提供 Cubism Core 与模型规范，让自研 moc3 编译器有了可对照的验收标准。
+- 感谢 **live2d-py**、**pixi-live2d-display**、**See-through**、**SAM 2**、**GroundingDINO**、**MediaPipe**、**rembg / ISNet** 等开源项目与模型作者，你们的工作构成了这个项目的地基。
+- 感谢 **ComfyUI**、**Stable Diffusion WebUI** 与各类生图模型社区，为本地生图提供了可选路径。
+- 感谢所有提交 issue、帮忙试装安装包、反馈模型效果的朋友；每一条反馈最后都变成了版本记录里的一行。
+- 也感谢每一个愿意用一句话描述自己角色的人 —— 这是这个项目存在的理由。
+
+> 第三方许可明细见 [docs/license-policy.md](docs/license-policy.md)。
+
 ## 许可证
 
 本项目采用 **AGPL-3.0 + 商业授权** 双轨：
