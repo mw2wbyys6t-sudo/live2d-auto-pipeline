@@ -372,16 +372,19 @@
 - 真实验收入口是手动触发的 `moc3-acceptance` job（安装 live2d-py + xvfb + `LIVE2D_TEST_PIXELS=1`）。
   首次运行需人工确认环境可跑通。
 
-## 9. 依赖治理现状（2026-11-18 复核）
+## 9. 依赖治理现状（2026-11-12 复核）
 
-本节记录仓库侧能核实的依赖状态。FOSSA 三项检查由第三方 SaaS 回写 commit status。最新一次摘要为 **72 issues**（58 Flagged License + 7 Denied License + 5 Outdated + 2 Vulnerabilities）；上一轮定位到 main `42a99c7ca10955d26525d022a83f361ac443aff4`、revision scan `126535209`（2026-10-29）。
+本节记录仓库侧能核实的依赖状态。FOSSA 三项检查由第三方 SaaS 回写 commit status。
+**当前（main `698d550`，revision scan `129895636`，2026-11-12）：69 issues = 64 License + 3 Quality + 2 Security。**
+上一轮（main `42a99c7`，revision scan `126535209`，2026-10-29）为 **72 issues（58 Flagged + 7 Denied + 5 Outdated + 2 Vulnerabilities）**。
+FOSSA 状态页只回写总数，逐条明细需要 Maintainer/API 权限（本机无 `FOSSA_API_KEY`，CI 亦未配置）；下表是仓库侧能核实的部分。
 
 | FOSSA 检查 | 当前结果 | 仓库侧处理与验证边界 |
 |---|---|---|
-| Dependency Quality | **5 quality issues** | 已更新 `websockets>=17.3`、`psd-tools>=1.26.0`、`rich>=15.0.0`、`onnxruntime>=1.31.0`、`pygame-ce>=2.5.8`、`next^16.4.3`、`lucide-react^1.61.0`。`mediapipe` 保持 `<0.10.32`：1.1.1 强制引入 `opencv-contrib-python`，与 headless OpenCV 争抢 `cv2`。公共页不开放逐项质量明细，是否归零必须重扫确认。 |
-| License Compliance | **58 Flagged + 7 Denied**（上一轮口径 57+7） | 本轮 58 条 Flagged 的主体是 **Python 依赖内捆绑的许可证全文**（libgfortran 的 GPL-3+exception、libquadmath 的 LGPL-2.1、pygame 文档里的 LGPL-2.1/GPL-2.0 提及、Pillow 聚合告知里的 liblzma GPLv3 提及）。其中 **4 条 ID 在依赖里根本没有载体**（`numpy: GPL-1.0`、`scipy: LGPL-3.0-only`、`scipy: LGPL-2.0-or-later`、`pillow: Bitstreamream`）——属扫描器误判。逐条载体复核见 [license-policy.md](license-policy.md) §3.2.2，可复现命令见 `scripts/fossa_license_carrier_check.py`。 |
-| Outdated Dependencies | **5**（chokidar / postcss-nested / commander / js-tokens / nanoid） | npm 侧传递依赖。仓库侧已把 chokidar→4.0.3、postcss-nested→7.0.2、js-tokens→5.0.0、commander→6.2.1 写进 `overrides`（都是最后一个 CJS 兼容版，`npm audit` 0 漏洞、`npm run build` 通过）；nanoid 3.3.20 已是 registry 的 `legacy` tag，升级会破坏 CJS `require` 或要求 node≥22，**不动**。FOSSA 拿最新版比对，所以这几条后台仍显示 outdated —— 要归零只能升 ESM-only 大版本，会破坏 Tailwind 3 的构建。 |
-| Security Analysis | **2 vulnerabilities** | 都是同一个 CVE-2026-112366（picomatch ReDoS，CWE-1333）在 2.3.2 与 4.0.7 上的两次记录。权威评分是 NVD **CVSS4 8.7 / CVSS3.1 7.5**（FOSSA 标的 9.7 无出处）；受影响范围 `≤4.0.7` 而 latest 即 4.0.7 → **无修复版可升**。两实例均 dev-only、不进产物、无用户可控输入，仓库侧无可修项。 |
+| Dependency Quality | **3 quality issues** | 已更新 `websockets>=17.3`、`psd-tools>=1.26.0`、`rich>=15.0.0`、`onnxruntime>=1.31.0`、`pygame-ce>=2.5.8`、`next^16.4.3`、`lucide-react^1.61.0`。`mediapipe` 保持 `<0.10.32`：1.1.1 强制引入 `opencv-contrib-python`，与 headless OpenCV 争抢 `cv2`。当前剩 3 条仍为 npm 传递依赖 outdated；FOSSA 拿最新版比对，后台不会归零，验收口径是「已升到最后一个兼容版」。 |
+| License Compliance | **64 issues**（状态页只给总数，未拆分 Flagged/Denied） | 主体仍是 **Python 依赖内捆绑的许可证全文**（libgfortran 的 GPL-3+exception、libquadmath 的 LGPL-2.1、pygame 文档里的 LGPL-2.1/GPL-2.0 提及、Pillow 聚合告知里的 liblzma GPLv3 提及）与 **LGPL/MPL 弱 copyleft**（`sharp`/`@img`、`edge-tts`、`pygame`、Tauri 的 MPL crates）。其中 **4 条 ID 在依赖里根本没有载体**（`numpy: GPL-1.0`、`scipy: LGPL-3.0-only`、`scipy: LGPL-2.0-or-later`、`pillow: Bitstreamream`）——属扫描器误判。本机依赖清单为 688 ALLOW / 22 REVIEW / 0 DENY；FOSSA 的 64 条需在后台逐条 Approve/Ignore，仓库侧不批量放行。逐条载体复核见 [license-policy.md](license-policy.md) §3.2.2，可复现命令见 `scripts/fossa_license_carrier_check.py`。 |
+| Outdated Dependencies | **3**（FOSSA 口径；候选仍是 chokidar / postcss-nested / commander / js-tokens / nanoid） | npm 侧传递依赖。仓库侧已把 chokidar→4.0.3、postcss-nested→7.0.2、js-tokens→5.0.0、commander→6.2.1 写进 `overrides`（都是最后一个 CJS 兼容版，`npm audit` 0 漏洞、`npm run build` 通过）；nanoid 3.3.20 已是 registry 的 `legacy` tag，升级会破坏 CJS `require` 或要求 node≥22，**不动**。要归零只能升 ESM-only 大版本，会破坏 Tailwind 3 的构建。 |
+| Security Analysis | **2 vulnerabilities** | 都是同一个 CVE-2026-112366（picomatch ReDoS，CWE-1333）在 2.3.2 与 4.0.7 上的两次记录。`npm audit` 显示 0 漏洞；npm 最新版仍是 4.0.7，**无修复版可升**。两实例均 dev-only、不进产物、无用户可控输入，仓库侧无可修项。 |
 
 ### 上一轮（2026-10-26）四项安全命中的依据与处置边界
 
