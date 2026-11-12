@@ -1,171 +1,231 @@
-# Pygmalion Studio
+<p align="center">
+  <img src="assets/icon/logo_512.png" width="180" alt="Pygmalion Studio Logo">
+</p>
 
-> 一句中文 → 会呼吸的 Live2D 角色。生图、分层、建模、导出，全在本地一条流水线里完成。
+<h1 align="center">Pygmalion Studio</h1>
 
-![许可证](https://img.shields.io/badge/license-AGPL--3.0%20%2B%20commercial-blue)
-![平台](https://img.shields.io/badge/platform-Windows-0078D4)
-![版本](https://img.shields.io/badge/version-0.10.11-ff5c9d)
+<p align="center">
+  <em>（原名 Live2D Master Agent，v0.10.10 起改名 —— 已发布的 v0.10.9 安装包仍沿用旧名）</em><br>
+  <strong>用一句话，让 AI 帮你生成一个能动的二次元角色。</strong><br>
+  从文本描述 → AI 立绘 → 自动分层 → Live2D 模型 → 可导出可预览。
+</p>
+
+<p align="center">
+  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.10-ff69b4?style=flat-square" alt="version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="license"></a>
+<a href="https://app.fossa.com/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline"><img src="https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline.svg?type=shield" alt="FOSSA Status"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11+-blue?style=flat-square" alt="python"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat-square" alt="go"></a>
+  <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16-black?style=flat-square" alt="nextjs"></a>
+</p>
 
 ---
 
-<!-- ============================================================
-     作者补写区（约一半篇幅）
-     下面四节由项目作者填写；建议每节 2–5 段/3–6 条，写你真实的想法即可。
-     写完把 ✍️ 行删掉。
-     ============================================================ -->
 
-## 为什么做这个项目
 
-> ✍️ **待作者补写**
->
-> 建议覆盖：
-> - 你最初遇到的痛点是什么（例如：有了立绘却卡在分层/绑定；商业工具门槛高）
-> - 现有工具（Live2D Cubism、各类"一键生成"服务）缺了什么
-> - 你想把哪一段变得"普通人也能跑通"
+
+## 先说清楚：现在能干什么
+
+我不想给你画饼。这个项目有些部分已经很稳，有些还在路上。下面是**截至 v0.10.9 的真实状态**：
+
+| 能力 | 状态 | 说明 |
+|------|------|------|
+| AI 生成角色立绘 | ✅ 可用 | Pollinations 免费云端，开箱即用无需 Key；也支持火山引擎/商汤付费高质量生成 |
+| 完全离线生图 | ✅ 可用 | 断网时自动降级为占位立绘，保证流程不中断 |
+| 自动分层（K-means） | ✅ 可用 | 颜色聚类分层，纯 Python 实现，无需额外模型 |
+| 自动分层（SAM 语义） | ⚠️ 需配置 | 语义分割精度更高，但需下载约 2GB 模型权重 |
+| PSD 导出 | ✅ 可用 | 需 `pip install psd-tools`；缺了也能降级导出 PNG 包 |
+| Live2D moc3 导出 | ✅ 可用 | **自研编译器，已通过 Live2D 官方 Cubism Core 逐像素验收** |
+| 面部捕捉驱动 | ✅ 安装包内置 | 桌面版用 Rust 原生面捕（YuNet + `onnxruntime.dll`），**不需要装 Python / MediaPipe**；从源码运行才走 MediaPipe。CI 已验证 exe / 模型 / dll 齐备，未接摄像头实测驱动效果 |
+| 桌宠运行 |   ✅目前已经实现，实机验证过了 | pygame 已随包分发，但多窗口 / 置顶行为真机验收，依旧存在问题 |
+| LLM 对话 + 语音 | ⚠️ 需 Key | 对话需要 OpenAI/Anthropic API Key 或本地 Ollama ，目前还在规划中|
+| 离线依赖 | ✅ 安装包自带 | 嵌入式 CPython 3.12 + 离线包（site-packages 约 0.9 GB），装完即可跑，无需预装 Python。torch 组（SAM2 用）按需下载 |
+| 规划| 后续我会持续将问题逐渐解决掉，目前开发时间不是很多的，但是我是会一直在维护这个仓库的。
+> 一句话总结：**「生成 → 分层 → 导出」核心链路完全可用，安装包装完即带运行时**；高级交互（LLM 对话）需自备 Key，面捕 / 桌宠尚待真机验证。
+
+---
+
+## 这个项目解决了什么问题
+
+我自己是个技术爱好者，不是专业画师也不是建模师。我想做一个属于自己的虚拟形象，但发现：
+
+- 找画师画一张立绘：**几百到几千块**
+- 找人做 Live2D 绑定：**几千到上万块**
+- 自己学：**PS 分层、Live2D Cubism、参数调试，每一样都要好几个月**
+
+所以我写了这个项目——**把「一句话到可用的 Live2D 模型」这条路上最耗时的环节自动化**。你不需要会画画，不需要懂建模，只要描述你想要什么样的角色，剩下的交给代码。
+
+它不能替代专业画师和建模师的精细作品，但能让你**零成本快速获得一个能用的起点**，然后在这个基础上继续打磨。
+
+---
 
 ## 这个项目面向谁
 
-> ✍️ **待补写**
+### 适合你，如果你……
+
+- **想做自己的虚拟形象，但不会画画** —— 有想法、描述得出想要的角色就行，不需要绘画或建模基础
+- **是技术爱好者或程序员** —— 想要一条能自己改、自己扩的角色生成管线，而不是一个黑盒服务
+- **在做独立作品** —— 独立游戏原型、同人企划、短片，需要几个风格一致的立绘打底
+- **想搞懂 Live2D 模型是怎么组装的** —— 自研 moc3 编译器是完整可读的实现，可以当参考
+- **预算为零** —— 免费链路（Pollinations 生图 + K-means 分层 + 自研 moc3 导出）不花一分钱
+
+### 可能不适合你，如果你……
+
+- **要商业级、能直接上镜直播的成品模型** —— 自动绑定给不了那个精度，仍需专业 Live2D 技术师手动精修
+- **想照着已有角色或某张立绘复刻** —— 这个项目是从文字描述生成**新**角色，不是照图转模型
+- **完全不想碰命令行和环境配置** —— 桌面应用双击安装即可用：Python 运行时、AI 生图依赖、模型都已随包分发，无需单独配环境
+
+### 典型使用场景
+
+| 场景 | 怎么用 | 能拿到什么 |
+|------|--------|-----------|
+| 造一个属于自己的虚拟形象 | 一句话描述 → 生成 → 分层 → 导出 | 可导入 Live2D Cubism / VTube Studio 的 moc3 模型包 |
+| 给原型快速凑角色素材 | 换个描述多跑几次，挑满意的 | 立绘 PNG + PSD 分层文件 |
+| 直播或录屏配个会动的形象 ⚠️ | 面部捕捉驱动 + 桌宠模式 | 跟着你表情动的桌面角色 |
+| 学 Cubism4 模型结构 | 读 `live2d_builder/` 源码 + 跑一遍导出 | 一份能跑通的参考实现 |
+| 当可继续打磨的起点 | 导出 PSD 手动改分层，再进 Cubism 精修 | 更接近成品的手工模型 |
+| 离线或受限网络环境演示 | 断网自动降级占位立绘 | 流程不中断的演示效果 |
+
+> 标 ⚠️ 的场景：面捕在安装包里是原生实现，但仍需摄像头；桌宠虽随包带了 pygame，尚未真机验收。**从源码运行**时，面捕走 MediaPipe、桌宠需自行安装 pygame。
 >
-> 建议给三组人各写一句：独立 VTuber / 同人创作者 / 想批量出草稿的小团队。
-> 同时写清楚"可能不适合你"的情况，避免预期错位。
-
-## 界面预览
-
-> ✍️ **待补写**
->
-> 建议放 4 张图（存到 `docs/assets/screenshots/` 后引用）：
-> 1. 桌面启动页（图标 + Pygmalion Studio）
-> 2. 工作台「生成」阶段（三栏：作品库 / 画布 / 操作台）
-> 3. 模型库（作品命名、分类、一个作品多个模型）
-> 4. 导出阶段（模型命名 + 导出结果）
-
-## v0.10.11 发布说明
-
-> ✍️ **待补写**
->
-> 建议只讲三件事：本版最值得升级的点、升级方式（覆盖安装/先卸载）、已知问题。
-> 技术细节可直接链接到 [CHANGELOG.md](CHANGELOG.md)。
-
-<!-- ===================== 作者补写区结束 ===================== -->
-
----
-
-## 现在能做什么（v0.10.11）
-
-- **两条入口链路**，按你手里已有的东西选：
-  - **从零开始**：一句中文 → 立绘 → 分层 → Live2D 模型 → 导出
-  - **已有图片**：上传现成立绘，跳过生成，直接从分层开始
-- **单页三栏工作台**：作品库（左） / 阶段画布（中） / 操作台（右），生成、分层、预览、导出都在一页完成
-- **模型库**：作品可以命名、自定义分类、按阶段筛选；**一个作品可以保存多个模型**，每个模型单独命名、独立目录，互不覆盖
-- **导出的确实是 Live2D 模型**：自研 moc3 编译器产出 `.moc3` + 贴图 + `model3.json`，可导入 Live2D Cubism 与 VTube Studio
-- **本地优先**：桌面安装包自带运行时，默认不联网也能生成（走本地兜底）；配了云端 Key 才走云端高质量出图
+> 如果你落在「可能不适合」那一栏，欢迎先提个 Issue 说清需求——项目还在快速迭代，有些边界是能推的。
 
 ---
 
 ## 快速开始
 
-### Windows 安装包（推荐）
+### 🖥️ 桌面应用（推荐 — 直接利用本地 GPU/CPU）
 
-> 安装包自带完整运行时（嵌入式 Python 3.12 + 依赖 + 源码树 + 模型），**无需预装 Python**。
+> **v0.10.5 起全面转向桌面应用**。Docker 和独立 Web 部署已废弃，桌面应用成为唯一分发形态。
 
-| 项目 | 说明 |
-|------|------|
-| 下载 | [Release v0.10.11](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.11) |
-| 文件 | `Pygmalion Studio_0.10.11_x64-setup.exe` |
-| 体积 | 约 320 MiB（<!-- BUILD_SIZE -->以 Release 页为准） |
-| 平台 | Windows 10 / 11 x64 |
+**下载安装包**（Windows，双击安装）：
 
-安装步骤：
+👉 [最新 Release v0.10.10](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/tag/v0.10.10)
 
-1. 从 Release 下载 `Pygmalion Studio_0.10.11_x64-setup.exe`
-2. 若装过旧版，先运行旧安装目录的 `uninstall.exe`（旧版产品名是 `Live2D Master Agent`）
-3. 双击安装，装完确认安装目录含 `live2d-api.exe`、`python\`、`app\`、`models\`
-4. 从开始菜单启动；桌面启动页出现后会拉起本地后端并进入工作台
+| 下载文件 | 说明 |
+|----------|------|
+| `Pygmalion.Studio_0.10.10_x64-setup.exe` | **最新 Windows 安装包（NSIS）** — 317.61 MiB（333,039,110 B），DirectML GPU 加速；验收记录见 [CHANGELOG.md](CHANGELOG.md) |
+| `Live2D.Master.Agent_0.10.9_x64-setup.exe` | 上一版 Windows 安装包（旧 Release） — 双击安装，装完即可用 |
 
-安装目录默认在 `%LOCALAPPDATA%\Pygmalion Studio`。
+> 实测体积 **342.63 MiB**（上一版 461.62 MiB，净减 **119 MiB / −26%**）。本版把误打进包的
+> torch 组移了出去（`requirements.desktop.txt` 29 → 24 条）；注意「−500 MB」指的是 torch 组
+> 本身体积，不是安装包净减少量 —— rembg 的传递依赖（scikit-image / numba / llvmlite）抵消了一部分。
 
-装完自检（可选）：
+> ✅ 安装包**自带完整运行时**：嵌入式 CPython 3.12 + 离线依赖 + `app/` 源码树 + 原生面捕（YuNet + `onnxruntime.dll`）。**无需预装 Python**。
+
+> 🚀 **v0.10.10（代号「GPU Aware」）已发布**：代码里已把分层接上 GPU
+> —— Windows 随包改带 `onnxruntime-directml`（N/A/I 卡通用，不需 CUDA），自检页新增
+> `GPU 与推理运行时` 一行；本机实测 ISNet 前景推理 **1149ms → 163ms（≈7.0×）**，
+> 且两条路径的前景掩码**逐像素一致**（IoU 1.0000）。
+> 本版起许可证切换为 **AGPL-3.0 + 商业授权双轨**（原因见下方「许可证」章节）。
+> 安装包构建与产物级验收记录详见 [CHANGELOG.md](CHANGELOG.md)。
+
+**使用方式**：
+1. 从 Release 下载 v0.10.10 安装包（`Pygmalion Studio_0.10.10_x64-setup.exe`；旧版 `Live2D.Master.Agent_0.10.9_x64-setup.exe` 仍可在旧 Release 获取）
+2. 若之前装过旧版，先运行旧安装目录里的 `uninstall.exe`
+3. 双击安装（NSIS 安装向导）；装完先确认安装目录含 `live2d-api.exe`、`python\`、`app\`、`models\`
+4. 从开始菜单或桌面快捷方式启动，应用会自动拉起本地后端并打开工作台 `http://localhost:8080`
+
+**装完自检**（可选，1 分钟）：
 
 ```powershell
 # 安装目录应含这些；缺 live2d-api.exe 就是没装对
-Get-ChildItem "$env:LOCALAPPDATA\Pygmalion Studio" | Select-Object Name
+Get-ChildItem "$env:LOCALAPPDATA\Live2D Master Agent" | Select-Object Name
 
 # 应用启动后，后端应能自报健康状态
 Invoke-RestMethod http://127.0.0.1:8080/api/health | ConvertTo-Json
 Invoke-RestMethod http://127.0.0.1:8080/api/diagnostics | ConvertTo-Json -Depth 6
 ```
 
-仓库还带一键验收脚本：
+仓库还带一键验收脚本：`powershell -ExecutionPolicy Bypass -File .\scripts\windows\verify_desktop_install.ps1 -Launch`
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\verify_desktop_install.ps1 -Launch
-```
+> ✅ 上一版 v0.10.8 已在 GitHub 的 Windows runner 上对**发布包本身**实跑过验收，结果 `RESULT: PASS`（[run #39046077810](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/39046077810)）：安装器退出码 `0`、17 项文件齐全、随包 Python `3.12.10`、`/api/health` 返回 `python_ok=true`。
+>
+> ✅ **v0.10.9 已构建、发布，并在 Windows runner 上对发布包本身实跑验收通过** —— `RESULT: PASS`，0 失败 0 警告（[run #40119429913](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/40119429913)，构建见 [run #40115248808](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/actions/runs/40115248808)）。实测：产物 `359,250,342 B（342.63 MiB）`、SHA256 校验通过、静默安装退出码 `0`、16 项随包文件齐全、随包 Python `3.12.10`、`core` 导入 7 个模块、mediapipe `0.10.31`、`/api/health` 返回 `python_ok=true`、诊断 8 项（后端 / 解释器 / 源码目录 / 产物目录 / 面捕程序 / YuNet 模型 / ONNX Runtime / 仅回环监听）全部 OK。安装后占用 `947.5 MB`。
 
-> 🔏 **安装包未签名**：首次运行会出现 SmartScreen「未知发布者」，点「更多信息 → 仍要运行」即可。
-> 发布后请用 Release 页给出的 SHA256 校验文件完整性。
+> 🔏 **关于代码签名**：当前安装包**尚未签名**，Windows 首次运行会提示 SmartScreen「未知发布者」——点「更多信息 → 仍要运行」即可。安装后请用 SHA256 确认文件完整：
+>
+> ```powershell
+> (Get-FileHash ".\Live2D.Master.Agent_0.10.9_x64-setup.exe" -Algorithm SHA256).Hash
+> # 期望值（实测，359,250,342 字节）：
+> # 1b371d525aca630e854d8e91cd0801c7237095fbca9fc6590b5083e4106c3d47
+> ```
+>
+> 签名管线已就绪（[scripts/windows/sign_artifacts.ps1](scripts/windows/sign_artifacts.ps1)，支持自定义签名命令 / PFX / 证书指纹）。获得受信任证书后，设置仓库变量 `L2D_SIGN_MODE=required` 并配置对应密钥，构建即自动签名并在签名无效时**阻断发布**。
+
+### v0.10.9 更新内容（先看这 6 条）
+
+> 本版是**工作流与代码层面的补丁发布**，不引入新功能模块。
+
+1. **修掉一个 CVE 级远程代码执行**：`next@16.4.0` 命中 3 条 2026-10-22 公布的告警（含 `use cache` 未授权 RCE），全部在 `16.4.1` 修复；已升级并同步锁文件。
+2. **Python 依赖的 CVE 面清零**：Pillow / cryptography / python-multipart / rembg / requests / torch / transformers 的下限全部抬到修复版本（OSV.dev 复扫 PyPI **157 → 0 条**）；顺带修掉 `transformers>=4.30.0` 与代码实际按 5.17 编写的声明矛盾。
+3. **安装包瘦身**：`requirements.desktop.txt` 把 torch 组移出（29 → 24 条）—— 它既与 `core/capabilities.py` 的「重能力按需下载」契约矛盾，装了也用不上（桌面端 `auto` 恒走 isnet）。改为应用内「能力」页按需安装，**默认链路零变化**。实测安装包 **461.62 MiB → 342.63 MiB（净减 119 MiB / −26%）**；注意「−500 MB」是 torch 组本身体积，不是净减少量。
+4. **运行变快**：`/api/health` 从「每次 fork 3 个 Python」改成合并 exec + 30s 缓存，并发 200 次从 9/200 成功 → **200/200**（RPS 2 → 130）；分层质量评分 **2.27 s → 1.0 s**、`compose` **2.82 s → 1.56 s**、生成管线端到端 **11.92 s → 9.41 s**（−21%），产物逐字节一致。
+5. **许可与 CI 真正落地**：FF-15 打包闸门从「文档里的待补」变成实装（产物内许可与仓库逐字节一致，不合规以退出码 1 阻断发布）；新增 FOSSA 扫描 job（无 key 自动跳过，不误伤外部 PR）；CI 改为按**声明下限**安装依赖，第一次真正验证下限可用。
+6. **安装包终于真的能构建出来了**：CI 首次跑到发布步骤，连续暴露三处**只有真构建才会显形**的缺陷 —— 陈旧 wheel 缓存让离线装配失败、`npx next build` 绕过 `prebuild` 导致产物漏许可被 FF-15 拦下、四段式版本号违反 Cargo/Tauri 的 semver 约束。三处均已修，并各自在本地复现验证过；本版安装包已由 CI 真实产出并发布（细节见 CHANGELOG「顺手修掉的存量 bug」）。
+
+> 完整变更、**尚未验证项**与发布凭据（源码提交 / 构建运行 / 哈希 / 回滚目标）见 [CHANGELOG v0.10.9](CHANGELOG.md)。
 
 ### 命令行快速体验（30 秒核心能力）
 
 ```bash
+# 安装依赖
 pip install -r requirements.txt
 
-# 一句话生成角色（默认用免费的 Pollinations，不需要 API Key）
+# 一句话生成角色（用免费的 Pollinations，不需要任何 API Key）
 python -m core.cli generate "蓝发猫耳少女，白色背景，日系赛璐璐风格"
 
 # 交互式菜单
 python -m core.cli
 ```
 
-产物落在 `output/`。
+就这么简单。如果你的网络能访问 pollinations.ai，几十秒内你就能在 `output/` 目录看到生成的角色立绘。
 
 ### 从源码构建桌面应用
 
-前置：Node.js 20+、Go 1.25+、Rust stable、Python 3.12、tauri-cli（`cargo install tauri-cli`）。
+**产出可分发安装包**（与 Release 一致，自带运行时）：
 
 ```bash
-# 1) 前端静态导出（含许可文件注入）
-cd web && npm ci && NEXT_STATIC_EXPORT=1 npm run build && cd ..
-node scripts/version-assets.mjs web/out
+# 前置：Node.js 20+、Go 1.25+、Rust stable、Python 3.12、tauri-cli（cargo install tauri-cli）
 
-# 2) 嵌入 Go 后端
-rm -rf api/webui/dist && mkdir -p api/webui/dist && cp -r web/out/. api/webui/dist/
+# 1) 前端 + Go 后端 + Rust 面捕
+cd web && npm ci && npm run build && cd ..
 cd api && go build -trimpath -tags nomsgpack -ldflags "-s -w -H windowsgui" -o live2d-api.exe . && cd ..
-
-# 3) 编译原生面捕
 cd native/face_tracker && cargo build --release && cd ../..
 
-# 4) 装配随包运行时（嵌入式 Python / 离线 wheel / 模型，site-packages 约 0.9 GB）
+# 2) 装配自带运行时（嵌入式 Python / 离线 wheel / 模型，约 0.9 GB site-packages，
+#    不含 torch 组 —— 那组由应用内按需下载）
 python scripts/build_desktop_bundle.py --go-exe api/live2d-api.exe \
   --face-tracker-exe native/face_tracker/target/release/face_tracker.exe
 
-# 5) 构建桌面启动页（Vue + Vite，产出单文件 index.html）
-cd desktop/launch && npm ci && npm run build && cd ../..
-
-# 6) 打 NSIS 安装包
+# 3) 打 NSIS 安装包
 cd desktop && cargo tauri build --bundles nsis
 # 产物：desktop/target/release/bundle/nsis/Pygmalion Studio_<version>_x64-setup.exe
+#       （v0.10.9 及之前打出来的包用的是旧 productName，文件名仍是 Live2D.Master.Agent_*）
 ```
 
-Windows 上也可以直接跑一键脚本：`scripts\build_tauri_release.bat`。
+**只想要一个轻量 exe 调试**（不含运行时，需本机 Python 3.11+）：
 
-> 装配脚本会在收尾时清掉随包运行时里的 `__pycache__` / `.pyc`，保证安装包只含运行所需文件。
+```bash
+./scripts/build_desktop.sh
+# 产物：dist/Live2DMasterAgent.exe（无控制台）/ dist/Live2DMasterAgent-console.exe（带日志）
+```
+
+> 注意：这个轻量 exe 只是窗口壳，必须配合本机 Python 与依赖才能跑；分发给别人请用上面的 NSIS 安装包。
 
 ### 开发模式（前后端分离调试）
 
 需要两个终端：
 
 ```bash
-# 终端 1 — Go 后端（端口 8080）
-cd api && go run .
+# 终端 1 — 启动 Python 后端（端口 8080）
+python api_server.py
 
-# 终端 2 — 前端开发服务器
+# 终端 2 — 启动前端开发服务器
 cd web && npm install && npm run dev
 ```
 
-打开 **http://localhost:3000**，前端通过 rewrites 代理到后端。
-
-> 想直接预览内嵌版（与安装包一致）：先按上面的步骤 1–2 生成 `api/webui/dist`，再打开 <http://localhost:8080/studio>。
+开发模式下打开 **http://localhost:3000**，前端通过 rewrites 代理连接后端。
 
 ---
 
@@ -175,69 +235,70 @@ cd web && npm install && npm run dev
 你的描述          AI 生图           自动分层          导出
   │                │                │               │
   ▼                ▼                ▼               ▼
-"蓝发猫耳少女" → 立绘 PNG → 分层 PSD → .moc3 模型包
+"蓝发猫耳少女" → 立绘 PNG → 18 层 PSD → .moc3 模型包
                                     ↓
                               可导入 Live2D Cubism
                               可导入 VTube Studio
 ```
 
-### 工作台
-
-单页三栏，四个阶段：
-
-| 阶段 | 做什么 | 产物 |
-|------|--------|------|
-| 生成 | 中文提示词 → 立绘（可选分辨率、生图引擎） | `output/character_<ts>.png` |
-| 分层 | K-means 快速分层 / 语义分层，可调图层顺序与显隐 | `output/layers_<ts>/`（PNG + `character.psd`） |
-| 预览 | 用参数与表情驱动模型，检查绑定效果 | 运行时渲染 |
-| 导出 | 命名模型并打包，或交给桌面桌宠 | `.moc3` + 贴图 + `model3.json` |
-
-### 模型库
-
-`/models` 是独立页面，用来管理做过的作品与模型：
-
-- 搜索作品名 / 提示词 / 模型名
-- 按自定义分类、阶段标签（已分层 / 已建模 / 已导出）筛选
-- 作品改名、设置分类，实时同步到工作台左栏
-- 一个作品下的多个模型并排展示，点「打开工作台」继续编辑
-- 页面每 8 秒自动刷新，窗口重新聚焦时也会刷新
-
 ### AI 图像生成
 
-按优先级自动降级，不配 Key 默认走免费的 Pollinations：
+接入多个服务商，按优先级自动降级：
 
-| 优先级 | 服务 | 需要付费？ |
-|--------|------|-----------|
-| 1 | Seedream（火山引擎） | 需 Key |
-| 2 | SenseNova（商汤） | 需 Key |
-| 3 | OpenAI 兼容端点 | 需 Key |
-| 4 | **Pollinations.ai** | **免费** |
-| 5 | 本地占位图 | 免费兜底 |
+| 优先级 | 服务 | 需要付费？ | 质量 |
+|--------|------|-----------|------|
+| 1 | Seedream（火山引擎） | 需 Key | 高 |
+| 2 | SenseNova（商汤） | 需 Key | 高 |
+| 3 | OpenAI 兼容端点 | 需 Key | 取决于模型 |
+| 4 | **Pollinations.ai** | **免费** | 中 |
+| 5 | 本地占位图 | 免费 | 兜底用 |
+
+不配任何 Key，默认走 Pollinations，完全够用。
 
 ### 自动分层
 
-- **K-means 颜色聚类**（默认，纯 Python）：快，不需要额外模型
-- **SAM + ISNet 语义分割**：按语义识别头发、五官、衣物，精度更高，需要模型权重（`python scripts/download_models.py`）
+两种模式：
+
+- **K-means 颜色聚类**（默认，纯 Python）：按颜色相近度自动拆分图层，快且不需要额外依赖。
+- **SAM + ISNet 语义分割**（需下载模型）：按语义识别头发、五官、衣物等部位，精度更高但需要约 2GB 模型权重。运行 `python scripts/download_models.py` 下载。
+
+标准 18 层顺序：头皮 → 后发 → 中发 → 前发 → 眉毛 → 眼睛 → 口鼻 → 脸 → 颈 → 上衣 → 内衣 → 手臂 → 手 → 裙摆 → 腿 → 配饰 → 兽耳/尾 → 特效。
 
 ### Live2D moc3 导出
 
-不是调用外部工具，而是**自己写了 moc3 编译器**：从分层 PNG 直接编译出符合 Cubism 4 规范的 `.moc3`，包含网格、骨骼、变形器、表情参数与物理模拟，并通过官方 Cubism Native Core 的逐像素验收。
+这是项目里我花了最多心血的部分。
+
+不是调用外部工具，而是**自己写了 moc3 编译器**——从分层 PNG 直接编译出符合 Live2D Cubism4 规范的 `.moc3` 文件，包含网格、骨骼、变形器、28 个表情参数、物理模拟。
+
+> ✅ 已在 **Live2D 官方 Cubism Native Core** 上通过逐像素验收：导出的模型能被官方内核正确加载，参数确实驱动画面。测试规模 504 passed / 96 skipped（2026-10-17 CI 实测）。
 
 ---
 
 ## 项目结构
 
 ```
-├── core/                  Python 核心内核（生图 / 分层 / PSD / 质检 / 编排）
-├── live2d_builder/        Live2D Cubism4 构建管线（网格 / 骨骼 / 表情 / 物理 / moc3 编译器）
-├── drivers/               实时驱动层（面捕 / 桌宠 / 软件渲染）
+├── core/                  Python 核心内核
+│   ├── image_gen/           图像生成（多服务商路由 + 离线兜底）
+│   ├── segment_engine/      分层引擎（K-means / SAM / ISNet）
+│   ├── psd/                 PSD 读写
+│   ├── qa/                  质量检测
+│   └── workflow.py          全流程编排
+├── live2d_builder/        Live2C Cubism4 构建管线
+│   ├── mesh/                网格生成
+│   ├── bones/               骨骼 + 变形器
+│   ├── blendshapes/         28 表情参数
+│   ├── physics/             物理模拟
+│   └── exporter/            自研 moc3 编译器 ← 核心技术
+├── drivers/               实时驱动层
+│   ├── face_tracker/        MediaPipe 面部捕捉
+│   ├── desktop_pet/         桌宠
+│   └── live2d_runtime/      软件 Live2D 渲染
 ├── llm_bridge/            AI 对话网关
-├── api/                   Go REST API（Gin），内嵌前端静态资源
-├── web/                   Next.js 工作台（单页三栏 + 模型库）
-├── desktop/               Tauri v2 外壳（启动页 / 拉起后端 / NSIS 打包）
-│   └── launch/              Vue 3 + Vite 桌面启动页（单文件产物）
+├── api/                   Go REST API（Gin）
+├── web/                   Next.js 工作台（单页三栏：作品栏 + 阶段画布 + 操作台）
+├── desktop/               Tauri v2 外壳（窗口 + 拉起后端 + NSIS 打包）
 ├── native/face_tracker/   Rust 原生面捕（YuNet + onnxruntime）
-├── scripts/               构建、装配与验收脚本
+├── scripts/               装配与验收（build_desktop_bundle.py、windows/verify_desktop_install.ps1）
 ├── assets/icon/           项目图标
 └── docs/                  文档
 ```
@@ -246,63 +307,80 @@ cd web && npm install && npm run dev
 
 ## 配置（可选）
 
-默认零配置即可跑通核心链路。需要更高质量出图或对话能力时：
+默认零配置即可使用核心功能。如果你想要更高质量的生图或对话能力：
 
 ```bash
 cp .env.example .env
 ```
 
-按需填写：
+编辑 `.env`，按需填入：
 
 ```env
-# 高质量生图（不填就走免费的 Pollinations）
+# 高质量生图（可选，不填就用免费的 Pollinations）
 ARK_API_KEY=你的火山引擎Key
 SENSENOVA_API_KEY=你的商汤Key
 
-# LLM 对话（不填则该能力不可用）
+# LLM 对话（可选，不填则聊天功能不可用）
 OPENAI_API_KEY=sk-你的Key
 OPENAI_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-4o-mini
+
+# 或者用本地 Ollama（完全免费）
+# 启动 ollama serve && ollama pull qwen2.5:3b 即可，无需填 Key
 ```
 
-> `.env` 已被 `.gitignore` 排除；请不要把任何密钥写进源码或提交到仓库。
+> `.env` 文件已被 `.gitignore` 排除，不会上传到 GitHub。
 
 ---
 
 ## 已知局限
 
-1. **出图质量取决于服务商**：免费 Pollinations 中等质量；要商业级立绘请配 Seedream。
-2. **语义分层需要模型权重**：不下载就退回 K-means，效果够用但部位边界更粗。
-3. **moc3 导出是"可用但粗糙"的起点**：自动绑定替代不了技术师精调。
-4. **面部捕捉未接摄像头实测**：程序、模型、运行库齐备，实际驱动效果仍待验证。
-5. **安装包未签名**：首次运行会触发 SmartScreen 提示。
-6. **安装包体积较大**（约 320 MiB）：因为内置了完整运行时与模型。
-7. 项目仍在快速迭代，接口与数据结构可能随版本变化。
+与其让你踩坑后失望，不如提前说清楚：
 
-详见 [docs/LIMITATIONS.md](docs/LIMITATIONS.md)。
+1. **生成的角色质量取决于 AI 生图服务商**。免费的 Pollinations 出图质量中等；想要高质量赛璐璐立绘，建议配置火山引擎 Seedream。
+2. **SAM 语义分层需要约 2GB 模型权重**。不想下载的话，默认的 K-means 分层也够用。
+3. **面部捕捉依赖摄像头**：安装包内置原生面捕（YuNet + onnxruntime），CI 已验证程序、模型、运行库齐备且诊断项通过，但**未接摄像头实测驱动效果**；桌宠的多窗口 / 置顶行为同样未验证。
+4. **moc3 导出的模型是「可用但粗糙」的起点**。自动绑定无法替代专业 Live2D 技术师的手动精调——它能让你快速有一个能动的模型，但要追求商业级品质仍需人工打磨。
+5. **项目仍在快速迭代中**，API 接口可能随版本变化。
+6. **Windows 安装包未签名**：首次运行会触发 SmartScreen「未知发布者」提示；请用上面给出的 SHA256 校验下载完整性。
+7. **安装包体积 306 MiB**：因为内置了完整 Python 运行时与模型，这是「装完就能用」的代价；对比旧版 8 MB（只含两个 exe，缺运行时）。
+8. **补充**：目前该项目是存在很多问题的，还没很多不完善的地方，我会多多进一步开发。
+
+详细说明见 [docs/LIMITATIONS.md](docs/LIMITATIONS.md)。
 
 ---
 
 ## 测试
 
 ```bash
-# Python 测试
+# Python 测试（504 passed / 96 skipped，2026-10-17 构建实测；跳过的多为缺可选依赖）
 python -m pytest tests/ -v
 
 # Go 测试
 cd api && go test ./... -v
 
-# 前端类型检查 + 静态构建
-cd web && npx tsc --noEmit && NEXT_STATIC_EXPORT=1 npm run build
+# 前端构建检查
+cd web && npm run build
 ```
 
 ---
 
 ## 版本记录
 
-- 完整变更与发布凭据：[CHANGELOG.md](CHANGELOG.md)
-- 当前版本号单一真源：`core/version.py`
-- 发布流程：`scripts/build_tauri_release.bat` → 校验产物 → 打 tag → 上传 Release
+| 版本 | 日期 | 重点 |
+|------|------|------|
+| **v0.10.9** | 2026-10-24 | **Dependency Truth**：依赖 CVE 面清零（PyPI 157→0）、修 Next.js 未授权 RCE、安装包移出 torch 组（**342.63 MiB / −119 MiB**）、`/api/health` 吞吐 65×、分层评分与 compose 提速、FF-15 许可闸门实装、构建链三处缺陷修复（wheel 陈旧缓存 / prebuild 被绕过 / 非 semver 版本号）—— 工作流与代码补丁，不含新功能 |
+| **v0.10.8** | 2026-10-17 | **Honest Desktop**：安装包自带运行时（461.62 MiB / 92 个离线包，无需装 Python）、修复「后端未找到」与导出页 PSD 失败、移除无效控件与假成功、新增 `/api/diagnostics` 与一键验收脚本（未签名） |
+| **v0.10.7** | 2026-10-16 | **依赖治理 + 发布修复**：抬高 Python/npm 依赖下限消除 CVE 面、修复 Release 无资产回归、清零版本号漂移（⚠️ 该版 8 MB 安装包缺运行时，已撤下） |
+| **v0.10.6** | 2026-10-15 | **CI 修复 + 版本统一**：关闭 pixi.js v8 破坏性升级 PR、dependabot 忽略 major、全栈版本号对齐到 0.10.6 |
+| **v0.10.5** | 2026-10-11 | **Desktop First**：移除 Docker/Web 部署，全面转向桌面应用；桌面应用安装包可直接下载 |
+| **v0.10.4** | 2026-10-11 | **Hardened Shell**：5 项安全加固（CSP/面捕恢复、zip symlink 防护、目录列举禁用、SSRF DNS 钉扎、PNG 批量导入内存优化） |
+| v0.10.3 | 2026-10-08 | 沙箱就绪：离线兜底生图 + PSD 缺依赖不崩 + 健康检查真实化 + 端口冲突友好提示 |
+| v0.10.2 | 2026-09-29 | 离线兜底生成器 + PSD 图层命名 + 桌面打包工具链 |
+| v0.10.1 | 2026-09-22 | 自研 moc3 编译器：官方 Cubism 参数驱动 + 逐像素验收通过 |
+| v0.10.0 | 2026-09-22 | SAM 语义分层 + 完整 Cubism4 模型包 + MediaPipe 面捕 + LLM 对话 |
+
+完整记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -310,36 +388,64 @@ cd web && npx tsc --noEmit && NEXT_STATIC_EXPORT=1 npm run build
 
 | 文档 | 内容 |
 |------|------|
-| [docs/QUICKSTART.md](docs/QUICKSTART.md) | 最快上手路径 |
-| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | 工作台逐项说明 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 模块与数据流 |
-| [docs/UI-REDESIGN.md](docs/ui-redesign.md) | 界面重设计说明 |
-| [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | 已知局限与规避方式 |
-| [docs/LICENSE-POLICY.md](docs/license-policy.md) | 第三方依赖许可策略 |
-| [docs/FAQ.md](docs/FAQ.md) | 常见问题 |
+| [快速入门](docs/QUICKSTART.md) | 5 分钟跑通 |
+| [用户指南](docs/USER_GUIDE.md) | 完整功能说明 |
+| [常见问题](docs/FAQ.md) | 遇到问题先看这里 |
+| [已知局限](docs/LIMITATIONS.md) | 功能边界 |
+| [架构设计](docs/ARCHITECTURE.md) | 技术架构详解 |
+| [架构决策](docs/architecture/index.md) | 6 条核心 ADR + 架构不变量 |
+| [部署指南](docs/DEPLOY.md) | 桌面应用安装与构建 |
+
+---
+
+## 关于这个项目
+
+这个项目由一个人从零开始摸索着做出来。我不是科班出身，很多技术是边做边学的——所以代码里可能有不够优雅的地方，架构上也有可以改进的空间。
+
+但它解决了一个真实的问题：**让没有绘画和建模基础的人，也能拥有自己的虚拟形象。**
+
+如果你也在做类似的事情，或者对这个方向感兴趣，欢迎交流。
 
 ---
 
 ## 如何贡献
 
-1. Fork 并创建分支（`feat/xxx`、`fix/xxx`）
-2. 改动前先跑一遍测试；涉及 UI 的附截图
-3. 提交前确认没有把 `.env`、`output/`、模型权重、本机配置带进提交
-4. 发起 PR，说明动机、改动范围与验证方式
+欢迎所有形式的贡献：
+
+- **提交 Issue** — 反馈 Bug、提功能建议
+- **Pull Request** — 修 Bug、加功能、改文档
+- **分享作品** — 用这个项目生成的角色（保留署名即可）
+- **写教程** — 帮更多小白上手
+
+提交 PR 前请确保 `pytest tests/` 和 `npm run build` 通过。详见 [docs/CODE_STANDARD.md](docs/CODE_STANDARD.md)。
 
 ---
 
 ## 致谢
 
-感谢 Live2D 生态中的开源项目与模型作者，以及所有提交 issue、帮忙验证安装包的人。
+这个项目站在巨人的肩膀上：
+
+- [MediaPipe](https://mediapipe.dev/) — 面部捕捉
+- [Segment Anything](https://github.com/facebookresearch/segment-anything) — 语义分割
+- [pixi-live2d-display](https://github.com/nicxfer/pixi-live2d-display) — Web Live2D 渲染
+- [Pollinations.ai](https://pollinations.ai) — 免费 AI 生图
+- [Live2D Cubism](https://www.live2d.com/) — 官方规范参考
+  
+
+感谢每一位 Star、Issue、PR 的贡献者。
 
 ---
 
 ## 许可证
 
-本项目自 v0.10.10 起采用 **AGPL-3.0 + 商业授权双轨**：
+[AGPL-3.0](LICENSE) + 商业授权双轨（Dual License）。Copyright (C) 2026 Live2D Master Agent Team（产权所有者）。
 
-- 个人 / 开源使用：遵循 [AGPL-3.0](LICENSE)
-- 商业闭源分发：需要单独获得商业授权（联系方式见仓库主页）
+**为什么从 Apache-2.0 改为 AGPL-3.0（v0.10.10 起，ADR-001 Rev.5）**：为了防止在作者不知情的情况下被私自商业化。项目完整度越来越高，尽管现在还存在大量问题，作者也要保留自己的开发著作权。**作者非常欢迎大家基于本项目进行二次开发和商业化**，希望大家能够理解。
 
-随安装包分发第三方组件均为宽松许可（MIT / Apache-2.0 / BSD），明细与判定依据见 [docs/license-policy.md](docs/license-policy.md)。
+具体到自己身上的三种情况：
+
+- **直接 Fork 本项目到你的 GitHub 账户**：不用告知作者，随意 Fork，欢迎二次开发（Fork 自带公开溯源，遵守 AGPL-3.0 即可）。
+- **二次开发 / 商业化并保持开源**：同样不用单独告知，遵守 AGPL-3.0（衍生作品以 AGPL-3.0 开源、保留 `LICENSE` 全文与版权声明；对外提供网络服务/SaaS 也触发开源义务）。
+- **把源码下载到本地、不开源、还进行商业化**：**不允许在不告知作者的情况下进行**。这种情况必须**告知作者并取得单独商业授权**——请通过 [GitHub Issues](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/issues) 联系，说明用途与范围。
+
+历史版本（曾按 CC BY-NC / MIT / Apache-2.0 发布）对接收者仍然有效、不追溯；自 v0.10.10（ADR-001 Rev.5）起的新提交与新发布按 AGPL-3.0 发布。
