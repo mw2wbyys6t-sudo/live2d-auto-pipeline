@@ -141,7 +141,7 @@ scripts\build_tauri_release.bat
 
 这个项目能跑起来，靠的不是我一个人。
 
-- 感谢 **Live2D** 提供 Cubism Core 与模型规范，让自研 moc3 编译器有了可对照的验收标准。
+
 - 感谢 **live2d-py**、**pixi-live2d-display**、**See-through**、**SAM 2**、**GroundingDINO**、**MediaPipe**、**rembg / ISNet** 等开源项目与模型作者，你们的工作构成了这个项目的地基。
 - 感谢 **ComfyUI**、**Stable Diffusion WebUI** 与各类生图模型社区，为本地生图提供了可选路径。
 - 感谢所有提交 issue、帮忙试装安装包、反馈模型效果的朋友；每一条反馈最后都变成了版本记录里的一行。
