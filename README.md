@@ -27,27 +27,13 @@
 
 导出的模型可以直接导入 **Live2D Cubism** 或 **VTube Studio**。桌面安装包自带完整运行时，装完即用，无需配置 Python 环境。
 
-![界面预览](docs/assets/preview.png)
+![工作台界面](docs/assets/screenshots/workbench.png)
 
 ## 开发历程
 
-2026 年 9 月开始，一个人从零把「一句话 → 可用的 Live2D 模型」跑通。
+2026 年 9 月从零起步，先后跑通自研 moc3 导出与桌面安装包，v0.10.11 起导出的模型在浏览器里真正动起来。
 
-- **v0.10.0 – v0.10.4（起步）**：SAM 语义分层、自研 moc3 编译器、离线兜底、桌面打包与首轮安全加固，先把整条链路跑通。
-- **v0.10.5（Desktop First）**：移除 Docker / Web 部署，全面转向桌面应用，只为能直接使用本地 GPU / CPU。
-
-之后的重心从「能跑」转到「能交付」：
-
-| 版本 | 重点 |
-|---|---|
-| v0.10.6 | 全栈版本号统一，挡住破坏性依赖升级 |
-| v0.10.7 | 清理 CVE；一次缺运行时的安装包事故，让产物级验收变成硬门槛 |
-| v0.10.8 | 安装包自带运行时，修复假成功，新增诊断与一键验收 |
-| v0.10.9 | 依赖 CVE 清零，安装包瘦身，修复发布链缺陷 |
-| v0.10.10 | GPU 探测与自动选卡，工作台形态成形，切换到 AGPL-3.0 + 商业授权 |
-| v0.10.11 | 导出的模型在浏览器里真正动起来；清理假内容，安装包改为干净重建 |
-
-> 完整变更与实测数据见 [CHANGELOG.md](CHANGELOG.md)。
+> 详见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 快速开始
 
@@ -86,13 +72,45 @@ python -m core.cli generate "蓝发猫耳少女，白色背景，日系赛璐璐
 | 面部捕捉 | 程序与模型齐备，摄像头实测待验证 |
 | LLM 对话 / 语音 | 需自备 API Key |
 
+## 导入验证
+
+导出的模型包已在两个真实宿主中导入成功：
+
+| Live2D Cubism 5.3 | VTube Studio |
+|---|---|
+| ![Live2D Cubism 5.3 导入截图](docs/assets/screenshots/cubism-5.3.png) | ![VTube Studio 导入截图](docs/assets/screenshots/vtube-studio.png) |
+
+## 相关开源生态与改进
+
+这个项目建立在 Live2D 与 AI 图像开源生态之上。和同类方案相比，主要改进：
+
+| 相关项目 | 许可 | 借鉴 / 改进 |
+|---|---|---|
+| live2d-py | MIT | 用官方 Cubism Core 做逐像素验收；moc3 由本项目自行编译，不依赖 Cubism Editor 导出 |
+| pixi-live2d-display | MIT | 借鉴浏览器端 Live2D 播放方式；本项目播放器直接读 `bindings.json` 做逐顶点形变，减少对官方 SDK 的依赖 |
+| See-through / l2d_sam_iter2 | Apache-2.0 | 借鉴部位解析思路，作为可选分层后端；模型缺失时自动降级，不阻塞主链路 |
+| SAM 2 / GroundingDINO | Apache-2.0 | 作为语义分层后端；在其上补了 19 类部位到 52 层的映射、遮挡补全与质量评分 |
+| MediaPipe | Apache-2.0 | 借鉴面捕关键点方案；桌面版改用 Rust + YuNet / ONNX，用户无需安装 Python 或 MediaPipe |
+| rembg / ISNet | MIT / 见模型页 | 用于抠图与前景剪影；改为权重直连，避免与 DirectML 版 onnxruntime 冲突 |
+| ComfyUI / Stable Diffusion WebUI | GPL-3.0 / AGPL-3.0 | 仅作为可选本地生图后端，通过 HTTP 调用，不做代码链接 |
+
+> 随包分发的第三方组件均为宽松许可（MIT / Apache-2.0 / BSD）；GPL 系组件只以独立进程或 HTTP 方式对接，不进入安装包。明细见 [docs/license-policy.md](docs/license-policy.md)。
+
 ## 已知限制
 
 - 自动绑定是「可用的起点」，还不能替代专业 Live2D 技术师的精修
-- 免费出图服务为中等质量，商业级立绘建议配 Seedream
+- 免费出图服务为中等质量，商业级立绘建议配 Seedream；中文提示词效果通常弱于英文
 - 安装包约 320 MiB（内置 Python 运行时与模型）
 - 安装包未签名，首次运行会触发 SmartScreen 提示
 - 项目仍在快速迭代，接口与数据结构可能变化
+
+### 正在改进（预计下个版本）
+
+- **分层**：复杂立绘下仍会出现部件边界粗糙、相邻部件误并（如裙摆并入后发）、大图内存占用偏高；当前可先用 K-means 分层或手动调整图层顺序规避
+- **贴图边缘**：部分宿主里模型边缘会出现白色毛边 / 裂纹（VTube Studio 截图可见），正在处理边缘外扩与透明边缘
+- **转头过渡**：下颌与领口之间仍有约 35px 的缝隙
+- **物理**：浏览器物理为自研近似，尚未与官方内核逐位一致
+- **面部捕捉**：程序与模型齐备，尚未接摄像头实测
 
 ## 从源码运行
 
@@ -118,6 +136,18 @@ scripts\build_tauri_release.bat
 | [ARCHITECTURE](docs/ARCHITECTURE.md) | 模块与数据流 |
 | [LIMITATIONS](docs/LIMITATIONS.md) | 已知局限与规避 |
 | [CHANGELOG](CHANGELOG.md) | 版本变更 |
+
+## 致谢
+
+这个项目能跑起来，靠的不是我一个人。
+
+- 感谢 **Live2D** 提供 Cubism Core 与模型规范，让自研 moc3 编译器有了可对照的验收标准。
+- 感谢 **live2d-py**、**pixi-live2d-display**、**See-through**、**SAM 2**、**GroundingDINO**、**MediaPipe**、**rembg / ISNet** 等开源项目与模型作者，你们的工作构成了这个项目的地基。
+- 感谢 **ComfyUI**、**Stable Diffusion WebUI** 与各类生图模型社区，为本地生图提供了可选路径。
+- 感谢所有提交 issue、帮忙试装安装包、反馈模型效果的朋友；每一条反馈最后都变成了版本记录里的一行。
+- 也感谢每一个愿意用一句话描述自己角色的人 —— 这是这个项目存在的理由。
+
+> 第三方许可明细见 [docs/license-policy.md](docs/license-policy.md)。
 
 ## 许可证
 
