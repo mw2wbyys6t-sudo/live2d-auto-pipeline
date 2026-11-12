@@ -80,6 +80,22 @@ python -m core.cli generate "蓝发猫耳少女，白色背景，日系赛璐璐
 |---|---|
 | ![Live2D Cubism 5.3 导入截图](docs/assets/screenshots/cubism-5.3.png) | ![VTube Studio 导入截图](docs/assets/screenshots/vtube-studio.png) |
 
+## 相关开源生态与改进
+
+这个项目建立在 Live2D 与 AI 图像开源生态之上。和同类方案相比，主要改进：
+
+| 相关项目 | 许可 | 借鉴 / 改进 |
+|---|---|---|
+| live2d-py | MIT | 用官方 Cubism Core 做逐像素验收；moc3 由本项目自行编译，不依赖 Cubism Editor 导出 |
+| pixi-live2d-display | MIT | 借鉴浏览器端 Live2D 播放方式；本项目播放器直接读 `bindings.json` 做逐顶点形变，减少对官方 SDK 的依赖 |
+| See-through / l2d_sam_iter2 | Apache-2.0 | 借鉴部位解析思路，作为可选分层后端；模型缺失时自动降级，不阻塞主链路 |
+| SAM 2 / GroundingDINO | Apache-2.0 | 作为语义分层后端；在其上补了 19 类部位到 52 层的映射、遮挡补全与质量评分 |
+| MediaPipe | Apache-2.0 | 借鉴面捕关键点方案；桌面版改用 Rust + YuNet / ONNX，用户无需安装 Python 或 MediaPipe |
+| rembg / ISNet | MIT / 见模型页 | 用于抠图与前景剪影；改为权重直连，避免与 DirectML 版 onnxruntime 冲突 |
+| ComfyUI / Stable Diffusion WebUI | GPL-3.0 / AGPL-3.0 | 仅作为可选本地生图后端，通过 HTTP 调用，不做代码链接 |
+
+> 随包分发的第三方组件均为宽松许可（MIT / Apache-2.0 / BSD）；GPL 系组件只以独立进程或 HTTP 方式对接，不进入安装包。明细见 [docs/license-policy.md](docs/license-policy.md)。
+
 ## 已知限制
 
 - 自动绑定是「可用的起点」，还不能替代专业 Live2D 技术师的精修
