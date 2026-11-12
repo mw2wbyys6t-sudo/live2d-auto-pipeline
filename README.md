@@ -74,14 +74,11 @@ python -m core.cli generate "蓝发猫耳少女，白色背景，日系赛璐璐
 
 ## 导入验证
 
-导出的模型包已在真实宿主中导入成功：
+导出的模型包已在两个真实宿主中导入成功：
 
-| 宿主 | 结果 |
+| Live2D Cubism 5.3 | VTube Studio |
 |---|---|
-| Live2D Cubism 5.3 | 已导入，模型 / 纹理 / 物理 / 动作齐全 |
-| VTube Studio | 已导入 |
-
-![Live2D Cubism 5.3 导入截图](docs/assets/screenshots/cubism-5.3.png)
+| ![Live2D Cubism 5.3 导入截图](docs/assets/screenshots/cubism-5.3.png) | ![VTube Studio 导入截图](docs/assets/screenshots/vtube-studio.png) |
 
 ## 已知限制
 
