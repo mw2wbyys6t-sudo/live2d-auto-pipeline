@@ -37,7 +37,7 @@
 
 ## 快速开始
 
-1. 打开 [Releases](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases)，下载 `Pygmalion Studio_0.10.11_x64-setup.exe`
+1. 打开 [Releases](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases)，下载 `Pygmalion.Studio_0.10.11_x64-setup.exe`
 2. 安装后从开始菜单启动
 3. 输入一句角色描述，依次完成 **生成 → 分层 → 预览 → 导出**
 
@@ -100,7 +100,7 @@ python -m core.cli generate "蓝发猫耳少女，白色背景，日系赛璐璐
 
 - 自动绑定是「可用的起点」，还不能替代专业 Live2D 技术师的精修
 - 免费出图服务为中等质量，商业级立绘建议配 Seedream；中文提示词效果通常弱于英文
-- 安装包约 320 MiB（内置 Python 运行时与模型）
+- 安装包约 291 MiB（内置 Python 运行时与模型）
 - 安装包未签名，首次运行会触发 SmartScreen 提示
 - 项目仍在快速迭代，接口与数据结构可能变化
 
