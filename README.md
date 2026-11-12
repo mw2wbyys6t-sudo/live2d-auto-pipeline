@@ -27,7 +27,7 @@
 
 导出的模型可以直接导入 **Live2D Cubism** 或 **VTube Studio**。桌面安装包自带完整运行时，装完即用，无需配置 Python 环境。
 
-![界面预览](docs/assets/preview.png)
+![工作台界面](docs/assets/screenshots/workbench.png)
 
 ## 开发历程
 
@@ -71,6 +71,17 @@ python -m core.cli generate "蓝发猫耳少女，白色背景，日系赛璐璐
 | 语义分层 | 需下载模型权重，否则自动退回 K-means |
 | 面部捕捉 | 程序与模型齐备，摄像头实测待验证 |
 | LLM 对话 / 语音 | 需自备 API Key |
+
+## 导入验证
+
+导出的模型包已在真实宿主中导入成功：
+
+| 宿主 | 结果 |
+|---|---|
+| Live2D Cubism 5.3 | 已导入，模型 / 纹理 / 物理 / 动作齐全 |
+| VTube Studio | 已导入 |
+
+![Live2D Cubism 5.3 导入截图](docs/assets/screenshots/cubism-5.3.png)
 
 ## 已知限制
 
