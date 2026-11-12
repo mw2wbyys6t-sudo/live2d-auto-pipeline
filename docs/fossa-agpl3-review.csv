@@ -1,0 +1,65 @@
+seq,group,count_in_group,issue_id,dependency,license,action,fossa_reason,notes,evidence
+1,A,1,TODO-EXPORT-01,live2d-auto-pipeline,AGPL-3.0-only,NOOP_POLICY_SHOULD_APPROVE,,"Policy must approve project own AGPL; if still flagged, binding failed",policy
+2,B,1,TODO-EXPORT-02,numpy,GPL-1.0,IGNORE,incorrect_data_found,"No GPL-1.0 carrier in wheel/sdist; scanner ID mismatch",carrier-check
+3,C,1,TODO-EXPORT-03,scipy,LGPL-3.0-only,IGNORE,incorrect_data_found,"No carrier; GPL-3 tail cross-spliced with LGPL mention",carrier-check
+4,D,1,TODO-EXPORT-04,scipy,LGPL-2.0-or-later,IGNORE,incorrect_data_found,"No carrier; real version is LGPL-2.1-or-later",carrier-check
+5,E,1,TODO-EXPORT-05,pillow,Bitstreamream,IGNORE,incorrect_data_found,"Bitstream Vera only in sdist Tests/fonts; wheel excludes Tests",carrier-check
+6,E,2,TODO-EXPORT-06,pillow,Bitstreamream,IGNORE,incorrect_data_found,"Second hit is class BitStream / *_BITSTREAM_* ordinary word",carrier-check
+7,F,1,TODO-EXPORT-07,scipy,LGPL-2.1-later,IGNORE,other,"libquadmath LGPL-2.1-or-later; dynamically linked, upstream unmodified",carrier-check
+8,G,1,TODO-EXPORT-08,scipy,GPL-3.0-with-GCC-exception,IGNORE,other,"libgfortran GPL-3.0-or-later WITH GCC-exception-3.1; AGPL project may combine",carrier-check
+9,H,1,TODO-EXPORT-09,pillow,GPL-3.0-only,IGNORE,other,"Aggregate notice file carrier; GNU FreeFont not in wheel",carrier-check
+10,I,1,TODO-EXPORT-10,pygame-ce,LGPL-2.1-only,IGNORE,other,"pygame/docs notice only; no GPL-2.0 code imported",carrier-check
+11,I,2,TODO-EXPORT-11,pygame-ce,GPL-2.0-only,IGNORE,other,"Bundled mpg123 GPL-2.0 text in docs; not imported code",carrier-check
+12,I,3,TODO-EXPORT-12,pygame-ce,GPL-2.0-later,IGNORE,other,"Cross-reference in LGPL-2.1 text; not a GPL-2.0 implementation",carrier-check
+13,I,4,TODO-EXPORT-13,pygame-ce,LGPL-3.0-only,IGNORE,other,"No carrier; upstream declares LGPL-2.1-or-later",carrier-check
+14,J,1,TODO-EXPORT-14,onnxruntime-directml,MPL-2.0,IGNORE,other,"File-level copyleft; upstream files unmodified",carrier-check
+15,K,1,TODO-EXPORT-15,next,MPL-2.0,IGNORE,other,"Build-time dependency; not shipped in installer",carrier-check
+16,L1,1,TODO-EXPORT-16,golang.org/x/text,CC-BY-SA-1.0,IGNORE,Component_not_present,"CC-BY-SA URL string in cases/map_test.go only; not compiled",carrier-check
+17,L1,2,TODO-EXPORT-17,golang.org/x/text,CC-BY-SA-2.0,IGNORE,Component_not_present,"CC-BY-SA URL string in cases/map_test.go only; not compiled",carrier-check
+18,L1,3,TODO-EXPORT-18,golang.org/x/text,CC-BY-SA-2.5,IGNORE,Component_not_present,"CC-BY-SA URL string in cases/map_test.go only; not compiled",carrier-check
+19,L1,4,TODO-EXPORT-19,golang.org/x/text,CC-BY-SA-3.0,IGNORE,Component_not_present,"CC-BY-SA URL string in cases/map_test.go only; not compiled",carrier-check
+20,L2,1,TODO-EXPORT-20,numpy,CC-BY-SA-4.0,IGNORE,Component_not_present,"Old pin 2.4.6; current wheel has no CC-BY-SA carrier",carrier-check
+21,L2,2,TODO-EXPORT-21,numpy,CC-BY-SA-3.0,IGNORE,Component_not_present,"Old pin 2.4.6; current wheel has no CC-BY-SA carrier",carrier-check
+22,L3,1,TODO-EXPORT-22,next,CC-BY-SA-4.0,IGNORE,Component_not_present,"LICENSE links in compiled deps; next not distributed",carrier-check
+23,M,1,TODO-EXPORT-23,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+24,M,2,TODO-EXPORT-24,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+25,M,3,TODO-EXPORT-25,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+26,M,4,TODO-EXPORT-26,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+27,M,5,TODO-EXPORT-27,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+28,M,6,TODO-EXPORT-28,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+29,M,7,TODO-EXPORT-29,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+30,M,8,TODO-EXPORT-30,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+31,M,9,TODO-EXPORT-31,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+32,M,10,TODO-EXPORT-32,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+33,M,11,TODO-EXPORT-33,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+34,M,12,TODO-EXPORT-34,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+35,M,13,TODO-EXPORT-35,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+36,M,14,TODO-EXPORT-36,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+37,M,15,TODO-EXPORT-37,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+38,M,16,TODO-EXPORT-38,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+39,M,17,TODO-EXPORT-39,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+40,M,18,TODO-EXPORT-40,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+41,M,19,TODO-EXPORT-41,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+42,M,20,TODO-EXPORT-42,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+43,M,21,TODO-EXPORT-43,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+44,M,22,TODO-EXPORT-44,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+45,M,23,TODO-EXPORT-45,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+46,M,24,TODO-EXPORT-46,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+47,M,25,TODO-EXPORT-47,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+48,M,26,TODO-EXPORT-48,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+49,M,27,TODO-EXPORT-49,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+50,M,28,TODO-EXPORT-50,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+51,M,29,TODO-EXPORT-51,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+52,M,30,TODO-EXPORT-52,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+53,M,31,TODO-EXPORT-53,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+54,M,32,TODO-EXPORT-54,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+55,M,33,TODO-EXPORT-55,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+56,M,34,TODO-EXPORT-56,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+57,M,35,TODO-EXPORT-57,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+58,M,36,TODO-EXPORT-58,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+59,M,37,TODO-EXPORT-59,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+60,M,38,TODO-EXPORT-60,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+61,M,39,TODO-EXPORT-61,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+62,M,40,TODO-EXPORT-62,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+63,M,41,TODO-EXPORT-63,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check
+64,M,42,TODO-EXPORT-64,PENDING,PENDING,CLASSIFY,other,"Export with GET /api/v2/issues; classify by carrier check",carrier-check

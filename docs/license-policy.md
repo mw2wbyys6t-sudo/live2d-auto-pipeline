@@ -194,6 +194,7 @@ GPL-3.0 依赖不再天然违规；但它会把「整体必须以 GPL-3.0 或 AG
 ```
 GPL-2.0
 GPL-2.0-only
+GPL-2.0-or-later
 SSPL-1.0
 BUSL-1.1
 Elastic-2.0
@@ -201,11 +202,19 @@ Commons Clause
 CC-BY-NC-3.0
 CC-BY-NC-4.0
 CC-BY-NC-SA-4.0
+CC-BY-SA-1.0
+CC-BY-SA-2.0
+CC-BY-SA-2.5
+CC-BY-SA-3.0
+CC-BY-SA-4.0
 ```
 
+> `GPL-2.0-or-later` 理论上可经 GPL-3.0 中转，但组合链条复杂，按 Deny 处理、需要时单独评估。
+> CC-BY-SA 放进 Deny 是为了与当前后台的 7 条 Denied 保持一致：本仓库出现的 CC-BY-SA
+> 全部是测试文件、旧 pin 或构建期引用，不随产物分发，逐条按 `Component_not_present` 忽略。
+
 > `GPL-2.0-only` 与 AGPL-3.0 **不兼容**（GPL-2.0 无 "or later" 时无法升级到
-> GPL-3.0，也就走不到 §13 的互认路径），保持 Deny。`GPL-2.0-or-later` 理论上
-> 可经 GPL-3.0 中转，但组合链条复杂，按 Deny 处理、需要时单独评估。
+> GPL-3.0，也就走不到 §13 的互认路径），保持 Deny。
 
 #### 3.2.1 那 7 条 Denied 的逐项复核（2026-11-03 完成）
 
@@ -395,6 +404,8 @@ export FOSSA_API_KEY=<你复制的 key>
 |---|---|
 | `LICENSE` | 项目自身 AGPL-3.0 全文（唯一真源） |
 | `NOTICE` | 第三方组件署名 + Live2D Cubism Core 专有条款（随产物分发） |
+| [`docs/fossa-agpl3-review.md`](fossa-agpl3-review.md) | `AGPL-3.0 Distribution` 三档规则 + 64 条处理清单（升级后执行） |
+| [`docs/fossa-agpl3-review.csv`](fossa-agpl3-review.csv) | 64 行逐条复核表（含 42 行待导出填充） |
 | `.fossa.yml` | FOSSA 扫描配置（分析范围、项目定位符、策略名） |
 | `scripts/fossa_license_inventory.py` | 四生态依赖许可清单 + 策略建议生成器 |
 | `scripts/fossa_license_carrier_check.py` | FOSSA 报的 SPDX ID 在依赖里的**载体核对**（运行时 / 告知文件 / 文档 / 测试 / 无载体=误判） |
