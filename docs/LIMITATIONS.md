@@ -8,14 +8,11 @@
 > - 导出链路（moc3）的深度缺陷与证据 → [docs/reviews/2026-09-20-moc3-export-risk-review.md](reviews/2026-09-20-moc3-export-risk-review.md)
 > - 原生运行时可用边界 → [docs/native-runtime.md](native-runtime.md) § 验收界限
 >
-> 本文档只做**面向用户的汇总**；细节与证据以上述真相源为准，避免重复维护。
-> **最后校验（Last verified）**：2026-10-14。
-> **新鲜度规则**：每个 minor 版本发布前复核一次；若真相源中关联条目（R-xx / F-xx）状态变化而本文未同步，即视为 `stale`。
-> **变更触发**：导出链路、分割后端、驱动层运行时、前端页面实现度任一发生变化时。
+> v
 
----
+***
 
-> 本文替代了 v0.6.0 时期的同名文档（其中引用的 `master_tool.py`、See-through 安装器等均**已不存在**），
+> 本文替代了 v0.6.0 时期的同名文档（其中引用的 `master_tool.py`、Se-through 安装器等均**已不存在**），
 > 并移除了会把未完成项标成「✅ 已完成」的表述。
 
 ## 1. 图像生成
