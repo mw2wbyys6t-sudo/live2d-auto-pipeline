@@ -20,9 +20,20 @@
 
 ## 1. 结论先说
 
-当前 FOSSA 摘要为 **72 issues = 58 Flagged + 7 Denied + 5 Outdated + 2 Vulnerabilities**（2026-11-18 复核；上一轮 2026-10-29 为 65 条 License Compliance = 57 Flagged + 7 Denied）。逐项 issue 详情需要 Maintainer Access，不能把 58 条 Flagged 一概归因成“策略未配置”，更不能全部放行。
+2026-11-12 通过 FOSSA **公共项目 API**（未登录，只读元数据）复核到当前真实状态：
 
-上一轮 2026-10-29 的本地清单为 **714 项依赖**：ALLOW 692 / REVIEW 22 / DENY 0 / 未知 0，另有 **2 项第一方组件**（自有 crate，不适用本策略）。该清单只覆盖 PyPI、npm、crates.io、Go 的包元数据，不能替代 FOSSA 对依赖内嵌许可证文本的深扫。
+- 项目 `public: true`，最新已分析 revision = `9756014da9a851d86d98a6e047b652b9246eb9bd`（2026-11-12 09:49）。
+- 未解决 issue：**69 = 64 licensing + 3 quality + 2 security**（64 licensing 与文档上一轮口径 57 Flagged + 7 Denied 数量吻合）。
+- **项目当前绑定的策略是内置 `Standard Bundle Distribution`（policyId `271431`），不是 `AGPL-3.0 Distribution`**。
+- 组织 `access_level = free`。
+
+这带来一个必须先说清的约束：FOSSA 三个内置模板对 AGPL 全部是 **Flag for Review** 或 **Deny**，没有任何内置模板会 Approve AGPL；而自定义策略与逐条忽略规则属于付费能力。因此在 Free 计划下：
+
+- 项目自身的 AGPL-3.0 `LICENSE` 会一直被标记，**无法通过后台绑定把 License Compliance 归零**；
+- `.fossa.yml` 的 `policy:` 字段只影响新建项目，不会改变已存在项目的绑定；
+- 在没有升级到可自定义策略的计划之前，正确的做法是保留 `Standard Bundle Distribution` 并把 64 条 licensing issue 作为**已记录的已知例外**，而不是反复尝试绑定一个尚不存在的策略。
+
+逐项 issue 详情需要 Maintainer Access，不能把 64 条一概归因成“策略未配置”，更不能全部放行。一旦组织升级并创建 `AGPL-3.0 Distribution`，再按下文 §3.2 的三档规则绑定与复核。
 
 仓库侧与后台必须分开处理：
 
@@ -101,6 +112,14 @@ Name = `FOSSA_API_KEY`，Secret = 刚复制的 key。
 > `AGPL-3.0` 放在 **Deny** 档，而项目自己的 `LICENSE` 现在就是 AGPL-3.0，
 > 于是 FOSSA 会判「项目自身违规」—— 这是 License Compliance issue 里
 > 最先要消掉的一类误报。
+
+> ⚠️ **2026-11-12 实测：这一步目前做不了。** 组织 `access_level = free`，
+> `AGPL-3.0 Distribution` 策略尚不存在，项目实际绑定的是内置
+> `Standard Bundle Distribution`（policyId `271431`）。Free 计划下
+> `Create Policy` 与 `Add Ignore Rule` 都会引导升级；而三个内置模板对 AGPL
+> 只会 Flag 或 Deny，不会 Approve。因此**在升级到可自定义策略的计划之前，
+> 不要反复改 `.fossa.yml` 或尝试绑定**：项目自身的 AGPL 标记无法归零，
+> 应把 64 条 licensing issue 作为已记录的已知例外。升级后再执行本节步骤。
 
 ### 3.2 填三档规则
 
@@ -228,7 +247,10 @@ Licensing Active 由 65 降到 **57**（−7 条 Denied，−1 条 Apache-in-cod
 
 ### 3.2.2 2026-11-18 那次扫描（72 issues）的逐条复核
 
-本次扫描摘要：**72 issues = 58 Flagged License + 7 Denied License + 5 Outdated + 2 Vulnerabilities**。
+该轮文档记录的摘要：**72 issues = 58 Flagged License + 7 Denied License + 5 Outdated + 2 Vulnerabilities**。
+> ⚠️ 2026-11-12 用 FOSSA 公共项目 API 实测当前后台为 **69 = 64 licensing + 3 quality + 2 security**，
+> 且项目仍绑定在内置 `Standard Bundle Distribution`、组织为 free 计划。下表的逐条载体结论仍然有效，
+> 但“绑定 AGPL-3.0 Distribution 后即可归零”的前提目前不成立，见 §1 与 §3.1 的说明。
 下面按**载体**逐条给结论 —— 判据是「这条 ID 在依赖里到底有没有许可证全文载体」，
 而不是扫描器的编号。可复现命令见 [`scripts/fossa_license_carrier_check.py`](../scripts/fossa_license_carrier_check.py)：
 
@@ -361,7 +383,7 @@ export FOSSA_API_KEY=<你复制的 key>
 | 许可全文随产物分发（FF-15） | ✅ | — | 已完成：`scripts/check-license-bundle.sh` 闸门（LICENSE + NOTICE 逐字节校验） |
 | 分析范围收敛（排除归档/文档） | ✅ | — | 已完成：`.fossa.yml` 的 `paths.exclude` |
 | 许可策略的三档规则 | ❌ | ✅ | 只能后台建，仓库侧无法声明 |
-| 项目绑定哪个策略 | ❌ | ✅ | 官方明确：改 `.fossa.yml` 不生效 |
+| 项目绑定哪个策略 | ❌ | ✅ | 当前实际绑定内置 `Standard Bundle Distribution`（policyId `271431`）；Free 计划无法自定义策略 |
 | issue 明细逐条读取 | ❌ | ✅ | 登录态下 Issues 页可读全量（见 §3.2.1），无需企业 API |
 | 逐条 / 自动忽略规则 | ❌ | ✅ **Business 计划** | 实测 Free 计划点 `Add Ignore Rule` 直接弹定价页；自定义策略同样付费 |
 
