@@ -34,6 +34,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # tests/unit/test_face_features.py 会用 `git show <历史提交>` 读取旧版
+          # semantic.py 作为对照证据；默认 depth=1 拿不到该对象，会直接失败。
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -43,7 +47,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1 libglib2.0-0 libportaudio2 ffmpeg
+          sudo apt-get install -y libgl1 libglib2.0-0 libportaudio2 ffmpeg fonts-noto-cjk
 
       - name: Cache pip packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -61,11 +65,11 @@ jobs:
                     "urllib3>=2.8.0" "httpx>=0.28.1" "aiohttp>=3.14.5" \
                     "aiofiles>=25.1.0" "websockets>=17.3" "psd-tools>=1.26.0" \
                     "scipy>=1.15.3" "scikit-learn>=1.9.1" "cryptography>=50.0.2" \
-                    "rich>=15.0.0" "opencv-python>=4.9.0.80" "onnxruntime>=1.31.0"
+                    "rich>=15.0.0" "opencv-python>=4.9.0.80" "onnxruntime>=1.31.1"
           # Python API server (api_server.py) deps. tests/integration/test_api_contract.py
           # and tests/unit/test_runtime_readiness.py import api_server at module scope,
           # so these must be present or pytest fails collection.
-          pip install "fastapi>=0.110.0" "uvicorn>=0.27.0" "python-multipart>=0.0.32"
+          pip install "fastapi>=0.110.0" "uvicorn>=0.54.0" "python-multipart>=0.0.32"
           # Install test deps
           # httpx2：starlette 1.10 起 TestClient 改为 `import httpx2 as httpx`，
           # 只装 `httpx` 会在收集期报 "testclient module requires the httpx2
@@ -308,7 +312,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1 libglib2.0-0 libportaudio2 ffmpeg
+          sudo apt-get install -y libgl1 libglib2.0-0 libportaudio2 ffmpeg fonts-noto-cjk
 
       - name: Install Python dependencies
         run: |
