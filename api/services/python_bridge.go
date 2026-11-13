@@ -579,13 +579,32 @@ func (pb *PythonBridge) SegmentImage(ctx context.Context, imagePath, method stri
 		"custom_root": filepath.Join(filepath.Dir(pb.cfg.Character.StorageDir), "models", "custom"),
 	}, 15*time.Minute)
 	if err != nil {
+		// 脚本在开工前就 mkdir(out_dir)，失败后留下空壳会让「最近分层」列表
+		// 多出一条点开空白的记录；只删空目录，非空一律保留。
+		removeEmptyDir(outDir)
 		return nil, err
 	}
 	inner, ok := res["result"].(map[string]interface{})
 	if !ok {
+		removeEmptyDir(outDir)
 		return nil, fmt.Errorf("分层脚本返回了意外的结果结构")
 	}
 	return inner, nil
+}
+
+// removeEmptyDir 只删除空目录，用于清理失败任务留下的 out_dir 空壳。
+//
+// 非空目录不动：那说明已经写进了产物（可能是上一次成功的图层），
+// 误删会直接把用户的产物清空。
+func removeEmptyDir(dir string) {
+	if strings.TrimSpace(dir) == "" {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) > 0 {
+		return
+	}
+	_ = os.Remove(dir)
 }
 
 // bridgeRecomputeEmbeddingScript 常量任务脚本：重算角色视觉 embedding。

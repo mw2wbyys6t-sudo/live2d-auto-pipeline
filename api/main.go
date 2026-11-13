@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -48,6 +50,17 @@ func main() {
 	// 桌面打包布局：发现 <res>/app/core/workflow.py 时，把解释器/源码/用户数据
 	// 目录解析到安装资源目录与 %APPDATA%/文档（ADR-010）。开发源码树不触发。
 	config.ApplyDesktopLayout(cfg, *configPath != "")
+
+	// Go 侧日志落盘。桌面壳 spawn 后端时把 stdout/stderr 都接到 NUL
+	// （desktop/src/lib.rs），handlers.serverError 记录的真实原因此前只写进
+	// 无人读取的 stdout —— 安装版出故障时用户只能看到「服务暂不可用」。
+	if logFile, err := setupBackendLog(cfg.LogsDir()); err != nil {
+		log.Printf("[warn] 后端日志落盘失败（仅输出到 stderr）: %v", err)
+	} else if logFile != nil {
+		// 信号退出走 os.Exit，defer 不会执行；os.File 无缓冲，每次 Write 已落盘，
+		// 这里的 Close 只是给测试与正常返回路径收尾。
+		defer logFile.Close()
+	}
 
 	// 把可写数据根交给所有 Python 子进程。core/logger.py 与 core/secure_storage.py
 	// 用它决定日志与保险库落在哪；不注入时它们退回 LIVE2D_PROJECT_ROOT，也就是
@@ -248,6 +261,40 @@ func main() {
 	if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("服务器运行异常: %v", err)
 	}
+}
+
+// backendLogMaxBytes 是单份 backend.log 的轮转阈值：超过就在启动时挪成
+// backend.log.1，避免长期运行把用户数据目录撑大。
+const backendLogMaxBytes = 8 << 20
+
+// setupBackendLog 把 Go 侧日志（含 serverError 记录的真实原因、gin 访问日志）
+// 同时写到 logs/backend.log 与 stderr，返回日志文件句柄供调用方收尾。
+//
+// 背景：桌面壳 spawn 后端时把 stdout/stderr 接到 NUL（desktop/src/lib.rs），
+// 而 handlers.serverError 只把异常原文写日志、响应固定为「服务暂不可用，
+// 请稍后重试」。结果安装版出故障时，唯一能定位根因的那行 log.Printf 被直接
+// 丢弃 —— 内置 Python 缺 numpy 导致分层失败那次就是这样，用户拿到的只有
+// 一句无从下手的提示。落盘后可在「设置 → 诊断」显示的 logs 目录里直接取证。
+func setupBackendLog(logDir string) (*os.File, error) {
+	if strings.TrimSpace(logDir) == "" {
+		return nil, nil
+	}
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return nil, err
+	}
+	logPath := filepath.Join(logDir, "backend.log")
+	if info, err := os.Stat(logPath); err == nil && info.Size() >= backendLogMaxBytes {
+		_ = os.Rename(logPath, logPath+".1")
+	}
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	w := io.MultiWriter(os.Stderr, f)
+	log.SetOutput(w)
+	gin.DefaultWriter = w
+	gin.DefaultErrorWriter = w
+	return f, nil
 }
 
 func setupRoutes(r *gin.Engine, h *handlers.Handler) {
