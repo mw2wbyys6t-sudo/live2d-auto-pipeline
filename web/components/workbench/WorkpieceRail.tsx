@@ -140,6 +140,14 @@ export default function WorkpieceRail({ className = '', onNavigate }: WorkpieceR
                         <AlertTriangle className="h-2.5 w-2.5" /> 占位图
                       </span>
                     )}
+                    {!work.fallback && work.incomplete && (
+                      <span
+                        className="inline-flex items-center gap-0.5 rounded-full bg-rose-400/10 px-1.5 py-px text-[9px] text-rose-600"
+                        title={work.incompleteReason || '立绘已生成，但后续步骤失败'}
+                      >
+                        <AlertTriangle className="h-2.5 w-2.5" /> 未完成
+                      </span>
+                    )}
                   </div>
                 </div>
               </button>

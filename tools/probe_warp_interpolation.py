@@ -312,7 +312,10 @@ def _candidates(grid, s, t):
     P00, P10, P01, P11 = P(0, 0), P(1, 0), P(0, 1), P(1, 1)
     out = {}
 
-    # (a) 现行实现：边界格双线性外推
+    # (a) 现行实现：官方 BDBoxGrid 外推（cubism-src 逆向规则，30 点对拍 7e-8）
+    out["BDBox外推"] = ruler.sample_warp_grid(flat, 1, 1, s, t)
+
+    # (a2) 旧实现：边界格双线性外推（2026-11-18 之前，仅留作对照）
     out["边界格双线性"] = _bilinear_extrapolate(flat, 1, 1, s, t)
 
     # (b) 左下三角形平面外推：P00 + u(P10-P00) + v(P01-P00)
@@ -337,9 +340,24 @@ def _candidates(grid, s, t):
 
 
 def _bilinear_extrapolate(flat, rows, cols, u, v):
-    """现行尺子的越界读数（边界格双线性外推）。"""
-    import bindings_gap_probe as ruler
-    return ruler.sample_warp_grid(flat, rows, cols, u, v)
+    """2026-11-18 之前的越界读数：边界格双线性外推（只留作对照）。"""
+    import math
+
+    cx, cy = u * cols, v * rows
+    c0 = min(max(int(math.floor(cx)), 0), max(cols - 1, 0))
+    r0 = min(max(int(math.floor(cy)), 0), max(rows - 1, 0))
+    c1, r1 = min(c0 + 1, cols), min(r0 + 1, rows)
+    fx, fy = cx - c0, cy - r0
+    stride = (cols + 1) * 2
+    i00 = r0 * stride + c0 * 2
+    i10 = r0 * stride + c1 * 2
+    i01 = r1 * stride + c0 * 2
+    i11 = r1 * stride + c1 * 2
+    top_x = flat[i00] + (flat[i10] - flat[i00]) * fx
+    top_y = flat[i00 + 1] + (flat[i10 + 1] - flat[i00 + 1]) * fx
+    bot_x = flat[i01] + (flat[i11] - flat[i01]) * fx
+    bot_y = flat[i01 + 1] + (flat[i11 + 1] - flat[i01 + 1]) * fx
+    return (top_x + (bot_x - top_x) * fy, top_y + (bot_y - top_y) * fy)
 
 
 def measure_out_of_grid_sweep(workdir=None, render=render_probe):

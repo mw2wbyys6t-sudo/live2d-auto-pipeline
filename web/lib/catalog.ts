@@ -1,4 +1,4 @@
-import type { Emotion, ExportFormat, Resolution } from '../types';
+import type { Emotion, ExportFormat } from '../types';
 import type { PreviewBackground } from './preview-runtime';
 
 /**
@@ -9,7 +9,30 @@ import type { PreviewBackground } from './preview-runtime';
  * 不要往这里加。
  */
 
-export const RESOLUTIONS: Resolution[] = [512, 768, 1024, 2048];
+/** 画幅预设：竖版立绘是 Live2D 的主场景，默认放第一位。 */
+export type CanvasPresetId = 'portrait' | 'square' | 'landscape' | 'large';
+
+export const CANVAS_PRESETS: Array<{
+  id: CanvasPresetId;
+  label: string;
+  width: number;
+  height: number;
+}> = [
+  { id: 'portrait', label: '竖版 1024×1536', width: 1024, height: 1536 },
+  { id: 'square', label: '方图 1024×1024', width: 1024, height: 1024 },
+  { id: 'landscape', label: '横版 1536×1024', width: 1536, height: 1024 },
+  { id: 'large', label: '大图 2048×2048', width: 2048, height: 2048 },
+];
+
+export function canvasSize(id: CanvasPresetId): { width: number; height: number } {
+  const preset = CANVAS_PRESETS.find((item) => item.id === id) || CANVAS_PRESETS[0];
+  return { width: preset.width, height: preset.height };
+}
+
+export function canvasPresetOf(width: number, height: number): CanvasPresetId {
+  const hit = CANVAS_PRESETS.find((item) => item.width === width && item.height === height);
+  return hit ? hit.id : 'portrait';
+}
 
 export const PROMPT_ENGINES: Array<{ id: string; label: string }> = [
   { id: 'auto', label: '自动选择（云端优先）' },

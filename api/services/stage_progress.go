@@ -547,6 +547,12 @@ if meta_file.is_file():
             "hollow": bool(inputs.parts_hollow),
             "missing_preview": list(inputs.missing_preview),
             "source": inputs.parts_source,
+            # P0 分层 readiness：rig_ready=false 表示必需部件缺件或需人工复核，
+            # 此时即使 moc3 被内核接受，产物也只是准备包而不是可交付模型。
+            "rig_ready": inputs.parts_rig_ready,
+            "quality_ready": inputs.parts_quality_ready,
+            "manual_required": list(inputs.manual_required),
+            "derived_parts": list(inputs.derived_parts),
         }
         meta_file.write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -53,6 +53,10 @@ STANDARD_PARAMETERS: List[Dict[str, Any]] = [
     {"id": "ParamTearsL",      "name": "Tears L",     "min": 0.0,   "max": 1.0,  "default": 0.0, "groups": ["eyes"]},
     {"id": "ParamTearsR",      "name": "Tears R",     "min": 0.0,   "max": 1.0,  "default": 0.0, "groups": ["eyes"]},
     {"id": "ParamHairSwing",   "name": "Hair Swing",  "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["hair_front"]},
+    # 前发左右两缕各有自己的摆链：与整块前发共用 ParamHairSwing 时内核只保留
+    # 一条输出，两缕的相位差会被抹平（与后发左右束同一个坑）。
+    {"id": "ParamHairSwingFrontL", "name": "Hair Swing Front L", "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["hair_front"]},
+    {"id": "ParamHairSwingFrontR", "name": "Hair Swing Front R", "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["hair_front"]},
     # 后发单独一条：前发与后发是两条摆链（快摆 vs 慢摆），共用一个参数时内核
     # 只保留一条输出，另一条等于白算 —— 实测导出的 physics3 里 HairFront 与
     # HairBack 都写 ParamHairSwing。
@@ -66,6 +70,11 @@ STANDARD_PARAMETERS: List[Dict[str, Any]] = [
     # 裙摆单独一条参数：躯干与裙摆是两条独立的摆链，共用一个 ParamBodySway 时
     # 物理内核只会保留其中一条输出，另一条等于白算（裙摆此前就是这样空转的）。
     {"id": "ParamSkirtSwing",  "name": "Skirt Swing", "min": -10.0, "max": 10.0, "default": 0.0, "groups": ["lower", "clothes"]},
+    # 下摆（skirt_hem）是与裙体分开画的一圈荷叶边：它有自己的摆链（滞后一档、
+    # 幅度更大）。与裙体共用 ParamSkirtSwing 时内核只保留一条输出，下摆等于白算。
+    {"id": "ParamSkirtHemSwing", "name": "Skirt Hem Swing", "min": -10.0, "max": 10.0, "default": 0.0, "groups": ["lower", "clothes"]},
+    # 头饰/飘带（accessories）：挂在头部外沿的独立图层，走自己的短摆链。
+    {"id": "ParamAccessorySwing", "name": "Accessory Swing", "min": -15.0, "max": 15.0, "default": 0.0, "groups": ["head", "accessories"]},
     # 兽耳单独一条：AnimalEars 组此前写 ParamHairSwing，与 HairFront 抢同一个
     # 参数，内核只保留一条输出；而且没有任何变形器读它，兽耳本来就不会摆。
     {"id": "ParamEarSwing",    "name": "Ear Swing",   "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["ear"]},

@@ -79,13 +79,13 @@ def test_word_boundary_still_allows_real_tokens():
     assert _matches_as_word("hair_back", "hair") is True
 
 
-def test_topwear_maps_to_clothes_outer_not_ear():
+def test_topwear_requires_split_without_claiming_clothes_outer():
     result = Layer52Generator().map_layers_to_standard(
         [{"part_name": "topwear", "path": "topwear.png"}]
     )
     mapped = [m for m in result["mappings"] if m["mapped"]]
-    assert len(mapped) == 1
-    assert mapped[0]["standard_id"] == 21
+    assert mapped == []
+    assert result["split_required"][0]["part_name"] == "topwear"
     assert not ({m["standard_id"] for m in mapped} & EAR_LAYERS)
 
 
@@ -106,7 +106,7 @@ def test_unmapped_parts_keep_original_label_and_consume_no_layer():
     assert [m["standard_id"] for m in mapped] == [5]
 
 
-def test_needs_split_parts_fall_to_a_single_primary_layer():
+def test_needs_split_parts_do_not_claim_fine_slots():
     layers = [
         {"part_name": "hair", "path": "hair.png"},
         {"part_name": "eyes", "path": "eyes.png"},
@@ -121,7 +121,7 @@ def test_needs_split_parts_fall_to_a_single_primary_layer():
 
     # 每个 mask 只落一层，不重复写同一个 mask 到多个层
     mapped_ids = [m["standard_id"] for m in result["mappings"] if m["mapped"]]
-    assert sorted(mapped_ids) == [1, 25, 28, 33]
+    assert mapped_ids == []
     assert len(mapped_ids) == len(set(mapped_ids))
 
 
@@ -173,13 +173,13 @@ def test_composer_layer_names_map_to_the_correct_slot_and_side():
     assert by_id[5] == "neck"          # 不是 cheek
     assert by_id[24] == "cheek"        # 腮红
     assert by_id[36] == "irides_left"  # 虹膜左，不是胸腔
-    assert by_id[7] == "waistband"
-    assert by_id[20] == "collar"
-    assert by_id[49] == "hair_front"   # 前发不是高光
+    assert 7 not in by_id
+    assert 20 not in by_id
+    assert 49 not in by_id
     # 左右必须同侧
     assert by_id[45] == "eyebrow_R"
     assert by_id[46] == "eyebrow_L"
-    assert by_id[33] == "eyes_right"
+    assert 33 not in by_id
     assert by_id[34] == "eyewhite_left"
 
 
@@ -210,4 +210,45 @@ def test_whole_eye_and_front_hair_are_recorded_as_split_targets():
     assert split["eyes_left"]["primary"] == 34
     assert split["hair_front"]["primary"] == 49
     assert split["hair_front"]["standard_ids"] == [47, 48, 49, 50, 51]
+
+
+@pytest.mark.parametrize("name", ["waistband", "waistband_L", "Waistband_Right"])
+def test_waistband_never_claims_a_body_slot(name):
+    result = _map_names([name])
+    assert result["mapped_layers"] == 0
+    assert result["unmapped_parts"][0]["part_name"] == name
+    assert 7 in {m["standard_id"] for m in result["missing_required"]}
+
+
+@pytest.mark.parametrize("name", [
+    "body", "skin", "eyes_left", "eye_right", "eyebrow", "ear",
+    "clothes", "clothes_top", "collar", "hair_front", "leg_L", "arm_R",
+    "skin_chest", "unknown_eye_white_left", "脖子_身体",
+])
+def test_coarse_or_unrecognized_parts_do_not_claim_fine_slots(name):
+    result = _map_names([name])
+    assert result["mapped_layers"] == 0
+    assert result["split_required"] or result["unmapped_parts"]
+
+
+def test_repeated_left_part_does_not_fill_missing_right_slot():
+    result = _map_names(["eyebrow_L", "eyebrow_left"])
+    assert [m["standard_id"] for m in result["mappings"] if m["mapped"]] == [46]
+    assert 45 in {m["standard_id"] for m in result["missing_required"]}
+    assert result["unmapped_parts"][0]["part_name"] == "eyebrow_left"
+
+
+@pytest.mark.parametrize("name, standard_id", [
+    ("Chest", 6), ("Waist_Hips", 7), ("Thigh_Left", 8),
+    ("Calf_Right", 11), ("Foot_Left", 12), ("UpperArm_Back_Left", 14),
+    ("Forearm_Back_Right", 17), ("Hand_Back_Left", 18),
+    ("clothes_inner", 20), ("eye_white_left", 34),
+    # 肘/膝分段产出的实际层名：必须落到同侧的单层槽位。
+    ("thigh_L", 8), ("calf_R", 11),
+    ("arm_upper_L", 14), ("arm_lower_R", 17), ("hand_L", 18),
+])
+def test_explicit_fine_parts_map_to_their_exact_standard_slot(name, standard_id):
+    result = _map_names([name])
+    assert [m["standard_id"] for m in result["mappings"] if m["mapped"]] == [standard_id]
+    assert result["split_required"] == []
 

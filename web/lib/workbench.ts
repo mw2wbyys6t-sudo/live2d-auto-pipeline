@@ -1,5 +1,6 @@
 import type { GenerationRecord, LayersIndex, LatestGeneration, WorkModelEntry } from './api-client';
 import { modelDirFromRecord, modelUrlFromRecord, outputUrlFromPath } from './api-client';
+import type { CanvasPresetId } from './catalog';
 import type {
   GenerationResult,
   GenerationStep,
@@ -40,6 +41,11 @@ export interface Workpiece {
   /** 立绘是本地占位图（非 AI 生成）；左栏与生成页都要按它如实标注。 */
   fallback: boolean;
   fallbackReason: string;
+  /** 立绘是真的，但后续分层/绑定阶段失败 —— 与 fallback 是两种不同的状态。 */
+  incomplete: boolean;
+  incompleteReason: string;
+  /** 上游把请求尺寸降了：图是真的，但实际像素少于请求值。 */
+  sizeDowngraded: boolean;
   createdAt: string;
 }
 
@@ -104,6 +110,9 @@ export function workFromRecord(record: GenerationRecord | LatestGeneration): Wor
     promptMismatch: !!record.prompt_mismatch,
     fallback: !!record.fallback,
     fallbackReason: record.fallback_reason || '',
+    incomplete: !!record.incomplete,
+    incompleteReason: record.incomplete_reason || '',
+    sizeDowngraded: !!record.size_downgraded,
     createdAt: record.created_at || '',
   };
 }
@@ -135,6 +144,9 @@ export function workFromResult(result: GenerationResult, prompt: string): Workpi
     promptMismatch: !!result.promptMismatch,
     fallback: !!result.fallback,
     fallbackReason: result.fallbackReason || '',
+    incomplete: !!result.incomplete,
+    incompleteReason: result.incompleteReason || '',
+    sizeDowngraded: !!result.sizeDowngraded,
     createdAt: result.createdAt || new Date().toISOString(),
   };
 }
@@ -249,7 +261,14 @@ const DRAFT_KEY = 'pygmalion.workbench.v1';
 export interface WorkbenchDraft {
   prompt: string;
   negativePrompt: string;
-  resolution: Resolution;
+  /** 画幅预设（新字段）；旧草稿只有 resolution。 */
+  canvasPreset: CanvasPresetId;
+  /** 旧草稿字段：仅用于迁移成方图预设。 */
+  resolution?: Resolution;
+  /** 多候选择优数量（1 = 关闭）。 */
+  candidates: number;
+  /** pollinations 随机种子（0 = 随机）。 */
+  pollinationsSeed: number;
   consistency: boolean;
   characterId: string;
   stage: StageId;
@@ -269,8 +288,18 @@ export function readDraft(): Partial<WorkbenchDraft> {
     const draft: Partial<WorkbenchDraft> = {};
     if (typeof parsed.prompt === 'string') draft.prompt = parsed.prompt;
     if (typeof parsed.negativePrompt === 'string') draft.negativePrompt = parsed.negativePrompt;
-    if ([512, 768, 1024, 2048].includes(parsed.resolution as number)) {
-      draft.resolution = parsed.resolution;
+    const PRESET_IDS: CanvasPresetId[] = ['portrait', 'square', 'landscape', 'large'];
+    if (PRESET_IDS.includes(parsed.canvasPreset as CanvasPresetId)) {
+      draft.canvasPreset = parsed.canvasPreset;
+    } else if ([512, 768, 1024, 2048].includes(parsed.resolution as number)) {
+      // 旧草稿：只有方图分辨率，迁移成方图预设。
+      draft.canvasPreset = 'square';
+    }
+    if (typeof parsed.candidates === 'number') {
+      draft.candidates = Math.min(4, Math.max(1, Math.round(parsed.candidates)));
+    }
+    if (typeof parsed.pollinationsSeed === 'number' && parsed.pollinationsSeed >= 0) {
+      draft.pollinationsSeed = Math.round(parsed.pollinationsSeed);
     }
     if (typeof parsed.consistency === 'boolean') draft.consistency = parsed.consistency;
     if (typeof parsed.characterId === 'string') draft.characterId = parsed.characterId;

@@ -1,12 +1,14 @@
 """rotation 变形器的「建不出来」必须可查，不能静默消失。
 
-背景（2026-10-21 实证）：``DeformerHierarchy.DEFAULT_ROTATION_DEFORMERS`` 声明的
-targets 是 ``eyeball_l`` / ``eye_left``，而分层阶段实际产出的层名是
-``eyewhite_left`` / ``irides_left`` / ``eyelid_left``。两套名字对不上，
-真实流水线里 rotation 变形器**一个都不会创建**。
+背景（2026-10-21 实证）：默认 rotation 表里曾声明 ``EyeTrack_L/R``，targets 写
+``eyeball_l`` / ``eye_left``，而分层阶段实际产出的层名是 ``eyewhite_left`` /
+``irides_left`` / ``eyelid_left``。两套名字对不上，真实流水线里这两条**一个都
+不会创建**，于是每次构建都打一条「rotation 变形器未创建 2」——看起来像缺件。
 
-这件事必须显式记录：否则「模型里没有 rotation 变形器」会被误读成
-「rotation 已支持、只是没绑参数」，而这两者的修法完全不同。
+2026-11-18 对照上游逆向资料确认：眼球跟随由 ParamEyeBallX/Y 的双轴网格键形
+（``moc3_pipeline.eye_track_keyforms``）负责，不应再叠一层 rotation 变形器。
+两条"不落地"的定义因此删除；下面保留的是**判定机制**的用例（目标没命中时
+必须给出名字、原因与期望层名）。
 """
 from live2d_builder.bones.deformers import DeformerHierarchy
 
@@ -31,18 +33,18 @@ def _build(names):
 
 
 def test_real_layer_names_produce_only_the_head_rotation():
-    """真实层名下的 rotation 只有 ``HeadRotationZ``（眼球那两条依旧落空）。
+    """真实层名下的 rotation 只有 ``HeadRotationZ``。
 
     ``HeadRotationZ`` 没有直接成员网格，靠 ``under`` 链转整颗 HeadRig 子树，
-    所以它不依赖层名匹配 —— 真实层名下必须建出来。眼球两条的 targets 仍与分层
-    产出对不上，继续留在 ``rotation_skipped`` 里等改名。
+    所以它不依赖层名匹配 —— 真实层名下必须建出来。眼球跟随不是 rotation
+    变形器（由 ParamEyeBallX/Y 键形负责），默认表里也不该再有空转的条目。
     """
     out = _build(REAL_LAYER_NAMES)
     types = {d["name"]: d["type"] for d in out["deformers"]}
     assert types, "warp 变形器应当照常建出来"
     assert set(types.values()) == {"warp", "rotation"}, types
     assert [n for n, t in types.items() if t == "rotation"] == ["HeadRotationZ"]
-    assert "EyeTrack_L" not in types and "EyeTrack_R" not in types
+    assert out["rotation_skipped"] == []
 
 
 def test_numeric_index_prefix_does_not_lose_warp_deformers():
@@ -59,34 +61,47 @@ def test_numeric_index_prefix_does_not_lose_warp_deformers():
         d["name"] for d in plain["deformers"]]
 
 
-def test_skipped_rotation_deformers_are_reported_with_a_reason():
-    """被跳过的 rotation 变形器必须给出名字、原因与它期望的层名。"""
+def test_skipped_rotation_deformers_are_reported_with_a_reason(monkeypatch):
+    """目标没命中的 rotation 变形器必须给出名字、原因与它期望的层名。"""
+    spec = {"name": "ProbeRotation", "parent": "Eye_L", "pivot": (-35, -40),
+            "type": "rotation", "targets": ["no_such_layer"]}
+    monkeypatch.setattr(
+        DeformerHierarchy, "DEFAULT_ROTATION_DEFORMERS",
+        DeformerHierarchy.DEFAULT_ROTATION_DEFORMERS + [spec])
+
     out = _build(REAL_LAYER_NAMES)
+
     skipped = out["rotation_skipped"]
-    assert [d["name"] for d in skipped] == ["EyeTrack_L", "EyeTrack_R"]
-    for entry in skipped:
-        assert entry["reason"] == "目标层名未命中"
-        assert entry["targets"], "必须能看出它原本想挂哪些层"
-        assert entry["available_sample"], "必须附上真实层名样本，便于对照"
+    assert [d["name"] for d in skipped] == ["ProbeRotation"]
+    entry = skipped[0]
+    assert entry["reason"] == "目标层名未命中"
+    assert entry["targets"] == ["no_such_layer"], "必须能看出它原本想挂哪些层"
+    assert entry["available_sample"], "必须附上真实层名样本，便于对照"
 
 
-def test_rotation_deformer_is_still_created_when_targets_really_exist():
+def test_rotation_deformer_is_still_created_when_targets_really_exist(monkeypatch):
     """功能本身没被删掉：层名真的命中时，rotation 变形器照旧创建。
 
-    这一条防止后人为了「消掉告警」把 DEFAULT_ROTATION_DEFORMERS 直接删空，
-    从而连带废掉真实存在的 rotation 能力。
+    这一条防止后人为了「消掉告警」把判定逻辑一起删掉，从而连带废掉 rotation 能力。
     """
-    names = REAL_LAYER_NAMES + ["eyeball_l", "eyeball_r"]
-    out = _build(names)
+    spec = {"name": "ProbeRotation", "parent": "Eye_L", "pivot": (-35, -40),
+            "type": "rotation", "targets": ["shoes_L"]}
+    monkeypatch.setattr(
+        DeformerHierarchy, "DEFAULT_ROTATION_DEFORMERS",
+        DeformerHierarchy.DEFAULT_ROTATION_DEFORMERS + [spec])
+
+    out = _build(REAL_LAYER_NAMES)
+
     rotation = [d for d in out["deformers"] if d["type"] == "rotation"]
-    assert [d["name"] for d in rotation] == [
-        "HeadRotationZ", "EyeTrack_L", "EyeTrack_R"]
+    assert [d["name"] for d in rotation] == ["HeadRotationZ", "ProbeRotation"]
     assert out["rotation_skipped"] == []
+    probe = next(d for d in rotation if d["name"] == "ProbeRotation")
+    assert probe["targets"] == ["shoes_L"]
 
 
-def test_no_rotation_skips_are_reported_when_all_targets_match():
-    """全部命中时不留噪音：rotation_skipped 为空列表，不是缺键。"""
-    out = _build(REAL_LAYER_NAMES + ["eyeball_l", "eyeball_r"])
+def test_no_rotation_skips_are_reported_for_the_shipped_defaults():
+    """默认表全部能落地：rotation_skipped 为空列表，不是缺键。"""
+    out = _build(REAL_LAYER_NAMES)
     assert out["rotation_skipped"] == []
 
 

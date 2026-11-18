@@ -281,7 +281,10 @@ class KMeansLayerer:
         log.debug(f"Running sklearn KMeans with k={k}, n_pixels={len(pixels)}")
         max_pixels = 100_000
         if len(pixels) > max_pixels:
-            indices = np.random.choice(len(pixels), max_pixels, replace=False)
+            # 等距采样，不用 np.random.choice：后者没有播种，同一张图连跑两次
+            # 会采到不同子集，KMeans 标签随之变化 —— 表现为"链路跑通了，但
+            # 每次产物不一样"，是最难排查的一类不稳定。
+            indices = np.linspace(0, len(pixels) - 1, max_pixels).astype(np.int64)
             sample_pixels = pixels[indices]
         else:
             sample_pixels = pixels

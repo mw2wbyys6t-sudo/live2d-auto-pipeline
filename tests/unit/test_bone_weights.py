@@ -121,6 +121,11 @@ class TestComputeBoneWeights:
 PRODUCTION_LAYERS = {
     "arm_L": "ArmBack_L",
     "arm_R": "ArmBack_R",
+    # 肘/膝分段后的真实层名：落在位置推断里会让肢体跟着躯干走。
+    "arm_upper_L": "ArmBack_L",
+    "arm_lower_R": "ForearmBack_R",
+    "thigh_L": "Leg_L",
+    "calf_R": "Calf_R",
     "clothes_bottom": "Skirt",
     "clothes_top": "Torso",
     "collar": "Neck",

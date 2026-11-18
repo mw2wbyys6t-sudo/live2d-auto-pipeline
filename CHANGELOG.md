@@ -221,7 +221,7 @@ Core 验收（11 个变形器编译、`runtime_ready`、动作与物理逐帧对
 而开发形态下 `go run .` 与 `./live2d-api` 都从 `api/` 启动，算出来的根是**仓库的上一级**。
 `go run` 的 exe 又在临时构建目录里，退回 exe 候选同样找不到，于是保持错误结果：
 
-- `/api/diagnostics` 报 `output_dir = F:\创造\output`、`log_dir = F:\创造\logs`；
+- `/api/diagnostics` 报 `output_dir` / `log_dir` 指向了仓库**上一级**目录（本地绝对路径）；
 - 工作台所有 `/output/*` 请求 404（预览加载不出任何模型）；
 - Python 子进程 `No module named 'core'`（GPU 探测、图像上游查询全失败）。
 
@@ -547,7 +547,7 @@ CI 跑通主链路），那种产物仍必须自报身份。
 `singer_demo` / `singer_head` 两个模型。
 
 （排查中踩到一次假警报：`/api/generations/models` 用管道喂给 Python 时报
-`Invalid \escape`，实际服务端 JSON 是合法的 `F:\\创造\\...` —— 是 GBK 控制台
+`Invalid \escape`，实际服务端 JSON 是合法的 Windows 绝对路径 —— 是 GBK 控制台
 把 UTF-8 路径读坏了，加 `PYTHONIOENCODING=utf-8` 即正常。）
 
 ### 20. 修复：躯干侧倾把头、眼、淡入层留在原地（头身交界撕开 83px）

@@ -2,7 +2,7 @@
 
 > **用途**：FOSSA 升级到可自定义策略的计划后，按本文件一次性完成策略创建、项目绑定与 64 条 licensing issue 复核。
 > **当前前提**：2026-11-12 公共 API 实测组织 `access_level = free`，`AGPL-3.0 Distribution` 尚不存在，项目绑定的是内置 `Standard Bundle Distribution`（policyId `271431`）。Free 计划不能创建自定义策略或逐条忽略，所以本文件是**升级后的执行单**，不是当前已生效的配置。
-> **配套表格**：[fossa-agpl3-review.csv](fossa-agpl3-review.csv)（64 行，含 42 行待导出填充）。
+> **配套表格**：[fossa-agpl3-review.csv](fossa-agpl3-review.csv)（64 行，已按 2026-11-14 扫描逐条判定：1 策略项 + 18 忽略 + 45 逐条放行；结构由 `tests/unit/test_fossa_review_table.py` 守护）。
 
 ---
 
@@ -107,63 +107,56 @@ CC-BY-SA-4.0
 
 ---
 
-## 3. 64 条处理清单（汇总）
+## 3. 64 条处理清单（汇总，2026-11-14 已全部判定）
 
-> 64 = 7 条 Denied（CC-BY-SA）+ 57 条 Flagged。下表已把文档中**具名载体**的 22 条拆开；剩余 42 条需要登录后导出 issue ID 再逐条归类。
-> 逐行可执行表见 [fossa-agpl3-review.csv](fossa-agpl3-review.csv)。
+> 64 = **6 条 Denied（CC-BY-SA）+ 58 条 Flagged**。逐行可执行表见
+> [fossa-agpl3-review.csv](fossa-agpl3-review.csv)：**64 行均有结论，无待判定占位**。
+>
+> CSV 的 `action` 是本仓库内部处置口径：`IGNORE` = 扫描器误判/无载体/不随产物分发，
+> `APPROVE_PER_ITEM` = 载体是许可告知或文档、逐条审阅后放行（后台动作同样是 Ignore）。
+> 共：`NOOP_POLICY_SHOULD_APPROVE` 1 + `IGNORE` 18 + `APPROVE_PER_ITEM` 45 = 64。
 
-| # | 组 | 数量 | 依赖 / 载体 | FOSSA 动作 | Reason | Notes |
-|---|---|---:|---|---|---|---|
-| A | 项目自身 AGPL | 1 | `live2d-auto-pipeline` | 不操作 | — | 策略生效后应自动消失；若仍 Flag，说明策略没绑定成功 |
-| B | `numpy: GPL-1.0` | 1 | numpy | Ignore | `incorrect_data_found` | wheel/sdist 内无 GPL-1.0 全文，扫描器编号错位 |
-| C | `scipy: LGPL-3.0-only` | 1 | scipy | Ignore | `incorrect_data_found` | 无载体；GPL-3 尾段与 LGPL 提及被跨段拼接 |
-| D | `scipy: LGPL-2.0-or-later` | 1 | scipy | Ignore | `incorrect_data_found` | 无载体；真实是 LGPL-2.1-or-later |
-| E | `pillow: Bitstreamream` | 2 | pillow | Ignore | `incorrect_data_found` | Bitstream Vera 只在 sdist 的 `Tests/fonts/`，wheel 不含；另一条是 `BitStream` 普通单词 |
-| F | `scipy: LGPL-2.1-later` | 1 | scipy（libquadmath） | Ignore | `other` | 弱 copyleft + 动态链接，未修改上游 |
-| G | `scipy: GPL-3.0-with-GCC-exception` | 1 | scipy（libgfortran） | Ignore | `other` | `GPL-3.0-or-later WITH GCC-exception-3.1`；项目为 AGPL，可组合 |
-| H | `pillow: GPL-3.0-only` | 1 | pillow | Ignore | `other` | 载体是聚合许可告知文件；GNU FreeFont 不进 wheel |
-| I | pygame-ce LGPL/GPL 文档提及 | 4 | pygame-ce | Ignore | `other` | `LGPL-2.1-only` / `GPL-2.0-only` / `GPL-2.0-later` / `LGPL-3.0-only`；均在 `pygame/docs/`，不是被 import 的 GPL-2.0 代码 |
-| J | `onnxruntime-directml: MPL-2.0` | 1 | onnxruntime-directml | Ignore | `other` | 文件级 copyleft，未修改上游文件 |
-| K | `next: MPL-2.0` | 1 | next | Ignore | `other` | 构建期依赖，不随安装包分发 |
-| L | CC-BY-SA（7 条 Denied） | 7 | x/text 测试 4 + numpy 2 + next 1 | Ignore | `Component_not_present` | 测试 URL 字符串 / 旧 pin / next 内 LICENSE 链接；均不构成分发义务 |
-| M | 其余 Flagged | 42 | 待导出 | 逐条归类 | 见 §4 | 用载体核对脚本判定后再选 `incorrect_data_found` / `Component_not_present` / `other` |
+| # | 组 | 数量 | 依赖 / 载体 | 处置 | Reason |
+|---|---|---:|---|---|---|
+| A | 项目自身 AGPL | 1 | `live2d-auto-pipeline` | 不操作 | 策略生效后应自动消失；Free 计划下无法 Approve |
+| B | CC-BY-SA（Denied） | 6 | numpy 1 + next 1 + `golang.org/x/text` 4 | Ignore | `incorrect_data_found`（SPDX 表）/ `Component_not_present`（构建期、测试文件） |
+| C | scipy 1.15.3 | 8 | libquadmath、libgfortran、Kokkos mdspan + 2 条错号 | 6×逐条放行 + 2×Ignore | 弱 copyleft 动态链接；GPL-3 经 §13 与 AGPL 互认；错号无载体 |
+| D | pillow 13.0.0 | 2 | 聚合告知文件里的 liblzma GPLv3 提及；BitStream 普通单词 | 1×逐条放行 + 1×Ignore | Pillow 本体 MIT-CMU |
+| E | numpy OPL-1.0 | 1 | 无载体 | Ignore | `incorrect_data_found` |
+| F | MPL-2.0 | 3 | onnxruntime / onnxruntime-directml / next | 逐条放行 | 文件级 copyleft，未修改上游 |
+| G | urllib3 MPL-2.0 | 1 | 已装 2.8.0 无 MPL 全文 | Ignore | `incorrect_data_found` |
+| H | edge-tts LGPL-3.0 | 1 | 运行时 import | 逐条放行 | 弱 copyleft、动态链接、未修改 |
+| I | x/crypto openssl-ssleay | 1 | v0.58.0 全目录无 SSLeay 全文 | Ignore | `incorrect_data_found` |
+| J | pygame 2.5.0 | 4 | 自身 LGPL + docs 内 mpg123 GPL 告知 + 2 条错号 | 2×逐条放行 + 2×Ignore | 不是被 import 的 GPL 实现 |
+| K | pygame-ce 2.5.8 | 4 | 同上 | 2×逐条放行 + 2×Ignore | 同上 |
+| L1 | opencv-python 4.9.0.80 | 9 | `cv2/LICENSE-3RD-PARTY.txt` 8 条 + instabug | 8×逐条放行 + 1×Ignore | OpenCV 本体 Apache-2.0；告知不是被 import 的代码 |
+| L2 | opencv-python-headless 4.9.0.80 | 9 | 同上 | 同上 | 同上 |
+| L3 | @img/sharp-* | 14 | 各平台可选依赖（Apache-2.0 AND LGPL-3.0-or-later） | 逐条放行 | 未修改、动态链接；本项目 `images.unoptimized=true` 不走 sharp |
 
-**合计：22 条已具名 + 42 条待导出 = 64 条。**
+**合计：1 + 6 + 8 + 2 + 1 + 3 + 1 + 1 + 1 + 4 + 4 + 9 + 9 + 14 = 64 条。**
 
 ---
 
-## 4. 剩余 42 条怎么归类
+## 4. 判定规则与后台执行
 
-1. 用 Full token 导出当前项目的 active licensing issues：
+表格里的结论由下面三条规则推出，重扫后按同一规则复核即可：
 
-```bash
-export FOSSA_API_TOKEN='<Full Token>'
-curl -sG 'https://app.fossa.com/api/v2/issues' \
-  -d 'category=licensing' \
-  -d 'scope[type]=project' \
-  -d 'scope[id]=git%2Bgithub.com%2Fmw2wbyys6t-sudo%2Flive2d-auto-pipeline' \
-  -d 'status=active' \
-  -d 'count=100' \
-  -H "Authorization: Bearer $FOSSA_API_TOKEN" > /tmp/fossa-issues.json
-```
+| 载体核对结果 | CSV action | FOSSA 后台动作 | Reason |
+|---|---|---|---|
+| 依赖里**没有**该许可全文 | `IGNORE` | Ignore | `incorrect_data_found` |
+| 只在测试 / 文档 / 许可告知文件里出现 | `APPROVE_PER_ITEM` | Ignore | `other` / `Component_not_present` |
+| 弱 copyleft（LGPL / MPL），动态链接或未修改 | `APPROVE_PER_ITEM` | Ignore | `other` |
+| 强 copyleft 进入分发产物 | **不忽略** | 替换/移除依赖，或单独评估 | — |
 
-2. 对每条 issue 用载体核对脚本确认它到底属于哪类：
+复核命令：
 
 ```bash
 python scripts/fossa_license_carrier_check.py \
   --expect '<dependency>:<license-id>'
 ```
 
-3. 按下面规则二选一：
-
-| 载体核对结果 | FOSSA 动作 | Reason |
-|---|---|---|
-| 依赖里**没有**该许可全文（扫描器误判） | Ignore | `incorrect_data_found` |
-| 只在测试 / 文档 / 许可告知文件里出现 | Ignore | `other` 或 `Component_not_present` |
-| 弱 copyleft（LGPL / MPL），动态链接或未修改 | Ignore | `other` |
-| 强 copyleft（GPL-2.0-only 等）进入分发产物 | **不要 Ignore** | 替换/移除依赖，或改策略前单独评估 |
-
-4. 把结果填进 [fossa-agpl3-review.csv](fossa-agpl3-review.csv) 的 `issue_id` / `dependency` / `license` / `action` / `fossa_reason` / `notes` 列。
+> 表格已无待判定行；剩余工作只有在 FOSSA 后台逐条执行 Ignore（Free 计划不可用，
+> 见 `docs/license-policy.md` §1）。执行后重扫同一提交，Active 应归零。
 
 ---
 

@@ -165,12 +165,115 @@ def sample_warp_grid(grid, rows, cols, u, v):
             + grid[i01 + 1] * w01 + grid[i11 + 1] * w11,
         )
 
-    # 越界：沿用既有的「边界格线性外推、不夹取」——见本函数 docstring 的 #72。
-    top_x = grid[i00] + (grid[i10] - grid[i00]) * fx
-    top_y = grid[i00 + 1] + (grid[i10 + 1] - grid[i00 + 1]) * fx
-    bot_x = grid[i01] + (grid[i11] - grid[i01]) * fx
-    bot_y = grid[i01 + 1] + (grid[i11 + 1] - grid[i01 + 1]) * fx
-    return (top_x + (bot_x - top_x) * fy, top_y + (bot_y - top_y) * fy)
+    # 越界：官方 Cubism 的 BDBoxGrid 外推（中心 + 两轴仿射框架，8 个区域分段
+    # 线性）。规则取自反编译的 Cubism Editor 5.3 `WarpDeformerUtils`，并由其
+    # 反射对拍输出（30 个点，最大误差 7e-8）逐点验证 —— 见
+    # ``tests/unit/test_bindings_gap_probe.py`` 的 warp_ref 用例。
+    return _warp_outside(grid, cols, rows, u, v)
+
+
+def _warp_outside(grid, cols, rows, x, y):
+    """格外的 BDBoxGrid 外推：(x, y) 是归一化的静止坐标（0..1 为一格）。
+
+    三个要点（与 jar 一致，逐分支照抄参考实现，别"化简"）：
+
+    1. 中心取四角均值，轴 1 = ((P11-P00)+(P10-P01))/2，轴 2 = ((P11-P00)-(P10-P01))/2；
+    2. 离得太远（x≤-2 / x≥3 / y≤-2 / y≥3）退化成纯仿射；
+    3. 近处按 8 个区域（四角 + 四边）各用一对三角形做分段线性，权重只依赖 (x, y)。
+    """
+    stride = (cols + 1) * 2
+
+    def pt(i, j):
+        k = j * stride + i * 2
+        return (grid[k], grid[k + 1])
+
+    p00, p10 = pt(0, 0), pt(cols, 0)
+    p01, p11 = pt(0, rows), pt(cols, rows)
+    cx = 0.25 * (p00[0] + p10[0] + p01[0] + p11[0])
+    cy = 0.25 * (p00[1] + p10[1] + p01[1] + p11[1])
+    d13 = (p11[0] - p00[0], p11[1] - p00[1])
+    d15 = (p10[0] - p01[0], p10[1] - p01[1])
+    ax = ((d13[0] + d15[0]) * 0.5, (d13[1] + d15[1]) * 0.5)
+    bx = ((d13[0] - d15[0]) * 0.5, (d13[1] - d15[1]) * 0.5)
+    ox = cx - 0.5 * (ax[0] + bx[0])
+    oy = cy - 0.5 * (ax[1] + bx[1])
+
+    if x <= -2.0 or x >= 3.0 or y <= -2.0 or y >= 3.0:
+        return (ox + x * ax[0] + y * bx[0], oy + x * ax[1] + y * bx[1])
+
+    def tri2(p, q, r, u, v):
+        return (p[0] + (q[0] - p[0]) * u + (r[0] - p[0]) * v,
+                p[1] + (q[1] - p[1]) * u + (r[1] - p[1]) * v)
+
+    def tri2b(p, q, r, u, v):
+        return (p[0] + (q[0] - p[0]) * (1.0 - u) + (r[0] - p[0]) * (1.0 - v),
+                p[1] + (q[1] - p[1]) * (1.0 - u) + (r[1] - p[1]) * (1.0 - v))
+
+    if x <= 0.0:
+        if y <= 0.0:                                    # 左上角
+            s = p00
+            p19 = (ox - 2 * ax[0], oy - 2 * ax[1])
+            p21 = (ox - 2 * bx[0], oy - 2 * bx[1])
+            p23 = (ox - 2 * ax[0] - 2 * bx[0], oy - 2 * ax[1] - 2 * bx[1])
+            u, v = 0.5 * (x + 2), 0.5 * (y + 2)
+            return tri2(p23, p21, p19, u, v) if u + v <= 1 else tri2b(s, p19, p21, u, v)
+        if y >= 1.0:                                    # 左下角
+            s = p01
+            p29 = (ox - 2 * ax[0] + bx[0], oy - 2 * ax[1] + bx[1])
+            p31 = (ox + 3 * bx[0], oy + 3 * bx[1])
+            p33 = (ox - 2 * ax[0] + 3 * bx[0], oy - 2 * ax[1] + 3 * bx[1])
+            u, v = 0.5 * (x + 2), 0.5 * (y - 1)
+            return tri2(p29, s, p33, u, v) if u + v <= 1 else tri2b(p31, p33, s, u, v)
+        j = min(int(math.floor(y * rows)), max(rows - 1, 0))
+        u, v = 0.5 * (x + 2), y * rows - j
+        r1, r2 = j / rows, (j + 1) / rows
+        p41, p43 = pt(0, j), pt(0, j + 1)
+        p45 = (ox - 2 * ax[0] + r1 * bx[0], oy - 2 * ax[1] + r1 * bx[1])
+        p47 = (ox - 2 * ax[0] + r2 * bx[0], oy - 2 * ax[1] + r2 * bx[1])
+        return tri2(p45, p41, p47, u, v) if u + v <= 1 else tri2b(p43, p47, p41, u, v)
+
+    if x >= 1.0:
+        if y <= 0.0:                                    # 右上角
+            s = p10
+            p51 = (ox + 3 * ax[0], oy + 3 * ax[1])
+            p53 = (ox + ax[0] - 2 * bx[0], oy + ax[1] - 2 * bx[1])
+            p55 = (ox + 3 * ax[0] - 2 * bx[0], oy + 3 * ax[1] - 2 * bx[1])
+            u, v = 0.5 * (x - 1), 0.5 * (y + 2)
+            return tri2(p53, p55, s, u, v) if u + v <= 1 else tri2b(p51, s, p55, u, v)
+        if y >= 1.0:                                    # 右下角
+            s = p11
+            p61 = (ox + 3 * ax[0] + bx[0], oy + 3 * ax[1] + bx[1])
+            p63 = (ox + ax[0] + 3 * bx[0], oy + ax[1] + 3 * bx[1])
+            p65 = (ox + 3 * ax[0] + 3 * bx[0], oy + 3 * ax[1] + 3 * bx[1])
+            u, v = 0.5 * (x - 1), 0.5 * (y - 1)
+            return tri2(s, p61, p63, u, v) if u + v <= 1 else tri2b(p65, p63, p61, u, v)
+        j = min(int(math.floor(y * rows)), max(rows - 1, 0))
+        u, v = 0.5 * (x - 1), y * rows - j
+        r1, r2 = j / rows, (j + 1) / rows
+        p73, p75 = pt(cols, j), pt(cols, j + 1)
+        p77 = (ox + 3 * ax[0] + r1 * bx[0], oy + 3 * ax[1] + r1 * bx[1])
+        p79 = (ox + 3 * ax[0] + r2 * bx[0], oy + 3 * ax[1] + r2 * bx[1])
+        return tri2(p73, p77, p75, u, v) if u + v <= 1 else tri2b(p79, p75, p77, u, v)
+
+    if y <= 0.0:                                        # 上边中部
+        i = min(int(math.floor(x * cols)), max(cols - 1, 0))
+        u, v = x * cols - i, 0.5 * (y + 2)
+        c1, c2 = i / cols, (i + 1) / cols
+        p85, p87 = pt(i, 0), pt(i + 1, 0)
+        p89 = (ox + c1 * ax[0] - 2 * bx[0], oy + c1 * ax[1] - 2 * bx[1])
+        p91 = (ox + c2 * ax[0] - 2 * bx[0], oy + c2 * ax[1] - 2 * bx[1])
+        return tri2(p89, p91, p85, u, v) if u + v <= 1 else tri2b(p87, p85, p91, u, v)
+
+    if y >= 1.0:                                        # 下边中部
+        i = min(int(math.floor(x * cols)), max(cols - 1, 0))
+        u, v = x * cols - i, 0.5 * (y - 1)
+        c1, c2 = i / cols, (i + 1) / cols
+        p97, p99 = pt(i, rows), pt(i + 1, rows)
+        p101 = (ox + c1 * ax[0] + 3 * bx[0], oy + c1 * ax[1] + 3 * bx[1])
+        p103 = (ox + c2 * ax[0] + 3 * bx[0], oy + c2 * ax[1] + 3 * bx[1])
+        return tri2(p97, p99, p101, u, v) if u + v <= 1 else tri2b(p103, p101, p99, u, v)
+
+    raise AssertionError("unreachable: %.3f %.3f" % (x, y))
 
 
 class Field:

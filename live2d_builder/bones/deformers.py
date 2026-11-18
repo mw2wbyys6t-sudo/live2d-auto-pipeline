@@ -14,9 +14,11 @@ import numpy as np
 
 from core.logger import get_logger
 from live2d_builder.layer_naming import (
+    ACCESSORY_KEYWORDS,
     ANIMAL_EAR_KEYWORDS,
     HAIR_BACK_KEYWORDS,
     HAIR_KEYWORDS,
+    SKIRT_HEM_KEYWORDS,
     SKIRT_KEYWORDS,
     TAIL_KEYWORDS,
     matches_keywords,
@@ -266,6 +268,10 @@ class BoneHierarchy:
     #: 屏幕左侧（x 更小）对应 ``*_L``，与 ``STANDARD_BONES`` 里负 x 的摆位一致。
     SIDED_BONE_MAP: Dict[str, Tuple[str, str]] = {
         "arm": ("ArmBack_L", "ArmBack_R"),
+        # split_limb_segments 产出的名字：缺了这两项会落到位置推断，
+        # 上臂/小臂跟着躯干走而不是跟手臂骨骼。
+        "arm_upper": ("ArmBack_L", "ArmBack_R"),
+        "arm_lower": ("ForearmBack_L", "ForearmBack_R"),
         "upper_arm": ("ArmBack_L", "ArmBack_R"),
         "sleeve": ("ArmBack_L", "ArmBack_R"),
         "forearm": ("ForearmBack_L", "ForearmBack_R"),
@@ -728,7 +734,9 @@ class DeformerHierarchy:
          "parameters": ["ParamAngleX", "ParamAngleY"],
          # ear_L / ear_R 是 19 类部位后端（l2d_sam_iter2）的层名写法；
          # 不点名的话人类耳朵不随头转（ear_left/right 是旧管线写法）。
-         "targets": ["face", "nose", "accessories", "ear_left", "ear_right",
+         # accessories 已交给 AccessorySwing（它 under 本变形器，照样跟随头部），
+         # 一块网格只能挂一个变形器，这里不能再点名，否则两条互相覆盖。
+         "targets": ["face", "nose", "ear_left", "ear_right",
                     "ear_L", "ear_R",
                     "cheek", "tear_left", "tear_right",
                     "eyelid_left", "eyelid_right"]},
@@ -744,7 +752,20 @@ class DeformerHierarchy:
          # 通用命名：HairFront / 前发 / hair1 都要能命中；后发从头发大类里剔除，
          # 否则同一块后发会被前发与后发两条摆链同时声明。
          "target_keywords": HAIR_KEYWORDS,
-         "exclude_keywords": HAIR_BACK_KEYWORDS},
+         # 左右前发各自一条摆链（见下面两条），这里必须让出去。
+         "exclude_keywords": HAIR_BACK_KEYWORDS + ("hair_front_left", "hair_front_right")},
+        # 前发左右两缕：分层阶段按连通块分出（``split_hair_front_sides``），
+        # 各走一条短摆链，摆起来才有左右相位差。
+        {"name": "HairFrontSwing_L", "parent": "Head", "under": "HeadRig",
+         "rows": 2, "cols": 2,
+         "type": "warp", "profile": "hair_sway",
+         "parameters": ["ParamHairSwingFrontL"],
+         "targets": ["hair_front_left", "hair_bangs_left"]},
+        {"name": "HairFrontSwing_R", "parent": "Head", "under": "HeadRig",
+         "rows": 2, "cols": 2,
+         "type": "warp", "profile": "hair_sway",
+         "parameters": ["ParamHairSwingFrontR"],
+         "targets": ["hair_front_right", "hair_bangs_right"]},
         # 后发是独立的慢摆链，读自己的 ParamHairSwingBack：
         # 与 HairFront 共用 ParamHairSwing 时内核只保留一条输出（实测旧产物里
         # 两个组的输出完全一样），后发的三级钟摆等于白算。
@@ -821,7 +842,25 @@ class DeformerHierarchy:
          "parameters": ["ParamSkirtSwing"],
          "targets": ["skirt", "bottomwear", "clothes_bottom", "skirt_body"],
          # 通用命名：SkirtFront / 裙摆 / 短裙 都能命中。
-         "target_keywords": SKIRT_KEYWORDS},
+         "target_keywords": SKIRT_KEYWORDS,
+         # 下摆交给 SkirtHemSway：一块网格只能挂一个变形器，两边都声明会互相覆盖。
+         "exclude_keywords": SKIRT_HEM_KEYWORDS},
+        # 下摆是一圈独立的荷叶边图层：腰线到裙体由 SkirtSway 管，下摆要自己
+        # 滞后一档地摆，否则整条裙子是一块刚体，跑起来像硬壳。
+        # 一块网格只能挂一个变形器，所以 skirt_hem 必须从 SkirtSway 的 targets
+        # 里排除（关键词表里单列），否则两边互相覆盖。
+        {"name": "SkirtHemSway", "parent": "Skirt", "under": "BodySway",
+         "rows": 3, "cols": 3,
+         "type": "warp", "profile": "skirt_sway",
+         "parameters": ["ParamSkirtHemSwing"],
+         "targets": ["skirt_hem", "hem", "frill_hem"]},
+        # 头饰/飘带：挂在头部外沿的碎件，头一转就甩，晚于头发回正。
+        {"name": "AccessorySwing", "parent": "Head", "under": "HeadRig",
+         "rows": 2, "cols": 2,
+         "type": "warp", "profile": "hair_sway",
+         "parameters": ["ParamAccessorySwing"],
+         "targets": ["accessories", "accessory", "hair_accessory"],
+         "target_keywords": ACCESSORY_KEYWORDS},
         # ---- 尾巴摆动：由 ParamTailSwing 驱动（Tail 物理组的输出）----
         #
         # ``tail`` 按整词匹配，``detail`` 不会误命中；中文层名（尾巴）走子串。
@@ -929,23 +968,13 @@ class DeformerHierarchy:
 
     # ---- rotation 变形器 ----
     #
-    # 眼睛两条仍是「不落地」的定义（保留只为标明意图），HeadRotationZ 作为
-    # **可选能力**保留在 ``HEAD_ROTATION`` 里但**不进默认表** —— 原因见下。
-    #
-    # 三条实测结论（2026-10-21，用 Work/base 的真实 32 层跑 build() 验证）：
-    # 1) targets 里的 ``eyeball_l`` / ``eye_left`` 与分层阶段实际产出的层名
-    #    （``eyewhite_left`` / ``irides_left`` / ``eyelid_left``）不匹配，
-    #    ``_matched_targets`` 恒为空 —— 真实流水线里这两条 rotation 变形器 **0 个**。
-    # 2) pivot(-35,-40) 取自 ``_DEFAULT_BONE_POSITIONS`` 的**比例兜底**值，不是
-    #    图像坐标；真实眼骨经质心换算后并不在这个点上（见 LIMITATIONS §3
-    #    「骨骼枢轴必须是图像坐标」）。
-    # 3) 即便前两条成立，``moc3_pipeline._driving_rotation_parameter`` 也只在
-    #    ``ROTATION_KEYFORM_PARAMS``（Head / Body / 双臂 / 三束头发）里找 Z 轴
-    #    参数，而眼球对应的是 ParamEyeBallX/Y（平移，不是旋转），永远绑不上。
-    #
-    # 眼球跟随实际由 ``moc3_pipeline.eye_track_keyforms`` 用 ParamEyeBallX/Y 双轴
-    # 网格键形实现 —— 效果不缺，缺的是「这两条不是 rotation 变形器」这件事被说清楚。
-    #
+    # 默认表里只有 HeadRotationZ。眼球跟随**不是** rotation 变形器：它由
+    # ``moc3_pipeline.eye_track_keyforms`` 用 ParamEyeBallX/Y 双轴网格键形实现。
+    # 曾经这里还留过 ``EyeTrack_L/R`` 两条"不落地"的定义（targets 写
+    # ``eyeball_l`` / ``eye_left``，而分层产出是 ``eyewhite_*`` / ``irides_*``），
+    # 它们在真实流水线里 0 个命中，于是每次构建都打一条「rotation 变形器未创建 2」，
+    # 看起来像缺件。规范已确认眼球不需要 rotation 变形器，两条定义删掉；
+    # 判定逻辑（``rotation_skipped``）保留，将来新增目标未命中时仍会如实告警。
     #: 头部刚体侧倾：绕 Head 关节转 ParamAngleZ 的 rotation 定义。
     #:
     #: **已进默认表**。它没有直接成员网格（``allow_empty_targets``）：转的是整棵
@@ -961,10 +990,6 @@ class DeformerHierarchy:
 
     DEFAULT_ROTATION_DEFORMERS: List[Dict] = [
         HEAD_ROTATION,
-        {"name": "EyeTrack_L",     "parent": "Eye_L",  "pivot": (-35, -40),
-         "type": "rotation", "targets": ["eyeball_l", "eye_left"]},
-        {"name": "EyeTrack_R",     "parent": "Eye_R",  "pivot": (35, -40),
-         "type": "rotation", "targets": ["eyeball_r", "eye_right"]},
     ]
 
     def __init__(self) -> None:

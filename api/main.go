@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -50,6 +51,10 @@ func main() {
 	// 桌面打包布局：发现 <res>/app/core/workflow.py 时，把解释器/源码/用户数据
 	// 目录解析到安装资源目录与 %APPDATA%/文档（ADR-010）。开发源码树不触发。
 	config.ApplyDesktopLayout(cfg, *configPath != "")
+
+	// 设置页保存的非敏感项落在用户可写目录；把路径交给所有 Python 子进程，
+	// 让「保存即生效」无需重启（每次生成都会重新读盘）。
+	_ = os.Setenv("LIVE2D_SETTINGS_FILE", config.SettingsPath(cfg))
 
 	// Go 侧日志落盘。桌面壳 spawn 后端时把 stdout/stderr 都接到 NUL
 	// （desktop/src/lib.rs），handlers.serverError 记录的真实原因此前只写进
@@ -356,6 +361,10 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 
 		// 生成上游状态 + 外部素材导入 v0.10.1
 		api.GET("/providers", h.ListImageProviders)
+		// 设置页：非敏感项写 settings.json，API Key 写 Python 加密保险库
+		api.GET("/settings", h.GetSettings)
+		api.PUT("/settings", h.UpdateSettings)
+		api.POST("/settings/test", h.TestProvider)
 		api.GET("/gpu", h.GetGPUStatus)
 		api.POST("/import/psd", h.ImportPSD)
 		api.POST("/import/pngs", h.ImportPNGs)
@@ -794,6 +803,20 @@ func validateRequestMiddleware() gin.HandlerFunc {
 				"error": "缺少User-Agent头",
 			})
 			return
+		}
+
+		// Windows 工具（PowerShell 的 Set-Content -Encoding UTF8、记事本另存
+		// UTF-8）会给 JSON 加 UTF-8 BOM。Go 的 encoding/json 不认 BOM，会直接
+		// 报 "invalid character '\ufeff' looking for beginning of value" —— 用户
+		// 只看到「参数错误」，看不出是编码问题。这里在解析前剥掉 3 字节 BOM；
+		// 只处理 application/json，multipart 上传与 WS 升级的 body 一律不动。
+		if c.ContentType() == "application/json" && c.Request.Body != nil {
+			reader := bufio.NewReader(c.Request.Body)
+			if head, _ := reader.Peek(3); len(head) == 3 &&
+				head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF {
+				_, _ = reader.Discard(3)
+			}
+			c.Request.Body = io.NopCloser(reader)
 		}
 
 		c.Next()

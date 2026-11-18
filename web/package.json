@@ -9,7 +9,8 @@
     "prebuild": "node scripts/copy-license.mjs",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "security:audit": "node scripts/security-audit.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.63.0",

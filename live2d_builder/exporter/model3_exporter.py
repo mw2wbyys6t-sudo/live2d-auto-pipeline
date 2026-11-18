@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
 
 from core.logger import get_logger
-from live2d_builder.exporter.moc3_model import DEFAULT_PIXELS_PER_UNIT
+from live2d_builder.exporter.moc3_model import resolve_pixels_per_unit
 from live2d_builder.exporter.texture_atlas import TextureAtlas
 from live2d_builder.blendshapes.parameters import ParameterSet
 from live2d_builder.blendshapes.expressions import ExpressionBuilder
@@ -393,7 +393,7 @@ class Model3Exporter:
             "Y": 0,
             "CenterX": 0.0,
             "CenterY": 0.0,
-            "PixelsPerUnit": float(DEFAULT_PIXELS_PER_UNIT),
+            "PixelsPerUnit": float(resolve_pixels_per_unit(canvas_width)),
         }
 
     def _build_hit_areas(self, layers: Dict[str, Image.Image]) -> List[Dict[str, Any]]:

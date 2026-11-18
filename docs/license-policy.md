@@ -3,7 +3,7 @@
 > **读者（Audience）**：维护者与合规负责人。
 > **文档类型（Diátaxis）**：explanation + how-to。
 > **真相源（Source of Truth）**：包元数据清单由 [`scripts/fossa_license_inventory.py`](../scripts/fossa_license_inventory.py) 实算；FOSSA 另做依赖内嵌许可证深扫，两者口径不同。本文件记录判定依据与后台操作步骤。
-> **最后校验（Last verified）**：2026-11-18（FOSSA 摘要 72 issues = 58 Flagged + 7 Denied + 5 Outdated + 2 Vulnerabilities；逐条载体复核见 §3.2.2，载体核对脚本见 `scripts/fossa_license_carrier_check.py`；本项目自身协议自 v0.10.10 起为 AGPL-3.0 + 商业授权双轨，见 ADR-001 Rev.5）。上一轮：2026-10-29（revision scan `126535209`，commit `42a99c7`）。
+> **最后校验（Last verified）**：2026-11-14（浏览器实读 FOSSA Issues 页，revision scan `129901049`，commit `9756014`：**64 licensing = 6 Denied + 58 Flagged**，另 2 条同一 CVE 的 security、3 条 quality；逐条载体复核见 §3.2.2，载体核对脚本见 `scripts/fossa_license_carrier_check.py`；本项目自身协议自 v0.10.10 起为 AGPL-3.0 + 商业授权双轨，见 ADR-001 Rev.5）。上一轮：2026-11-03（`main@8f1ad93d`）。
 
 ---
 
@@ -23,7 +23,9 @@
 2026-11-12 通过 FOSSA **公共项目 API**（未登录，只读元数据）复核到当前真实状态：
 
 - 项目 `public: true`，最新已分析 revision = `9756014da9a851d86d98a6e047b652b9246eb9bd`（2026-11-12 09:49）。
-- 未解决 issue：**69 = 64 licensing + 3 quality + 2 security**（64 licensing 与文档上一轮口径 57 Flagged + 7 Denied 数量吻合）。
+- 未解决 issue：**69 = 64 licensing + 3 quality + 2 security**（2026-11-14 实读：64 licensing = **6 Denied + 58 Flagged**）。
+- **6 条 Denied 全部是 CC-BY-SA**：`numpy 2.4.6` 1 条（载体是 `packaging/licenses/_spdx.py` 的 SPDX 标识表，不是许可授权）、`next 16.4.3` 1 条（`next/dist/compiled/*/LICENSE` 里的 CC 链接，只用于构建静态导出）、`golang.org/x/text v0.43.0` 4 条（`cases/map_test.go` 里作为大小写折叠测试输入的 URL 字符串，`_test.go` 不进二进制）。
+- **58 条 Flagged 集中在 8 个包**：scipy 8、opencv-python 9、opencv-python-headless 9、@img/sharp-* 14、pygame 5、pygame-ce 4、pillow 2、numpy 1，以及 onnxruntime / onnxruntime-directml / next / urllib3 各 1（MPL-2.0）、edge-tts 1（LGPL-3.0）、golang.org/x/crypto 1（openssl-ssleay）、项目自身 AGPL 1。载体性质与处置见 §3.2.2。
 - **项目当前绑定的策略是内置 `Standard Bundle Distribution`（policyId `271431`），不是 `AGPL-3.0 Distribution`**。
 - 组织 `access_level = free`。
 

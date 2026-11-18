@@ -40,8 +40,16 @@ SOURCE_YUNET = "yunet"
 SOURCE_SKIN = "skin_heuristic"
 SOURCE_NONE = "none"
 
-#: YuNet 检测阈值：动漫脸的置信度普遍低于真人，阈值放到 0.55。
-_SCORE_THRESHOLD = 0.55
+#: YuNet 检测阈值。动漫脸的置信度普遍低于真人，阈值放到 0.40：
+#: 实测这张立绘在**原图**上 0.697 分，但经过背景去除 + 画布归一化后的
+#: ``optimized_*.png`` 只有 0.539 分——阈值 0.55 时直接漏检，退化到肤色
+#: 兜底，眼睛锚点落到额头顶。低阈值带来的误检由「取最大框」与后续的
+#: 眼带/皮肤约束过滤。
+_SCORE_THRESHOLD = 0.40
+
+#: YuNet 的检测输入上限（最长边）。超过就先降采样检测、再把坐标还原。
+#: 实测 2731×4096 直接检测返回空，缩到 ≤1536 立刻命中。
+_DETECT_MAX_SIDE = 1536
 _NMS_THRESHOLD = 0.3
 _TOP_K = 5000
 
@@ -144,6 +152,57 @@ def find_yunet_model(dirs: Optional[Sequence[Path]] = None) -> Optional[Path]:
     return None
 
 
+#: 已复制到 ASCII 路径的权重缓存：``源路径:mtime`` -> 可打开的路径。
+#: Windows 上 OpenCV 的 ONNX importer 打不开含中文的路径（实测本项目目录
+#: ``F:\\前沿虚拟偶像\\...`` 直接报 ``Can't read ONNX file``），此时把权重
+#: 复制到临时目录再加载，避免每次都重复拷贝。
+_MODEL_PATH_CACHE: dict[str, str] = {}
+
+
+def _openable_model_path(model: Path) -> Optional[str]:
+    """返回 OpenCV 能打开的权重路径（必要时复制到 ASCII 临时目录）。
+
+    OpenCV 5 的 ``ONNXImporter2`` 在 Windows 上把路径按本地编码处理，遇到
+    ``F:\\前沿虚拟偶像\\...`` 这类非 ASCII 目录会抛 ``Can't read ONNX file``；
+    :func:`detect_face_yunet` 把它吞成 ``None``，于是整条链路静默退回肤色
+    启发式——实测眼睛锚点落到额头顶（y≈105，真实约 150），眼睛层里全是发丝。
+
+    全 ASCII 路径原样返回；否则复制到 ``<temp>/pygmalion-models/<name>``。
+    临时目录本身也不是 ASCII 时返回 ``None``（调用方继续走兜底路径）。
+    """
+    try:
+        raw = str(Path(model).resolve())
+    except OSError:  # pragma: no cover
+        return None
+    if raw.isascii():
+        return raw
+
+    try:
+        stat = Path(model).stat()
+    except OSError:  # pragma: no cover
+        return None
+    key = f"{raw}:{stat.st_mtime_ns}"
+    cached = _MODEL_PATH_CACHE.get(key)
+    if cached and Path(cached).is_file():
+        return cached
+
+    import shutil
+    import tempfile
+
+    temp_root = Path(tempfile.gettempdir())
+    if not str(temp_root).isascii():  # pragma: no cover - 罕见环境
+        return None
+    dest_dir = temp_root / "pygmalion-models"
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / Path(model).name
+        shutil.copy2(model, dest)
+    except OSError:  # pragma: no cover
+        return None
+    _MODEL_PATH_CACHE[key] = str(dest)
+    return str(dest)
+
+
 def _clip_box(
     x: float, y: float, w: float, h: float, width: int, height: int
 ) -> Optional[Box]:
@@ -184,6 +243,22 @@ def estimate_anchors_from_box(box: Box) -> FaceAnchors:
     )
 
 
+def plan_detect_size(width: int, height: int) -> Tuple[int, int, float, float]:
+    """计算 YuNet 的检测输入尺寸与坐标还原比例。
+
+    Returns:
+        ``(detect_w, detect_h, scale_x, scale_y)``；检测尺寸为原图坐标乘以
+        比例再乘回来即可还原。最长边不超过 :data:`_DETECT_MAX_SIDE`。
+    """
+    longest = max(height, width)
+    if longest <= _DETECT_MAX_SIDE:
+        return width, height, 1.0, 1.0
+    ratio = _DETECT_MAX_SIDE / float(longest)
+    detect_w = max(32, int(round(width * ratio)))
+    detect_h = max(32, int(round(height * ratio)))
+    return detect_w, detect_h, width / float(detect_w), height / float(detect_h)
+
+
 def detect_face_yunet(
     rgb: np.ndarray, model_path: Optional[Path] = None
 ) -> Optional[FaceAnchors]:
@@ -198,17 +273,29 @@ def detect_face_yunet(
     model = model_path or find_yunet_model()
     if model is None:
         return None
+    # OpenCV 打不开非 ASCII 路径；必要时改用 ASCII 临时副本（见该函数说明）。
+    model_file = _openable_model_path(model)
+    if model_file is None:
+        return None
 
     height, width = rgb.shape[:2]
     if height < 32 or width < 32:
         return None
 
+    # 超大画布（4K 立绘）直接喂给 YuNet 会检测不到脸：实测 2731×4096 时
+    # 返回空、缩到 1/3 立刻命中。统一把检测输入压到最长边 ≤1536，
+    # 检测出的框与关键点再按比例还原到原画布坐标。
+    detect_w, detect_h, scale_x, scale_y = plan_detect_size(width, height)
+    detect_rgb = rgb
+    if detect_w != width or detect_h != height:
+        detect_rgb = cv2.resize(rgb, (detect_w, detect_h), interpolation=cv2.INTER_AREA)
+
     try:
         detector = cv2.FaceDetectorYN.create(
-            str(model), "", (width, height),
+            model_file, "", (detect_rgb.shape[1], detect_rgb.shape[0]),
             _SCORE_THRESHOLD, _NMS_THRESHOLD, _TOP_K,
         )
-        bgr = np.ascontiguousarray(rgb[:, :, ::-1])
+        bgr = np.ascontiguousarray(detect_rgb[:, :, ::-1])
         _, faces = detector.detect(bgr)
     except Exception:
         return None
@@ -230,12 +317,17 @@ def detect_face_yunet(
         return None
 
     x, y, w, h = (float(v) for v in best[:4])
+    if scale_x != 1.0 or scale_y != 1.0:
+        x, w = x * scale_x, w * scale_x
+        y, h = y * scale_y, h * scale_y
     box = _clip_box(x, y, w, h, width, height)
     if box is None:
         return None
 
     # 关键点：右眼 / 左眼 / 鼻尖 / 右嘴角 / 左嘴角
     pts = np.asarray(best[4:14], dtype=np.float64).reshape(5, 2)
+    if scale_x != 1.0 or scale_y != 1.0:
+        pts = pts * np.asarray([scale_x, scale_y], dtype=np.float64)
     right_eye = (float(pts[0][0]), float(pts[0][1]))
     left_eye = (float(pts[1][0]), float(pts[1][1]))
     nose = (float(pts[2][0]), float(pts[2][1]))
@@ -280,6 +372,12 @@ def skin_mask(rgb: np.ndarray) -> np.ndarray:
         & (g >= b - 14)
         & ((r - g) <= 95)
         & ((g - b) <= 70)
+        # 下限与 ``_is_skin_color`` 保持一致：只有 r 明显高于 g 才是皮肤。
+        # 少了这两条时，浅米色头发（r-g≈5、r-b≈10）会被当成皮肤，脸和头发
+        # 连成一整块，脸框取成「整个脑袋」→ 五官锚点整体下移（实测眼睛落到
+        # 264px、真实位置约 150px），后续左右眼/眉毛全部切错。
+        & ((r - g) >= 8)
+        & ((r - b) >= 16)
     )
 
 

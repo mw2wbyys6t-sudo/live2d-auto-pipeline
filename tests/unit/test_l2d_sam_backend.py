@@ -216,12 +216,17 @@ def test_layer_exports_19_class_names_back_to_front(tmp_path, monkeypatch):
 
 
 def test_amodal_skips_absurd_expansion(tmp_path):
-    """整件上衣被当成脖子的遮挡区时，宁可不补也不造出巨型假脖子。"""
+    """整件上衣被当成脖子的遮挡区时，宁可不补也不造出巨型假脖子。
+
+    重叠必须占到前排层的 2% 以上（``GRAZING_OVERLAP_RATIO``）才算真遮挡：
+    分割掩码在相邻处会互相渗 1~2px，那种擦边不算「上衣盖住脖子」。所以这里
+    让脖子整段落在上衣里（160/6560 = 2.4%），才能真的走到膨胀比守卫。
+    """
     h = w = 120
     neck = np.zeros((h, w), dtype=bool)
-    neck[20:28, 50:70] = True            # 160 px
+    neck[40:48, 50:70] = True            # 160 px
     shirt = np.zeros((h, w), dtype=bool)
-    shirt[25:118, 10:110] = True         # 与脖子有 3px 重叠 -> 走整块前排掩码
+    shirt[36:118, 20:100] = True         # 整段盖住脖子 -> 走整块前排掩码
 
     arr = np.zeros((h, w, 4), dtype=np.uint8)
     arr[neck] = (220, 170, 130, 255)
@@ -232,6 +237,10 @@ def test_amodal_skips_absurd_expansion(tmp_path):
 
     assert layers["neck"]["completed"] is False
     assert layers["neck"]["pixel_count"] == int(neck.sum())
+    # 补全被守卫拦下时不得伪报成功：该层必须转人工复核，且没有推断像素。
+    assert layers["neck"]["status"] == "manual_required"
+    assert layers["neck"]["completed_pixels"] == 0
+    assert "超过可见区" in layers["neck"]["completion_rejected"]
 
 
 def test_face_layer_erases_19_class_eye_pixels(tmp_path, monkeypatch):

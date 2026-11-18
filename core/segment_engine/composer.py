@@ -10,6 +10,7 @@ emits layer metadata JSON, and builds an occlusion map.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -18,9 +19,11 @@ import numpy as np
 from PIL import Image
 
 from core.logger import get_logger
+from core.segment_engine import face_detect
 from core.segment_engine.amodal import AmodalCompleter
 from core.segment_engine.part_split import (
     attach_depths,
+    refine_part_masks,
     split_depth_parts,
     split_eye_parts,
     split_garment_details,
@@ -51,6 +54,11 @@ class LayerComposer:
         "hair_back",
         # 后发左右两束（split_hair_parts 自适应拆出）：与后发同层，必须显式列名，
         # 否则会按字母序落到最前 = 画在脸和衣服之上。
+        # 每侧再分出的第三束（split_hair_side_strands 的 `_inner`/`_outer`）排在
+        # 父束**之前**：父束登记在 AMODAL_PARTS 里，补画会把它前面的同族层填满；
+        # 排在后面就会被父束的补画覆盖，拆了也白拆。
+        "hair_back_left_inner", "hair_back_left_outer",
+        "hair_back_right_inner", "hair_back_right_outer",
         "hair_back_left", "hair_back_right",
         "hair_mid",
         # 刘海（hair_front / hair_bangs）**不在这里**：见下方眼睑之后的位置。
@@ -86,6 +94,9 @@ class LayerComposer:
         # 19 类的眼镜：压在眼睛之上、刘海之下。
         "eyewear",
         # 刘海：必须排在闭眼图之后（画在闭眼图前），否则闭眼图的补色会盖住刘海。
+        # 分束后的 `*_left` / `*_right` 与母层相邻（split_hair_bangs_strands）。
+        "hair_front_left", "hair_front_right",
+        "hair_bangs_left", "hair_bangs_right",
         "hair_front", "hair_bangs",
         # 19 类的头饰：帽子压在头发之上。
         "headwear",
@@ -109,11 +120,16 @@ class LayerComposer:
         "arms",
         "arm_L",
         "arm_R",
+        # 肘部分段（split_limb_segments）：上臂在后、小臂在前，与手臂同族相邻。
+        "arm_upper_L", "arm_lower_L",
+        "arm_upper_R", "arm_lower_R",
         "hands",
         "hand_L",
         "hand_R",
         # 19 类的手套/袖套：压在手臂与手之上
         "handwear",
+        # 裙内层（split_skirt_inner）：在内衬位置、被裙子外轮廓挡住，与裙子同族。
+        "skirt_inner",
         "skirt",
         "skirt_back",
         "bottomwear_back",
@@ -126,6 +142,9 @@ class LayerComposer:
         "legs",
         "leg_L",
         "leg_R",
+        # 膝盖分段（split_leg_segments）：大腿在后、小腿在前，与腿同族相邻。
+        "thigh_L", "calf_L",
+        "thigh_R", "calf_R",
         # 19 类的下装：压住裸腿、被袜子与鞋压住
         "bottomwear",
         "legwear",
@@ -180,9 +199,35 @@ class LayerComposer:
         "eye_iris_left", "eye_iris_right", "eye_white_left", "eye_white_right",
     )
 
+    RIG_REQUIRED_PARTS = frozenset({
+        "hand_L", "hand_R", "eyebrow_L", "eyebrow_R",
+    })
+
     #: 补掉五官时向外扩的像素数：五官边缘有 1~2px 抗锯齿，不扩会留一圈深色描边，
     #: 眨眼/闭嘴时那一圈会露出来，看起来像"眼睛还在"。
     FEATURE_ERASE_MARGIN = 2
+
+    #: 可见面积低于画布这个比例的层直接丢弃。实测残留过 74px 的 skirt_hem：
+    #: 它既看不见，又白占一次 draw call 和一套永远空转的绑定。
+    MIN_LAYER_AREA_RATIO = 0.0005
+
+    #: 掩码闭运算半径（像素）。SAM 会把同一条缎带/薄纱切成相距 1~2px 的碎片，
+    #: 闭运算把它们接回来；半径不能再大，否则会把不相干的元素粘在一起。
+    MASK_CLOSE_RADIUS = 1
+
+    #: 非五官层的孤立碎片下限（占该层总面积的比例与绝对像素取大者）。
+    DUST_AREA_RATIO = 0.02
+    DUST_MIN_PX = 24
+
+    #: 擦五官时"墨线"的亮度上限：睫毛/眼线/眉线都比它暗。
+    FEATURE_ERASE_INK_LUM = 110
+
+    #: 擦五官时保留"亮且低饱和"的像素（发丝）。脸层是**实心脸形**，被后排头发
+    #: 盖住的地方存的是发色；把它当五官擦掉会 inpaint 成肤色，在刘海上涂出一块
+    #: 白斑（实测眼定位修好后眉毛掩码压到刘海，脸层出现 385px 白斑）。
+    #: 只保留「非皮肤 + 亮度够 + 饱和度低」三种条件同时成立的像素：虹膜是亮
+    #: 但高饱和（实测 0.58），睫毛/眼线是暗的，两者照常擦掉。
+    FEATURE_ERASE_HAIR_SAT = 0.20
 
     #: SAM2 常沿绘画边界切成零交集硬接。补画必须先认出「紧贴在后排层前面的
     #: 前排层」，否则遮挡检测要求输入已经重叠，AmodalCompleter 永远不会触发。
@@ -196,6 +241,14 @@ class LayerComposer:
     #: 呼吸一动就会从领口露出一大块假脖子。超过这个倍数说明「遮挡区」其实是
     #: 别的大部件，不是本层被压住的部分——此时保留原层，宁可有缝也不造假层。
     AMODAL_MAX_EXPANSION = 20.0
+
+    #: 「擦边重叠」判据：重叠面积不到前排层自身的这个比例，就不算前排盖住了后排。
+    #:
+    #: 分割掩码在相邻处常互相渗 1~2px。实测 neck 与 clothes_top 只重叠 79px
+    #: （占上衣 0.13%），旧逻辑却因此把整件上衣当作脖子的遮挡区（83 倍膨胀）。
+    #: 真实遮挡的形状与之相反：hair_back 被 face 压住时，重叠占脸面积 4.7%。
+    #: 取 2% 分界，既保住后发被脸遮挡时的整块补画，又不让小渗边触发巨型补画。
+    GRAZING_OVERLAP_RATIO = 0.02
 
     #: 合成上眼睑：层名 -> 可以作为"眼睛可见区域"的候选层（按优先级）。
     #:
@@ -308,14 +361,29 @@ class LayerComposer:
         img_arr = np.array(original_image)
         h, w = img_arr.shape[:2]
 
+        source_names = {str(name) for name in part_masks}
+        soft_masks = {
+            str(name): np.asarray(mask)
+            for name, mask in part_masks.items()
+            if np.asarray(mask).dtype != np.bool_
+            and np.asarray(mask).dtype.kind == "f"
+        }
         part_masks, split_warnings = split_limb_parts(part_masks, (w, h))
         part_masks, eye_warnings = split_eye_parts(part_masks, img_arr)
         part_masks, hair_warnings = split_hair_parts(part_masks)
         part_masks, derived_parts = split_garment_details(part_masks, (w, h))
+        # 几何细化（刘海分束 / 后侧发再分束 / 手臂分段 / 裙内层）必须排在
+        # split_garment_details 之后：裙摆、腰带、袖口已经切走，剩余面积才是
+        # 细化阈值的真实分母。深度前后拆分仍排在最后，作用于细化后的外层。
+        part_masks, refine_warnings = refine_part_masks(part_masks)
         depth_warnings: List[str] = []
         if depth_map is not None:
             part_masks, depth_warnings = split_depth_parts(part_masks, depth_map)
-        for message in split_warnings + eye_warnings + hair_warnings + depth_warnings:
+        # 拆分之后统一收拾一遍：接回被切碎的缎带、丢掉看不见的碎层。
+        # 必须放在所有 split_* 之后 —— 碎片是拆分本身产生的。
+        part_masks = self._stabilize_masks(part_masks, (h, w))
+        for message in (split_warnings + eye_warnings + hair_warnings
+                        + refine_warnings + depth_warnings):
             log.warning(message)
         if derived_parts:
             log.info(f"Derived garment layers: {derived_parts}")
@@ -349,7 +417,12 @@ class LayerComposer:
             for other in occluded_by:
                 if other in part_masks:
                     front = np.asarray(part_masks[other], dtype=bool)
-                    if not np.any(mask & front):
+                    overlap = int((mask & front).sum())
+                    # 只擦到边的重叠不算「整块盖住」：分割掩码在相邻处常互相渗
+                    # 1~2px，若据此把整件前排都当遮挡区，后排层的补画会膨胀几十倍
+                    # 被守卫拦下（实测 neck 因 79px 重叠被判 83 倍 → 记成缺件）。
+                    grazing = overlap < max(1.0, self.GRAZING_OVERLAP_RATIO * int(front.sum()))
+                    if grazing:
                         if adjacent_region is None:
                             adjacent_region = self._dilate(
                                 mask, self.OCCLUSION_HARD_CUT_MARGIN)
@@ -359,16 +432,27 @@ class LayerComposer:
 
             # 膨胀比守卫：见 AMODAL_MAX_EXPANSION 的说明。
             visible_px = int(mask.sum())
-            if visible_px and int(occluded_mask.sum()) > self.AMODAL_MAX_EXPANSION * visible_px:
+            completion_rejected = ""
+            # 守卫只对**真的会补画**的层有意义。之前它对所有层生效，于是从不补画
+            # 的层（口内、袖口…）也会被判成「补画不可信」→ 标成 manual_required
+            # → 这些层被算进清单的缺件里，必需部件清单凭空多出几项，而这些层的
+            # 像素其实全部来自原画、没有任何推断内容。
+            attempts_completion = part in self.AMODAL_PARTS
+            if (attempts_completion and visible_px
+                    and int(occluded_mask.sum()) > self.AMODAL_MAX_EXPANSION * visible_px):
                 log.warning(
                     f"'{part}' 的遮挡区 {int(occluded_mask.sum())}px 是可见区 "
                     f"{visible_px}px 的 "
                     f"{int(occluded_mask.sum()) / visible_px:.0f} 倍，判定为误把整个"
                     f"前排部件当成遮挡区，跳过补画（保留原层）"
                 )
+                completion_rejected = (
+                    f"遮挡区 {int(occluded_mask.sum())}px 超过可见区 "
+                    f"{self.AMODAL_MAX_EXPANSION:g} 倍，补画不可信")
                 occluded_mask = np.zeros((h, w), dtype=bool)
 
             completed = False
+            completed_pixels = 0
             if part in self.AMODAL_PARTS and occluded_mask.any():
                 try:
                     completed_layer = self.amodal.complete(
@@ -384,11 +468,13 @@ class LayerComposer:
                     layer_arr[union, :3] = completed_arr[union, :3]
                     layer_arr[union, 3] = 255
                     completed = True
+                    completed_pixels = int((union & ~mask).sum())
                 except Exception as exc:
                     log.warning(f"Amodal completion failed for '{part}': {exc}")
+                    completion_rejected = f"amodal 补画失败: {exc}"
                     layer_arr = self._extract_layer(img_arr, mask)
             else:
-                layer_arr = self._extract_layer(img_arr, mask)
+                layer_arr = self._extract_layer(img_arr, soft_masks.get(part, mask))
 
             if part in self.FACE_PARTS and face_features.any():
                 layer_arr = self._erase_features(layer_arr, mask, face_features)
@@ -413,18 +499,54 @@ class LayerComposer:
                 "mean_color": mean_color,
                 "occluded_by": list(occluded_by),
                 "completed": completed,
+                # 补全证据：面积可核对；失败/被守卫拦下时该层必须人工复核。
+                "completed_pixels": completed_pixels,
+                "completion_rejected": completion_rejected,
+                "status": ("completed" if completed
+                           else "manual_required" if completion_rejected else None),
+                "provenance": ("amodal_completion" if completed
+                               else "amodal_untrusted" if completion_rejected else None),
             }
             log.debug(
                 f"  layer {part:14s} pixels={layers[part]['pixel_count']:>7d} "
                 f"bbox={bbox} completed={completed}"
             )
 
+        self._complete_occluded_irises(layers, img_arr, h, w)
+
         synthesized = self.synthesize_face_geometry(layers, h, w, out)
         if synthesized:
             log.info(f"合成表情图层（眼睑/口内）：{synthesized}")
 
+        # 来源记账：拆分/合成出来的层不能冒充检测结果。检测层由调用方（sam2_gd
+        # 的 parts_report）补 provenance/confidence；这里只负责把「相对输入新增」
+        # 的层标成 derived，并给每层留下可追溯的 source_mask。
+        for part, info in layers.items():
+            info.setdefault("source_mask", part)
+            if part in source_names and part not in synthesized:
+                continue
+            info.setdefault(
+                "provenance",
+                "synthesized" if part in synthesized else "derived_geometry",
+            )
+            info.setdefault("status", "derived")
+            info.setdefault("derived", True)
+
         if depth_map is not None:
             attach_depths(layers, part_masks, depth_map)
+
+        provenance = {name: {
+            "bbox": list(info["bbox"]),
+            "origin": [0, 0],
+            "synthesized": bool(info.get("synthesized") or info.get("completed")),
+            "alpha_checksum": hashlib.sha256(
+                np.asarray(Image.open(info["path"]).convert("RGBA"))[:, :, 3].tobytes()
+            ).hexdigest(),
+        } for name, info in layers.items()}
+        (out / "layer_provenance.json").write_text(
+            json.dumps({"layers": provenance}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
         log.success(f"Composed {len(layers)} layers into {out}")
         return layers
@@ -742,22 +864,48 @@ class LayerComposer:
     def _synthesize_mouth_cavity(self, layers: Dict[str, Dict],
                                  sources: List[str], h: int,
                                  w: int) -> Optional[np.ndarray]:
-        """按嘴线形状生成口内层：轮廓与嘴唇**完全重合**，静止时不可见。"""
+        """按嘴唇**内侧**生成口内层：几何比嘴唇小一圈，静止时被嘴唇盖住。
+
+        旧实现直接把嘴唇整块 alpha 复制过去，导致 mouth_cavity 与 mouth 的
+        bbox、像素数完全相同（实测 161×134 / 13,129 两者一致）——分层列表里
+        出现两条同尺寸图层，张开时整片嘴唇都会变成口腔色。改为内缩区域；
+        缩不出足够面积就不生成，宁可没有口内层，也不留一层的复制品。
+        """
         mouth = self._alpha_over([self._layer_array(layers, n) for n in sources], h, w)
         if mouth is None:
             return None
-        solid = mouth[..., 3] >= 250
-        if not solid.any():
+        mask = mouth[..., 3] >= 128
+        area = int(mask.sum())
+        if area < 12:
             return None
-        line = np.median(mouth[solid][:, :3], axis=0).astype(np.float32)
+        interior = self._erode_mask(mask, 2)
+        if interior.sum() < max(8, int(area * 0.12)):
+            interior = self._erode_mask(mask, 1)
+        if interior.sum() < max(8, int(area * 0.08)):
+            # 嘴太细（闭口的一条线）时没有可信的「内部」，不生成重复层。
+            return None
+        line = np.median(mouth[mask][:, :3], axis=0).astype(np.float32)
         # 墨线多为近黑：往暖红抬，得到"口腔内侧"而不是第二条黑线。
         warm = np.array([140.0, 56.0, 56.0], dtype=np.float32)
         ratio = min(1.0, max(0.0, float(self.MOUTH_CAVITY_WARMTH)))
         colour = np.clip(line * (1.0 - ratio) + warm * ratio, 0, 255).astype(np.uint8)
         cavity = np.zeros((h, w, 4), dtype=np.uint8)
-        cavity[solid, :3] = colour
-        cavity[solid, 3] = 255
+        cavity[interior, :3] = colour
+        cavity[interior, 3] = 255
         return cavity
+
+    @staticmethod
+    def _erode_mask(mask: np.ndarray, radius: int = 1) -> np.ndarray:
+        """按 4 邻域做二值腐蚀（纯 numpy，避免为了 1px 内缩引入 opencv 依赖）。"""
+        out = mask.astype(bool)
+        for _ in range(max(0, int(radius))):
+            nxt = out.copy()
+            nxt[1:, :] &= out[:-1, :]
+            nxt[:-1, :] &= out[1:, :]
+            nxt[:, 1:] &= out[:, :-1]
+            nxt[:, :-1] &= out[:, 1:]
+            out = nxt
+        return out
 
     def _draw_order(self, names: List[str]) -> List[str]:
         """按 ``STANDARD_LAYER_ORDER`` 排序（越靠后 = 越靠前）。"""
@@ -796,6 +944,135 @@ class LayerComposer:
         if not path or not Path(path).is_file():
             return None
         return np.array(Image.open(path).convert("RGBA"))
+
+    #: 虹膜「核心」高宽比低于此值，说明被刘海/睫毛遮掉了一大半。
+    #: 注意用的是原图高饱和像素的 bbox，而不是图层 bbox：图层 bbox 里混着
+    #: 睫毛/眼线，宽高等于整个眼窝（实测 64×61），拿它当虹膜尺寸会把补全
+    #: 画成一整块盖住眼睛和刘海的大圆盘。
+    IRIS_MIN_ASPECT = 0.55
+    #: 核心像素的判定下限：饱和度与亮度。都取"虹膜本体"而不是睫毛/皮肤。
+    IRIS_CORE_SAT = 0.30
+    IRIS_CORE_BRIGHT = 80
+    #: 一侧至少要有这么多核心像素才认为它给出了可信的虹膜尺寸；
+    #: 不足则不补（宁可有缝，也不要凭 10 个像素造一块假虹膜）。
+    IRIS_MIN_CORE_PIXELS = 40
+
+    def _complete_occluded_irises(self, layers: Dict[str, Dict], img_arr: np.ndarray,
+                                  h: int, w: int) -> None:
+        """被遮挡的虹膜按「对侧虹膜尺寸 + 虹膜饱和色」补成完整椭圆。
+
+        现场：刘海压住右眼，``irides_right`` 只剩 50×15 的一条，左眼是
+        64×61。Live2D 里虹膜应在刘海层之下完整存在，缺一块会让眨眼/闭眼时
+        右侧出现空洞。
+
+        几何只信**原图里的高饱和虹膜像素**：一侧被遮住时，未遮挡的对侧给出
+        真实虹膜尺寸，本侧可见的那条给出水平中心与底边（虹膜坐在下眼睑上）。
+        补出来的椭圆因此落在真实虹膜大小内，不会盖到眼白/刘海。
+        """
+        sides = ("left", "right")
+        for side in sides:
+            if not isinstance(layers.get(f"irides_{side}"), dict):
+                return  # 缺一侧就不补：没有参照比例，补出来只会更假
+
+        boxes = {s: tuple(layers[f"irides_{s}"]["bbox"]) for s in sides}
+        cores = {s: self._iris_core(img_arr, boxes[s]) for s in sides}
+        if any(core is None for core in cores.values()):
+            # 原图里认不出虹膜配色（灰瞳/强滤镜/坐标错位）时不补：
+            # 没有可信参照，补出来的只会是凭空一块色块。
+            log.debug(
+                "跳过虹膜补全：虹膜核心像素不足 "
+                f"{sorted(s for s, c in cores.items() if c is None)}"
+            )
+            return
+
+        ref_side = max(sides, key=lambda s: cores[s]["bbox"][3] - cores[s]["bbox"][1])
+        ref = cores[ref_side]["bbox"]
+        ref_w = ref[2] - ref[0] + 1
+        ref_h = ref[3] - ref[1] + 1
+        iris_colour = np.median(
+            np.concatenate([c["pixels"] for c in cores.values()]), axis=0
+        ).astype(np.uint8)
+
+        yy, xx = np.mgrid[0:h, 0:w]
+        for side in sides:
+            own = cores[side]["bbox"]
+            own_w, own_h = own[2] - own[0] + 1, own[3] - own[1] + 1
+            if own_h / max(1, own_w) >= self.IRIS_MIN_ASPECT:
+                continue  # 这一侧本来就完整
+            if own_h >= ref_h * 0.6:
+                # 缺口不够大就不补。**透视**是这里的现实风险：3/4 侧脸时远侧
+                # 眼睛本来就比近侧小（实测右眼 508×199~536×219 vs 左眼
+                # 437×174~500×236），按对侧尺寸"补全"会把它放大成一只假眼。
+                continue
+
+            info = layers[f"irides_{side}"]
+            radius_x = ref_w / 2.0
+            radius_y = ref_h / 2.0
+            cx = (own[0] + own[2]) / 2.0
+            cy = own[3] - radius_y  # 底边对齐可见核心底边（坐在下眼睑上）
+            ellipse = ((xx - cx) / max(radius_x, 1.0)) ** 2 + (
+                (yy - cy) / max(radius_y, 1.0)
+            ) ** 2 <= 1.0
+
+            arr = np.array(Image.open(info["path"]).convert("RGBA"))
+            visible = arr[..., 3] > 0
+            fill = ellipse & ~visible
+            if int(fill.sum()) < 20:
+                continue
+            arr[fill, :3] = iris_colour
+            arr[fill, 3] = 255
+            Image.fromarray(arr, "RGBA").save(info["path"])
+
+            pixels = arr[..., 3] > 0
+            ys, xs = np.where(pixels)
+            info["bbox"] = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
+            info["size"] = (
+                int(info["bbox"][2] - info["bbox"][0] + 1),
+                int(info["bbox"][3] - info["bbox"][1] + 1),
+            )
+            info["pixel_count"] = int(pixels.sum())
+            info["mean_color"] = tuple(
+                int(c) for c in arr[pixels][:, :3].mean(axis=0)
+            )
+            log.info(
+                f"虹膜补全：irides_{side} 可见 {own_w}×{own_h} → 补齐 "
+                f"{int(fill.sum())} 像素（{info['size'][0]}×{info['size'][1]}）"
+            )
+
+    def _iris_core(self, img_arr: np.ndarray, box: tuple) -> Optional[dict]:
+        """在原图的一只眼眶里取出「高饱和虹膜像素」的 bbox 与像素池。
+
+        返回 ``{"bbox": (x0, y0, x1, y1), "pixels": (N, 3) float32}``；
+        像素太少（低于 ``IRIS_MIN_CORE_PIXELS``）时返回 ``None``，表示这一侧
+        没有可信的虹膜参照。
+        """
+        rgb = np.asarray(img_arr)
+        if rgb.ndim != 3 or rgb.shape[2] < 3:
+            return None
+        rgb = rgb[..., :3]
+        height, width = rgb.shape[:2]
+        x0, y0, x1, y1 = (int(v) for v in box)
+        x0, x1 = max(0, min(x0, width - 1)), max(0, min(x1, width - 1))
+        y0, y1 = max(0, min(y0, height - 1)), max(0, min(y1, height - 1))
+        patch = rgb[y0 : y1 + 1, x0 : x1 + 1].reshape(-1, 3).astype(np.float32)
+        if patch.size == 0:
+            return None
+
+        hi = patch.max(axis=1)
+        lo = patch.min(axis=1)
+        sat = (hi - lo) / np.clip(hi, 1.0, None)
+        keep = (sat >= self.IRIS_CORE_SAT) & (hi >= self.IRIS_CORE_BRIGHT)
+        if int(keep.sum()) < self.IRIS_MIN_CORE_PIXELS:
+            return None
+
+        local_h, local_w = y1 - y0 + 1, x1 - x0 + 1
+        mask = keep.reshape(local_h, local_w)
+        ys, xs = np.where(mask)
+        bbox = (
+            x0 + int(xs.min()), y0 + int(ys.min()),
+            x0 + int(xs.max()), y0 + int(ys.max()),
+        )
+        return {"bbox": bbox, "pixels": patch[keep]}
 
     def _store_layer(self, layers: Dict[str, Dict], dest: Path, name: str,
                      layer_arr: np.ndarray, rest_opacity: float = 1.0) -> Dict:
@@ -986,10 +1263,50 @@ class LayerComposer:
 
     @staticmethod
     def _extract_layer(img_arr: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        """Return an ``(H, W, 4)`` uint8 array with only ``mask`` pixels."""
+        """Return an RGBA layer, accepting boolean or normalized soft alpha masks."""
+        weights = np.asarray(mask)
         out = np.zeros(img_arr.shape, dtype=np.uint8)
-        out[mask] = img_arr[mask]
+        if weights.dtype == np.bool_:
+            out[weights] = img_arr[weights]
+            return out
+        if weights.shape != img_arr.shape[:2]:
+            raise ValueError("mask shape must match image")
+        scale = 255.0 if weights.size and float(np.nanmax(weights)) <= 1.0 else 1.0
+        alpha = np.clip(np.rint(weights.astype(np.float64) * scale), 0, 255).astype(np.uint8)
+        out[..., :3] = img_arr[..., :3]
+        out[..., 3] = np.minimum(img_arr[..., 3], alpha)
         return out
+
+    @staticmethod
+    def partition_alpha(img_arr: np.ndarray, first: np.ndarray,
+                        second: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        first_alpha = np.clip(np.rint(np.asarray(first, dtype=np.float64) * 255), 0, 255).astype(np.uint8)
+        second_alpha = 255 - first_alpha
+        outputs = []
+        for alpha in (first_alpha, second_alpha):
+            layer = np.zeros_like(img_arr, dtype=np.uint8)
+            layer[..., :3] = img_arr[..., :3]
+            layer[..., 3] = alpha
+            outputs.append(layer)
+        return outputs[0], outputs[1]
+
+    @staticmethod
+    def composite_partition(layers: Tuple[np.ndarray, ...]) -> np.ndarray:
+        if not layers:
+            raise ValueError("layers must not be empty")
+        rgba = np.zeros_like(layers[0], dtype=np.float64)
+        for layer in layers:
+            alpha = layer[..., 3:4].astype(np.float64) / 255.0
+            previous_alpha = rgba[..., 3:4] / 255.0
+            combined_alpha = alpha + previous_alpha
+            numerator = (layer[..., :3] * alpha
+                         + rgba[..., :3] * previous_alpha)
+            rgba[..., :3] = np.divide(
+                numerator, combined_alpha,
+                out=np.zeros_like(numerator), where=combined_alpha > 0,
+            )
+            rgba[..., 3:4] = combined_alpha * 255
+        return np.clip(np.rint(rgba), 0, 255).astype(np.uint8)
 
     @staticmethod
     def _dilate(mask: np.ndarray, radius: int) -> np.ndarray:
@@ -1003,6 +1320,156 @@ class LayerComposer:
         return cv2.dilate(mask.astype(np.uint8), kernel).astype(bool)
 
     @staticmethod
+    def _close(mask: np.ndarray, radius: int) -> np.ndarray:
+        """闭运算：先膨胀后腐蚀，把 ≤2px 的缝接起来而不改变外轮廓大小。"""
+        try:
+            import cv2  # type: ignore
+        except ImportError:  # pragma: no cover
+            return mask
+        size = max(1, int(radius) * 2 + 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+        closed = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+        return closed.astype(bool)
+
+    @staticmethod
+    def _drop_dust(mask: np.ndarray, min_px: int) -> np.ndarray:
+        """丢掉面积小于 ``min_px`` 的孤立连通块。"""
+        try:
+            import cv2  # type: ignore
+        except ImportError:  # pragma: no cover
+            return mask
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(
+            mask.astype(np.uint8), connectivity=8)
+        keep = np.zeros(mask.shape, dtype=bool)
+        for idx in range(1, num):
+            if stats[idx, cv2.CC_STAT_AREA] >= min_px:
+                keep |= labels == idx
+        return keep
+
+    def _stabilize_masks(
+        self,
+        masks: Dict[str, np.ndarray],
+        size: Tuple[int, int],
+    ) -> Dict[str, np.ndarray]:
+        """接合碎片、剔除碎层与看不见的层。
+
+        两个实测问题都出在这一步之前：
+        * SAM 把一条缎带切成多块（相距 1~2px），导出后像被撕开；
+        * ``split_garment_details`` 会留下 74px 的 ``skirt_hem`` 这种空壳层。
+
+        五官层豁免：鼻子只有十几个像素、睫毛是细线，任何"最小面积"规则都会
+        把它们误杀，闭运算也会把睫毛粘成一坨。
+        """
+        h, w = size
+        area_floor = int(self.MIN_LAYER_AREA_RATIO * h * w)
+        # 进入缝合/剪枝之前的原始掩码：用来区分「原画本来就有重叠」和「本步骤
+        # 新长出来的重叠」（见 _drop_growth_into_front 的说明）。
+        originals: Dict[str, np.ndarray] = {
+            name: np.asarray(mask, dtype=bool).copy()
+            for name, mask in masks.items()
+            if np.asarray(mask).shape == (h, w)
+        }
+        kept: Dict[str, np.ndarray] = {}
+        dropped: List[str] = []
+        bridged: List[str] = []
+        skirt_parts = {
+            "clothes_bottom", "skirt", "skirt_body", "skirt_front",
+            "skirt_back", "bottomwear", "bottomwear_front", "bottomwear_back",
+            "skirt_inner", "skirt_hem", "skirt_hem_L", "skirt_hem_R",
+            "waistband",
+        }
+        skirt_original: Dict[str, np.ndarray] = {}
+        for name, mask in masks.items():
+            if name in skirt_parts:
+                source = np.asarray(mask, dtype=bool)
+                if source.shape == (h, w):
+                    skirt_original[name] = source.copy()
+        for part, mask in masks.items():
+            m = np.asarray(mask, dtype=bool)
+            if m.shape != (h, w) or not m.any():
+                dropped.append(part)
+                continue
+            if part in self.FACE_FEATURE_PARTS or part in self.RIG_REQUIRED_PARTS:
+                kept[part] = m
+                continue
+            if part in skirt_parts:
+                if int(m.sum()) < area_floor:
+                    dropped.append(part)
+                    continue
+                kept[part] = m
+                continue
+            if self.MASK_CLOSE_RADIUS > 0:
+                closed = self._close(m, self.MASK_CLOSE_RADIUS)
+                if int(closed.sum()) > int(m.sum()):
+                    bridged.append(part)
+                m = closed
+            total = int(m.sum())
+            if total <= 0:
+                dropped.append(part)
+                continue
+            m = self._drop_dust(m, max(self.DUST_MIN_PX, int(self.DUST_AREA_RATIO * total)))
+            if int(m.sum()) < area_floor:
+                dropped.append(part)
+                continue
+            kept[part] = m
+        if skirt_original:
+            original_union = np.logical_or.reduce(list(skirt_original.values()))
+            kept_skirt = [mask for name, mask in kept.items() if name in skirt_parts]
+            source_union = np.logical_or.reduce(kept_skirt) if kept_skirt else np.zeros((h, w), dtype=bool)
+            missing = original_union & ~source_union
+            if missing.any():
+                for part in ("clothes_bottom", "skirt", "skirt_body", "skirt_front", "bottomwear"):
+                    source = skirt_original.get(part)
+                    if part in kept and source is not None:
+                        kept[part] |= source & missing
+                        break
+        if bridged:
+            log.info(f"Bridged split fragments: {sorted(bridged)}")
+        if dropped:
+            log.info(f"Dropped empty/negligible layers (<{area_floor}px): {sorted(dropped)}")
+        return self._drop_growth_into_front(kept, originals, (h, w))
+
+    def _drop_growth_into_front(
+        self,
+        kept: Dict[str, np.ndarray],
+        originals: Dict[str, np.ndarray],
+        size: Tuple[int, int],
+    ) -> Dict[str, np.ndarray]:
+        """缝合/闭运算不得把后排层长进它前面的层。
+
+        闭运算会把细缝桥接起来，副作用是让后排层向外长 1~2px。若这几像素原本
+        属于**画在它前面**的层，就凭空造出了一处重叠；而遮挡图把重叠解读成
+        「后面的层被整块前排挡住」，于是脖子被判定遮挡区 76 倍、补画被守卫
+        拦下，最终在清单里记成缺件（实测真实立绘：缝合前 neck 838px 与上衣
+        零重叠，缝合后 960px、重叠 152px）。
+
+        这里只退回**本步骤新长出来的**像素：原画本来就存在的重叠保留原样，
+        因为那是「谁在谁后面」的真实证据（后发被脸压住正是靠它触发补画）。
+        """
+        h, w = size
+        order = self.STANDARD_LAYER_ORDER
+        known = [n for n in order if n in kept]
+        unknown = sorted(n for n in kept if n not in order)
+        draw_seq = known + unknown
+
+        front_owned = np.zeros((h, w), dtype=bool)
+        result: Dict[str, np.ndarray] = {}
+        for name in reversed(draw_seq):
+            current = np.asarray(kept[name], dtype=bool)
+            original = originals.get(name)
+            if original is not None:
+                grown = current & ~original
+                if grown.any() and front_owned.any():
+                    current = current & ~(grown & front_owned)
+                front_owned |= original
+            else:
+                front_owned |= current
+            if current.any():
+                result[name] = current
+        result = {name: result[name] for name in kept if name in result}
+        return result
+
+    @staticmethod
     def _erase_features(layer_arr: np.ndarray, mask: np.ndarray,
                         feature_mask: np.ndarray) -> np.ndarray:
         """把脸层里被五官盖住的像素换成周围肤色（alpha 不变）。
@@ -1010,8 +1477,26 @@ class LayerComposer:
         为什么不直接把五官区域挖成透明：眨眼/闭嘴时会把脸上的洞露出来，透出背景。
         这里用「脸层自身可见像素」作为唯一已知区域做 inpaint，填充色因此只会来自
         额头/脸颊的皮肤，不会把头发或背景的颜色渗进来。
+
+        只擦「皮肤 / 深色墨线 / 高饱和虹膜」，**亮而低饱和的发丝原样保留**：
+        脸层是实心脸形，刘海被画在脸层后面时，那一块存的就是发色；不加这条
+        约束会把刘海 inpaint 成肤色，在额头上涂出一块白斑。
         """
         holes = np.asarray(mask, dtype=bool) & np.asarray(feature_mask, dtype=bool)
+        if not holes.any():
+            return layer_arr
+        rgb = layer_arr[..., :3]
+        lum = (0.299 * rgb[..., 0] + 0.587 * rgb[..., 1]
+               + 0.114 * rgb[..., 2]).astype(np.float32)
+        hi = rgb.max(axis=2).astype(np.float32)
+        lo = rgb.min(axis=2).astype(np.float32)
+        sat = (hi - lo) / np.clip(hi, 1.0, None)
+        hair_like = (
+            (lum >= LayerComposer.FEATURE_ERASE_INK_LUM)
+            & (sat < LayerComposer.FEATURE_ERASE_HAIR_SAT)
+            & ~face_detect.skin_mask(rgb)
+        )
+        holes &= ~hair_like
         if not holes.any():
             return layer_arr
         known = np.asarray(mask, dtype=bool) & ~holes

@@ -57,6 +57,15 @@ type GenerateImageResponse struct {
 	// GenerateWithCharacter 此前只把它写到 stderr，界面上只剩一张假立绘。
 	Fallback       bool   `json:"fallback,omitempty"`
 	FallbackReason string `json:"fallback_reason,omitempty"`
+	// Incomplete：立绘是真的 AI 出图，但后续步骤（分层/绑定/PSD）失败。
+	// 与 Fallback 的区别：Fallback 是「图本身是占位图」，Incomplete 是
+	// 「图是真的、链路没跑完」。界面必须分别说明，否则用户会把可用的立绘
+	// 当成又一次假成功，或者把真图当成占位图丢掉。
+	Incomplete       bool   `json:"incomplete,omitempty"`
+	IncompleteReason string `json:"incomplete_reason,omitempty"`
+	// SizeDowngraded：上游把请求尺寸降了（免密通道约 0.6MP 上限）。
+	// 与 Fallback 无关：图是真的，只是细节量少于请求值。
+	SizeDowngraded bool `json:"size_downgraded,omitempty"`
 }
 
 // PSD分层请求
@@ -254,6 +263,13 @@ type GenerateRequest struct {
 	Model string `json:"model,omitempty"`
 	// 本地引擎的 LoRA 文件名（角色一致性）。留空 = 不注入。
 	Lora string `json:"lora,omitempty"`
+	// 多候选择优：生成 N 张后按 QA/剪影/居中评分选优；1 或空 = 关闭（默认）。
+	Candidates int `json:"candidates,omitempty"`
+	// 生成后是否把图规范成目标画幅的立绘画布。nil = 默认开启。
+	NormalizeCanvas *bool `json:"normalize_canvas,omitempty"`
+	// 4K 画布：规范化阶段把立绘等比放大到该高度（0/空 = 保持生成尺寸）。
+	// 分层、PSD、moc3 的精细度取决于画布尺寸，导出高质量模型时传 4096。
+	CanvasHeight int `json:"canvas_height,omitempty"`
 }
 
 // ChatRequest LLM聊天请求

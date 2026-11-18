@@ -47,12 +47,19 @@ class UVUnwrapper:
     # Public API
     # ------------------------------------------------------------------
 
-    def pack_meshes(self, meshes: Dict[str, Dict]) -> Dict:
+    def pack_meshes(
+        self,
+        meshes: Dict[str, Dict],
+        content_boxes: Optional[Dict[str, Tuple[int, int, int, int]]] = None,
+    ) -> Dict:
         """Pack all meshes into one or more atlas pages.
 
         Args:
             meshes: dict of ``{layer_name: mesh_dict}`` where each mesh
                     contains ``width`` and ``height`` keys.
+            content_boxes: optional ``{layer: (x0, y0, w, h)}`` alpha 包围盒。
+                    给了就按裁剪后的尺寸打包（与 ``TextureAtlas.pack`` 一致），
+                    否则按网格的画布尺寸 —— 整画布图层会让一层占满一整页。
 
         Returns:
             dict with keys:
@@ -65,11 +72,16 @@ class UVUnwrapper:
             self._uv_data = {}
             return {"pages": [], "uvs": {}, "atlas_size": (self.atlas_size, self.atlas_size)}
 
+        boxes = content_boxes or {}
+
         # Build rectangle list sorted by height descending (tallest first)
         rects: List[Tuple[str, int, int]] = []
         for name, mesh in meshes.items():
             w = int(mesh.get("width", 0))
             h = int(mesh.get("height", 0))
+            box = boxes.get(name)
+            if box:
+                w, h = int(box[2]), int(box[3])
             if w <= 0 or h <= 0:
                 log.debug(f"Skipping mesh {name} with zero dimensions ({w}x{h})")
                 continue
@@ -104,10 +116,17 @@ class UVUnwrapper:
             for name, (x, y, w, h) in placements.items():
                 # Remove padding for actual content bounds
                 px = self.padding
+                box = boxes.get(name)
+                if not box:
+                    mesh = meshes[name]
+                    box = (0, 0, int(mesh.get("width", 0)), int(mesh.get("height", 0)))
                 uvs[name] = {
                     "page": page_idx,
                     # Pixel coordinates within atlas
                     "rect_px": (x, y, w - px, h - px),
+                    # 裁剪框（画布坐标）：下游据此把画布坐标映射到这块 UV
+                    "bbox": (float(box[0]), float(box[1]),
+                             float(box[2]), float(box[3])),
                     # UV coordinates (0-1) — top-left origin (Live2D style)
                     "u0": x / self.atlas_size,
                     "v0": y / self.atlas_size,

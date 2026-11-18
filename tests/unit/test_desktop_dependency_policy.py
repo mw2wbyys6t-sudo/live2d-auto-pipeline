@@ -26,6 +26,11 @@ _CI_FLOOR_ANCHOR = 'pip install "Pillow'
 def _time_limit(seconds: float):
     """给纯 CPU 调用加硬上限：正则回溯不会自己让出 GIL，只能靠 SIGALRM。"""
 
+    if not hasattr(signal, "SIGALRM"):
+        # Windows 没有 SIGALRM；没有硬上限就不假装有，交由 skipif 跳过该用例。
+        yield
+        return
+
     def _raise(_signum, _frame):
         raise AssertionError(f"超过 {seconds}s 未完成（疑似正则灾难性回溯）")
 
@@ -126,6 +131,10 @@ def test_capability_installer_gpu_spec_matches_manifest():
     assert f"{directml[0].name}{directml[0].specifier}" == match.group(1)
 
 
+@pytest.mark.skipif(
+    not hasattr(signal, "SIGALRM"),
+    reason="硬上限依赖 SIGALRM（POSIX）；Windows 上保留原因说明，由 CI 的 Linux 任务守护",
+)
 def test_ci_floor_extraction_survives_many_backslash_continuations():
     """提取 CI 下限不能依赖跨行可回溯正则。
 

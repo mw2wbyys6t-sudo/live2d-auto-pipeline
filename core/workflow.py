@@ -28,6 +28,7 @@ from core.version import __version__, FULL_VERSION_STRING
 from core.config import config
 from core.logger import get_logger
 from core.image_gen.router import ProviderRouter, get_router
+from core.image_gen.registry import provider_choices
 from core.segment_engine.kmeans import KMeansLayerer
 from core.segment_engine.semantic import SemanticLayerer
 from core.segment_engine.composer import LayerComposer
@@ -50,6 +51,7 @@ log = get_logger("workflow")
 def derive_deployment_status(
     rigging: Optional[Dict[str, Any]],
     layer_order_issues: Optional[List[Dict[str, Any]]] = None,
+    layer_readiness: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """从 rigging 阶段结果推导部署结论（单一真相源）。
 
@@ -63,14 +65,21 @@ def derive_deployment_status(
     Args:
         rigging: ``result["steps"]["rigging"]``，需带 ``moc3`` 摘要。
         layer_order_issues: ``check_layer_order`` 的返回；``None`` 表示未测量。
+        layer_readiness: 分层清单的 readiness 摘要，键为 ``rig_ready`` /
+            ``quality_ready`` / ``missing_required`` / ``manual_required`` /
+            ``psd_success`` / ``psd_error``。``None`` 表示未测量（不据此判）。
+            ``rig_ready=False``（缺件或必需部件需人工复核）与
+            ``psd_success=False``（未交付真实 PSD）都会阻塞：内核接受一个
+            层数不全的 moc3 不说明它可交付。
 
     Returns:
         ``runtime_verified`` / ``deployment_ready`` / ``artifact_type`` /
-        ``deployment_blockers``。未就绪时 blocker 逐字取自实测原因，
-        不再是那句与内核结论无关的静态文案。
+        ``deployment_blockers`` / ``rig_ready`` / ``quality_ready``。未就绪时
+        blocker 逐字取自实测原因，不再是那句与内核结论无关的静态文案。
     """
     moc3 = (rigging or {}).get("moc3") or {}
     core_ready = bool(moc3.get("runtime_ready"))
+    readiness = layer_readiness or {}
 
     blockers: List[str] = []
     if not core_ready:
@@ -81,6 +90,14 @@ def derive_deployment_status(
     for issue in (layer_order_issues or []):
         blockers.append(
             issue.get("message") or f"层序错位: {issue.get('layer')}")
+    if readiness.get("rig_ready") is False:
+        blocked_parts = (readiness.get("missing_required")
+                         or readiness.get("manual_required") or [])
+        detail = f"（{'、'.join(map(str, blocked_parts))}）" if blocked_parts else ""
+        blockers.append(f"分层未达到 rig_ready{detail}")
+    if readiness.get("psd_success") is False:
+        blockers.append(
+            "PSD 未成功写出：" + (readiness.get("psd_error") or "原因未知"))
 
     ready = core_ready and not blockers
     return {
@@ -88,6 +105,9 @@ def derive_deployment_status(
         "deployment_ready": ready,
         "artifact_type": "deployable_model" if ready else "preparation_bundle",
         "deployment_blockers": blockers,
+        # readiness 单独暴露：让调用方能区分「能部署」与「高质量」。
+        "rig_ready": readiness.get("rig_ready"),
+        "quality_ready": readiness.get("quality_ready"),
     }
 
 
@@ -147,6 +167,9 @@ class WorkflowEngine:
         export_live2d: bool = False,
         image_model: str = "",
         lora: str = "",
+        candidates: int = 1,
+        normalize_canvas: bool = True,
+        canvas_height: int = 0,
     ):
         """Initialize the workflow engine.
 
@@ -174,8 +197,16 @@ class WorkflowEngine:
         # 这两个值最终会出现在生成记录里，多模型并存时才解释得清"这张图谁画的"。
         self.image_model = (image_model or "").strip()
         self.lora = (lora or "").strip()
+        # 多候选择优：1 = 关闭（默认）。上限 4，避免一次点击把免费额度刷光。
+        self.candidates = max(1, min(int(candidates or 1), 4))
+        # 生成后是否把图规范成「居中留边、目标画幅」的立绘画布。
+        self.normalize_canvas = bool(normalize_canvas)
         self.width = width
         self.height = height
+        # 4K 画布：>0 时把规范化后的立绘等比放大到该高度（宽度按原画幅比例推算）。
+        # 生成侧受上游免费通道限制只有约 0.6MP，分层/PSD/moc3 的精细度取决于画布，
+        # 所以这里用高质量重采样把画布抬到目标高度，而不是改请求尺寸。
+        self.canvas_height = max(0, int(canvas_height or 0))
         self.use_semantic_segmentation = use_semantic_segmentation
         #: 传给 SemanticLayerer 的 model_type；"sam2_gd" = GroundingDINO + SAM2。
         #: 该后端不降级成颜色启发式：缺模型/权重就抛 ModelUnavailable，
@@ -239,6 +270,17 @@ class WorkflowEngine:
         """Set progress callback: cb(state, message, percent_0_100)."""
         self._progress_cb = cb
 
+    def _target_canvas_size(self) -> Tuple[int, int]:
+        """规范化画布的目标尺寸 ``(width, height)``。
+
+        默认沿用生成尺寸；指定 ``canvas_height`` 时按该高度等比放大，
+        宽度由生成宽高比推算 —— 画幅比例保持与生成一致，只提升分辨率。
+        """
+        if self.canvas_height <= 0:
+            return self.width, self.height
+        aspect = self.width / max(1, self.height)
+        return max(1, int(round(self.canvas_height * aspect))), self.canvas_height
+
     def _set_state(self, new_state: str, message: str = "", percent: float = 0) -> None:
         self.state = new_state
         try:
@@ -265,22 +307,45 @@ class WorkflowEngine:
         任一份不可得时传 ``None`` 跳过比对 —— 不把「测不到」当成「通过」，
         也不据此把整个产物判失败（可选依赖缺失不该误报错层）。
         """
-        psd_order: Optional[List[str]] = None
-        psd_path = (psd_result or {}).get("psd_path") or ""
-        if psd_path and Path(psd_path).is_file():
-            psd_order = read_psd_layer_order(psd_path) or None
-
         render_order: Optional[List[str]] = None
         meshes = (rig_result or {}).get("meshes")
         if isinstance(meshes, dict) and meshes:
             # 字典插入顺序就是 moc3 的 draw_order（build() 里按喂入顺序枚举）。
             render_order = list(meshes.keys())
 
-        return check_layer_order(
+        issues = check_layer_order(
             LayerComposer.STANDARD_LAYER_ORDER,
-            psd_order=psd_order,
+            psd_order=None,
             render_order=render_order,
         )
+
+        psd_path = (psd_result or {}).get("psd_path") or ""
+        if psd_path and Path(psd_path).is_file():
+            manifest_path = Path(psd_path).parent / "layer_manifest.json"
+            try:
+                import json
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                group_rank = {
+                    group["id"]: int(group.get("order", 0))
+                    for group in manifest.get("groups", [])
+                }
+                layer_rank = {
+                    name: index for index, name
+                    in enumerate(LayerComposer.STANDARD_LAYER_ORDER)
+                }
+                layer_group = {
+                    layer["id"]: group_rank.get(layer.get("group"), len(group_rank))
+                    for layer in manifest.get("layers", [])
+                }
+                psd_standard = sorted(
+                    (name for name in layer_group if name in layer_rank),
+                    key=lambda name: (layer_group[name], layer_rank[name]),
+                )
+                psd_order = read_psd_layer_order(psd_path) or None
+                issues.extend(check_layer_order(psd_standard, psd_order=psd_order))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                log.warning(f"PSD 层序契约读取失败: {exc}")
+        return issues
 
     def _cleanup_temp(self) -> None:
         """P1-2: Remove temporary files after workflow completion or failure."""
@@ -463,8 +528,71 @@ class WorkflowEngine:
             "method": layer_result.get("method", "kmeans"),
         })
         step["quality"] = self._score_layering_quality(layers_output, image)
+        if image is not None:
+            from core.qa.layer_reconstruction import verify_reconstruction
+            layer_arrays = {}
+            for path in Path(layers_output).glob("*.png"):
+                try:
+                    layer_arrays[path.stem] = np.asarray(Image.open(path).convert("RGBA"))
+                except Exception as exc:
+                    log.warning(f"无法读取分层图用于重建验证 {path}: {exc}")
+            try:
+                step["reconstruction"] = verify_reconstruction(
+                    layer_arrays, np.asarray(image.convert("RGBA")))
+            except Exception as exc:
+                step["reconstruction"] = {"error": str(exc)}
         result["steps"]["layering"] = step
         return step
+
+    def _export_layers(self, layers_output: str, layer_result: Dict[str, Any],
+                       image: Image.Image) -> Dict[str, Any]:
+        """先写 manifest，再以它为契约生成分组 PSD。
+
+        manifest 是 PSD 分组/坐标/顺序与 readiness 的唯一契约：先落盘再交给
+        ``PSDCreator``（写出后由 validator 重新读取对账）。顺序反过来，PSD 只会
+        留下平铺层名，组结构与来源证据在结果里无从追溯。
+        """
+        from core.segment_engine.layer_manifest import (
+            build_manifest,
+            source_for_method,
+            write_manifest,
+        )
+
+        source = source_for_method(layer_result.get("method", "kmeans"))
+        manifest = build_manifest(
+            layer_result.get("layers") or [],
+            source=source,
+            canvas=(image.width, image.height),
+            warnings=layer_result.get("warnings"),
+            eyebrow_evidence=layer_result.get("eyebrow_evidence"),
+        )
+        manifest_path = write_manifest(layers_output, manifest)
+        step = {
+            "path": manifest_path,
+            "schema_version": manifest.schema_version,
+            "source": manifest.source,
+            "canvas": dict(manifest.canvas),
+            "rig_ready": manifest.rig_ready,
+            "quality_ready": manifest.quality_ready,
+            "preview_ready": manifest.preview_ready,
+            "missing_required": list(manifest.missing_required),
+            "manual_required": list(manifest.manual_required),
+            "not_applicable": list(manifest.not_applicable),
+            "derived_parts": list(manifest.derived_parts),
+            "warnings": list(manifest.warnings),
+        }
+        if not manifest.rig_ready:
+            log.warning(
+                "分层未达到 rig_ready（缺件/需人工复核）: "
+                + (", ".join(manifest.missing_required) or "见 manifest warnings")
+            )
+
+        psd_result = self.psd_creator.create_psd(
+            layers_output,
+            str(Path(layers_output) / "character.psd"),
+            manifest_path=manifest_path,
+        )
+        return {"manifest": step, "psd": psd_result}
 
     def _score_layering_quality(self, layers_output: str,
                                 image: Optional[Image.Image]) -> Dict[str, Any]:
@@ -503,20 +631,29 @@ class WorkflowEngine:
         return quality
 
     def _local_engine_options(self) -> Dict[str, Any]:
-        """只把本地引擎认识的 `model` / `lora` 传下去。
+        """按 provider 过滤 `model` / `lora`。
 
-        为什么按 provider 过滤而不是无条件透传：`model` 在云端 provider 上
-        语义不同（那是它们的固定模型名），透传会混淆"用户以为换了模型"与
-        "provider 忽略了它"。空值不传，保持旧调用链的参数形态。
+        为什么按 provider 过滤而不是无条件透传：`model` 在不同上游语义不同
+        （本地引擎是底模文件名，pollinations 是模型档位，云端付费端点则是
+        设置页里固定的模型名）。这里只放行两类：
+
+        * 本地引擎：``model`` + ``lora``；
+        * pollinations：仅 ``model``（flux / turbo / kontext），且必须是
+          安全字符，避免把用户输入原样拼进上游 URL。
         """
-        local = {"comfyui", "sd_webui"}
-        if self.provider_name not in local:
-            return {}
         options: Dict[str, Any] = {}
-        if self.image_model:
-            options["model"] = self.image_model
-        if self.lora:
-            options["lora"] = self.lora
+        local = {"comfyui", "sd_webui"}
+        if self.provider_name in local:
+            if self.image_model:
+                options["model"] = self.image_model
+            if self.lora:
+                options["lora"] = self.lora
+            return options
+        if self.provider_name == "pollinations" and self.image_model:
+            import re
+
+            if re.fullmatch(r"[A-Za-z0-9._-]{1,40}", self.image_model):
+                options["model"] = self.image_model
         return options
 
     def run(
@@ -585,29 +722,63 @@ class WorkflowEngine:
                 self._set_state("generating", f"Generating character: {effective_prompt[:60]}...", 5)
                 safe_prompt = sanitize_prompt(effective_prompt)
                 timestamp = int(time.time())
-                gen_output = str(self.output_dir / f"character_{timestamp}.png")
-                # NOTE: gen_output is a final deliverable (the raw generated
-                # character image) — do NOT track it as temp; user may want it.
+                # NOTE: 生成图是最终交付物（用户可能要用），不要当临时文件清理。
+                options = self._local_engine_options()
+                best = None  # (score, gen_result, path)
+                candidate_records = []
+                for index in range(self.candidates):
+                    suffix = f"_{index}" if self.candidates > 1 else ""
+                    gen_output = str(self.output_dir / f"character_{timestamp}{suffix}.png")
+                    candidate_seed = None if seed is None else seed + index
+                    gen_result = self.router.generate(
+                        prompt=safe_prompt,
+                        output_path=gen_output,
+                        width=self.width,
+                        height=self.height,
+                        provider=self.provider_name,
+                        negative_prompt=effective_negative or None,
+                        seed=candidate_seed,
+                        auto_fallback=auto_fallback,
+                        **options,
+                    )
+                    score = 1.0
+                    if self.candidates > 1:
+                        from core.image_gen.selection import score_candidate
 
-                gen_result = self.router.generate(
-                    prompt=safe_prompt,
-                    output_path=gen_output,
-                    width=self.width,
-                    height=self.height,
-                    provider=self.provider_name,
-                    negative_prompt=effective_negative or None,
-                    seed=seed,
-                    auto_fallback=auto_fallback,
-                    **self._local_engine_options(),
-                )
-                character_path = gen_result.image_path
+                        score = score_candidate(Image.open(gen_result.image_path))
+                        candidate_records.append({
+                            "path": gen_result.image_path,
+                            "score": round(float(score), 4),
+                            "seed": candidate_seed,
+                        })
+                        log.info(f"Candidate {index + 1}/{self.candidates}: score={score:.3f}")
+                    if best is None or score > best[0]:
+                        best = (score, gen_result, gen_result.image_path)
+
+                _, gen_result, character_path = best
                 temp_generated = character_path
-                result["steps"]["generate"] = {
+                generate_step = {
                     "provider": gen_result.provider,
                     "model": gen_result.model,
                     "path": character_path,
                     "elapsed": gen_result.elapsed_seconds,
+                    "candidates": self.candidates,
                 }
+                # 上游可能偷偷降尺寸（免密通道约 0.6MP 上限）。记下**真实**
+                # 像素，响应与界面才不会再拿请求尺寸冒充产物尺寸。
+                if gen_result.width and gen_result.height:
+                    generate_step["width"] = gen_result.width
+                    generate_step["height"] = gen_result.height
+                    if gen_result.width < self.width or gen_result.height < self.height:
+                        generate_step["size_downgraded"] = True
+                        log.warning(
+                            f"上游降尺寸：请求 {self.width}×{self.height}，"
+                            f"实际 {gen_result.width}×{gen_result.height}；"
+                            "后续分层/锐化基于这张小图，画面细节会受限"
+                        )
+                if candidate_records:
+                    generate_step["candidate_scores"] = candidate_records
+                result["steps"]["generate"] = generate_step
                 # 「实际发送给模型的提示词」只认 provider 记录的那串（含风格标签）；
                 # 用户原文、合并角色一致性后的文本也一并留下，便于在界面里对照。
                 prompt_meta = gen_result.metadata or {}
@@ -622,6 +793,9 @@ class WorkflowEngine:
                     "mismatch": bool(prompt_meta.get("prompt_mismatch", False)),
                 }
                 log.success(f"Image generated: {character_path}")
+                # 立绘一落盘就记账：后续分层/绑定失败时，这份路径要能带出去，
+                # 否则调用方只能把已经画好的真图丢掉、换成占位图。
+                result["character_image"] = character_path
 
             # Load the character image
             character_img = Image.open(character_path).convert('RGBA')
@@ -661,12 +835,31 @@ class WorkflowEngine:
             # === Step 3: Image optimization ===
             self._set_state("optimizing", "Optimizing image (background removal, enhancement)", 45)
             optimized_img = self._optimize_image(character_img)
+            # 立绘规范化：取最大前景 → 居中留边 → 缩放到目标画幅 → 轻锐化。
+            # 分层/绑定都假设「角色完整居中」，这一步把生成模型的随机构图收口。
+            if self.normalize_canvas:
+                from core.utils.image_utils import normalize_character_canvas
+
+                # 目标画布：默认按生成尺寸；指定 --canvas-height 时按该高度等比放大。
+                target_w, target_h = self._target_canvas_size()
+                source_size = [optimized_img.width, optimized_img.height]
+                optimized_img = normalize_character_canvas(
+                    optimized_img, target_w, target_h
+                )
+                result["steps"]["normalize_canvas"] = {
+                    "size": [optimized_img.width, optimized_img.height],
+                    "upscaled_from": source_size,
+                    "target_height": target_h if self.canvas_height > 0 else 0,
+                }
+                log.info(
+                    f"Character canvas normalized: {optimized_img.width}×{optimized_img.height}"
+                )
             # Save optimized version (output artifact, not temp)
             timestamp = int(time.time())
             optimized_path = str(self.output_dir / f"optimized_{timestamp}.png")
             optimized_img.save(optimized_path)
             result["steps"]["optimize"] = {"path": optimized_path}
-            log.info("Image optimized: background removed, contrast enhanced")
+            log.info("Image optimized: background removed, canvas normalized")
 
             # === Step 4: Layer separation ===
             layers_output, layer_result = self._step_layering(
@@ -752,29 +945,30 @@ class WorkflowEngine:
                     block = (rig_result.get("moc3") or {}).get("moc3_blocker") or "未产生 moc3 验收结论"
                     log.error(f"Rigging 完成但不可部署: {block}")
 
-            # === Step 5: PSD export ===
+            # === Step 5: Layer manifest + PSD export ===
             self._set_state("psd_export", "Creating PSD file", 75)
-            psd_output = str(Path(layers_output) / "character.psd")
-            # 传入有序的语义层名：PSD 在 PS/GIMP 中应显示 hair_back/face/eye_L，
-            # 而不是 layer_000，同时保持正确的前后层次序。
-            psd_names = [l.get("name") for l in (layer_result.get("layers") or []) if l.get("name")]
-            psd_result = self.psd_creator.create_psd(
-                layers_output, psd_output, ordered_names=psd_names or None
-            )
+            # manifest 先行：它是 PSD 分组/坐标/顺序与 readiness 的唯一契约。
+            export_step = self._export_layers(
+                layers_output, layer_result, optimized_img)
+            manifest_step = export_step["manifest"]
+            psd_result = export_step["psd"]
+            result["steps"]["manifest"] = manifest_step
             result["steps"]["psd"] = psd_result
             if not psd_result.get("success"):
-                raise RuntimeError(psd_result.get("error") or "PSD export failed")
-            # v0.10.3: PSD fallback（psd-tools 缺失时只产出 PNG 包）从「致命错误」
-            # 降级为「带警告的降级」——图片已生成、分层已完成，不该因为一个
-            # 可选依赖没装上就让整个 workflow 前功尽弃。后续 Live2D 导出仍可走通。
-            if psd_result.get("fallback"):
-                log.warning(
-                    "PSD 以降级模式产出（仅 PNG 包，缺少 .psd）。如需完整 PSD，"
-                    "请安装 psd-tools：pip install psd-tools"
-                )
-                result.setdefault("warnings", []).append(
-                    "PSD 降级模式：缺少 psd-tools，仅产出 PNG 包"
-                )
+                if psd_result.get("fallback"):
+                    # v0.10.3: PSD fallback（psd-tools 缺失时只产出 PNG 包）不是
+                    # 致命错误 —— 图片已生成、分层已完成，不该因为一个可选依赖
+                    # 没装上就前功尽弃。但它也**不是**可交付 PSD：readiness 会带着
+                    # psd_success=False 阻塞部署结论，绝不静默降级冒充 PSD。
+                    log.warning(
+                        "PSD 以降级模式产出（仅 PNG 包，缺少 .psd）。如需完整 PSD，"
+                        "请安装 psd-tools：pip install psd-tools"
+                    )
+                    result.setdefault("warnings", []).append(
+                        "PSD 降级模式：缺少 psd-tools，仅产出 PNG 包"
+                    )
+                else:
+                    raise RuntimeError(psd_result.get("error") or "PSD export failed")
             elif not Path(psd_result.get("psd_path", "")).is_file():
                 raise RuntimeError("PSD export did not produce a file")
             log.success(f"PSD created: {psd_result.get('psd_path', 'N/A')}")
@@ -843,6 +1037,16 @@ class WorkflowEngine:
             result.update(derive_deployment_status(
                 (result.get("steps") or {}).get("rigging"),
                 ((result.get("steps") or {}).get("layer_order") or {}).get("issues"),
+                {
+                    "rig_ready": manifest_step["rig_ready"],
+                    "quality_ready": manifest_step["quality_ready"],
+                    "missing_required": manifest_step["missing_required"],
+                    "manual_required": manifest_step["manual_required"],
+                    # PNG 包降级（无真实 .psd）同样让 P0 交付不成立。
+                    "psd_success": bool(psd_result.get("success")),
+                    "psd_error": psd_result.get("error")
+                                 or psd_result.get("fallback_reason") or "",
+                },
             ))
             result["character_image"] = character_path
             result["layers_dir"] = layers_output
@@ -855,6 +1059,13 @@ class WorkflowEngine:
             result["success"] = False
             result["error"] = str(e)
             result["error_state"] = failed_state
+            # 部分成功契约：只要立绘已经生成，就把路径留在结果里并显式标记
+            # partial。Go 侧据此返回「真图 + 未完成原因」，而不是回退占位图。
+            produced = str(result.get("character_image") or "")
+            if produced and os.path.isfile(produced):
+                result["partial"] = True
+            else:
+                result.pop("character_image", None)
             # 机器可读的失败原因：像「没配图像引擎」这种用户能自己解决的，
             # 必须带着原文递到人面前，不能被上游折叠成「服务暂不可用」。
             code = getattr(e, "code", "")
@@ -981,11 +1192,16 @@ if __name__ == "__main__":
     parser.add_argument("--deploy-desktop", action="store_true", help="Create desktop pet")
     parser.add_argument("--k", type=int, default=12, help="K-means clusters (default: 12)")
     parser.add_argument("--provider",
-                        choices=["auto", "comfyui", "sd_webui", "pollinations",
-                                  "sensenova", "seedream", "openai", "local_placeholder"],
+                        choices=provider_choices(),
                         default="auto", help="Image provider")
     parser.add_argument("--width", type=int, default=1024)
-    parser.add_argument("--height", type=int, default=1024)
+    parser.add_argument("--height", type=int, default=1536)
+    # 多候选择优（默认 1 = 关闭）。上限在 WorkflowEngine 内钳制为 4。
+    parser.add_argument("--candidates", type=int, default=1,
+                        help="Generate N candidates and pick the best (1 disables)")
+    parser.add_argument("--no-normalize-canvas", dest="normalize_canvas",
+                        action="store_false", default=True,
+                        help="Disable character canvas normalization")
     # 本地引擎的底模 / LoRA。留空 = 由 provider 自己决定（环境变量或自动挑选）。
     # Go 侧把这两个字段透传进来，界面才能"选模型"。
     parser.add_argument("--model", default="",
@@ -1005,6 +1221,18 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility")
     parser.add_argument("--negative-prompt", "-n", default=None, help="Negative prompt")
     parser.add_argument("--json", action="store_true", help="Output result as JSON to stdout")
+    # 4K 画布：把规范化后的立绘等比放大到指定高度（0 = 保持生成尺寸）。
+    # 用于导出高精度分层/PSD/moc3；默认关闭，避免无谓的耗时与内存。
+    parser.add_argument("--canvas-height", type=int, default=0, dest="canvas_height",
+                        help="Upscale the normalized canvas to this pixel height (0 = off, "
+                             "e.g. 4096 for a 4K portrait)")
+    # 分割后端：默认（sam/isnet/颜色启发式）按可用权重自动选；点名 sam2_gd 时
+    # 走"文本提示 → 框 → SAM 掩码"的定向部件识别。权重缺失会直接报错，不会
+    # 悄悄换回颜色启发式（那会让"定向识别"变成一句空话）。
+    parser.add_argument("--segmentation-backend", default=None,
+                        dest="segmentation_backend",
+                        help="Semantic backend, e.g. sam2_gd (GroundingDINO + SAM2). "
+                             "Requires the model weights.")
     args = parser.parse_args()
 
     if not args.prompt and not args.input:
@@ -1022,6 +1250,10 @@ if __name__ == "__main__":
         export_live2d=args.live2d_export,
         image_model=args.model or "",
         lora=args.lora or "",
+        candidates=args.candidates,
+        normalize_canvas=args.normalize_canvas,
+        canvas_height=args.canvas_height,
+        segmentation_backend=args.segmentation_backend,
     )
     result = wf.run(
         prompt=args.prompt,

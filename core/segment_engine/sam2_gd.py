@@ -109,6 +109,10 @@ PART_PROMPTS: Dict[str, str] = {
     "arms": "arm . sleeve",
     "hands": "hand . hands",
     "legs": "leg . thigh . calf",
+    # 长袜/鞋：不单列时白色长袜会被并进腿的皮肤、鞋子并进腿的下端，
+    # 模型就没有可单独驱动的袜子层。
+    "legwear": "socks . thigh highs . stockings",
+    "footwear": "shoes . boots . footwear",
     # "hair ornament" and "glasses" are deliberately absent: measured on
     # docs/assets/demo_input.png they matched the *whole hair mass* (0.23 of the
     # frame) and the *eye band* respectively, so the accessories layer became a
@@ -226,6 +230,7 @@ class Sam2GroundingDinoSegmenter:
         nms_iou: float = 0.55,
         local_files_only: bool = False,
         allow_sam1_fallback: bool = True,
+        fill_missing_with_color: bool = True,
     ) -> None:
         self.requested_device = device
         self.device = self._resolve_device(device)
@@ -242,6 +247,9 @@ class Sam2GroundingDinoSegmenter:
         self.nms_iou = float(nms_iou)
         self.local_files_only = bool(local_files_only)
         self.allow_sam1_fallback = bool(allow_sam1_fallback)
+        # 检测器分不开的部位（上衣/下装这种只靠语义区分的）用颜色在 SAM
+        # 剪影内部补出，避免整层缺失。
+        self.fill_missing_with_color = bool(fill_missing_with_color)
 
         # Nothing below is populated until load() runs — construction is free.
         self._dino = None
@@ -435,7 +443,230 @@ class Sam2GroundingDinoSegmenter:
                     f"{query}: {len(out[query])} boxes "
                     f"(max score {max(d.score for d in out[query]):.2f})"
                 )
+        out = self._suppress_catch_all(out, img_area)
         return out
+
+    #: 五官层：允许只有几十像素（色阶启发式给出的鼻子只有 13px），并且
+    #: 必须落在脸掩码内才采用。名字与 ``LayerComposer.FACE_FEATURE_PARTS``
+    #: 同义，这里只留补全会用到的规范名。
+    FACE_FEATURE_PARTS = frozenset({
+        "eyes", "eyes_left", "eyes_right", "eyebrows", "nose", "mouth",
+        "eyewhite_left", "eyewhite_right", "irides_left", "irides_right",
+        "eyelash_left", "eyelash_right",
+    })
+
+    #: 面积占比超过这个值的框，一旦在两个以上不同查询里重复出现，就是
+    #: "整个角色"级别的兜底框，不是某个部位。
+    CATCH_ALL_AREA_RATIO = 0.20
+    #: 判定"同一个框"的 IoU 门槛。
+    CATCH_ALL_IOU = 0.80
+
+    def _suppress_catch_all(
+        self,
+        detections: Dict[str, List[Detection]],
+        img_area: float,
+    ) -> Dict[str, List[Detection]]:
+        """丢掉跨查询重复的"整个角色"兜底框。
+
+        实测（2026-11-16，grounding-dino-tiny / 1024×1536 立绘）：
+        ``clothes_top`` / ``clothes_bottom`` / ``arms`` / ``accessories`` 四个
+        查询各返回了一个 (200,267)-(822,1059) 级别的框（面积占比 0.31），
+        彼此 IoU > 0.95 —— SAM 于是给这四个部位各切出一份"整个角色"的掩码，
+        上衣、下装、手臂、头饰全是同一块，等于没分。
+
+        判据不是单看面积（真裙子确实能占到 0.2）：**同一个框要在两个以上
+        不同查询里重复出现**才算兜底框。只属于一个查询的大框仍然保留 —— 那
+        可能真的是整条裙子。
+        """
+        flat = [(q, d) for q, dets in detections.items() for d in dets]
+        drop_ids = set()
+        for query, det in flat:
+            area = (det.box[2] - det.box[0]) * (det.box[3] - det.box[1])
+            if area < self.CATCH_ALL_AREA_RATIO * img_area:
+                continue
+            twins = {
+                other_query
+                for other_query, other in flat
+                if other_query != query
+                and self._box_iou(det.box, other.box) >= self.CATCH_ALL_IOU
+            }
+            if len(twins) >= 2:
+                drop_ids.add(id(det))
+                self.dropped_boxes.append(
+                    f"{query}: catch-all box shared with "
+                    f"{', '.join(sorted(twins))} at {det.score:.2f}"
+                )
+        if not drop_ids:
+            return detections
+        cleaned: Dict[str, List[Detection]] = {}
+        for query, dets in detections.items():
+            kept = [d for d in dets if id(d) not in drop_ids]
+            if kept:
+                cleaned[query] = kept
+        log.info(f"丢掉了 {len(drop_ids)} 个跨查询重复的兜底框")
+        return cleaned
+
+    #: 五官相对**脸掩码**的面积上限。超出说明这个掩码抓到了整块皮肤
+    #: （实测 nose=2706px / face=5823px = 46%，鼻子不可能占半张脸）。
+    FACE_PART_AREA_CEILING: Dict[str, float] = {
+        "nose": 0.06,
+        "mouth": 0.08,
+        "eyebrows": 0.45,
+        "eyes_left": 0.18,
+        "eyes_right": 0.18,
+    }
+
+    def _enforce_face_area_priors(
+        self, masks: Dict[str, np.ndarray]
+    ) -> Tuple[Dict[str, np.ndarray], List[str]]:
+        """按"五官不会比脸大"的先验剔掉越界掩码。
+
+        SAM 只按框给掩码，框略大将直接吞掉半张脸；这时留着一个错误的鼻子层
+        比留空更糟（它会盖在脸上）。被剔掉的部件会进入 ``missing_parts``，
+        再由颜色补全接手。
+        """
+        face = masks.get("face")
+        if face is None or not np.asarray(face).any():
+            return masks, []
+        face_px = float(np.asarray(face).sum())
+        notes: List[str] = []
+        for part, ceiling in self.FACE_PART_AREA_CEILING.items():
+            mask = masks.get(part)
+            if mask is None:
+                continue
+            px = float(np.asarray(mask).sum())
+            if px <= ceiling * face_px:
+                continue
+            masks.pop(part, None)
+            notes.append(
+                f"{part}: mask {int(px)}px 超过脸面积的 {ceiling:.0%}"
+                f"（{int(face_px)}px），判定为误抓整块皮肤并剔掉"
+            )
+            self.dropped_boxes.append(f"{part}: area prior violated ({int(px)}px)")
+        return masks, notes
+
+    def _fill_missing_with_color(
+        self, masks: Dict[str, np.ndarray], image: Image.Image
+    ) -> Tuple[Dict[str, np.ndarray], List[str]]:
+        """在 SAM 给出的剪影内部，用颜色规则补出检测器分不开的部件。
+
+        只补 ``masks`` 里没有的部件，并且从补出的像素里**扣除已经被 SAM
+        占据的部分** —— 保证补出来的层不会盖到脸上、更不会和头发重叠。
+        """
+        from core.segment_engine.semantic import SemanticSegmenter
+
+        arr = np.array(image.convert("RGBA"))
+        # 结构性部位（五官/四肢）是可靠的，补出来的衣饰绝不能再盖上去。
+        # 头发**不**参与这个排除集：实测 hair_back 的 SAM 掩码有 12.7 万像素、
+        # 覆盖了整个上半身，一旦把它算成"已占用"，上衣/下装的颜色补全会因为
+        # 像素全被头发占着而一个都补不出来。
+        hard = np.zeros(arr.shape[:2], dtype=bool)
+        hair = np.zeros(arr.shape[:2], dtype=bool)
+        structural = {"face", "eyes_left", "eyes_right", "nose", "mouth",
+                      "eyebrows", "hands", "arms", "legs", "neck", "accessories"}
+        for part, mask in masks.items():
+            m = np.asarray(mask, dtype=bool)
+            if part in ("hair_back", "hair_front"):
+                hair |= m
+            elif part in structural:
+                hard |= m
+        if not (hard | hair).any():
+            return masks, []
+
+        # 前景必须用**真实剪影**：`_fallback_color_segment` 靠前景推断身体
+        # 中轴、腰线、裙摆宽度，喂残缺形状会把腰线算到错误位置（实测把
+        # 184684px 的裙子压成 22090px）。优先用 alpha；没有 alpha 时走 ISNet
+        # 前景，最后才退回"已占用并集"。
+        segmenter = SemanticSegmenter(device=self.device)
+        fg = np.zeros(arr.shape[:2], dtype=bool)
+        fg_is_real = False
+        if arr.shape[2] == 4:
+            alpha = arr[:, :, 3] > 10
+            if alpha.any() and float(alpha.mean()) <= 0.98:
+                fg, fg_is_real = alpha, True
+        if not fg.any():
+            try:
+                raw = segmenter._segment_rembg(image)  # noqa: SLF001
+            except Exception:  # pragma: no cover - defensive
+                raw = []
+            if raw:
+                fg = np.asarray(raw[0]["segmentation"], dtype=bool)
+                fg_is_real = bool(fg.any())
+        if not fg.any():
+            fg = hard | hair
+        # 只有拿到真实剪影时才用它裁剪；退回"已占用并集"时它缺了下半身，
+        # 拿它裁剪会把补出来的衣服整块削掉。
+        clip = fg if fg_is_real else np.ones_like(fg)
+
+        try:
+            parts = segmenter._fallback_color_segment(image, fg)  # noqa: SLF001
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning(f"颜色补全失败，跳过：{exc}")
+            return masks, []
+
+        min_px = max(32, int(0.0005 * hard.size))
+        face = masks.get("face")
+        face_mask = np.asarray(face, dtype=bool) if face is not None else None
+        filled: List[str] = []
+        for part in self.STANDARD_PARTS:
+            if part in masks:
+                continue
+            candidate = parts.get(part)
+            if candidate is None:
+                continue
+            if part in self.FACE_FEATURE_PARTS:
+                # 五官必须落在脸内，且允许只有几十像素（色阶启发式给出的鼻子
+                # 只有 13px）。用 ~hard 会连脸一起减掉，所以这里单独走一条路。
+                if face_mask is None:
+                    continue
+                filled_mask = np.asarray(candidate, dtype=bool) & face_mask
+                if int(filled_mask.sum()) < 8:
+                    continue
+                masks[part] = filled_mask
+                filled.append(part)
+                continue
+            filled_mask = np.asarray(candidate, dtype=bool) & ~hard & clip
+            if int(filled_mask.sum()) < min_px:
+                continue
+            # 争议像素：SAM 说这是头发、颜色说这是衣服。按颜色距离仲裁 ——
+            # 谁的中位色更近就归谁。长发垂在裙子上时这一步决定裙子上沿是否
+            # 被整块让给头发（那会让裙子缺口）。
+            contested = filled_mask & hair
+            if contested.any():
+                hair_only = hair & ~filled_mask
+                cloth_only = filled_mask & ~hair
+                hair_ref = self._median_rgb(arr, hair_only)
+                cloth_ref = self._median_rgb(arr, cloth_only)
+                if hair_ref is not None and cloth_ref is not None:
+                    dist_h = np.linalg.norm(
+                        arr[:, :, :3].astype(np.float32) - hair_ref, axis=2)
+                    dist_c = np.linalg.norm(
+                        arr[:, :, :3].astype(np.float32) - cloth_ref, axis=2)
+                    # 必须"明显更像衣服"才从头发里夺，避免把发丝吃进衣服。
+                    freed = contested & (dist_c < dist_h * 0.9)
+                else:
+                    freed = np.zeros_like(contested)
+                filled_mask = (filled_mask & ~contested) | freed
+            if int(filled_mask.sum()) < min_px:
+                continue
+            for hair_part in ("hair_back", "hair_front"):
+                if hair_part in masks:
+                    masks[hair_part] = np.asarray(masks[hair_part], dtype=bool) & ~filled_mask
+            masks[part] = filled_mask
+            hard |= filled_mask
+            filled.append(part)
+        for hair_part in ("hair_back", "hair_front"):
+            if hair_part in masks and not np.asarray(masks[hair_part]).any():
+                masks.pop(hair_part)
+        return masks, filled
+
+    @staticmethod
+    def _median_rgb(arr: np.ndarray, mask: np.ndarray):
+        """掩码内 RGB 中位色；掩码太空时返回 None。"""
+        pixels = arr[:, :, :3][np.asarray(mask, dtype=bool)]
+        if pixels.size < 30:
+            return None
+        return np.median(pixels, axis=0).astype(np.float32)
 
     def _detect_query(self, rgb: Image.Image, phrase: str) -> List[Detection]:
         """Single open-vocabulary detection pass for one prompt."""
@@ -876,6 +1107,23 @@ class Sam2GroundingDinoSegmenter:
         masks, roi_notes = self._roi_redetect(image, masks)
         notes.extend(roi_notes)
 
+        masks, prior_notes = self._enforce_face_area_priors(masks)
+        notes.extend(prior_notes)
+
+        # 检测器给不出"上衣/下装"这种只靠语义区分的部位（实测兜底框被丢掉后
+        # 两者都为空）。缺的部件用**颜色 + 几何**在前景内补：SAM 已经给出准确
+        # 剪影，颜色只负责在剪影内部画分界，比从头猜整张图可靠得多。
+        color_filled: List[str] = []
+        if self.fill_missing_with_color:
+            masks, filled = self._fill_missing_with_color(masks, image)
+            color_filled = list(filled)
+            if filled:
+                notes.append(
+                    "color-split filled the parts the detector could not separate: "
+                    + ", ".join(sorted(filled))
+                )
+                missing = [p for p in missing if p not in filled]
+
         # Per-part accounting over the *merged* mask.
         parts_report: Dict[str, Dict[str, object]] = {}
         for part in self.STANDARD_PARTS:
@@ -917,6 +1165,9 @@ class Sam2GroundingDinoSegmenter:
             "mean_coverage": round(total_cov, 6),
             "box_count": len(flat_boxes),
             "dropped_boxes": list(self.dropped_boxes),
+            # 颜色补全出来的部件必须可与检测/ROI 结果区分：它们的 provenance
+            # 是 color_heuristic，不能计入 detector 证据。
+            "color_filled": sorted(color_filled),
             "notes": notes,
             "elapsed_s": round(time.time() - t0, 3),
         }
@@ -1005,7 +1256,20 @@ class Sam2GroundingDinoSegmenter:
                 "bbox": info.get("bbox", (0, 0, 0, 0)),
                 "rest_opacity": float(info.get("rest_opacity", 1.0)),
                 "amodal_completed": bool(info.get("completed", False)),
+                # composer 已给出的派生/合成来源；检测层由 _annotate_evidence 补齐。
+                "provenance": info.get("provenance"),
+                "confidence": info.get("confidence"),
+                "status": info.get("status"),
+                "source_mask": info.get("source_mask", part_name),
+                "derived": bool(info.get("derived", False)),
+                "depth": info.get("depth"),
             })
+        self._annotate_evidence(
+            exported_layers,
+            report.get("parts_report") or {},
+            set(masks),
+            set(report.get("color_filled") or []),
+        )
 
         preview_path = out / "preview.png"
         image.save(preview_path)
@@ -1044,6 +1308,44 @@ class Sam2GroundingDinoSegmenter:
             "composition": composition,
             **report,
         }
+
+    @staticmethod
+    def _annotate_evidence(
+        exported_layers: List[Dict],
+        parts_report: Dict[str, Dict[str, object]],
+        mask_names: set,
+        color_filled: set,
+    ) -> None:
+        """把每层的来源与置信度写进 layer dict（manifest 的权威证据）。
+
+        - 检测器直接给出的部件：``detector`` + GroundingDINO 分数；
+        - 颜色补全：``color_heuristic``，无置信度（不得冒充检测）；
+        - ROI 二次检测：``roi_redetect``，只有 SAM IoU 可作证据；
+        - composer 已标来源的拆分/合成层：保持 ``derived``，不继承检测分数。
+        """
+        for layer in exported_layers:
+            name = str(layer.get("name") or "")
+            if layer.get("provenance"):
+                layer.setdefault("status", "derived")
+                layer.setdefault("source_mask", name)
+                continue
+            evidence = parts_report.get(name) or {}
+            if evidence.get("detected"):
+                layer["provenance"] = "detector"
+                layer["confidence"] = float(evidence.get("confidence") or 0.0)
+                layer["status"] = "detected"
+            elif name in color_filled:
+                layer["provenance"] = "color_heuristic"
+                layer["status"] = "derived"
+            elif name in mask_names:
+                iou = float(evidence.get("sam_iou") or 0.0)
+                layer["provenance"] = "roi_redetect"
+                layer["confidence"] = iou if iou > 0 else None
+                layer["status"] = "derived"
+            else:
+                layer["provenance"] = "derived_geometry"
+                layer["status"] = "derived"
+            layer.setdefault("source_mask", name)
 
     def _direct_mask_export(
         self,

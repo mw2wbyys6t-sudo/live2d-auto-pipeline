@@ -21,6 +21,7 @@ from drivers.live2d_runtime.moc3_verify import (
 from live2d_builder.exporter import moc3_sections as ms
 from live2d_builder.exporter.model3_exporter import Model3Exporter
 from live2d_builder.exporter.moc3_pipeline import compile_export_moc3
+from live2d_builder.exporter.moc3_model import resolve_pixels_per_unit
 
 import importlib.util
 import os
@@ -482,13 +483,14 @@ def test_pipeline_bakes_keyforms_into_moc3(tmp_path):
     assert doc["parameter.keyform_binding_counts"] == [1]
     # 三个键形里必须有一个逐字复现静止姿态（default 键），否则模型开箱就是歪的。
     # 顶点先按 (x - w/2, y - h/2) 换算（模型 y 向下，见 moc3_pipeline.to_model_xy）、
-    # 再除以 ppu=100 存成单位坐标。
+    # 再除以 ppu 存成单位坐标（ppu = 画布宽度，见 resolve_pixels_per_unit）。
     begins = doc["art_mesh_keyform.keyform_position_begin_indices"]
     positions = doc["keyform_position.xys"]
-    authored = [[(32.0 - 64.0) / 100.0, (32.0 - 64.0) / 100.0],
-                [(96.0 - 64.0) / 100.0, (32.0 - 64.0) / 100.0],
-                [(96.0 - 64.0) / 100.0, (96.0 - 64.0) / 100.0],
-                [(32.0 - 64.0) / 100.0, (96.0 - 64.0) / 100.0]]
+    ppu = resolve_pixels_per_unit(128.0)
+    authored = [[(32.0 - 64.0) / ppu, (32.0 - 64.0) / ppu],
+                [(96.0 - 64.0) / ppu, (32.0 - 64.0) / ppu],
+                [(96.0 - 64.0) / ppu, (96.0 - 64.0) / ppu],
+                [(32.0 - 64.0) / ppu, (96.0 - 64.0) / ppu]]
     expected = [v for point in authored for v in point]
     assert len(begins) == 6, f"2 个网格 x 3 个键形，实为 {begins}"
     for keyform_begin in begins:

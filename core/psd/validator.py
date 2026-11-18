@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Sequence
 
+from PIL import Image
+
 from core.logger import get_logger
 from core.psd.parser import PSDParser, PSDValidationError
 
@@ -173,14 +175,130 @@ def read_psd_layer_order(filepath: str) -> List[str]:
     except ImportError:
         log.warning("未安装 psd-tools，无法读取 PSD 层序")
         return []
-
     try:
         psd = PSDImage.open(filepath)
-        return [layer.name for layer in psd]
+
+        def leaves(container):
+            names: List[str] = []
+            for layer in container:
+                if layer.is_group():
+                    names.extend(leaves(layer))
+                else:
+                    names.append(layer.name)
+            return names
+
+        return leaves(psd)
     except Exception as exc:
         log.warning(f"读取 PSD 层序失败: {exc}")
         return []
 
+
+def validate_psd_roundtrip(filepath: str, manifest: Dict[str, Any],
+                           layer_files: Optional[Sequence[Path]] = None) -> Dict[str, Any]:
+    """Validate a saved PSD by reopening it and comparing its manifest contract."""
+    errors: List[str] = []
+    try:
+        from psd_tools import PSDImage
+        psd = PSDImage.open(filepath)
+    except Exception as exc:
+        return {"valid": False, "errors": [f"PSD readback failed: {exc}"]}
+
+    canvas = manifest.get("canvas") or {}
+    expected_size = (canvas.get("width"), canvas.get("height"))
+    if tuple(psd.size) != expected_size:
+        errors.append(f"canvas mismatch: expected {expected_size}, got {psd.size}")
+
+    groups = manifest.get("groups") or []
+    expected_group_names = [group.get("psd_name") or group.get("id") for group in
+                            sorted(groups, key=lambda item: item.get("order", 0))]
+    actual_group_names = [layer.name for layer in psd if layer.is_group()]
+    if actual_group_names != expected_group_names:
+        errors.append(f"group structure mismatch: expected {expected_group_names}, got {actual_group_names}")
+
+    group_by_name = {}
+    for group in groups:
+        group_by_name[group.get("psd_name") or group.get("id")] = group
+        group_by_name[group.get("name_zh", group.get("id"))] = group
+        group_by_name[group.get("id")] = group
+    expected_layers = manifest.get("layers") or []
+    draw_order = manifest.get("draw_order", [layer.get("id") for layer in expected_layers])
+    by_id = {layer.get("id"): layer for layer in expected_layers}
+    actual_entries = []
+    for group in psd:
+        if not group.is_group():
+            continue
+        spec = group_by_name.get(group.name)
+        if spec and group.visible != bool(spec.get("visible", True)):
+            errors.append(f"group visibility mismatch: {group.name}")
+        for layer in group:
+            actual_entries.append((group.name, layer))
+    actual_order = [layer.name for _, layer in actual_entries]
+    # PSD 的叠放顺序是「组顺序 + 组内顺序」：组按 GROUP_ORDER 排列，
+    # 组内保持 manifest 的 draw_order。拿扁平 draw_order 直接比会误报
+    # 所有跨组层（实测 31 层 fixture 里 5 组全部错位），而实际画出顺序是对的。
+    group_rank = {
+        spec.get("id"): index
+        for index, spec in enumerate(sorted(groups, key=lambda item: item.get("order", 0)))
+    }
+    expected_order = sorted(
+        list(draw_order),
+        key=lambda layer_id: group_rank.get(
+            (by_id.get(layer_id) or {}).get("group"), len(group_rank)),
+    )
+    if actual_order != expected_order:
+        errors.append(f"layer order mismatch: expected {expected_order}, got {actual_order}")
+
+    if layer_files is None:
+        source_by_id = {item.get("id"): Path(filepath).parent / item.get("file", "")
+                        for item in expected_layers}
+    else:
+        source_by_id = {layer.get("id"): Path(path) for layer, path in
+                        zip([by_id.get(name, {}) for name in draw_order], layer_files)}
+    for group_name, layer in actual_entries:
+        expected = by_id.get(layer.name)
+        if expected is None:
+            errors.append(f"unexpected PSD layer: {layer.name}")
+            continue
+        expected_group = expected.get("group")
+        expected_spec = group_by_name.get(expected_group, {})
+        expected_name = expected_spec.get("psd_name") or expected_spec.get("id", expected_group)
+        if group_name != expected_name:
+            errors.append(f"group mismatch for layer {layer.name}: expected {expected_name}, got {group_name}")
+        if layer.visible != bool(expected.get("visible", True)):
+            errors.append(f"layer visibility mismatch: {layer.name}")
+        source = source_by_id.get(layer.name)
+        if source:
+            try:
+                expected_image = Image.open(source).convert("RGBA")
+                actual_image = layer.topil().convert("RGBA")
+                origin = expected.get("origin") or [0, 0]
+                if len(origin) != 2 or any(not isinstance(v, int) for v in origin):
+                    errors.append(f"invalid layer origin: {layer.name}")
+                    continue
+                placed = Image.new("RGBA", expected_size, (0, 0, 0, 0))
+                x, y = origin
+                if x < 0 or y < 0 or x + expected_image.width > placed.width or y + expected_image.height > placed.height:
+                    errors.append(f"layer origin outside canvas: {layer.name}")
+                    continue
+                placed.paste(expected_image, (x, y))
+                if tuple(actual_image.size) != expected_size:
+                    errors.append(f"layer canvas dimensions mismatch: {layer.name}")
+                elif placed.tobytes() != actual_image.tobytes():
+                    errors.append(f"layer RGBA/alpha mismatch: {layer.name}")
+                expected_bbox = expected.get("bbox")
+                if expected_bbox is not None:
+                    # manifest 的 bbox 用闭区间（x1/y1 是最后一个像素），与
+                    # numpy 的 min/max 一致；PIL getbbox 的 right/bottom 是开区间。
+                    raw_bbox = placed.getchannel("A").getbbox()
+                    actual_bbox = (
+                        [raw_bbox[0], raw_bbox[1], raw_bbox[2] - 1, raw_bbox[3] - 1]
+                        if raw_bbox else None)
+                    if actual_bbox != list(expected_bbox):
+                        errors.append(f"layer bbox mismatch: {layer.name}")
+            except Exception as exc:
+                errors.append(f"layer pixel readback failed for {layer.name}: {exc}")
+
+    return {"valid": not errors, "errors": errors}
 
 class PSDValidator:
     """Validates PSD files against Live2D Cubism Editor import requirements."""

@@ -37,6 +37,72 @@ export interface APIClientOptions {
   onUnauthorized?: () => void;
 }
 
+/** 设置页：本地引擎地址。 */
+export interface ImageEngineSettings {
+  comfyui_base_url: string;
+  sd_webui_base_url: string;
+}
+
+/** 设置页：云端上游的非敏感参数（Key 不在此结构里）。 */
+export interface ImageProviderSettings {
+  openai: { base_url: string; model: string };
+  seedream: { version: string; size: string };
+  sensenova: { base_url: string };
+}
+
+/** 设置页：生成默认值。 */
+export interface ImageGenerationSettings {
+  width: number;
+  height: number;
+  candidates: number;
+  pollinations_model: string;
+  pollinations_seed: number;
+  normalize: boolean;
+}
+
+export interface ProviderStatusItem {
+  name: string;
+  display_name?: string;
+  available?: boolean;
+  requires_key?: boolean;
+  local?: boolean;
+  probe_size?: number[] | null;
+  probe_note?: string;
+  setup_guide?: string;
+}
+
+export type ApiKeyName = 'ark' | 'seedream' | 'sensenova' | 'openai';
+
+export interface ImageSettingsPayload {
+  engines: ImageEngineSettings;
+  providers: ImageProviderSettings;
+  generation: ImageGenerationSettings;
+  custom_providers: Array<Record<string, unknown>>;
+  keys: Record<ApiKeyName, boolean>;
+  vault_available: boolean;
+  provider_status: ProviderStatusItem[];
+}
+
+export interface SettingsUpdatePayload {
+  secrets?: Partial<Record<ApiKeyName, string>>;
+  engines?: ImageEngineSettings;
+  providers?: ImageProviderSettings;
+  generation?: ImageGenerationSettings;
+  custom_providers?: Array<Record<string, unknown>>;
+}
+
+export interface ProviderTestResult {
+  ok: boolean;
+  elapsed_ms?: number;
+  probe_size?: number[];
+  provider?: string;
+  model?: string;
+  image_url?: string;
+  error_code?: string;
+  message?: string;
+  probe_note?: string;
+}
+
 // Helper to extract data from the standard Go API wrapper: { success, data, message, error }
 function extractData<T>(res: unknown): T {
   const wrapper = res as { success?: boolean; data?: T; error?: string };
@@ -277,6 +343,8 @@ export class APIClient {
       provider: req.engine || undefined,
       model: req.model?.trim() || undefined,
       lora: req.lora?.trim() || undefined,
+      candidates: req.candidates && req.candidates > 1 ? req.candidates : undefined,
+      normalize_canvas: req.normalizeCanvas,
     };
   }
 
@@ -434,6 +502,9 @@ export class APIClient {
       promptMismatch: !!data.prompt_mismatch,
       fallback: !!data.fallback,
       fallbackReason: data.fallback_reason || '',
+      incomplete: !!data.incomplete,
+      incompleteReason: data.incomplete_reason || '',
+      sizeDowngraded: !!data.size_downgraded,
     };
   }
 
@@ -829,6 +900,8 @@ export class APIClient {
   async listProviders(): Promise<{
     available: Array<{ name: string; display_name: string; requires_key: boolean }>;
     registered: string[];
+    detail?: ProviderStatusItem[];
+    vault_available?: boolean;
     query_ok: boolean;
   }> {
     try {
@@ -837,6 +910,35 @@ export class APIClient {
     } catch {
       return { available: [], registered: [], query_ok: false };
     }
+  }
+
+  // ---------- 设置页（本机生图上游） ----------
+
+  /** 读取设置页数据；keys 只有布尔，绝不包含 Key 内容。 */
+  async getSettings(): Promise<ImageSettingsPayload> {
+    const res = await this.request<unknown>('/api/settings', undefined, 60_000);
+    return extractData<ImageSettingsPayload>(res);
+  }
+
+  /** 保存设置：secrets 里空字符串表示删除该 Key，缺省表示保持不变。 */
+  async updateSettings(
+    update: SettingsUpdatePayload,
+  ): Promise<{ settings: ImageSettingsPayload; warnings: string[] }> {
+    const res = await this.request<unknown>('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify(update),
+    });
+    return extractData<{ settings: ImageSettingsPayload; warnings: string[] }>(res);
+  }
+
+  /** 真实出图测试（会消耗一次上游额度）。 */
+  async testProvider(provider: string): Promise<ProviderTestResult> {
+    const res = await this.request<unknown>(
+      '/api/settings/test',
+      { method: 'POST', body: JSON.stringify({ provider }) },
+      180_000,
+    );
+    return extractData<ProviderTestResult>(res);
   }
 
   // ---------- external asset import ----------
@@ -1101,6 +1203,11 @@ export interface LatestGeneration {
   /** 占位图标记：见 GenerationRecord。 */
   fallback?: boolean;
   fallback_reason?: string;
+  /** 部分成功：立绘是真的，但后续阶段失败。 */
+  incomplete?: boolean;
+  incomplete_reason?: string;
+  /** 上游把请求尺寸降了（免密通道像素上限）。 */
+  size_downgraded?: boolean;
 }
 
 /** 一个作品下的一次导出产物。同一作品可以有多份，各自命名。 */

@@ -4,10 +4,9 @@ Pygmalion Studio - PSD Creator
 Creates layered PSD files from PNG layer directories, with fallback to PNG package.
 """
 
-import os
-import time
+import json
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 
 from PIL import Image
 
@@ -38,6 +37,7 @@ class PSDCreator:
         canvas_size: Optional[tuple] = None,
         layer_order: Optional[List[str]] = None,
         ordered_names: Optional[List[str]] = None,
+        manifest_path: Optional[str] = None,
     ) -> Dict:
         """Create a PSD file from a directory of layer PNG files.
 
@@ -78,6 +78,19 @@ class PSDCreator:
             if matched:
                 display_names = [n for n, _ in matched]
                 layer_files = [p for _, p in matched]
+        manifest = None
+        if manifest_path:
+            try:
+                with open(manifest_path, encoding="utf-8") as handle:
+                    manifest = json.load(handle)
+                layer_files, display_names = self._manifest_files(layers_path, manifest)
+                w = int(manifest["canvas"]["width"])
+                h = int(manifest["canvas"]["height"])
+                canvas_size = (w, h)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                return {"success": False, "fallback": False,
+                        "error": f"Invalid layer manifest: {exc}"}
+
         if not layer_files:
             layer_files = sorted(layers_path.glob("layer_*.png"))
         if not layer_files:
@@ -112,27 +125,106 @@ class PSDCreator:
         log.info(f"Creating PSD from {len(layer_files)} layers, canvas {w}x{h}")
 
         if self._has_psd_tools:
-            return self._create_with_psd_tools(layer_files, output_path, w, h, display_names)
+            return self._create_with_psd_tools(layer_files, output_path, w, h, display_names,
+                                               manifest)
         else:
-            return self._create_png_package(layer_files, output_path, w, h, layers_dir)
+            result = self._create_png_package(layer_files, output_path, w, h, layers_dir)
+            result["success"] = False
+            result["error"] = result["fallback_reason"]
+            return result
+
+    @staticmethod
+    def _manifest_files(layers_path: Path, manifest: Dict[str, Any]):
+        layers = manifest.get("layers")
+        groups = manifest.get("groups")
+        if not isinstance(layers, list) or not isinstance(groups, list):
+            raise ValueError("manifest requires layers and groups arrays")
+        unsupported = {"blend_mode", "clipping", "mask", "smart_object", "effects"}
+        for layer in layers:
+            features = unsupported.intersection(layer)
+            if features:
+                raise ValueError(f"unsupported layer feature(s): {', '.join(sorted(features))}")
+        group_ids = {group["id"] for group in groups}
+        for group in groups:
+            psd_name = str(group.get("psd_name") or group.get("id") or "")
+            try:
+                psd_name.encode("mac_roman")
+            except UnicodeEncodeError as exc:
+                raise ValueError(
+                    f"unsupported PSD group identifier: {psd_name!r}; "
+                    "provide an ASCII psd_name while keeping name_zh in the manifest"
+                ) from exc
+        draw_order = manifest.get("draw_order", [layer.get("id") for layer in layers])
+        by_id = {layer["id"]: layer for layer in layers}
+        if len(by_id) != len(layers) or set(draw_order) != set(by_id):
+            raise ValueError("manifest layer IDs and draw_order must be unique and complete")
+        ordered = [by_id[layer_id] for layer_id in draw_order]
+        files = []
+        names = []
+        for layer in ordered:
+            if layer.get("group") not in group_ids:
+                raise ValueError(f"unknown group for layer {layer.get('id')!r}")
+            path = (layers_path / layer["file"]).resolve()
+            if path.parent != layers_path.resolve() or not path.is_file():
+                raise ValueError(f"invalid or missing layer file: {layer.get('file')}")
+            files.append(path)
+            names.append(layer["id"])
+        return files, names
 
     def _create_with_psd_tools(self, layer_files: List[Path], output_path: str, w: int, h: int,
-                               display_names: Optional[List[str]] = None) -> Dict:
+                               display_names: Optional[List[str]] = None,
+                               manifest: Optional[Dict[str, Any]] = None) -> Dict:
         """Create actual PSD using psd-tools."""
         try:
             psd = self._PSDImage.new(mode='RGBA', size=(w, h))
 
             # PSD layer order is back-to-front; frompil appends to its parent.
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            group_layers = {}
+            if manifest:
+                from psd_tools.api.layers import Group
+                for spec in sorted(manifest["groups"], key=lambda item: item.get("order", 0)):
+                    group = Group.new(
+                        psd,
+                        name=spec.get("psd_name") or spec["id"],
+                        open_folder=True,
+                    )
+                    group.visible = bool(spec.get("visible", True))
+                    group_layers[spec["id"]] = group
+            manifest_by_id = {item["id"]: item for item in manifest["layers"]} if manifest else {}
             for idx, lf in enumerate(layer_files):
                 img = Image.open(lf).convert('RGBA')
-                if img.size != (w, h):
-                    img = img.resize((w, h), Image.LANCZOS)
                 layer_name = (display_names[idx]
                               if display_names and idx < len(display_names) else lf.stem)
-                self._PixelLayer.frompil(img, psd, name=layer_name)
+                if manifest and img.size != (w, h):
+                    spec = manifest_by_id[layer_name]
+                    origin = spec.get("origin")
+                    if not isinstance(origin, (list, tuple)) or len(origin) != 2:
+                        raise ValueError(
+                            f"cropped layer {lf.name} requires integer canvas origin"
+                        )
+                    x, y = origin
+                    if not isinstance(x, int) or not isinstance(y, int):
+                        raise ValueError(f"layer {lf.name} origin must be integer pixels")
+                    if x < 0 or y < 0 or x + img.width > w or y + img.height > h:
+                        raise ValueError(f"layer {lf.name} crop exceeds canvas bounds")
+                    canvas_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                    canvas_layer.paste(img, (x, y))
+                    img = canvas_layer
+                elif not manifest and img.size != (w, h):
+                    img = img.resize((w, h), Image.LANCZOS)
+                parent = group_layers[manifest_by_id[layer_name]["group"]] if manifest else psd
+                layer = self._PixelLayer.frompil(img, parent, name=layer_name)
+                if manifest:
+                    layer.visible = bool(manifest_by_id[layer_name].get("visible", True))
 
             psd.save(output_path)
+            if manifest:
+                from core.psd.validator import validate_psd_roundtrip
+                checked = validate_psd_roundtrip(output_path, manifest, layer_files=layer_files)
+                if not checked["valid"]:
+                    raise ValueError("PSD readback validation failed: " +
+                                     "; ".join(checked["errors"]).encode("ascii", "backslashreplace").decode("ascii"))
             log.success(f"PSD created: {output_path}")
             return {
                 "success": True,
@@ -141,9 +233,10 @@ class PSDCreator:
                 "layer_count": len(layer_files),
             }
         except Exception as e:
-            log.error(f"psd-tools creation failed: {e}")
-            return self._create_png_package(layer_files, output_path, w, h,
-                                             Path(output_path).parent)
+            message = f"psd-tools creation failed: {e}"
+            log.error(message.encode("ascii", "backslashreplace").decode("ascii"))
+            return {"success": False, "psd_path": "", "fallback": False,
+                    "error": str(e), "layer_count": len(layer_files)}
 
     def _create_png_package(self, layer_files: List[Path], output_path: str, w: int, h: int,
                              layers_dir: Path) -> Dict:
@@ -183,7 +276,7 @@ class PSDCreator:
 
         log.info(f"PNG package created: {pkg_dir} (install psd-tools for PSD output)")
         return {
-            "success": True,
+            "success": False,
             # 没有真实 .psd 时不要把目录冒充成文件路径：旧实现返回 pkg_dir，
             # 上层据此生成 /output/<目录> 下载链接，点击必然 404。
             "psd_path": "",

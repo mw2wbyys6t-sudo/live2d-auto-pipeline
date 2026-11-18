@@ -337,6 +337,32 @@ class TestFeatureParts:
         assert 62 <= ys_l.min() and ys_l.max() <= 70
         assert 62 <= ys_r.min() and ys_r.max() <= 70
 
+    def test_highlight_split_eye_is_reassembled_with_rgb(self):
+        """远侧眼被大面积高光切成两段墨线时，提供 rgb 应合并回一只完整的眼。
+
+        现场（2026-11-15）：这只 3/4 侧脸的远侧眼被高光切成 39+18+18+32 四个
+        碎块，旧实现只留下 74px 碎点；合并 + 按颜色回填后应覆盖整个眼眶。
+        """
+        rgb, ink = self._ink_with_eyes()
+        # 把右眼（x=108..122）中间挖成高光：既不是墨线，也不是皮肤
+        rgb[62:70, 112:119] = (255, 255, 255)
+        ink[62:70, 112:119] = False
+        fg = np.ones(rgb.shape[:2], dtype=bool)
+        h, w = rgb.shape[:2]
+
+        _left, right = SemanticLayerer._eye_parts(
+            _anchors(), ~ink, fg, (h, w), rgb
+        )
+
+        ys, xs = np.nonzero(right)
+        assert xs.min() <= 108 and xs.max() >= 121, (
+            f"高光两侧的墨线没有被合并: x=[{xs.min()},{xs.max()}]"
+        )
+        # 高光本身被回填成眼内像素（否则瞳孔层中间会缺一块）
+        assert right[65, 115], "高光列没有并入眼睛掩码"
+        assert 62 <= ys.min() and ys.max() <= 70
+
+
     def test_nose_stays_in_its_small_window(self):
         rgb, ink = self._ink_with_eyes()
         h, w = rgb.shape[:2]
@@ -378,6 +404,154 @@ class TestFeatureParts:
 
         assert not SemanticLayerer._nose_part(degenerate, ink, (h, w)).any()
         assert not SemanticLayerer._mouth_part(degenerate, ink, (h, w)).any()
+
+
+class TestEyebrowRegion:
+    """眉毛取区收紧：不把刘海发丝/竖向碎块当成眉毛。
+
+    现场（2026-11-15）：旧实现只按「上下被皮肤夹住」取墨线，眉毛带里混进了
+    刘海碎块与竖向发丝（本素材 eyebrow_L/R 与眼睛区域重叠）；现在要求
+    「暗 + 横向」，并且窗口的水平中心对齐实际眼睛。
+    """
+
+    @staticmethod
+    def _scene():
+        rgb = _skin_canvas()
+        h, w = rgb.shape[:2]
+        eye_sides = []
+        brows = np.zeros((h, w), dtype=bool)
+        for cx in (85, 115):
+            eyes = np.zeros((h, w), dtype=bool)
+            rgb[62:72, cx - 7 : cx + 7] = (30, 40, 90)      # 眼睛
+            eyes[62:72, cx - 7 : cx + 7] = True
+            rgb[52:54, cx - 9 : cx + 9] = (90, 70, 60)      # 眉毛（暗、横）
+            brows[52:54, cx - 9 : cx + 9] = True
+            eye_sides.append(eyes)
+        # 刘海：亮米色发丝，只盖在眉毛两侧与两眼之间，不盖住眉毛本身
+        rgb[40:62, 55:74] = (238, 228, 216)
+        rgb[40:62, 96:104] = (238, 228, 216)
+        rgb[40:62, 126:145] = (238, 228, 216)
+        ink = np.zeros((h, w), dtype=bool)
+        ink[62:72, 78:92] = ink[62:72, 108:122] = True      # 眼睛墨线
+        ink[52:54, 76:94] = ink[52:54, 106:124] = True      # 眉毛墨线
+        fg = np.ones((h, w), dtype=bool)
+        return rgb, ink, fg, tuple(eye_sides), brows
+
+    def test_brows_kept_and_hair_ignored(self):
+        rgb, ink, fg, eye_sides, brows = self._scene()
+        h, w = rgb.shape[:2]
+
+        out = SemanticLayerer._eyebrow_parts(
+            _anchors(), ~ink, fg, (h, w), eye_sides, rgb
+        )
+
+        assert out.any()
+        assert not (out & ~brows).any(), "眉毛层包含了眉毛以外的像素"
+        ys, _xs = np.nonzero(out)
+        assert 52 <= ys.min() and ys.max() <= 53, f"取到了眼睛/发丝: y={ys.min()}..{ys.max()}"
+
+    def test_vertical_strands_are_rejected(self):
+        """竖向发丝即使被皮肤上下夹住，也不符合「横向」判据。"""
+        rgb = _skin_canvas()
+        h, w = rgb.shape[:2]
+        rgb[44:58, 95:98] = (90, 70, 60)   # 眉毛高度的竖条
+        ink = np.zeros((h, w), dtype=bool)
+        ink[44:58, 95:98] = True
+        fg = np.ones((h, w), dtype=bool)
+
+        out = SemanticLayerer._eyebrow_parts(_anchors(), ~ink, fg, (h, w), None, rgb)
+
+        assert not out.any()
+
+    def test_legacy_call_without_eyes_still_works(self):
+        """不传眼睛/原图时保持旧行为（单测与第三方调用依赖这个签名）。"""
+        rgb, ink, fg, _eyes, _brows = self._scene()
+        h, w = rgb.shape[:2]
+
+        out = SemanticLayerer._eyebrow_parts(_anchors(), ~ink, fg, (h, w))
+
+        assert out.any()
+
+
+class TestEyebrowEvidence:
+    """「源图有没有眉毛」的判读：上睫毛不能当成眉毛。
+
+    现场（2026-11-18）：真实立绘的刘海盖住额头、没有画眉毛，但眼球顶边往上
+    6 行是粗黑上睫毛。旧判据把这几行当成横向暗线，于是「有眉毛」，眉毛层却
+    永远取不出像素（0px），必需槽位一直报缺件。
+    """
+
+    @staticmethod
+    def _scene(with_brow: bool):
+        h = w = 160
+        rgb = np.empty((h, w, 3), dtype=np.uint8)
+        rgb[...] = SKIN
+        eyes = []
+        brows = np.zeros((h, w), dtype=bool)
+        for cx in (60, 100):
+            eye = np.zeros((h, w), dtype=bool)
+            rgb[86:96, cx - 20 : cx + 20] = (30, 40, 90)          # 眼球
+            eye[86:96, cx - 20 : cx + 20] = True
+            rgb[80:86, cx - 22 : cx + 22] = (8, 8, 8)             # 粗黑上睫毛
+            if with_brow:
+                rgb[70:73, cx - 16 : cx + 16] = (90, 70, 60)      # 眉毛（暗、横）
+                brows[70:73, cx - 16 : cx + 16] = True
+            eyes.append(eye)
+        return rgb, tuple(eyes), brows
+
+    def test_lash_rows_are_not_mistaken_for_a_brow(self):
+        rgb, eyes, _brows = self._scene(with_brow=False)
+
+        evidence = SemanticLayerer._eyebrow_evidence_of(
+            _anchors(right_eye=(60.0, 91.0), left_eye=(100.0, 91.0)),
+            eyes,
+            np.zeros(rgb.shape[:2], dtype=bool),
+            rgb,
+            np.ones(rgb.shape[:2], dtype=bool),
+            np.zeros(rgb.shape[:2], dtype=bool),
+            rgb.shape[:2],
+        )
+
+        assert evidence["absent"] is True
+        assert all(side["absent"] for side in evidence["sides"].values())
+        assert all(side["lash_rows"] > 0 for side in evidence["sides"].values())
+
+    def test_real_brow_above_the_lash_keeps_the_slot_required(self):
+        rgb, eyes, brows = self._scene(with_brow=True)
+
+        evidence = SemanticLayerer._eyebrow_evidence_of(
+            _anchors(right_eye=(60.0, 91.0), left_eye=(100.0, 91.0)),
+            eyes,
+            brows,
+            rgb,
+            np.ones(rgb.shape[:2], dtype=bool),
+            np.zeros(rgb.shape[:2], dtype=bool),
+            rgb.shape[:2],
+        )
+
+        assert evidence["absent"] is False
+        assert evidence["sides"]["L"]["separable_run"] > 0
+
+
+class TestLashLine:
+    """眼睛上沿定位：只认「成笔的深色 + 下方是暗眼内」，不认刘海散点/眉毛。"""
+
+    def test_scattered_hair_and_eyebrow_are_skipped(self):
+        dark = np.zeros((80, 80), dtype=bool)
+        dark[20, 10:70:4] = True              # 刘海：散点，不成笔
+        dark[25, 20:60] = True                # 眉毛：成笔，但下方是皮肤
+        dark[40, 20:60] = True                # 上睫毛
+        dark[41:46, 20:60] = True             # 睫毛下方的虹膜（暗）
+
+        line = SemanticLayerer._lash_line(dark, 10, 70, 10.0, 45.0, 40.0)
+
+        assert line == 40
+
+    def test_returns_none_when_no_stroke_exists(self):
+        dark = np.zeros((80, 80), dtype=bool)
+        dark[20, 10:70:4] = True
+
+        assert SemanticLayerer._lash_line(dark, 10, 70, 10.0, 45.0, 40.0) is None
 
 
 class TestSkinFaceSelection:

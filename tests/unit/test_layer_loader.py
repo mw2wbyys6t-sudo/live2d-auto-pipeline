@@ -330,6 +330,31 @@ def test_blocker_message_is_not_used_for_imperfect_layering(tmp_path):
 
 
 
+def test_manifest_readiness_flags_reach_the_loader(tmp_path):
+    """rig_ready / quality_ready / 人工复核项要透传到导出装载结果。
+
+    导出侧不能只看到 ``preview_ready``：P0 缺件或派生层证据不足是两种不同的
+    非 ready，把结论折叠成一句「部件齐了」会让上游把准备包当成可交付模型。
+    """
+    _write_layer(tmp_path, "hair_back")
+    _write_manifest(tmp_path, {
+        "preview_ready": True,
+        "missing_preview": [],
+        "rig_ready": False,
+        "quality_ready": False,
+        "manual_required": ["arm:R"],
+        "derived_parts": ["leg_L"],
+        "source": "semantic",
+    })
+
+    inputs = load_export_inputs(str(tmp_path))
+
+    assert inputs.parts_rig_ready is False
+    assert inputs.parts_quality_ready is False
+    assert inputs.manual_required == ["arm:R"]
+    assert inputs.derived_parts == ["leg_L"]
+
+
 def test_manifest_says_usable_export_inputs_agree(tmp_path):
     """第三向：清单说齐了就得报齐，否则闸门只会永远红。"""
     _write_layer(tmp_path, "hair_back")

@@ -85,6 +85,10 @@ class SemanticSegmenter:
         "arms",
         "hands",
         "legs",
+        # 长袜与鞋：不单列时白色长袜被并进腿的皮肤、鞋并进腿下端，
+        # 导出后既没有袜子层也没有鞋子层，脚步动作只能是整条腿在动。
+        "legwear",
+        "footwear",
         "accessories",
     ]
 
@@ -381,6 +385,14 @@ class SemanticSegmenter:
                 # 静止姿态下的不透明度。腮红/眼泪这类"淡入"表情层为 0：
                 # 静止时不可见，由参数键形在运行时抬到 1。
                 "rest_opacity": float(info.get("rest_opacity", 1.0)),
+                # 这条路径没有检测器：来源只能是颜色启发式，置信度无从谈起。
+                # 拆分/合成层由 composer 标注，不能被这里覆盖成检测结果。
+                "provenance": info.get("provenance") or "color_heuristic",
+                "confidence": info.get("confidence"),
+                "status": info.get("status") or "derived",
+                "source_mask": info.get("source_mask", part_name),
+                "derived": bool(info.get("derived", False)),
+                "depth": info.get("depth"),
             })
 
         # 4. Save preview (original optimized image) and composite preview
@@ -418,6 +430,8 @@ class SemanticSegmenter:
             "k_clusters": 0,
             "segmentation_mask": None,
             "guide_path": str(guide_path) if guide_path.exists() else None,
+            # 眉毛是否适用于这份源素材的可复核证据（见 _eyebrow_evidence_of）。
+            "eyebrow_evidence": getattr(self, "_eyebrow_evidence", None),
         }
 
     def _direct_mask_export(
@@ -887,6 +901,23 @@ class SemanticSegmenter:
         return "other"
 
     @staticmethod
+    def _neck_span(face_h: int, body_h: int) -> int:
+        """脖子带的长度上限：脸高的 28% 与身形高的 10% 取小。
+
+        脖子是下巴下面的一小段；用脸高的固定比例（尤其 >0.5）会把胸口和
+        大腿的肤色一起圈进来，legs 就再也分不出来。
+        """
+        return int(min(max(1, face_h) * 0.28, max(1, body_h) * 0.10))
+
+    @staticmethod
+    def _neck_bottom(neck_top: int, neck_span: int, waist_y: int, fg_bottom: int) -> int:
+        """脖子带的下界：至少 8px，且不得越过腰线与前景底边。"""
+        bottom = int(neck_top) + max(8, int(neck_span))
+        if waist_y > neck_top:
+            bottom = min(bottom, int(waist_y))
+        return min(bottom, int(fg_bottom))
+
+    @staticmethod
     def _is_skin_color(rgb: np.ndarray) -> bool:
         """Very loose anime skin-tone test in RGB."""
         r, g, b = float(rgb[0]), float(rgb[1]), float(rgb[2])
@@ -1024,19 +1055,6 @@ class SemanticSegmenter:
         # 容差肤色：脸的阴影渐变也算皮肤，否则按列扫描五官时会被切碎
         skin_tol = (~ink) | skin
 
-        eyes_left, eyes_right = self._eye_parts(anchors, skin_tol, fg, (h, w))
-        eyebrows = self._eyebrow_parts(anchors, skin_tol, fg, (h, w))
-        nose = self._nose_part(anchors, ink, (h, w))
-        mouth = self._mouth_part(anchors, ink, (h, w))
-
-        features = eyes_left | eyes_right | eyebrows | nose | mouth
-
-        # 脸底图层：完整实心脸形（含被刘海盖住的部分），并按五官锚点切掉脖子
-        face, chin_y = self._face_base(skin, features, anchors, fg, (h, w))
-        if not face.any():
-            # 冷色/深色角色：肤色没命中，退化为脸框内的非暗像素
-            face = in_face & fg
-
         # ---------- 头发 ----------
         non_skin = fg & ~skin
         fg_rows = np.where(fg.any(axis=1))[0]
@@ -1120,12 +1138,10 @@ class SemanticSegmenter:
         # “蓝通道主导”，会被整块并进后发层（实测 clothes_bottom 只剩 1014
         # 像素、裙摆跟着头动）。中轴两侧垂下来的长发保留（落点可到大腿）。
         hair = hair & ~(torso_core & (yy > waist_y))
-        hair = hair & ~features
         if not hair.any() or int(hair.sum()) > int(non_skin.sum()) * 0.85:
             # 发色没区分开（银发/纯黑发等）：退回按位置切
             hair = non_skin & (yy < shoulder_y)
             hair = hair & ~(torso_core & (yy > waist_y))
-        hair = hair & ~features
 
         # 「蓝色主导」这条规则会把同色系的领带、裙褶一起抓进头发（实测领带
         # 整条进了 hair_back）。头发在拓扑上是**一整块**：从头顶一直连到发梢；
@@ -1151,17 +1167,55 @@ class SemanticSegmenter:
             hair_front = hair.copy()
             hair_back = hair.copy()
 
+        # ---------- 五官 ----------
+        # 眼睛必须**在头发之后**取：刘海与睫毛在列扫描里常常连成一段非肤色，
+        # 先取眼会把刘海整块并进眼睛层。这里把 hair 作为「排除区」传进去，
+        # 眼带里不再有发丝。眉毛同样受益（不再把刘海碎块当眉毛）。
+        eyes_left, eyes_right = self._eye_parts(
+            anchors, skin_tol, fg, (h, w), rgb, hair
+        )
+        eyebrows = self._eyebrow_parts(
+            anchors, skin_tol, fg, (h, w), (eyes_left, eyes_right), rgb
+        )
+        # 眉毛是否存在属于「源素材事实」，不能靠推断；这里把判读依据留在结果里，
+        # 供分层清单决定是缺件还是不适用（见 _eyebrow_evidence）。
+        self._eyebrow_evidence = self._eyebrow_evidence_of(
+            anchors, (eyes_left, eyes_right), eyebrows, rgb, skin_tol, hair, (h, w)
+        )
+        nose = self._nose_part(anchors, ink, (h, w))
+        mouth = self._mouth_part(anchors, ink, (h, w))
+
+        features = eyes_left | eyes_right | eyebrows | nose | mouth
+
+        # 五官区域不属于头发（眼睛/嘴在色距规则里本来可能被算进发色）。
+        hair = hair & ~features
+        hair_front = hair_front & ~features
+        hair_back = hair_back & ~features
+
+        # 脸底图层：完整实心脸形（含被刘海盖住的部分），并按五官锚点切掉脖子
+        face, chin_y = self._face_base(skin, features, anchors, fg, (h, w))
+        if not face.any():
+            # 冷色/深色角色：肤色没命中，退化为脸框内的非暗像素
+            face = in_face & fg
+
         # ---------- 脖子 ----------
         # 以下颌（脸底肤色最低点）为基准，比用 YuNet 脸框下沿更贴近真实轮廓
         neck_top = int(max(chin_y, fy1 - int(face_h * 0.05)))
+        # 脖子是「下巴下面的一小段」，不是「脸以下的所有皮肤」。
+        # 旧实现把下界写成 face_h*0.9：脸框高 ~720px 时这条带子能一直伸到
+        # 大腿，把胸口与整条腿的肤色都算进 neck —— 实测 neck 变成 239×568，
+        # 而 leg_L 只剩 15×12（腿的像素被 neck 先吃掉，legs 永远拼不出来）。
+        # 现在按脸高/身形高取更小的下界，并且不越过腰线。
+        neck_span = self._neck_span(face_h, body_h)
+        neck_bottom = self._neck_bottom(neck_top, neck_span, waist_y, fg_bottom)
         neck_zone = (
             (yy > neck_top)
-            & (yy < neck_top + int(face_h * 0.9))
-            & (np.abs(xx - face_cx) <= face_w * 0.6)
+            & (yy < neck_bottom)
+            & (np.abs(xx - face_cx) <= face_w * 0.45)
         )
         neck = skin & neck_zone & ~face
         if not neck.any():
-            neck = skin & (yy > neck_top) & (yy < neck_top + face_h) & (np.abs(xx - face_cx) <= face_w)
+            neck = skin & (yy > neck_top) & (yy < neck_bottom) & (np.abs(xx - face_cx) <= face_w * 0.6)
 
         # ---------- 衣服 ----------
         clothes = non_skin & ~hair & ~features
@@ -1215,11 +1269,20 @@ class SemanticSegmenter:
                 arms |= comp & (yy < cut)
                 hands |= comp & (yy >= cut)
 
-        # 裙摆以下的非肤色（袜子/鞋）单独成层，不混进裙子
+        # 裙摆以下的非肤色（袜子/鞋）单独成层，不混进裙子。
+        # 只从「小腿下段」开始算：hem_y 是颜色宽度推出来的，遇到层叠裙摆/
+        # 半透明薄纱会把分界抬到大腿（实测 hem=861，裙摆实际到 ~1018），
+        # 于是整条下裙都被塞进 sock_L/R。用真实腿长再兜一次底。
         legwear = np.zeros((h, w), dtype=bool)
-        if hem_y is not None:
-            legwear = clothes_bottom & (yy >= hem_y)
-            clothes_bottom = clothes_bottom & (yy < hem_y)
+        legwear_top = hem_y
+        if legs.any():
+            rows = np.where(legs.any(axis=1))[0]
+            leg_bottom, leg_top_edge = int(rows.max()), int(rows.min())
+            lower_bound = leg_bottom - int((leg_bottom - leg_top_edge) * 0.45)
+            legwear_top = lower_bound if legwear_top is None else max(legwear_top, lower_bound)
+        if legwear_top is not None:
+            legwear = clothes_bottom & (yy >= legwear_top)
+            clothes_bottom = clothes_bottom & (yy < legwear_top)
 
         # 结构性图层去碎点：抗锯齿在发丝/描线边缘留下的大量 1~3 像素孤立点
         # 本身没有语义，却会让图层在 Live2D 里出现游离小点，也会让碎片化检查
@@ -1414,6 +1477,7 @@ class SemanticSegmenter:
         seed_y: float,
         max_height: float,
         margin: int = 2,
+        dark: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """按列取「上下都被肤色夹住的非肤色段」，用来切出眼/嘴这类封闭部件。
 
@@ -1421,6 +1485,11 @@ class SemanticSegmenter:
         但它们的**内部**并不是皮肤（眼白、瞳孔、唇线），所以不能靠填洞。
         逐列找包含部件中心的那段非肤色像素，再要求这段的上方与下方
         ``margin`` 像素内出现皮肤——头发是长条状、上方接不到皮肤，会被挡掉。
+
+        ``dark``（墨线掩码，可选）把「上方/下方」的判定从"必须是皮肤"放宽到
+        "皮肤或深色墨线"。动漫的眼睛上眼睑是一条厚睫毛，上方紧接的不是皮肤
+        而是睫毛/刘海；只认皮肤会把整只眼拒掉（实测远侧眼只剩 74px 碎点）。
+        头发是亮米色，不算 ``dark``，因此仍会被挡掉。
         """
         non_skin = np.asarray(non_skin, dtype=bool)
         skin_tol = np.asarray(skin_tol, dtype=bool)
@@ -1447,9 +1516,32 @@ class SemanticSegmenter:
                 continue
             above = bool(skin_tol[max(0, top - margin) : top, x].any())
             below = bool(skin_tol[bot + 1 : min(h, bot + 1 + margin), x].any())
+            if dark is not None:
+                above = above or bool(dark[max(0, top - margin) : top, x].any())
+                below = below or bool(dark[bot + 1 : min(h, bot + 1 + margin), x].any())
             if above and below:
                 out[top : bot + 1, x] = True
         return out
+
+    #: 眼睛横带的上下界（相对双眼间距 d，从双眼中心算起）。
+    #: 上界 0.60d：动漫上睫毛很厚，0.50d 会把睫毛切掉一截；下界保持 0.65d，
+    #: 再往下会把鼻梁墨点卷进来（实测 0.75d 时鼻孔那 9px 进了眼睛层）。
+    EYE_BAND_UP = 0.60
+    EYE_BAND_DOWN = 0.65
+    #: 上/下边界允许是深色墨线的宽度（睫毛紧贴着眼球，中间没有皮肤间隙）。
+    EYE_BOUNDARY_MARGIN = 4
+    #: 单个墨线块的面积下限（相对 d²）。低于它的是噪点/发丝碎屑。
+    EYE_MIN_COMPONENT_RATIO = 0.008
+    #: 同一只眼被高光/反光切成几块时，bbox 间距不超过这个比例就合并。
+    #: 0.30d 仍远小于双眼之间的空隙（实测 ~0.8d），不会把两只眼并成一只。
+    EYE_CLUSTER_GAP = 0.30
+    #: 合并后按颜色扩张的半径比例：把高光、眼白等"眼内但非墨线"的像素补回来。
+    EYE_SNAP_RATIO = 0.10
+    #: 「眼内像素」的颜色判据：深墨线 / 亮白（眼白与高光）/ 高饱和（虹膜）。
+    EYE_INK_LUM = 110
+    EYE_WHITE_LUM = 245
+    EYE_WHITE_SAT = 0.05
+    EYE_IRIS_SAT = 0.35
 
     @staticmethod
     def _eye_parts(
@@ -1457,52 +1549,313 @@ class SemanticSegmenter:
         skin_tol: np.ndarray,
         fg: np.ndarray,
         shape: Tuple[int, int],
+        rgb: Optional[np.ndarray] = None,
+        hair: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """用 YuNet 双眼关键点切出左右眼（含睫毛/眼白/瞳孔）。
+        """用 YuNet 双眼关键点定位眼睛横带，再按连通块分左右。
 
-        每只眼的 ROI 以关键点为心、``0.95×双眼间距`` 为半宽，
-        再按「双眼中线」切开，避免两侧 ROI 互相抢像素。动漫脸的头身比
-        差异很大，用双眼间距而不是脸框宽做尺度，换角色时更稳。
+        尺度用「双眼间距」而不是脸框宽（动漫头身比差异大）。没有原图（``rgb``）
+        时只做整带提取并按质心分左右，保持旧行为，方便单测直接调用。
+
+        有原图时**每只眼单独开带**（以人脸中线分左右半脸）：
+        * 上沿停在**上睫毛线**（见 :meth:`_lash_line`），而不是固定 0.5d/0.6d。
+          刘海常与睫毛连成一段非肤色，固定上沿会把刘海整块并进眼睛（实测
+          demo 立绘的眼掩码从 y=111 开始，而眼睛实际在 135 以下）；
+        * ``hair``（头发掩码）提供时先从非肤色/墨线里整体剔除，眼带里不会
+          再有刘海像素——这是比"猜睫毛线"更根本的一层；
+        * 眼内高光会把墨线切成几段，按 bbox 间距合并后取最大簇；
+        * 合并后按颜色把同一 bbox 内的眼白/高光/虹膜补回来，扩张范围同样
+          限制在睫毛线以下，不会把刘海补回来。
         """
         h, w = shape
         d = float(anchors.eye_distance)
         if not np.isfinite(d) or d < 2.0:
             d = max(2.0, (anchors.box[2] - anchors.box[0]) * 0.45)
-        mid_x = (anchors.right_eye[0] + anchors.left_eye[0]) / 2.0
         non_skin = (~np.asarray(skin_tol, dtype=bool)) & np.asarray(fg, dtype=bool)
+        fg_bool = np.asarray(fg, dtype=bool)
+        hair_mask = np.asarray(hair, dtype=bool) if hair is not None else None
+        if hair_mask is not None and hair_mask.any():
+            # 头发（含刘海）从「非肤色」里整体剔除：否则刘海与睫毛连成一段，
+            # 眼带会沿着它一路长到额头。
+            non_skin = non_skin & ~hair_mask
 
-        eyes: List[np.ndarray] = []
-        for name, anchor in (("left", anchors.right_eye), ("right", anchors.left_eye)):
-            ax, ay = float(anchor[0]), float(anchor[1])
-            x_lo = ax - 0.95 * d
-            x_hi = ax + 0.95 * d
-            if name == "left":
-                x_hi = min(x_hi, mid_x - 1.0)
-            else:
-                x_lo = max(x_lo, mid_x + 1.0)
-            mask = SemanticSegmenter._bounded_runs(
+        eye_y = (float(anchors.right_eye[1]) + float(anchors.left_eye[1])) / 2.0
+        face_lo = max(0.0, float(anchors.box[0]))
+        face_hi = min(float(w), float(anchors.box[2]))
+        face_cx = (face_lo + face_hi) / 2.0
+
+        # 先在「整个脸宽的眼睛横带」里一次性提取墨线块，再按人脸中线分配到左右。
+        # 旧实现给每只眼单独开 0.95*d 的 ROI 并按关键点中线硬切：皮肤启发式
+        # 给的关键点一旦偏一边，较小那只眼睛就会被 mid_x 直接削掉一半 ——
+        # 实测右眼只剩 109×62，而左眼是 242×116。整带提取按连通块归属，
+        # 不会再出现「一只眼被中线切开」。
+        dark = None
+        if rgb is not None:
+            arr = np.asarray(rgb, dtype=np.float32)
+            if arr.ndim == 3 and arr.shape[2] >= 3:
+                lum = (0.299 * arr[..., 0] + 0.587 * arr[..., 1]
+                       + 0.114 * arr[..., 2])
+                dark = (lum < SemanticSegmenter.EYE_INK_LUM) & fg_bool
+                if hair_mask is not None:
+                    dark = dark & ~hair_mask
+
+        eyes: List[np.ndarray] = [np.zeros((h, w), dtype=bool) for _ in range(2)]
+        min_area = max(8, int(SemanticSegmenter.EYE_MIN_COMPONENT_RATIO * d * d))
+
+        if dark is None:
+            # 兼容路径：没有原图时只做整带提取，不合并、不扩张
+            band = SemanticSegmenter._bounded_runs(
+                non_skin,
+                skin_tol,
+                face_lo,
+                face_hi,
+                eye_y - SemanticSegmenter.EYE_BAND_UP * d,
+                eye_y + SemanticSegmenter.EYE_BAND_DOWN * d,
+                eye_y,
+                max_height=0.95 * d,
+                margin=SemanticSegmenter.EYE_BOUNDARY_MARGIN,
+            ) & fg_bool
+            for comp, area, cx, _cy in SemanticSegmenter._components(band):
+                if area < min_area:
+                    continue
+                eyes[0 if cx < face_cx else 1] |= np.asarray(comp, dtype=bool)
+            return eyes[0], eyes[1]
+
+        # 有原图时**每只眼单独开带**，上沿停在「上睫毛」而不是固定比例：
+        # 刘海常与睫毛连成一段非肤色，固定上沿会把刘海整块并进眼睛（实测
+        # demo 立绘的眼掩码从 y=111 开始，而眼睛实际在 135 以下）。按睫毛线
+        # 截断后，带内只剩眼球本身。
+        snap_mask = SemanticSegmenter._eye_like_mask(rgb, fg_bool)
+        if hair_mask is not None:
+            snap_mask = snap_mask & ~hair_mask
+        white_mask = SemanticSegmenter._eye_white_mask(rgb, fg_bool)
+        pad = max(2, int(round(SemanticSegmenter.EYE_SNAP_RATIO * d)))
+        halves = (
+            (0, anchors.right_eye, face_lo, face_cx - 1.0),
+            (1, anchors.left_eye, face_cx + 1.0, face_hi),
+        )
+        for side, anchor, x_lo, x_hi in halves:
+            ay = float(anchor[1])
+            lash = SemanticSegmenter._lash_line(
+                dark,
+                x_lo,
+                x_hi,
+                ay - SemanticSegmenter.EYE_BAND_UP * d,
+                ay + 0.05 * d,
+                d,
+            )
+            top = float(lash) if lash is not None else ay - SemanticSegmenter.EYE_BAND_UP * d
+            # 眼白/高光是**只在眼睛里**才有的近纯白像素（发丝是米色/蓝色，
+            # 饱和度不为 0）。用它的上沿再压一次带顶：demo 立绘的刘海下缘是
+            # 成笔深色，`_lash_line` 会误判成睫毛（实测 122，而真睫毛在 135），
+            # 眼白上沿把带顶拉回 137 附近，刘海不再进眼睛层。
+            core_top = SemanticSegmenter._eye_core_top(
+                white_mask, x_lo, x_hi, top, ay + SemanticSegmenter.EYE_BAND_DOWN * d
+            )
+            if core_top is not None:
+                top = max(top, core_top - 0.10 * d)
+            band = SemanticSegmenter._bounded_runs(
                 non_skin,
                 skin_tol,
                 x_lo,
                 x_hi,
-                ay - 0.50 * d,
-                ay + 0.65 * d,
+                top,
+                ay + SemanticSegmenter.EYE_BAND_DOWN * d,
                 ay,
-                max_height=0.95 * d,
-            )
-            mask &= np.asarray(fg, dtype=bool)
+                max_height=1.10 * d,
+                margin=SemanticSegmenter.EYE_BOUNDARY_MARGIN,
+                dark=dark,
+            ) & fg_bool
 
-            # 眼眶下沿被描线/防晒霜高光断开时，按列结果会碎成几块，
-            # 保留该 ROI 内所有成规模的碎块（实测被发丝切开的眼睛会拆成 2 块）。
-            comps = SemanticSegmenter._components(mask)
-            keep = np.zeros((h, w), dtype=bool)
-            min_area = max(6, int(0.0012 * d * d))
-            for comp, area, _cx, _cy in comps:
-                if area >= min_area:
-                    keep |= comp
-            eyes.append(keep)
+            comps: List[dict] = []
+            for comp, area, cx, _cy in SemanticSegmenter._components(band):
+                if area < min_area:
+                    continue
+                mask = np.asarray(comp, dtype=bool)
+                ys, xs = np.where(mask)
+                comps.append({
+                    "mask": mask,
+                    "area": int(area),
+                    "cx": float(cx),
+                    "bbox": (int(xs.min()), int(ys.min()),
+                             int(xs.max()), int(ys.max())),
+                })
+            clusters = SemanticSegmenter._cluster_components(
+                comps, gap=SemanticSegmenter.EYE_CLUSTER_GAP * d
+            )
+            if not clusters:
+                continue
+            cluster = clusters[0]
+            mask = cluster["mask"]
+            x0, y0, x1, y1 = cluster["bbox"]
+            # 扩张只在睫毛线以下进行：否则会把上方的刘海又补回来
+            X0, Y0 = max(0, x0 - pad), max(int(top), y0 - pad)
+            X1, Y1 = min(w, x1 + pad + 1), min(h, y1 + pad + 1)
+            local = np.zeros((h, w), dtype=bool)
+            local[Y0:Y1, X0:X1] = snap_mask[Y0:Y1, X0:X1]
+            for comp, _area, _cx, _cy in SemanticSegmenter._components(local):
+                piece = np.asarray(comp, dtype=bool)
+                ys, xs = np.where(piece)
+                if (xs.max() < x0 or xs.min() > x1
+                        or ys.max() < y0 or ys.min() > y1):
+                    continue
+                mask = mask | piece
+            eyes[side] |= mask
 
         return eyes[0], eyes[1]
+
+    @staticmethod
+    def _longest_true_run(values: np.ndarray) -> int:
+        """一行布尔值里最长的连续 True 长度。"""
+        best = cur = 0
+        for value in values:
+            cur = cur + 1 if value else 0
+            if cur > best:
+                best = cur
+        return best
+
+    @staticmethod
+    def _lash_line(
+        dark: np.ndarray,
+        x_lo: float,
+        x_hi: float,
+        y_lo: float,
+        y_hi: float,
+        d: float,
+    ) -> Optional[int]:
+        """找这只眼的**上睫毛线**（自上而下第一行成笔的深色）。
+
+        三条同时成立才算睫毛线：
+        * 该行深色像素总数够多；
+        * 其中最长的**连续**深色段够长——刘海发丝的深色是散点（实测 demo 上
+          刘海行最长连续段只有 2~4px，而睫毛行是 12~22px）；
+        * 紧挨着的下方是**暗的眼内像素**（粗睫毛/虹膜）：实测"假睫毛线"
+          （刘海下缘）下方平均亮度 182，真睫毛线下方只有 84。只统计非肤色
+          不够——刘海下方同样是发丝，也会被算成眼内。
+        眉毛同样是成笔的深色，但它下面紧接着是皮肤，会被跳过。
+        找不到时返回 ``None``，调用方退回比例边界。
+        """
+        x0, x1 = max(0, int(x_lo)), int(x_hi)
+        y0, y1 = max(0, int(y_lo)), int(y_hi)
+        if x1 <= x0 or y1 < y0:
+            return None
+        width = x1 - x0 + 1
+        need = max(3, int(round(0.30 * width)))
+        need_run = max(3, int(round(0.15 * width)))
+        probe = max(2, int(round(0.10 * d)))
+        height = dark.shape[0]
+        for y in range(y0, min(y1, height - 1) + 1):
+            row = dark[y, x0 : x1 + 1]
+            if int(row.sum()) < need:
+                continue
+            if SemanticSegmenter._longest_true_run(row) < need_run:
+                continue
+            below = dark[y + 1 : min(height, y + 1 + probe), x0 : x1 + 1]
+            if below.size == 0 or float(below.mean()) < 0.30:
+                continue
+            return y
+        return None
+
+    @staticmethod
+    def _eye_white_mask(rgb: np.ndarray, fg: np.ndarray) -> np.ndarray:
+        """眼白/高光：亮度极高且几乎无饱和的像素（近纯白）。"""
+        arr = np.asarray(rgb, dtype=np.float32)
+        if arr.ndim != 3 or arr.shape[2] < 3:
+            return np.zeros(np.asarray(fg).shape, dtype=bool)
+        rgb3 = arr[..., :3]
+        lum = 0.299 * rgb3[..., 0] + 0.587 * rgb3[..., 1] + 0.114 * rgb3[..., 2]
+        hi = rgb3.max(axis=2)
+        lo = rgb3.min(axis=2)
+        sat = (hi - lo) / np.clip(hi, 1.0, None)
+        return (
+            (lum >= SemanticSegmenter.EYE_WHITE_LUM)
+            & (sat <= SemanticSegmenter.EYE_WHITE_SAT)
+            & np.asarray(fg, dtype=bool)
+        )
+
+    @staticmethod
+    def _eye_core_top(
+        white: np.ndarray,
+        x_lo: float,
+        x_hi: float,
+        y_lo: float,
+        y_hi: float,
+    ) -> Optional[int]:
+        """该侧眼眶里第一行出现「成块眼白」的行号；没有则返回 ``None``。
+
+        要求同一行至少 2 个白像素，避免单点高光（发丝的镜面反射）误判。
+        """
+        x0, x1 = max(0, int(x_lo)), int(x_hi)
+        y0, y1 = max(0, int(y_lo)), int(y_hi)
+        if x1 <= x0 or y1 < y0:
+            return None
+        counts = np.asarray(white)[y0 : y1 + 1, x0 : x1 + 1].sum(axis=1)
+        rows = np.where(counts >= 2)[0]
+        return int(rows.min()) + y0 if rows.size else None
+
+    @staticmethod
+    def _cluster_components(comps: List[dict], gap: float) -> List[dict]:
+        """按 bbox 间距把同一只眼的碎块合并，返回按面积降序的簇。"""
+        clusters: List[dict] = []
+        for comp in sorted(comps, key=lambda c: -c["area"]):
+            x0, y0, x1, y1 = comp["bbox"]
+            for cluster in clusters:
+                cx0, cy0, cx1, cy1 = cluster["bbox"]
+                if (x1 + gap < cx0 or x0 - gap > cx1
+                        or y1 + gap < cy0 or y0 - gap > cy1):
+                    continue
+                cluster["mask"] |= comp["mask"]
+                cluster["area"] += comp["area"]
+                cluster["bbox"] = (
+                    min(cx0, x0), min(cy0, y0), max(cx1, x1), max(cy1, y1),
+                )
+                # 质心按面积加权，避免小碎块把整只眼拉偏
+                total = max(1, cluster["area"])
+                cluster["cx"] = (
+                    cluster["cx"] * (total - comp["area"]) + comp["cx"] * comp["area"]
+                ) / total
+                break
+            else:
+                clusters.append({
+                    "mask": comp["mask"].copy(),
+                    "area": comp["area"],
+                    "cx": comp["cx"],
+                    "bbox": comp["bbox"],
+                })
+        clusters.sort(key=lambda c: -c["area"])
+        return clusters
+
+    @staticmethod
+    def _eye_like_mask(rgb: np.ndarray, fg: np.ndarray) -> np.ndarray:
+        """眼内像素的颜色判据：深墨线 / 亮白（眼白、高光）/ 高饱和（虹膜）。
+
+        头发是亮而低饱和的米色，会被排除；浅肤色也因亮度不足 245 被排除。
+        """
+        arr = np.asarray(rgb, dtype=np.float32)
+        if arr.ndim != 3 or arr.shape[2] < 3:
+            return np.zeros(np.asarray(fg).shape, dtype=bool)
+        rgb3 = arr[..., :3]
+        lum = 0.299 * rgb3[..., 0] + 0.587 * rgb3[..., 1] + 0.114 * rgb3[..., 2]
+        hi = rgb3.max(axis=2)
+        lo = rgb3.min(axis=2)
+        sat = (hi - lo) / np.clip(hi, 1.0, None)
+        like = (
+            (lum < SemanticSegmenter.EYE_INK_LUM)
+            | ((lum >= SemanticSegmenter.EYE_WHITE_LUM)
+               & (sat <= SemanticSegmenter.EYE_WHITE_SAT))
+            | (sat >= SemanticSegmenter.EYE_IRIS_SAT)
+        )
+        return like & np.asarray(fg, dtype=bool)
+
+    #: 眉毛取区的收紧参数：只保留「暗 + 横向」的连通块。
+    #: 刘海是亮米色发丝，亮度高；耳饰/发影是竖条或团块，都被排除。
+    #:
+    #: 为什么不直接按眼睛掩码上下截断：眼睛掩码本身常含刘海（眼睛与刘海在
+    #: 列扫描里连成一段），拿它当眉毛的下界会把整条眉毛切掉（实测 demo 立绘
+    #: 眉毛整条消失）。眼睛只用来给眉毛窗口定水平中心，垂直位置仍由锚点决定，
+    #: 眼睛/睫毛像素靠「段高上限 + 走势 + 亮度」过滤掉。
+    EYEBROW_MAX_LUM = 170
+    EYEBROW_MIN_ASPECT = 1.6
 
     @staticmethod
     def _eyebrow_parts(
@@ -1510,12 +1863,19 @@ class SemanticSegmenter:
         skin_tol: np.ndarray,
         fg: np.ndarray,
         shape: Tuple[int, int],
+        eyes: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+        rgb: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """眉毛：眼睛上方、被皮肤上下夹住的横向墨线块。
 
         刘海常常直接盖住眉毛，此时如实返回空掩码（分层清单会记为缺失），
         不用发丝或眼线凑数。判据和眼睛同源：眉毛是小段「上方接皮肤、下方接
         皮肤」的墨线，而刘海是长条（上下接不到皮肤），天然被排除。
+
+        ``eyes`` 提供时用**实际眼睛掩码**的水平中心定位眉毛窗口（远侧关键点
+        常常偏到鼻梁附近）；``rgb`` 提供时再按颜色要求"暗 + 横向"，把亮色
+        发丝与眼线排除在外。
+
         """
         h, w = shape
         out = np.zeros((h, w), dtype=bool)
@@ -1523,27 +1883,266 @@ class SemanticSegmenter:
         if not np.isfinite(d) or d < 2.0:
             return out
         mid_x = (anchors.right_eye[0] + anchors.left_eye[0]) / 2.0
-        non_skin = (~np.asarray(skin_tol, dtype=bool)) & np.asarray(fg, dtype=bool)
+        fg_bool = np.asarray(fg, dtype=bool)
+        non_skin = (~np.asarray(skin_tol, dtype=bool)) & fg_bool
 
-        for name, anchor in (("left", anchors.right_eye), ("right", anchors.left_eye)):
+        lum = None
+        if rgb is not None:
+            arr = np.asarray(rgb, dtype=np.float32)
+            if arr.ndim == 3 and arr.shape[2] >= 3:
+                lum = (0.299 * arr[..., 0] + 0.587 * arr[..., 1]
+                       + 0.114 * arr[..., 2])
+
+        sides = ("left", anchors.right_eye), ("right", anchors.left_eye)
+        for index, (name, anchor) in enumerate(sides):
             ax, ay = float(anchor[0]), float(anchor[1])
+            y_lo = ay - 0.78 * d
+            y_hi = ay - 0.18 * d
+            if eyes is not None and index < len(eyes):
+                candidate = np.asarray(eyes[index], dtype=bool)
+                if candidate.any():
+                    eye_xs = np.where(candidate)[1]
+                    # 只借眼睛掩码的水平中心：远侧关键点常常偏到鼻梁附近，
+                    # 按它开窗口会把眉毛取到脸中间。
+                    ax = (float(eye_xs.min()) + float(eye_xs.max())) / 2.0
+            if y_hi <= y_lo:
+                continue
+
             x_lo = ax - 0.80 * d
             x_hi = ax + 0.80 * d
             if name == "left":
                 x_hi = min(x_hi, mid_x - 1.0)
             else:
                 x_lo = max(x_lo, mid_x + 1.0)
-            out |= SemanticSegmenter._bounded_runs(
+
+            band = SemanticSegmenter._bounded_runs(
                 non_skin,
                 skin_tol,
                 x_lo,
                 x_hi,
-                ay - 0.78 * d,
-                ay - 0.18 * d,
+                y_lo,
+                y_hi,
                 ay - 0.48 * d,
                 max_height=0.32 * d,
+            ) & fg_bool
+
+            min_area = max(4, int(0.004 * d * d))
+            for comp, area, _cx, _cy in SemanticSegmenter._components(band):
+                if area < min_area:
+                    continue
+                piece = np.asarray(comp, dtype=bool)
+                ys, xs = np.where(piece)
+                bw = int(xs.max() - xs.min() + 1)
+                bh = int(ys.max() - ys.min() + 1)
+                if bw < SemanticSegmenter.EYEBROW_MIN_ASPECT * bh:
+                    continue  # 竖向/团块：发丝交叉或阴影，不是眉毛
+                if lum is not None and float(lum[piece].mean()) > SemanticSegmenter.EYEBROW_MAX_LUM:
+                    continue  # 亮色：刘海发丝
+                out |= piece
+        return out & fg_bool
+
+    #: 判读「源图没有眉毛」的阈值。
+    #:
+    #: 眉毛是横着的一道笔画；没有眉毛的立绘在眼上只会有睫毛、刘海碎块或眼褶。
+    #: 因此把「带内最长横向暗线 / 眉宽尺度」作为主判据，并同时要求这条暗线
+    #: 足够淡（与脸部底色亮度差小于阈值），避免把较深的眼褶或发丝误判成「没有
+    #: 眉毛」。任一条件不满足就保持缺件，交给人工复核——宁可报缺，不可编造。
+    #:
+    #: 尺度用**眼距**而不是眼球掩码宽度：掩码宽度会被粗睫毛吃掉一块，而且
+    #: 两侧不一致（4K 实测右眼 38px、左眼 96px）。同一张图左右用不同尺子，
+    #: 结论就会互相矛盾（INV-2 要求左右一致）。眼距来自关键点，随画布等比缩放。
+    EYEBROW_ABSENT_RUN_RATIO = 0.55
+    #: 暗线有多深才算「可能是眉毛」。
+    #:
+    #: 实测：真实眉线是整段均匀的深色（合成样本亮度差 155）；斜穿眉部的发丝
+    #: 只有部分像素深（4K 实测最长暗线亮度中位数 117，亮度差 103）。取 130 分界
+    #: 既能排除发丝，又能认出真正的深色眉线；而浅色眉线本来就「可分离」，走的是
+    #: 另一条判据，不靠这个门槛。
+    EYEBROW_ABSENT_CONTRAST = 130.0
+    #: 眉毛带下沿离眼顶至少这么多个眼距，避开粗黑的上睫毛。
+    EYEBROW_BAND_TOP_MARGIN = 0.10
+    #: 上睫毛判据：从眼球顶边往上，暗像素占该行比例达到这个值就算睫毛。
+    #:
+    #: 固定的 ``EYEBROW_BAND_TOP_MARGIN`` 挡不住粗黑睫毛：实测右眼从眼球顶边
+    #: 往上 6 行都是睫毛（行内 57%~82% 是暗像素，亮度中位数 64~115），而再往上
+    #: 一行只有 43%。把这几行算进眉部窗口，就会得到一条「20px 长、亮度 55」的
+    #: 假眉线，把本来没有眉毛的输入判成有眉毛。
+    EYEBROW_LASH_DARK_FRACTION = 0.5
+    #: 睫毛最多有**整只眼**那么高。走到上限还没结束，说明是刘海压眼之类的
+    #: 别的东西，此时无法判读，保持缺件交给人工复核。
+    #:
+    #: 这里用眼球掩码的高度：宽度会被睫毛吃掉一块（4K 实测右眼 61px、左眼
+    #: 95px），眼距在低分辨率关键点失准时也不可靠（4K 实测 83px，而按画布
+    #: 等比应为 167px）。高度只用来卡「厚到不正常」，1.0 倍不会误伤睫毛。
+    EYEBROW_LASH_MAX_RATIO = 1.0
+    #: 紧挨睫毛还要再让开几行：那一行只是睫毛的抗锯齿边缘（实测亮度中位数 217、
+    #: 与肤色无异，但里面有 10px 的深色过渡），当眉线会得到「亮度差 99」的假证据。
+    EYEBROW_LASH_AA_ROWS = 1
+
+    @classmethod
+    def _eyebrow_evidence_of(
+        cls,
+        anchors,
+        eyes: Tuple[np.ndarray, np.ndarray],
+        eyebrows: np.ndarray,
+        rgb: np.ndarray,
+        skin_tol: np.ndarray,
+        hair: np.ndarray,
+        shape: Tuple[int, int],
+    ) -> Dict[str, Any]:
+        """记录「源图是否存在眉毛」的可复核证据。
+
+        为什么需要它：眉毛是绑定必需槽位，但真实立绘可能根本不画眉毛（刘海或
+        设计本身省略）。这种输入无论怎么调检测都取不出眉毛像素——此时按规格
+        INV-4 / failure_modes，不能生成合成眉毛，只能如实标注并降级为不适用
+        （规格 reconsider_if 允许把无稳定像素证据的槽位降为 optional）。
+
+        判读只看**非头发像素**：刘海发丝常常横着压在眉部窗口里，颜色很深，
+        若把它算进暗线，会把「没有眉毛」误判成「有眉毛」。
+
+        Returns:
+            ``{"absent": bool, "sides": {...}, "reason": str}``。``absent`` 只有在
+            **两侧**都「检测为零像素 + 带内没有像样的横向暗线」时才为 True。
+        """
+        h, w = shape
+        empty = {"absent": False, "sides": {}, "reason": ""}
+        d = float(getattr(anchors, "eye_distance", 0.0) or 0.0)
+        if not np.isfinite(d) or d < 2.0:
+            return empty
+
+        arr = np.asarray(rgb, dtype=np.float32)
+        if arr.ndim != 3 or arr.shape[2] < 3:
+            return empty
+        lum = 0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2]
+        skin = np.asarray(skin_tol, dtype=bool)
+        face_lum = float(np.median(lum[skin])) if skin.any() else float(np.median(lum))
+        brow_mask = np.asarray(eyebrows, dtype=bool)
+        hair_mask = np.asarray(hair, dtype=bool)
+
+        sides: Dict[str, Dict[str, Any]] = {}
+        all_absent = True
+        for index, (name, anchor) in enumerate(
+            (("L", anchors.right_eye), ("R", anchors.left_eye))
+        ):
+            ax, ay = float(anchor[0]), float(anchor[1])
+            eye = np.asarray(eyes[index], dtype=bool) if index < len(eyes) else np.zeros((h, w), bool)
+            if eye.any():
+                ys, xs = np.where(eye)
+                eye_top = int(ys.min())
+                x0, x1 = int(xs.min()), int(xs.max())
+                eye_height = int(ys.max()) - eye_top + 1
+                ax = (x0 + x1) / 2.0
+            else:
+                eye_top = int(ay)
+                half = max(2, int(0.55 * d))
+                x0, x1 = int(ax) - half, int(ax) + half
+                eye_height = max(2, int(round(0.25 * d)))
+            eye_width = max(1, x1 - x0 + 1)
+
+            margin = max(2, int(round(cls.EYEBROW_BAND_TOP_MARGIN * d)))
+            y_hi = eye_top - margin
+            y_lo = eye_top - int(round(0.55 * d))
+
+            # 粗黑上睫毛和眼球连成一片，固定 margin 挡不住它（见
+            # EYEBROW_LASH_DARK_FRACTION）。先把这段睫毛量出来，窗口从它上方起算。
+            lash_rows = 0
+            lash_limit = max(2, int(round(cls.EYEBROW_LASH_MAX_RATIO * eye_height)))
+            win_lo, win_hi = max(0, x0), min(w, x1 + 1)
+            for step in range(lash_limit):
+                y = eye_top - 1 - step
+                if y < 0:
+                    break
+                row = lum[y, win_lo:win_hi]
+                on_skin = ~hair_mask[y, win_lo:win_hi]
+                dark = (row < (face_lum - 18.0)) & on_skin
+                if row.size and float(dark.mean()) >= cls.EYEBROW_LASH_DARK_FRACTION:
+                    lash_rows += 1
+                else:
+                    break
+            lash_top = eye_top - lash_rows
+            # 睫毛一路走到上限还没断开：这是刘海压眼之类的东西，判不了，保持缺件。
+            lash_unjudgeable = lash_rows >= lash_limit
+            y_hi = min(y_hi, lash_top - 1 - (cls.EYEBROW_LASH_AA_ROWS if lash_rows else 0))
+
+            longest = 0
+            run_lum = float(face_lum)
+            separable = 0
+            if y_hi >= y_lo and x1 >= x0:
+                lo, hi = win_lo, win_hi
+                required = max(4, int(round(0.25 * d)))
+                for y in range(max(0, y_lo), min(h - 1, y_hi) + 1):
+                    row = lum[y, lo:hi]
+                    on_skin = ~hair_mask[y, lo:hi]
+                    dark = (row < (face_lum - 18.0)) & on_skin
+                    if not dark.any():
+                        continue
+                    # 逐段找出暗笔画，并记录最长的一段
+                    start = None
+                    for col, flag in enumerate(list(dark) + [False]):
+                        if flag and start is None:
+                            start = col
+                        elif not flag and start is not None:
+                            length = col - start
+                            if length > longest:
+                                longest = length
+                                run_lum = float(row[start:col].mean())
+                            # 「可分离」才算眉毛：下方两行同列不能还是暗的，
+                            # 否则这条笔画与睫毛连成一片，切出来必然带上睫毛
+                            # （实测真实立绘：眉部暗线与眼线在列方向连成一段）。
+                            if length >= required:
+                                blocked = False
+                                for below in (y + 1, y + 2):
+                                    if below >= h:
+                                        blocked = True
+                                        break
+                                    sub = lum[below, lo + start : lo + col]
+                                    if (sub < (face_lum - 18.0)).any():
+                                        blocked = True
+                                        break
+                                if not blocked:
+                                    separable = max(separable, length)
+                            start = None
+
+            window = np.zeros((h, w), dtype=bool)
+            if y_hi >= y_lo:
+                window[max(0, y_lo) : min(h, y_hi + 1), max(0, x0) : min(w, x1 + 1)] = True
+            pixels = int((brow_mask & window).sum())
+
+            contrast = face_lum - run_lum
+            side_absent = (
+                not lash_unjudgeable
+                # 窗口被睫毛吃光时等于「没看到」，不能据此判不适用。
+                and y_hi >= y_lo
+                and pixels == 0
+                and separable == 0
+                and longest <= cls.EYEBROW_ABSENT_RUN_RATIO * d
+                and contrast <= cls.EYEBROW_ABSENT_CONTRAST
             )
-        return out & np.asarray(fg, dtype=bool)
+            sides[name] = {
+                "pixels": pixels,
+                "eye_width": eye_width,
+                "lash_rows": int(lash_rows),
+                "longest_dark_run": int(longest),
+                "separable_run": int(separable),
+                "run_luminance": round(run_lum, 1),
+                "face_luminance": round(face_lum, 1),
+                "absent": bool(side_absent),
+            }
+            all_absent = all_absent and side_absent
+
+        reason = ""
+        if all_absent:
+            reason = (
+                "源图眉部窗口内没有可分离的眉毛笔画（"
+                + "；".join(
+                    f"{side}: 像素 {info['pixels']}, 最长横向暗线 "
+                    f"{info['longest_dark_run']}px（眼距 {int(round(d))}px）, "
+                    f"亮度差 {round(info['face_luminance'] - info['run_luminance'], 1)}"
+                    for side, info in sides.items()
+                )
+                + "）"
+            )
+        return {"absent": bool(all_absent), "sides": sides, "reason": reason}
 
     @staticmethod
     def _nose_part(anchors, ink: np.ndarray, shape: Tuple[int, int]) -> np.ndarray:

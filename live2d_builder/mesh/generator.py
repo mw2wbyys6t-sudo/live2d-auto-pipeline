@@ -32,6 +32,18 @@ class MeshGenerator:
     image dimensions are non-zero.
     """
 
+    #: 网格取样用的 alpha 下限。立绘边缘有 1~3px 抗锯齿过渡（alpha 1~128），
+    #: 按 128 取轮廓会把这一圈整圈漏在网格之外：网格边界是折线，于是边缘被
+    #: 切成台阶，相邻部件之间留下 2~4px 透明缝 —— 在 VTS 里放大后就是"洞"。
+    #: 实测腿 7.54%、手臂 5.00%、袜 2.28% 的可见像素根本不在网格内。
+    #: 取 8 只多覆盖肉眼可见的边缘墨迹，低于 8 的像素本就看不见。
+    MESH_ALPHA_FLOOR = 8
+
+    def _mask(self, alpha: np.ndarray) -> np.ndarray:
+        """三角化用的二值掩码：把可见的软边一并算进网格覆盖。"""
+        floor = min(self.alpha_threshold, self.MESH_ALPHA_FLOOR)
+        return (alpha > floor).astype(np.uint8)
+
     def __init__(
         self,
         internal_spacing: int = 24,
@@ -130,7 +142,7 @@ class MeshGenerator:
         alpha = arr[:, :, 3]
         h, w = alpha.shape
 
-        mask = (alpha > self.alpha_threshold).astype(np.uint8)
+        mask = self._mask(alpha)
         if mask.sum() == 0:
             return self._empty_mesh(w, h)
 
@@ -161,7 +173,7 @@ class MeshGenerator:
         alpha = arr[:, :, 3]
         h, w = alpha.shape
 
-        mask = (alpha > self.alpha_threshold).astype(np.uint8)
+        mask = self._mask(alpha)
         if mask.sum() == 0:
             return self._empty_mesh(w, h)
 
@@ -197,7 +209,7 @@ class MeshGenerator:
         alpha = arr[:, :, 3]
         h, w = alpha.shape
 
-        mask = (alpha > self.alpha_threshold).astype(np.uint8)
+        mask = self._mask(alpha)
         if mask.sum() == 0:
             return self._empty_mesh(w, h)
 
@@ -236,7 +248,7 @@ class MeshGenerator:
         alpha = arr[:, :, 3]
         h, w = alpha.shape
 
-        mask = (alpha > self.alpha_threshold).astype(np.uint8)
+        mask = self._mask(alpha)
         if mask.sum() == 0:
             return self._empty_mesh(w, h)
 

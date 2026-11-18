@@ -63,7 +63,7 @@ export interface Outfit {
 // ---------- Generation ----------
 
 export type ProviderId = 'pollinations' | 'seedream' | 'sensenova' | 'openai' | 'local';
-export type Resolution = 512 | 768 | 1024 | 2048;
+export type Resolution = 512 | 768 | 1024 | 1536 | 2048;
 export type StylePreset =
   | 'moe'
   | 'realistic'
@@ -81,8 +81,8 @@ export interface GenerationRequest {
   negativePrompt?: string;
   /** 界面上的偏好标记，不透传给后端；真正生效的引擎见 engine。 */
   provider?: ProviderId;
-  width: Resolution;
-  height: Resolution;
+  width: number;
+  height: number;
   /** 后端当前不消费 style：保留为可选。 */
   style?: StylePreset;
   seed?: number;
@@ -98,6 +98,10 @@ export interface GenerationRequest {
   model?: string;
   /** 本地引擎的 LoRA 文件名（角色一致性）。 */
   lora?: string;
+  /** 多候选择优：>1 时生成 N 张并按 QA/剪影/居中评分选优。 */
+  candidates?: number;
+  /** 生成后立绘规范化；缺省 = 后端默认开启。 */
+  normalizeCanvas?: boolean;
 }
 
 export type PipelineStatus =
@@ -151,6 +155,12 @@ export interface GenerationResult {
   fallback?: boolean;
   /** 为什么退到占位图（免密上游配额耗尽 / 没配图像服务）。 */
   fallbackReason?: string;
+  /** 立绘是真的 AI 出图，但后续分层/绑定/PSD 阶段失败。 */
+  incomplete?: boolean;
+  /** 后续哪一步失败、失败原因。 */
+  incompleteReason?: string;
+  /** 上游把请求尺寸降了（免密通道像素上限）；图是真的，只是细节更少。 */
+  sizeDowngraded?: boolean;
 }
 
 // ---------- Layers ----------

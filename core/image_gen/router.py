@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Callable, Type
 
 from core.image_gen.base import ImageProvider, GenerationResult, GenerationError
+from core.image_gen.registry import PRIORITY_NAMES, spec_for
 from core.logger import get_logger
 
 log = get_logger("image_gen")
@@ -59,15 +60,9 @@ class ProviderRouter:
         self.register_provider("local_placeholder", LocalPlaceholderProvider)
 
     # 统一的路由优先级：本机引擎优先，其次才是云端（付费 Key / 免费兜底）。
-    # ``local_placeholder`` 不在表内 —— 见 ``_register_defaults`` 的说明。
-    PRIORITY = [
-        "comfyui",
-        "sd_webui",
-        "seedream",
-        "sensenova",
-        "openai",
-        "pollinations",
-    ]
+    # 顺序的唯一来源是 core/image_gen/registry.py；``local_placeholder``
+    # 不在表内 —— 见 ``_register_defaults`` 的说明。
+    PRIORITY = list(PRIORITY_NAMES)
 
     # 只连本机、不发外网请求的 provider。
     LOCAL_PROVIDERS = ("comfyui", "sd_webui", "local_placeholder")
@@ -230,6 +225,7 @@ class ProviderRouter:
             try:
                 p = self._get_provider(name)
                 if p:
+                    spec = spec_for(name)
                     info.append({
                         "name": name,
                         "display_name": p.display_name,
@@ -237,6 +233,9 @@ class ProviderRouter:
                         "requires_key": p.requires_api_key,
                         "local": name in self.LOCAL_PROVIDERS,
                         "setup_guide": p.get_setup_guide(),
+                        # 「测试连接」用多大图 / 是否消耗额度：前端据此提示成本。
+                        "probe_size": list(spec.probe_size) if spec else None,
+                        "probe_note": spec.probe_note if spec else "",
                     })
             except Exception as e:
                 info.append({

@@ -66,6 +66,21 @@ _KEYFORM_POS_ALIGN = 16
 DEFAULT_PIXELS_PER_UNIT = 100.0
 
 
+def resolve_pixels_per_unit(canvas_width: float) -> float:
+    """真实模型该用的换算基准：让单位坐标跨度恒为「1.0 × 高/宽」。
+
+    为什么不能用固定 100：VTube Studio / Cubism 运行时**不会**替模型做自适应
+    缩放，单位跨度直接决定模型占屏比例。1024×1536 的画布配 ppu=100 会得到
+    10.24 × 15.36 单位（官方 Haru 是 2400×4500 @ ppu 2400，只有 1.0 × 1.875），
+    实测在 VTS 里首屏被放大 5~7 倍，只能靠滚轮缩回来。
+    以画布宽度为基准后，1024 与 4K（2731）得到同一量级的跨度。
+    """
+    width = float(canvas_width)
+    if width <= 0.0:
+        return DEFAULT_PIXELS_PER_UNIT
+    return width
+
+
 class UnsupportedRig(Exception):
     """绑定数据包含本模块尚未支持的形态。"""
 
@@ -718,6 +733,8 @@ def compile_static_rig(spec: RigSpec) -> Moc3Container:
                  % ([d.deformer_id for d in spec.deformers],
                     [d.deformer_id for d in ordered]))
     spec = replace(spec, deformers=ordered)
+    # 仍按 V3_03 写出：moc3 v5 的 count info 与 section 表都和 v3_03 不同
+    # （见 moc3_sections.build_layout 的说明），改版本字节会被官方 Core 判为不一致。
     doc = Moc3Container(version=ms.MocVersion.V3_03)
     doc.canvas = CanvasInfo(
         pixels_per_unit=spec.pixels_per_unit,

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Pack RGBA layers into one or more texture atlases and bake them.
+"""Pack RGBA layers into one or more texture atlases.
 
 Supports:
 - Shelf-packing (simple next-fit) and skyline-packing (more efficient)
 - Multi-page atlases for large character sets
 - NPOT (non-power-of-two) output
-- Baking layers into atlas images based on pre-computed UV layouts
+- 按 alpha 包围盒裁剪后再打包（整画布图层不再一层占一页）
 """
 
 from __future__ import annotations
@@ -21,6 +21,24 @@ from core.logger import get_logger
 log = get_logger("exporter.atlas")
 
 Rect = Tuple[int, int, int, int]
+
+
+def content_box(img: Image.Image) -> Tuple[int, int, int, int]:
+    """返回 ``(x0, y0, w, h)``：alpha 非零的紧包围盒。
+
+    图层导出的是整张画布（4K 立绘每层都是 2731×4096 的透明大图）。按画布尺寸
+    打包会让每层各占一整页 —— 实测 32 层 = 32 页 4096²，光贴图就 2GB。
+
+    整层全透明时返回左上角 1×1：moc3 要求每个网格都有 UV 摆放信息，UV 落在
+    一块全透明像素上即可，不能因为「看不见」就漏掉这一项。
+    """
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
+    box = img.getchannel("A").getbbox()
+    if not box:
+        return (0, 0, 1, 1)
+    x0, y0, x1, y1 = box
+    return (int(x0), int(y0), max(1, x1 - int(x0)), max(1, y1 - int(y0)))
 
 
 class TextureAtlas:
@@ -55,17 +73,32 @@ class TextureAtlas:
             empty = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
             return {"atlases": [empty], "uvs": {}, "pages": []}
 
-        # Build rectangle list
+        # 图层导出的是整张画布（4K 立绘每层都是 2731×4096 的透明大图）。按画布
+        # 尺寸打包会让每层各占一整页 —— 实测 32 层 = 32 页 4096²，光贴图就
+        # 2GB。先按 alpha 紧包围盒裁剪，同一批图层只需 1 页。裁剪偏移写进 UV
+        # 的 ``bbox``，moc3 据此把画布坐标映射回裁剪后的 UV。
+        crops: Dict[str, Tuple[int, int, int, int]] = {
+            name: self._content_box(img) for name, img in layers.items()
+        }
+
+        padding = self.padding
+        largest = max((max(b[2], b[3]) for b in crops.values()), default=0)
+        if largest + padding * 2 > self.max_size:
+            # 部件本身顶到图集上限（4K 画布高 4096）：padding 只能让路，
+            # 否则 rect 比图集还大，一整批都放不进去，UV 全空。
+            log.info(
+                f"Atlas padding {padding} → 0 (largest part {largest}px, "
+                f"max {self.max_size})"
+            )
+            padding = 0
+
         rects: List[Tuple[str, int, int]] = []
-        for name, img in layers.items():
-            w, h = img.width, img.height
-            if w <= 0 or h <= 0:
-                continue
-            if w > self.max_size or h > self.max_size:
+        for name, (bx, by, bw, bh) in crops.items():
+            if bw > self.max_size or bh > self.max_size:
                 raise RuntimeError(
-                    f"Layer {name} ({w}x{h}) exceeds max atlas size {self.max_size}"
+                    f"Layer {name} ({bw}x{bh}) exceeds max atlas size {self.max_size}"
                 )
-            rects.append((name, w + self.padding, h + self.padding))
+            rects.append((name, bw + padding * 2, bh + padding * 2))
 
         rects.sort(key=lambda r: (r[2], r[1]), reverse=True)
 
@@ -109,17 +142,34 @@ class TextureAtlas:
             for name, img in layers.items():
                 if name not in placements:
                     continue
-                x, y, w, h = placements[name]
-                w -= self.padding
-                h -= self.padding
+                bx, by, bw, bh = crops[name]
+                rx, ry, packed_w, packed_h = placements[name]
+                x, y = rx + padding, ry + padding
+                w = packed_w - padding * 2
+                h = packed_h - padding * 2
                 if w <= 0 or h <= 0:
                     continue
-                resized = img.resize((w, h), Image.LANCZOS) if (w, h) != img.size else img
+                content = img.crop((bx, by, bx + bw, by + bh))
+                resized = (
+                    content.resize((w, h), Image.LANCZOS)
+                    if (w, h) != content.size else content
+                )
                 atlas.paste(resized, (x, y), resized)
+                if padding:
+                    pixels = np.asarray(resized)
+                    extended = np.pad(
+                        pixels,
+                        ((padding, padding), (padding, padding), (0, 0)),
+                        mode="edge",
+                    )
+                    atlas.paste(Image.fromarray(extended, "RGBA"), (rx, ry))
                 uvs[name] = {
                     "page": page_idx,
                     "top_left": (float(x), float(y)),
                     "bottom_right": (float(x + w), float(y + h)),
+                    # 裁剪框（画布坐标）：moc3 用 (顶点 - bbox 原点) / bbox 尺寸
+                    # 把画布坐标映射到这块 UV。
+                    "bbox": (float(bx), float(by), float(bw), float(bh)),
                     "u0": x / page_w,
                     "v0": y / page_h,
                     "u1": (x + w) / page_w,
@@ -132,74 +182,6 @@ class TextureAtlas:
         self._uvs = uvs
         log.info(f"Packed {len(uvs)} layers into {len(atlases)} atlas page(s)")
         return {"atlases": atlases, "uvs": uvs, "pages": pages}
-
-    def bake_atlas(
-        self,
-        layers: Dict[str, Image.Image],
-        meshes: Dict[str, Dict],
-        uv_data: Dict[str, Dict],
-        output_path: str,
-    ) -> List[str]:
-        """Bake layers into atlas PNG images using pre-computed UV data.
-
-        This is separate from ``pack()`` — it accepts externally computed
-        UV coordinates (e.g. from :class:`UVUnwrapper`) and writes the
-        resulting atlas images.
-
-        Args:
-            layers:      Name -> PIL Image mapping.
-            meshes:      Name -> mesh dict (unused directly, kept for interface symmetry).
-            uv_data:     Name -> UV dict (from UVUnwrapper).
-            output_path: Base path; page index and ``.png`` are appended.
-
-        Returns:
-            List of file paths written.
-        """
-        from pathlib import Path
-
-        out = Path(output_path)
-        out.parent.mkdir(parents=True, exist_ok=True)
-
-        # Determine atlas size from UV data
-        atlas_size = self.max_size
-        for info in uv_data.values():
-            if "atlas_width" in info:
-                atlas_size = max(atlas_size, info["atlas_width"])
-                break
-
-        # Group placements by page
-        pages: Dict[int, Dict[str, Dict]] = {}
-        for name, info in uv_data.items():
-            pg = info.get("page", 0)
-            pages.setdefault(pg, {})[name] = info
-
-        written: List[str] = []
-        for page_idx in sorted(pages.keys()):
-            page_placements = pages[page_idx]
-            atlas_w = page_placements[next(iter(page_placements))].get("atlas_width", atlas_size)
-            atlas_h = page_placements[next(iter(page_placements))].get("atlas_height", atlas_size)
-
-            canvas = Image.new("RGBA", (int(atlas_w), int(atlas_h)), (0, 0, 0, 0))
-            for name, info in page_placements.items():
-                if name not in layers:
-                    continue
-                img = layers[name]
-                x1, y1 = info.get("top_left", (0, 0))
-                x2, y2 = info.get("bottom_right", (img.width, img.height))
-                tw, th = int(x2 - x1), int(y2 - y1)
-                if tw <= 0 or th <= 0:
-                    continue
-                resized = img.resize((tw, th), Image.LANCZOS) if (tw, th) != img.size else img
-                canvas.paste(resized, (int(x1), int(y1)), resized)
-
-            stem = out.stem
-            suffix = out.suffix or ".png"
-            page_path = out.parent / f"{stem}_{page_idx:02d}{suffix}"
-            canvas.save(str(page_path))
-            written.append(str(page_path))
-            log.info(f"Baked atlas page {page_idx} -> {page_path}")
-
-        return written
 
     def get_uvs(self) -> Dict[str, Dict]:
         """Return UV coordinate data from the last ``pack()`` call."""
@@ -326,6 +308,11 @@ class TextureAtlas:
     # ------------------------------------------------------------------
     # Util
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _content_box(img: Image.Image) -> Tuple[int, int, int, int]:
+        """兼容旧调用：见模块级 :func:`content_box`。"""
+        return content_box(img)
 
     @staticmethod
     def _next_po2(n: int) -> int:

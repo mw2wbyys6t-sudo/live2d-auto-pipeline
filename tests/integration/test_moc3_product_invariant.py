@@ -1,6 +1,6 @@
 """产物级零变化必须有个**能跑的**家（Task 2 审查前移的 Important 3）。
 
-审查员的 original 批评：「画面零变化」今天只由 `F:\\tmp` 里的临时脚本量过（重建
+审查员的 original 批评：「画面零变化」今天只由本地临时脚本量过（重建
 `.moc3` 逐字节 cmp + 官方 Core 静止 SHA），而仓库里的集成用例受
 `LIVE2D_TEST_PIXELS=1`、`live2d-py`、`importorskip("moc3._core")` 三重门 ——
 那 12 个 skip 就是这么来的。10880 字节的黄金夹具

@@ -16,7 +16,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.logger import get_logger
 from live2d_builder.layer_naming import (
+    ACCESSORY_KEYWORDS,
     HAIR_BACK_KEYWORDS,
+    HAIR_KEYWORDS,
+    SKIRT_HEM_KEYWORDS,
     SKIRT_KEYWORDS,
     matches_keywords,
 )
@@ -29,6 +32,9 @@ _PENDULUM_UNIT = 10.0
 #: 中文别名给 PSD 手工命名的素材兜底）。
 HAIR_SIDE_L_KEYWORDS = ("hair_back_left", "左后发")
 HAIR_SIDE_R_KEYWORDS = ("hair_back_right", "右后发")
+#: 前发左右两缕（与 ``part_split.split_hair_front_sides`` 的产出一致）。
+HAIR_FRONT_SIDE_L_KEYWORDS = ("hair_front_left", "hair_bangs_left", "左前发")
+HAIR_FRONT_SIDE_R_KEYWORDS = ("hair_front_right", "hair_bangs_right", "右前发")
 
 
 def _as_percent(weight: float) -> float:
@@ -150,24 +156,68 @@ class PhysicsBuilder:
         """
         groups: List[Dict[str, Any]] = []
 
-        # Hair front — short pendulum, quick response
-        groups.append(self._make_pendulum_group(
-            group_id="HairFront",
-            name="前发摇摆 (Hair Front Swing)",
-            inputs=[
-                {"target": "Parameter", "id": "ParamAngleX", "weight": 10.0},
-                {"target": "Parameter", "id": "ParamBodyAngleX", "weight": 5.0},
-            ],
-            outputs=[
-                {"target": "Parameter", "id": "ParamHairSwing", "weight": 100, "scale": 1.0, "reflect": False},
-            ],
-            pendulums=[
-                {"length": 0.30, "damping": 0.85, "stiffness": 0.30, "mass": 1.0},
-                {"length": 0.50, "damping": 0.90, "stiffness": 0.20, "mass": 0.8},
-            ],
-            vertices=3,
-            normalization_angle=90.0,
-        ))
+        # 前发整体链只在前发**还没被拆成左右两缕**时创建。
+        # 拆开之后 ParamHairSwing 没有任何变形器消费（HairFrontSwing 把左/右
+        # 前发让给了 HairFrontSwing_L/R），再留一条就是空转的链。
+        side_names = (HAIR_FRONT_SIDE_L_KEYWORDS + HAIR_FRONT_SIDE_R_KEYWORDS
+                      + HAIR_SIDE_L_KEYWORDS + HAIR_SIDE_R_KEYWORDS
+                      + HAIR_BACK_KEYWORDS)
+        has_generic_front = any(
+            matches_keywords(n, HAIR_KEYWORDS)
+            and not matches_keywords(n, side_names)
+            for n in hair_layers
+        )
+        if has_generic_front:
+            # Hair front — short pendulum, quick response
+            groups.append(self._make_pendulum_group(
+                group_id="HairFront",
+                name="前发摇摆 (Hair Front Swing)",
+                inputs=[
+                    {"target": "Parameter", "id": "ParamAngleX", "weight": 10.0},
+                    {"target": "Parameter", "id": "ParamBodyAngleX", "weight": 5.0},
+                    # 点头与歪头也必须驱动摆：只吃 AngleX 时，头部一歪头发像
+                    # 刚体一样跟着转过去，正是"发丝不跟手"的观感来源。
+                    {"target": "Parameter", "id": "ParamAngleZ", "weight": 7.0},
+                    {"target": "Parameter", "id": "ParamAngleY", "weight": 3.0},
+                ],
+                outputs=[
+                    {"target": "Parameter", "id": "ParamHairSwing", "weight": 100, "scale": 1.0, "reflect": False},
+                ],
+                pendulums=[
+                    {"length": 0.30, "damping": 0.85, "stiffness": 0.30, "mass": 1.0},
+                    {"length": 0.50, "damping": 0.90, "stiffness": 0.20, "mass": 0.8},
+                ],
+                vertices=3,
+                normalization_angle=90.0,
+            ))
+
+        # 前发左右两缕：各自一条短摆链。与整块前发共用 ParamHairSwing 时
+        # 内核只保留一条输出，两缕的相位差被抹平（与后发左右束同一个坑）。
+        for suffix, keywords, param_id in (
+                ("L", HAIR_FRONT_SIDE_L_KEYWORDS, "ParamHairSwingFrontL"),
+                ("R", HAIR_FRONT_SIDE_R_KEYWORDS, "ParamHairSwingFrontR")):
+            if not any(matches_keywords(n, keywords) for n in hair_layers):
+                continue
+            groups.append(self._make_pendulum_group(
+                group_id=f"HairFront{suffix}",
+                name=f"前发{suffix}摆 (Hair Front {suffix})",
+                inputs=[
+                    {"target": "Parameter", "id": "ParamAngleX", "weight": 11.0},
+                    {"target": "Parameter", "id": "ParamBodyAngleX", "weight": 6.0},
+                    {"target": "Parameter", "id": "ParamAngleZ", "weight": 7.0},
+                    {"target": "Parameter", "id": "ParamAngleY", "weight": 3.0},
+                ],
+                outputs=[
+                    {"target": "Parameter", "id": param_id,
+                     "weight": 100, "scale": 1.1, "reflect": False},
+                ],
+                pendulums=[
+                    {"length": 0.28, "damping": 0.84, "stiffness": 0.34, "mass": 0.9},
+                    {"length": 0.46, "damping": 0.90, "stiffness": 0.22, "mass": 0.7},
+                ],
+                vertices=3,
+                normalization_angle=90.0,
+            ))
 
         # Hair back — longer, slower swing
         if any(matches_keywords(n, HAIR_BACK_KEYWORDS) for n in hair_layers):
@@ -177,6 +227,8 @@ class PhysicsBuilder:
                 inputs=[
                     {"target": "Parameter", "id": "ParamAngleX", "weight": 8.0},
                     {"target": "Parameter", "id": "ParamBodyAngleX", "weight": 8.0},
+                    {"target": "Parameter", "id": "ParamAngleZ", "weight": 6.0},
+                    {"target": "Parameter", "id": "ParamAngleY", "weight": 3.0},
                 ],
                 # 后发写自己的参数：HairFront 已经占了 ParamHairSwing。
                 # 两个组写同一参数时内核只保留一条，后发的慢摆会被整条丢掉
@@ -207,6 +259,8 @@ class PhysicsBuilder:
                 inputs=[
                     {"target": "Parameter", "id": "ParamAngleX", "weight": 9.0},
                     {"target": "Parameter", "id": "ParamBodyAngleX", "weight": 7.0},
+                    {"target": "Parameter", "id": "ParamAngleZ", "weight": 6.0},
+                    {"target": "Parameter", "id": "ParamAngleY", "weight": 3.0},
                 ],
                 outputs=[
                     {"target": "Parameter", "id": param_id,
@@ -289,29 +343,93 @@ class PhysicsBuilder:
             log.debug("No skirt layers provided; skipping skirt physics")
             return {"groups": []}
 
+        groups: List[Dict[str, Any]] = []
+        hem_layers = [n for n in skirt_layers
+                      if matches_keywords(n, SKIRT_HEM_KEYWORDS)]
+        body_layers = [n for n in skirt_layers if n not in hem_layers]
+
+        if body_layers:
+            groups.append(self._make_pendulum_group(
+                group_id="Skirt",
+                name="裙摆 (Skirt)",
+                inputs=[
+                    {"target": "Parameter", "id": "ParamBodyAngleX", "weight": 10.0},
+                    {"target": "Parameter", "id": "ParamAngleX", "weight": 5.0},
+                    # 侧身（ParamBodyAngleZ）同样甩裙子：没有这一项时侧倾身体
+                    # 只有头发动、裙子像焊在胯上。
+                    {"target": "Parameter", "id": "ParamBodyAngleZ", "weight": 8.0},
+                ],
+                # 输出必须是**裙摆自己的**参数：BodyBounce 已经写了 ParamBodySway，
+                # 两个组写同一个参数时内核只保留一条，裙摆这条会被整个丢掉 ——
+                # 这正是此前「physics3 里有 Skirt 组、裙子却一动不动」的原因。
+                outputs=[
+                    {"target": "Parameter", "id": "ParamSkirtSwing", "weight": 80, "scale": 1.2, "reflect": False},
+                ],
+                pendulums=[
+                    {"length": 0.40, "damping": 0.88, "stiffness": 0.25, "mass": 1.0},
+                    {"length": 0.60, "damping": 0.92, "stiffness": 0.15, "mass": 0.9},
+                    {"length": 0.80, "damping": 0.95, "stiffness": 0.10, "mass": 0.7},
+                ],
+                vertices=4,
+                normalization_angle=30.0,
+            ))
+
+        # 下摆独立成链：它画在裙体下方、末端更轻，摆幅要更大、回正更慢。
+        # 与裙体共用 ParamSkirtSwing 时内核只留一条输出，下摆就永远是刚体。
+        if hem_layers:
+            groups.append(self._make_pendulum_group(
+                group_id="SkirtHem",
+                name="裙下摆 (Skirt Hem)",
+                inputs=[
+                    {"target": "Parameter", "id": "ParamBodyAngleX", "weight": 12.0},
+                    {"target": "Parameter", "id": "ParamAngleX", "weight": 6.0},
+                    {"target": "Parameter", "id": "ParamBodyAngleZ", "weight": 9.0},
+                ],
+                outputs=[
+                    {"target": "Parameter", "id": "ParamSkirtHemSwing",
+                     "weight": 70, "scale": 1.6, "reflect": False},
+                ],
+                pendulums=[
+                    {"length": 0.50, "damping": 0.90, "stiffness": 0.18, "mass": 0.8},
+                    {"length": 0.75, "damping": 0.94, "stiffness": 0.09, "mass": 0.6},
+                ],
+                vertices=3,
+                normalization_angle=30.0,
+            ))
+
+        self._groups.extend(groups)
+        log.info(f"Built skirt physics for {len(skirt_layers)} layer(s) "
+                 f"-> {len(groups)} group(s)（下摆 {len(hem_layers)} 层独立成链）")
+        return {"groups": groups}
+
+    def build_accessory_physics(self, accessory_layers: List[str]) -> Dict[str, Any]:
+        """头饰 / 飘带的短摆链。
+
+        这些碎件挂在头部外沿，头一转就被甩出去、比头发晚一档回正。它们没有
+        自己的摆链时整块跟着 HeadRig 刚体转，看起来像贴图。
+        """
+        if not accessory_layers:
+            return {"groups": []}
         group = self._make_pendulum_group(
-            group_id="Skirt",
-            name="裙摆 (Skirt)",
+            group_id="Accessory",
+            name="头饰摇摆 (Accessory Swing)",
             inputs=[
-                {"target": "Parameter", "id": "ParamBodyAngleX", "weight": 10.0},
-                {"target": "Parameter", "id": "ParamAngleX", "weight": 5.0},
+                {"target": "Parameter", "id": "ParamAngleX", "weight": 10.0},
+                {"target": "Parameter", "id": "ParamAngleZ", "weight": 8.0},
+                {"target": "Parameter", "id": "ParamAngleY", "weight": 4.0},
             ],
-            # 输出必须是**裙摆自己的**参数：BodyBounce 已经写了 ParamBodySway，
-            # 两个组写同一个参数时内核只保留一条，裙摆这条会被整个丢掉 ——
-            # 这正是此前「physics3 里有 Skirt 组、裙子却一动不动」的原因。
             outputs=[
-                {"target": "Parameter", "id": "ParamSkirtSwing", "weight": 80, "scale": 1.2, "reflect": False},
+                {"target": "Parameter", "id": "ParamAccessorySwing",
+                 "weight": 100, "scale": 0.8, "reflect": False},
             ],
             pendulums=[
-                {"length": 0.40, "damping": 0.88, "stiffness": 0.25, "mass": 1.0},
-                {"length": 0.60, "damping": 0.92, "stiffness": 0.15, "mass": 0.9},
-                {"length": 0.80, "damping": 0.95, "stiffness": 0.10, "mass": 0.7},
+                {"length": 0.22, "damping": 0.82, "stiffness": 0.42, "mass": 0.5},
             ],
-            vertices=4,
-            normalization_angle=30.0,
+            vertices=2,
+            normalization_angle=45.0,
         )
         self._groups.append(group)
-        log.info(f"Built skirt physics for {len(skirt_layers)} layer(s)")
+        log.info(f"Built accessory physics for {len(accessory_layers)} layer(s)")
         return group
 
     def build_ear_tail_physics(

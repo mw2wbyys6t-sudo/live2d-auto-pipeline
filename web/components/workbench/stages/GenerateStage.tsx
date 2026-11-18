@@ -20,6 +20,8 @@ export default function GenerateStage() {
         badge={
           current?.fallback ? (
             <span className="chip chip-active border-amber-400/40 bg-amber-400/10 text-amber-700">占位图</span>
+          ) : current?.incomplete ? (
+            <span className="chip chip-active border-rose-400/40 bg-rose-400/10 text-rose-600">未完成</span>
           ) : imageUrl ? (
             <span className="chip tabular-nums">
               {current?.width}×{current?.height}
@@ -86,6 +88,15 @@ export default function GenerateStage() {
                 <span> 在「设置」里配置可用的图像服务后重试。</span>
               </div>
             )}
+            {/* 部分成功与占位图是两件事：图是真的，只是后续步骤没跑完。
+                必须分开说明，否则用户会把可用的立绘当成又一次假成功。 */}
+            {!current?.fallback && current?.incomplete && (
+              <div className="absolute left-3 right-3 top-3 z-10 rounded-xl border border-rose-400/35 bg-ink-950/90 px-3 py-2 text-[11px] leading-relaxed text-rose-600 backdrop-blur">
+                <span className="font-medium">立绘已生成，但后续处理失败。</span>
+                {current.incompleteReason ? ` ${current.incompleteReason}` : ''}
+                <span> 可以先用这张图；分层与模型需要重试。</span>
+              </div>
+            )}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={imageUrl}
@@ -98,6 +109,14 @@ export default function GenerateStage() {
               </span>
               <span className="h-3 w-px bg-black/10" />
               <span className="max-w-[320px] truncate">{promptExcerpt(current?.prompt || '', 40)}</span>
+              {current?.sizeDowngraded && (
+                <span
+                  className="rounded-full bg-amber-400/15 px-1.5 py-px text-[9px] text-amber-700"
+                  title="上游按匿名额度降低了出图像素（约 0.6MP）。需要原尺寸请在「设置」里配置带额度的图像服务。"
+                >
+                  上游降尺寸
+                </span>
+              )}
             </div>
           </div>
         ) : (

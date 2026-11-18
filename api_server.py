@@ -1853,11 +1853,6 @@ def _run_segment(req: "SegmentRequest") -> Dict[str, Any]:
         from core.segment_engine.semantic import SemanticSegmenter
         result = SemanticSegmenter(model_type="auto").layer(img, output_dir=str(out_dir))
 
-    names = [l.get("name") for l in (result.get("layers") or []) if l.get("name")]
-    psd_result = PSDCreator().create_psd(
-        str(out_dir), str(out_dir / "character.psd"), ordered_names=names or None
-    )
-
     from core.segment_engine.layer_manifest import (
         build_manifest,
         source_for_method,
@@ -1872,7 +1867,12 @@ def _run_segment(req: "SegmentRequest") -> Dict[str, Any]:
         source=source,
         canvas=(img.width, img.height),
     )
+    # manifest 必须先落盘：PSD creator 以它为分组/坐标/顺序的唯一契约，
+    # 反过来再由它做写出后的重新读取校验。
     manifest_path = write_manifest(str(out_dir), manifest)
+    psd_result = PSDCreator().create_psd(
+        str(out_dir), str(out_dir / "character.psd"), manifest_path=manifest_path
+    )
 
     layers = [{
         "name": l.get("name", ""),
@@ -1891,13 +1891,17 @@ def _run_segment(req: "SegmentRequest") -> Dict[str, Any]:
         "psd_path": psd_result.get("psd_path", "") or "",
         "psd_url": to_output_url(psd_result.get("psd_path", "") or ""),
         "psd_success": bool(psd_result.get("success")),
+        "psd_error": psd_result.get("error") or "",
         "manifest_path": manifest_path,
         "manifest_url": to_output_url(manifest_path),
         "manifest_version": manifest.schema_version,
         "source": manifest.source,
         "rig_ready": manifest.rig_ready,
+        "quality_ready": manifest.quality_ready,
         "preview_ready": manifest.preview_ready,
         "missing_required": manifest.missing_required,
+        "manual_required": manifest.manual_required,
+        "derived_parts": manifest.derived_parts,
         "warnings": manifest.warnings,
     }
 

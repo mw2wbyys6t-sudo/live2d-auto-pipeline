@@ -701,6 +701,98 @@ def test_the_shipped_player_samples_in_grid_like_the_core_and_the_ruler():
 
 
 # ----------------------------------------------------------------------
+# 越界外推：与 Cubism Editor 5.3 的 WarpDeformerUtils 逐点对拍
+#
+# 数据来自 F:\杂物\rea-work\deform-notes\ref\warp_ref.csv：反射调用
+# Live2D_Cubism.jar 的 warp.o.a(...)（SDK transformPoints_sdk2）生成的 15 个点
+# （quad=false），控制网格照抄 WarpRef.java（col=row=2）。这些点同时覆盖格内、
+# 四边、四角与"太远退化成仿射"的分支 —— 旧实现只做了边界格双线性外推，
+# 在 1.2/0.5 这类点上会读成 (1.0, 1.0) 而不是 (1.155, 0.545)。
+# ----------------------------------------------------------------------
+
+WARP_REF_GRID = [
+    0.00, 0.00, 0.55, -0.05, 1.00, 0.00,
+    0.05, 0.55, 0.75, 0.70, 0.95, 0.55,
+    0.00, 1.00, 0.50, 1.08, 1.00, 1.00,
+]
+WARP_REF_POINTS = [
+    (0.00, 0.00, 0.00000000, 0.00000000),
+    (1.00, 1.00, 1.00000000, 1.00000000),
+    (0.50, 0.50, 0.75000000, 0.69999999),
+    (0.25, 0.75, 0.37500000, 0.85000002),
+    (0.75, 0.25, 0.87500000, 0.34999999),
+    (0.10, 0.90, 0.15000001, 0.94000000),
+    (0.90, 0.10, 0.94999993, 0.14000000),
+    (0.33, 0.66, 0.49599999, 0.79299998),
+    (1.20, 0.50, 1.15499997, 0.54500002),
+    (-0.30, 0.50, -0.25749993, 0.54250002),
+    (0.50, 1.30, 0.50000000, 1.36800003),
+    (0.50, -0.40, 0.54000002, -0.43999994),
+    (1.50, 1.50, 1.50000000, 1.50000000),
+    (-0.60, -0.60, -0.60000002, -0.60000002),
+    (2.50, 0.50, 2.48749995, 0.51249999),
+]
+WARP_REF_TOL = 1e-5
+
+
+def test_ruler_warp_extrapolation_matches_the_cubism_editor():
+    """离线尺子的越界分支必须与 jar 逐点一致（不能只对恒等网格成立）。"""
+    for u, v, want_x, want_y in WARP_REF_POINTS:
+        got_x, got_y = probe_mod.sample_warp_grid(WARP_REF_GRID, 2, 2, u, v)
+        assert got_x == pytest.approx(want_x, abs=WARP_REF_TOL), (u, v, got_x, want_x)
+        assert got_y == pytest.approx(want_y, abs=WARP_REF_TOL), (u, v, got_y, want_y)
+
+
+_PLAYER_WARP_REF_HARNESS = """
+import { pathToFileURL } from 'node:url';
+const mod = await import(pathToFileURL(process.env.TS_PATH).href);
+const grid = new Float32Array(process.env.GRID.split(',').map(Number));
+const pts = JSON.parse(process.env.PTS);
+const out = [];
+for (const [u, v] of pts) {
+  const o = { x: NaN, y: NaN };
+  mod.sampleWarpGrid(grid, 2, 2, u, v, o);
+  out.push([o.x, o.y]);
+}
+console.log(JSON.stringify(out));
+"""
+
+
+def _player_warp_ref_samples():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("需要 node 才能跑 shipped 播放器里那一份采样器")
+    ts = ROOT / "web" / "lib" / "live2d-bindings.ts"
+    assert ts.is_file(), ts
+    env = dict(
+        os.environ,
+        TS_PATH=str(ts),
+        GRID=",".join(str(v) for v in WARP_REF_GRID),
+        PTS=json.dumps([[u, v] for u, v, _, _ in WARP_REF_POINTS]),
+    )
+    proc = subprocess.run([node, "--input-type=module", "-e",
+                           _PLAYER_WARP_REF_HARNESS],
+                          capture_output=True, text=True, encoding="utf-8",
+                          env=env, timeout=120)
+    assert proc.returncode == 0, proc.stderr[-500:]
+    lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("[")]
+    assert lines, proc.stdout[-500:]
+    return json.loads(lines[-1])
+
+
+def test_shipped_player_warp_extrapolation_matches_the_cubism_editor():
+    """浏览器播放器的越界分支同样要与 jar 一致；与离线尺子互为对照。"""
+    samples = _player_warp_ref_samples()
+    assert len(samples) == len(WARP_REF_POINTS)
+    for (u, v, want_x, want_y), (got_x, got_y) in zip(WARP_REF_POINTS, samples):
+        assert got_x == pytest.approx(want_x, abs=WARP_REF_TOL), (u, v, got_x, want_x)
+        assert got_y == pytest.approx(want_y, abs=WARP_REF_TOL), (u, v, got_y, want_y)
+        ruler = probe_mod.sample_warp_grid(WARP_REF_GRID, 2, 2, u, v)
+        assert got_x == pytest.approx(ruler[0], abs=1e-4), (u, v, got_x, ruler)
+        assert got_y == pytest.approx(ruler[1], abs=1e-4), (u, v, got_y, ruler)
+
+
+# ----------------------------------------------------------------------
 # Task 1.5 审查前移的那块未测区：**子级矩形整体越出父级矩形**
 #
 # 官方实样里约 15% 的嵌套矩形就在父级之外，而编译器今天照收（st 读到 -0.25/1.25）。

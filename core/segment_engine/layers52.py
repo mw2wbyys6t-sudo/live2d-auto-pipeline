@@ -420,13 +420,8 @@ class Layer52Generator:
     ) -> Dict:
         """Map detected layers to the 52-layer standard.
 
-        Uses heuristic matching based on color, position, and size to assign
-        K-means layers to standard positions. Returns a complete mapping plan.
-
-        ``l2d_sam_iter2`` 输出的 19 类部位名先走 :data:`BODY_PARTS_19_TO_52`：
-        直接映射的落单层，需要拆分的先落 ``primary`` 单层并登记到
-        ``split_required``，52 层没有槽位的部件登记到 ``unmapped_parts``
-        并保留原标签，不占用任何 52 层。
+        Only exact semantic matches claim standard slots. Coarse parts retain
+        their source labels in split diagnostics without claiming fine parts.
         """
         mappings: List[Layer52Mapping] = []
         used_standard_ids = set()
@@ -442,72 +437,6 @@ class Layer52Generator:
             )
             mappings.append(mapping)
 
-        # Assign detected layers to standard positions using keyword matching.
-        # Supports both Chinese K-means labels ("头发", "脸") and English
-        # semantic segmentation / LayerComposer names ("hair_back", "bangs",
-        # "eye_right", "clothes_outer", …).
-        part_keywords = {
-            # --- Chinese (K-means path) ---
-            "头发": ["hair_back", "hair_front"],
-            "头发_后": ["hair_back"],
-            "刘海": ["hair_front"],
-            "皮肤": ["body", "face"],
-            "脸": ["face"],
-            "眼睛": ["eyes"],
-            "眉毛": ["eyebrows"],
-            "睫毛": ["eyelashes"],
-            "嘴巴": ["mouth"],
-            "嘴唇": ["mouth"],
-            "衣服": ["clothes"],
-            "腮红": ["face"],
-            "鼻子": ["nose"],
-            "耳朵": ["ears"],
-            "高光": ["eyes"],
-            "脖子": ["body"],
-            # --- English (semantic / LayerComposer path) ---
-            "background": ["bg"],
-            "scalp": ["hair_back"],
-            "hair_back": ["hair_back"],
-            # 后发自适应拆出的左右两束，对应 52 层的 Hair_Back_Left/Right
-            "hair_back_left": ["hair_back"],
-            "hair_back_right": ["hair_back"],
-            "hair_mid": ["hair_back"],
-            "hair_front": ["hair_front"],
-            "sidehair": ["hair_front"],
-            "hair_stray": ["hair_front"],
-            "bangs": ["hair_front"],
-            "ahoge": ["hair_front"],
-            "neck": ["body"],
-            "body": ["body"],
-            "skin": ["body", "face"],
-            "chest": ["body"],
-            "clothes_top": ["clothes"],
-            "clothes_inner": ["clothes"],
-            "clothes_outer": ["clothes"],
-            "accessories": ["clothes"],
-            "face": ["face"],
-            "blush": ["face"],
-            "ear": ["ears"],
-            "nose": ["nose"],
-            "mouth": ["mouth"],
-            "lip": ["mouth"],
-            "tooth": ["mouth"],
-            "teeth": ["mouth"],
-            "tongue": ["mouth"],
-            "eye": ["eyes"],
-            "iris": ["eyes"],
-            "pupil": ["eyes"],
-            "highlight": ["eyes"],
-            "sclera": ["eyes"],
-            "eyelash": ["eyelashes"],
-            "lash": ["eyelashes"],
-            "brow": ["eyebrows"],
-            "eyebrow": ["eyebrows"],
-        }
-
-        # Fine-grained direct part_name → standard_id mappings (higher priority
-        # than keyword → group heuristic). Semantic / LayerComposer names map
-        # directly; K-means generic labels fall through to group heuristic.
         direct_map: Dict[str, List[int]] = {
             # English LayerComposer / semantic labels → standard IDs
             "background": [0],
@@ -529,12 +458,21 @@ class Layer52Generator:
             "body": [6, 7],
             "chest": [6],
             "waist": [7],
-            # 腰带是腰臀层的可见部分，不能落到「胸腔」或配饰
-            "waistband": [7],
             "skin": [23, 5, 6, 7],
             "clothes_inner": [20],
             "clothes_outer": [21],
             "clothes_top": [21],
+            # 四肢分段（肘/膝）落到 52 层的对应单侧槽位：带 side 时会被过滤成
+            # 唯一 ID；整段 arm/leg 保持未映射，避免粗粒度冒充细分槽。
+            "arm_upper": [14, 15],
+            "upper_arm": [14, 15],
+            "forearm": [16, 17],
+            "arm_lower": [16, 17],
+            "hand": [18, 19],
+            "thigh": [8, 9],
+            "leg_upper": [8, 9],
+            "calf": [10, 11],
+            "leg_lower": [10, 11],
             # 领子属于内层衣物；不显式登记会被 group fallback 塞进任意衣服槽
             "collar": [20],
             "clothes": [21, 20],
@@ -621,8 +559,13 @@ class Layer52Generator:
             "背景": [0],
         }
 
-        def _match(pn: str) -> Tuple[List[int], List[str], Optional[Dict]]:
-            """Return (preferred std IDs, fallback groups, 19-class spec).
+        canonical_map = {
+            layer["name_en"].lower(): [layer["id"]]
+            for layer in self.standard_layers
+        }
+
+        def _match(pn: str) -> Tuple[List[int], Optional[Dict]]:
+            """Return (preferred std IDs, 19-class spec).
 
             ``spec`` 非空表示该名字命中了 :data:`BODY_PARTS_19_TO_52`，
             调用方据此区分「直接映射 / 需二次拆分 / 无对应层」。
@@ -632,31 +575,21 @@ class Layer52Generator:
             spec = resolve_body_part_19(pn_lower)
             if spec is not None:
                 primary = spec["primary"]
-                return ([primary] if primary is not None else []), [], spec
-            # 2. exact direct map
+                return ([primary] if primary is not None else []), spec
+            if pn_lower in canonical_map:
+                return canonical_map[pn_lower], None
             if pn_lower in direct_map:
-                return direct_map[pn_lower], [], None
-            # 3. substring direct map（最长优先，且必须整词命中）
-            best_ids: List[int] = []
-            best_len = 0
-            for key, ids in direct_map.items():
-                if len(key) > best_len and _matches_as_word(pn_lower, key):
-                    best_ids = ids
-                    best_len = len(key)
-            if best_ids:
-                return best_ids, [], None
-            # 4. keyword → group fallback。必须整词命中，否则 ``tear_left``
-            #    会因为包含 ``ear`` 被塞进耳朵层；中文没有词边界，等价于子串。
-            groups: List[str] = []
-            for keyword, grps in part_keywords.items():
-                if _matches_as_word(pn_lower, keyword):
-                    groups.extend(grps)
-            return [], groups, None
+                return direct_map[pn_lower], None
+            base, side = _split_suffix(pn_lower)
+            if side and base in direct_map:
+                return direct_map[base], None
+            return [], None
 
         # 52 层里没有槽位、但合成器会真实产出的层：保留原标签，不能硬塞。
         no_slot_parts = {
             "tear", "skirt", "skirt_hem", "clothes_bottom",
-            "sock", "boot", "shoe", "glove", "scarf",
+            "sock", "boot", "shoe", "glove", "scarf", "waistband",
+            "collar", "clothes_top",
         }
         # 不在 19 类表里、但同样需要二次拆分的真实层名。
         split_hints: Dict[str, Tuple[Tuple[int, ...], int, str]] = {
@@ -683,7 +616,7 @@ class Layer52Generator:
             part_name = layer.get("part_name", "未分类")
             source = layer.get("path", "")
             base, side = _split_suffix(str(part_name or ""))
-            preferred_ids, fallback_groups, spec = _match(str(part_name or ""))
+            preferred_ids, spec = _match(str(part_name or ""))
 
             if spec is not None and spec["status"] == MAP_UNMAPPED:
                 # 52 层没有对应层：保留原始标签与图层，不做任何 52 层占位，
@@ -720,7 +653,7 @@ class Layer52Generator:
                     "standard_ids": list(spec["standard_ids"]),
                     "reason": spec["note"],
                 })
-                preferred_ids = [primary]
+                continue
             elif (spec is None and base in split_hints
                   and (side is None or base in ("eyes", "eye"))):
                 targets, primary, note = split_hints[base]
@@ -733,13 +666,14 @@ class Layer52Generator:
                     "standard_ids": list(targets),
                     "reason": note,
                 })
+                continue
 
             assigned = False
-            # 同侧优先：eyebrow_L/R、sidehair_L/R 这类名字在 direct_map 里
-            # 共享一组候选 ID，只看列表顺序会把左右写反。
             ordered_ids = list(preferred_ids)
             if side:
-                ordered_ids.sort(key=lambda sid: 0 if standard_side.get(sid) == side else 1)
+                ordered_ids = [sid for sid in ordered_ids if standard_side.get(sid) in (None, side)]
+            if len(ordered_ids) != 1 or (not side and any(standard_side.get(sid) for sid in ordered_ids)):
+                ordered_ids = []
 
             for sid in ordered_ids:
                 if sid in used_standard_ids:
@@ -754,20 +688,6 @@ class Layer52Generator:
                         break
                 if assigned:
                     break
-
-            # 组内兜底只对「已知泛化名」生效（如 collar → clothes）；
-            # 未识别的新名字宁可如实记为 unmapped，也不占用任意 52 层。
-            if not assigned and fallback_groups:
-                for m in mappings:
-                    if (not m.mapped
-                            and m.standard_id not in used_standard_ids
-                            and m.group in fallback_groups):
-                        m.mapped = True
-                        m.source_file = source
-                        m.notes = f"Auto-mapped (group fallback) from part: {part_name}"
-                        used_standard_ids.add(m.standard_id)
-                        assigned = True
-                        break
 
             if not assigned:
                 unmapped_parts.append({
@@ -853,6 +773,8 @@ class Layer52Generator:
             f.write(f"Total standard layers: {mapping_result['total_layers']}\n")
             f.write(f"Mapped layers: {mapping_result['mapped_layers']}\n")
             f.write(f"Missing required layers: {len(mapping_result['missing_required'])}\n\n")
+            f.write("Mapping is a slot-assignment report only; it does not certify rig readiness.\n")
+            f.write("See layer_manifest.json for exportable / rig_ready / quality_ready and per-part evidence.\n\n")
 
             if mapping_result.get("split_required"):
                 f.write("Parts needing a secondary split (single fallback layer):\n")

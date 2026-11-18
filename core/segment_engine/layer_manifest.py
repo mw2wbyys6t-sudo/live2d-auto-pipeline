@@ -28,7 +28,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from core.segment_engine.part_split import DERIVED_PARTS
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 MANIFEST_FILENAME = "layer_manifest.json"
 
@@ -94,12 +94,12 @@ def source_for_method(method: str) -> str:
     return SOURCE_SEMANTIC_HSV_FALLBACK
 
 GROUP_ORDER: List[Dict[str, str]] = [
-    {"id": "head_hair", "name_zh": "01_头部·头发", "order": 1},
-    {"id": "head_face", "name_zh": "01_头部·面部", "order": 2},
-    {"id": "body", "name_zh": "02_身体", "order": 3},
-    {"id": "clothing", "name_zh": "03_服装", "order": 4},
-    {"id": "lower", "name_zh": "04_下半身", "order": 5},
-    {"id": "accessory", "name_zh": "05_配件", "order": 6},
+    {"id": "head_hair", "psd_name": "01_head_hair", "name_zh": "01_头部·头发", "order": 1},
+    {"id": "head_face", "psd_name": "02_head_face", "name_zh": "01_头部·面部", "order": 2},
+    {"id": "body", "psd_name": "03_body", "name_zh": "02_身体", "order": 3},
+    {"id": "clothing", "psd_name": "04_clothing", "name_zh": "03_服装", "order": 4},
+    {"id": "lower", "psd_name": "05_lower", "name_zh": "04_下半身", "order": 5},
+    {"id": "accessory", "psd_name": "06_accessory", "name_zh": "05_配件", "order": 6},
 ]
 
 _GROUP_IDS = {g["id"] for g in GROUP_ORDER}
@@ -123,7 +123,9 @@ PART_SPECS: Dict[str, Dict[str, Any]] = {
     "neck_shadow": {"name_zh": "身体_颈部阴影", "group": "body", "z": 31, "sides": False},
     "torso": {"name_zh": "身体_躯干", "group": "body", "z": 32, "sides": False},
     "arm": {"name_zh": "身体_手臂", "group": "body", "z": 33, "sides": True},
+    "arm_upper": {"name_zh": "身体_上臂", "group": "body", "z": 33, "sides": True},
     "forearm": {"name_zh": "身体_前臂", "group": "body", "z": 34, "sides": True},
+    "arm_lower": {"name_zh": "身体_小臂", "group": "body", "z": 34, "sides": True},
     "hand": {"name_zh": "身体_手", "group": "body", "z": 35, "sides": True},
     "waist": {"name_zh": "身体_腰带", "group": "body", "z": 36, "sides": False},
     "clothes_top": {"name_zh": "服装_上装", "group": "clothing", "z": 50, "sides": False},
@@ -139,6 +141,8 @@ PART_SPECS: Dict[str, Dict[str, Any]] = {
     "brooch": {"name_zh": "服装_胸针", "group": "clothing", "z": 56, "sides": False},
     "clothes_bottom": {"name_zh": "服装_下装", "group": "clothing", "z": 49, "sides": False},
     "skirt_body": {"name_zh": "服装_裙主体", "group": "clothing", "z": 48, "sides": False},
+    # 裙内层由 split_skirt_inner 按内外轮廓腐蚀拆出，画在外轮廓之后（z 更小 = 更靠后）。
+    "skirt_inner": {"name_zh": "服装_裙内层", "group": "clothing", "z": 46, "sides": False},
     "skirt_front": {"name_zh": "服装_裙摆_前", "group": "clothing", "z": 47, "sides": False},
     "skirt_side": {"name_zh": "服装_裙摆_侧", "group": "clothing", "z": 46, "sides": True},
     "skirt_back": {"name_zh": "服装_裙摆_后", "group": "clothing", "z": 20, "sides": False},
@@ -149,6 +153,9 @@ PART_SPECS: Dict[str, Dict[str, Any]] = {
     "boot": {"name_zh": "下半身_靴", "group": "lower", "z": 16, "sides": True},
     "boot_cuff": {"name_zh": "下半身_靴口", "group": "lower", "z": 17, "sides": True},
     "leg": {"name_zh": "下半身_腿", "group": "lower", "z": 14, "sides": True},
+    # 膝盖分段（split_leg_segments）：整腿太矮/过碎时不拆，保留 leg。
+    "thigh": {"name_zh": "下半身_大腿", "group": "lower", "z": 14, "sides": True},
+    "calf": {"name_zh": "下半身_小腿", "group": "lower", "z": 13, "sides": True},
     "watch": {"name_zh": "配件_怀表", "group": "accessory", "z": 70, "sides": False},
     "pendant": {"name_zh": "配件_挂饰", "group": "accessory", "z": 71, "sides": False},
     "accessories": {"name_zh": "配件_未分类", "group": "accessory", "z": 69, "sides": False},
@@ -160,7 +167,78 @@ PART_SPECS: Dict[str, Dict[str, Any]] = {
     "tail": {"name_zh": "配件_尾巴", "group": "accessory", "z": 8, "sides": False},
     "wings": {"name_zh": "配件_翅膀", "group": "accessory", "z": 5, "sides": False},
     "objects": {"name_zh": "配件_道具", "group": "accessory", "z": 72, "sides": False},
+    # 合成层此前没有登记：它们在清单里被判成「未识别部件」，还被塞进 accessory
+    # 组（z=999）→ PSD 里被画到最上层，闭眼图盖住眼球、口内盖住嘴唇。
+    # 下面三条把合成层登记到头面组，绘制位置与权威表一致。
+    "eyelid": {"name_zh": "面部_闭眼图", "group": "head_face", "z": 43, "sides": True},
+    "tear": {"name_zh": "面部_眼泪", "group": "head_face", "z": 47, "sides": True},
+    "mouth_cavity": {"name_zh": "面部_口内", "group": "head_face", "z": 42, "sides": False},
 }
+
+#: canonical 部件 → 权威表（``composer.STANDARD_LAYER_ORDER``）里的代表层名。
+#:
+#: 清单的静态绘制顺序必须与权威表一致（ADR-003：层序的唯一权威），否则 PSD
+#: 写出的层序与 moc3 的渲染层序对不上，FF-2 的 1:1 契约随即失效。
+#: 这里把每个 canonical 部件映射到权威表里的对应层名，用它在权威表中的位置
+#: 作为绘制序；映射不到的部件退回各自 spec 里的 z（只影响组内相对顺序）。
+STANDARD_ORDER_NAMES: Dict[str, str] = {
+    "hair_back": "hair_back",
+    "hair_bangs": "hair_bangs",
+    "headwear": "headwear",
+    "face_base": "face_base",
+    "cheek": "cheek",
+    "ear": "ears",
+    "eyebrow": "eyebrow_L",
+    "eye_white": "eyewhite_left",
+    "eye_iris": "irides_left",
+    "eyelash": "eyelash_left",
+    "eyelid": "eyelid_left",
+    "tear": "tear_left",
+    "eyewear": "eyewear",
+    "earwear": "earwear",
+    "nose": "nose",
+    "mouth": "mouth",
+    "mouth_cavity": "mouth_cavity",
+    "neck": "neck",
+    "arm": "arm_L",
+    "forearm": "arm_lower_L",
+    "hand": "hand_L",
+    "clothes_top": "clothes_top",
+    "clothes_inner": "clothes_inner",
+    "lining": "clothes_inner",
+    "waistband": "waistband",
+    "collar": "collar",
+    "neckwear": "neckwear",
+    "sleeve": "sleeve_L",
+    "cuff": "cuff_L",
+    "handwear": "handwear",
+    "skirt_body": "skirt",
+    "skirt_hem": "skirt_hem",
+    "clothes_bottom": "clothes_bottom",
+    "skirt_inner": "skirt_inner",
+    "skirt_front": "skirt_front",
+    "skirt_back": "skirt_back",
+    "bottomwear": "bottomwear",
+    "leg": "leg_L",
+    "thigh": "thigh_L",
+    "calf": "calf_L",
+    "sock": "sock_L",
+    "boot": "boot_L",
+    "boot_cuff": "boot_cuff_L",
+    "legwear": "legwear",
+    "footwear": "footwear",
+    "accessories": "accessories",
+    "tail": "tail",
+    "wings": "wings",
+    "objects": "objects",
+}
+
+
+def _standard_order_ranks() -> Dict[str, int]:
+    """权威表里每个层名的位置（局部导入以避开 composer ↔ manifest 的导入环）。"""
+    from core.segment_engine.composer import LayerComposer
+
+    return {name: index for index, name in enumerate(LayerComposer.STANDARD_LAYER_ORDER)}
 
 _UNKNOWN_SPEC = {
     "name_zh": "未识别部件",
@@ -176,6 +254,12 @@ ALIASES: Dict[str, Tuple[str, Optional[str]]] = {
     "hair": ("hair_back", None),
     "hair_front": ("hair_bangs", None),
     "hair_mid": ("hair_bangs", None),
+    # split_hair_side_strands 从后发侧束里再拆出的第三束（没有侧别后缀，
+    # 名字里带 _inner/_outer），按后发登记，避免清单报「未识别部件」。
+    "hair_back_left_inner": ("hair_back", None),
+    "hair_back_left_outer": ("hair_back", None),
+    "hair_back_right_inner": ("hair_back", None),
+    "hair_back_right_outer": ("hair_back", None),
     "face": ("face_base", None),
     "eyes": ("eye_white", None),
     "eyes_left": ("eye_white", "L"),
@@ -186,7 +270,12 @@ ALIASES: Dict[str, Tuple[str, Optional[str]]] = {
     "arms": ("arm", None),
     "hands": ("hand", None),
     "legs": ("leg", None),
-    "clothes_inner": ("clothes_bottom", None),
+    "leg_upper": ("thigh", None),
+    "leg_lower": ("calf", None),
+    "thighs": ("thigh", None),
+    "calves": ("calf", None),
+    "clothes_inner": ("lining", None),
+    "clothes_outer": ("outer_body", None),
     "skirt": ("skirt_body", None),
     "tail_ears": ("accessories", None),
     "effects": ("accessories", None),
@@ -260,6 +349,53 @@ _UNSIDED_LIMBS = {
     "boot": "靴",
 }
 
+#: 一条肢体可以由整段表示，也可以由「上段 + 下段」两段表示。
+#: 只有两段齐全才算这个槽位齐全；只拆出一段时按缺件处理，绝不把
+#: 「大腿单独一层」当成整条腿（那会让绑定器以为小腿也存在）。
+#: 每个段给多个候选名，是因为历史输出用过 ``arm_lower`` / ``leg_lower``。
+LIMB_CHAINS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
+    "arm": (("arm_upper",), ("forearm", "arm_lower")),
+    "leg": (("thigh",), ("calf", "leg_lower")),
+}
+
+
+def _segment_present(alts: Iterable[str], side: str, emitted: Iterable[str]) -> bool:
+    emitted_set = emitted if isinstance(emitted, (set, frozenset)) else set(emitted)
+    return any(f"{alt}:{side}" in emitted_set for alt in alts)
+
+
+def _limb_slot_satisfied(slot: str, emitted: Iterable[str]) -> bool:
+    """``arm:L`` 这类槽位是否齐全：整段在，或上下两段都在。"""
+    emitted_set = emitted if isinstance(emitted, (set, frozenset)) else set(emitted)
+    if slot in emitted_set:
+        return True
+    base, _, side = slot.partition(":")
+    chain = LIMB_CHAINS.get(base)
+    if not chain or not side:
+        return False
+    return all(_segment_present(alts, side, emitted_set) for alts in chain)
+
+
+def _slot_statuses(
+    slot: str,
+    status_by_qualified: Dict[str, List[str]],
+) -> List[str]:
+    """槽位对应的图层状态；整段不在时汇总上下两段的状态。"""
+    if slot in status_by_qualified:
+        return status_by_qualified[slot]
+    base, _, side = slot.partition(":")
+    chain = LIMB_CHAINS.get(base)
+    if not chain or not side:
+        return []
+    statuses: List[str] = []
+    for alts in chain:
+        for alt in alts:
+            key = f"{alt}:{side}"
+            if key in status_by_qualified:
+                statuses.extend(status_by_qualified[key])
+                break
+    return statuses
+
 
 def _split_suffix(name: str) -> Tuple[str, Optional[str]]:
     lowered = name.strip().lower()
@@ -302,13 +438,20 @@ class LayerEntry:
     side: Optional[str]
     z: int
     file: str
+    #: 内容包围盒 ``[x0, y0, x1, y1]``，闭区间（x1/y1 是最后一个像素）。
     bbox: Optional[List[int]] = None
     pixel_count: int = 0
     confidence: Optional[float] = None
     occluded_by: List[str] = field(default_factory=list)
     amodal_completed: bool = False
+    #: 遮挡补全新增的像素数（0 = 没有推断像素）。面积可核对才叫可追溯。
+    completed_pixels: int = 0
     derived: bool = False
     depth: Optional[float] = None
+    status: str = "detected"
+    provenance: str = "unknown"
+    source_mask: Optional[str] = None
+    parent_group: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -323,8 +466,13 @@ class LayerEntry:
             "confidence": self.confidence,
             "occluded_by": list(self.occluded_by),
             "amodal_completed": bool(self.amodal_completed),
+            "completed_pixels": int(self.completed_pixels),
             "derived": bool(self.derived),
             "depth": self.depth,
+            "status": self.status,
+            "provenance": self.provenance,
+            "source_mask": self.source_mask,
+            "parent_group": self.parent_group or self.group,
         }
 
 
@@ -338,6 +486,13 @@ class LayerManifest:
     missing_required: List[str]
     missing_preview: List[str]
     warnings: List[str]
+    quality_ready: bool = False
+    manual_required: List[str] = field(default_factory=list)
+    #: 源素材里确实不存在、且已记录证据的槽位（不算缺件）。当前只用于眉毛。
+    not_applicable: List[str] = field(default_factory=list)
+    derived_parts: List[str] = field(default_factory=list)
+    #: 逐侧像素覆盖：``{部件基名: {"L": px, "R": px}}``。只作诊断，不是闸门。
+    sided_coverage: Dict[str, Dict[str, int]] = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
     created_at: str = ""
     order_source: str = "static"
@@ -358,6 +513,7 @@ class LayerManifest:
             "source": self.source,
             "canvas": dict(self.canvas),
             "rig_ready": self.rig_ready,
+            "quality_ready": self.quality_ready,
             "preview_ready": self.preview_ready,
             "order_source": order_source,
             "draw_order": [entry.id for entry in ordered],
@@ -365,8 +521,26 @@ class LayerManifest:
             "layers": [entry.to_dict() for entry in ordered],
             "missing_required": list(self.missing_required),
             "missing_preview": list(self.missing_preview),
+            "manual_required": list(self.manual_required),
+            "not_applicable": list(self.not_applicable),
+            "derived_parts": list(self.derived_parts),
+            "sided_coverage": {key: dict(value)
+                               for key, value in self.sided_coverage.items()},
             "warnings": list(self.warnings),
         }
+
+
+def _sided_coverage(entries: Iterable[LayerEntry]) -> Dict[str, Dict[str, int]]:
+    """按部件基名汇总左右侧像素覆盖，供「逐侧诊断」使用。"""
+    coverage: Dict[str, Dict[str, int]] = {}
+    for entry in entries:
+        _part_id, canonical, side = resolve_part(entry.id)
+        side = side or entry.side
+        if not side:
+            continue
+        bucket = coverage.setdefault(canonical, {"L": 0, "R": 0})
+        bucket[side] += int(entry.pixel_count or 0)
+    return coverage
 
 
 def build_manifest(
@@ -374,11 +548,15 @@ def build_manifest(
     source: str,
     canvas: Tuple[int, int],
     warnings: Optional[Iterable[str]] = None,
+    eyebrow_evidence: Optional[Dict[str, Any]] = None,
 ) -> LayerManifest:
     """Build a manifest from layerer output without inventing missing parts."""
     entries: List[LayerEntry] = []
     emitted: set[str] = set()
     extra_warnings: List[str] = list(warnings or [])
+    manual_required: List[str] = []
+    derived_parts: List[str] = []
+    standard_ranks = _standard_order_ranks()
 
     for layer in layers:
         raw = str(layer.get("name") or "").strip()
@@ -389,25 +567,68 @@ def build_manifest(
         if canonical == "unknown":
             extra_warnings.append(f"未识别部件：{raw}")
 
+        # 静态绘制序取自权威表（ADR-003：层序的唯一权威）。此前这里用 PART_SPECS
+        # 里另一套 z 权重，两套顺序互相矛盾：权威表把 hair_front 放在脸之后、
+        # 权重表把它放在脸之前，于是 PSD 写出的层序与 moc3 的渲染层序对不上。
+        # 权威表里没有的部件退回自身权重，并排在权威表部件之后。
+        # 优先用原始层名查表（thigh_R / calf_R 这类左右侧名能直接命中），
+        # 查不到再用 canonical 部件的代表名。
+        standard_rank = standard_ranks.get(raw)
+        if standard_rank is None:
+            standard_name = STANDARD_ORDER_NAMES.get(canonical)
+            if standard_name is not None:
+                standard_rank = standard_ranks.get(standard_name)
+        z = int(layer.get("z", spec["z"]))
+        if standard_rank is not None:
+            z = standard_rank
+        elif canonical == "unknown":
+            z = len(standard_ranks) + spec["z"]
+
         path = str(layer.get("path") or "")
         confidence = layer.get("confidence")
         depth_value = layer.get("depth")
         depth = float(depth_value) if isinstance(depth_value, (int, float)) else None
+        provenance = str(layer.get("provenance") or (
+            "derived_geometry" if canonical in DERIVED_PARTS else "unknown"
+        ))
+        status = str(layer.get("status") or (
+            "derived" if provenance in {"derived_geometry", "color_heuristic"}
+            else "detected"
+        ))
+        if status not in {"detected", "derived", "completed", "manual_required", "missing"}:
+            extra_warnings.append(f"{raw} 状态无效，按 manual_required 处理")
+            status = "manual_required"
+        if confidence is None:
+            confidence = layer.get("score")
+        confidence_value = float(confidence) if isinstance(confidence, (int, float)) else None
+        if provenance == "unknown":
+            status = "manual_required"
+        if status == "detected" and confidence_value is None:
+            status = "manual_required"
+        if status == "manual_required":
+            manual_required.append(raw)
+        if status == "derived":
+            derived_parts.append(raw)
         entries.append(
             LayerEntry(
                 id=raw,
                 name_zh=str(layer.get("part_name") or spec["name_zh"]),
                 group=str(spec["group"]),
                 side=side,
-                z=int(layer.get("z", spec["z"])),
+                z=z,
                 file=Path(path).name if path else f"{raw}.png",
                 bbox=[int(v) for v in layer.get("bbox", [])] or None,
                 pixel_count=int(layer.get("pixel_count", 0) or 0),
-                confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
+                confidence=confidence_value,
                 occluded_by=list(layer.get("occluded_by", []) or []),
                 amodal_completed=bool(layer.get("completed", layer.get("amodal_completed", False))),
+                completed_pixels=int(layer.get("completed_pixels", 0) or 0),
                 derived=canonical in DERIVED_PARTS,
                 depth=depth,
+                status=status,
+                provenance=provenance,
+                source_mask=str(layer.get("source_mask") or raw),
+                parent_group=str(layer.get("parent_group") or spec["group"]),
             )
         )
         emitted.add(_qualified(canonical, side))
@@ -429,10 +650,92 @@ def build_manifest(
         if base in emitted:
             extra_warnings.append(f"{label}未区分左右，无法独立绑定")
 
-    missing_preview = [q for q in REQUIRED_FOR_PREVIEW if q not in emitted]
-    missing_required = [q for q in REQUIRED_FOR_RIG if q not in emitted]
+    # 上下段只拆出一半：整条肢体仍算缺失，并要求人工确认（不能默默当成齐全）。
+    for base, chain in LIMB_CHAINS.items():
+        for side in ("L", "R"):
+            slot = f"{base}:{side}"
+            if slot in emitted:
+                continue
+            present = [alts[0] for alts in chain
+                       if _segment_present(alts, side, emitted)]
+            if present:
+                extra_warnings.append(
+                    f"{slot} 只拆出部分段（{'、'.join(present)}），缺段按未齐全处理")
 
-    rig_ready = source in _RIG_CAPABLE_SOURCES and not missing_required
+    missing_preview = [q for q in REQUIRED_FOR_PREVIEW if q not in emitted]
+    missing_required = [q for q in REQUIRED_FOR_RIG
+                        if not _limb_slot_satisfied(q, emitted)]
+
+    status_by_qualified: Dict[str, List[str]] = {}
+    for entry in entries:
+        _part_id, canonical, side = resolve_part(entry.id)
+        qualified = _qualified(canonical, side or entry.side)
+        status_by_qualified.setdefault(qualified, []).append(entry.status)
+    for required in REQUIRED_FOR_RIG:
+        statuses = _slot_statuses(required, status_by_qualified)
+        if not statuses or all(value in {"manual_required", "missing"} for value in statuses):
+            manual_required.append(required)
+    manual_required.extend(
+        entry.id for entry in entries if entry.status == "manual_required"
+    )
+    manual_required = sorted(set(manual_required))
+    missing_required = sorted(set(missing_required) | {
+        part for part in manual_required if part in REQUIRED_FOR_RIG
+    })
+
+    # 眉毛不适用：源素材本身没有可分离的眉毛笔画时（刘海或设计省略），无论怎么
+    # 调检测都取不到像素。按规格 INV-4 / failure_modes 不得生成合成眉毛，只能
+    # 如实降级为 N/A —— 不算缺件，但证据与原因必须写进清单（reconsider_if）。
+    not_applicable: List[str] = []
+    brow_slots = ("eyebrow:L", "eyebrow:R")
+    evidence = eyebrow_evidence if isinstance(eyebrow_evidence, dict) else {}
+    if evidence.get("absent") and not any(slot in emitted for slot in brow_slots):
+        not_applicable.extend(brow_slots)
+        missing_required = [s for s in missing_required if s not in brow_slots]
+        manual_required = [s for s in manual_required if s not in brow_slots]
+        extra_warnings.append(
+            "眉毛按不适用处理（不生成合成眉毛）："
+            + str(evidence.get("reason") or "源图眉部窗口内没有眉毛像素")
+        )
+
+    sided_coverage = _sided_coverage(entries)
+    for base, counts in sided_coverage.items():
+        left, right = counts["L"], counts["R"]
+        if left and right:
+            smaller, larger = sorted((left, right))
+            if smaller / larger < 0.10:
+                extra_warnings.append(
+                    f"{base} 左右覆盖差异过大（L={left}px, R={right}px），"
+                    "请确认是否误拆或被遮挡")
+
+    exportable_sources = source in _RIG_CAPABLE_SOURCES
+    rig_ready = exportable_sources and not missing_required
+    # 补全层含推断像素：可以用于导出，但不能宣称「高质量 = 全部来自原画」。
+    completed_entries = [entry for entry in entries
+                         if entry.status == "completed"]
+    if completed_entries:
+        inferred = sum(entry.completed_pixels for entry in completed_entries)
+        extra_warnings.append(
+            f"含遮挡补全层 {len(completed_entries)} 个（共 {inferred} px 为推断像素），"
+            "补全区不计入原画证据")
+    detection_evidence_ready = all(
+        entry.confidence is not None and entry.confidence >= 0.5
+        and entry.provenance not in {"unknown", "color_heuristic"}
+        for entry in entries if entry.status == "detected"
+    )
+    quality_ready = (
+        rig_ready
+        and not manual_required
+        and not completed_entries
+        and all(
+            entry.provenance not in {"unknown", "color_heuristic"}
+            and entry.confidence is not None and entry.confidence >= 0.5
+            for entry in entries if entry.status == "derived"
+        )
+        and detection_evidence_ready
+    )
+    if rig_ready and not quality_ready:
+        extra_warnings.append("允许导出候选层，但证据不足或含派生层，未达到高质量 rig-ready")
     preview_ready = not missing_preview
     if not preview_ready:
         extra_warnings.append("缺少必要部件，无法进入预览/分层检查")
@@ -454,6 +757,11 @@ def build_manifest(
         missing_required=missing_required,
         missing_preview=missing_preview,
         warnings=extra_warnings,
+        quality_ready=quality_ready,
+        manual_required=manual_required,
+        not_applicable=not_applicable,
+        derived_parts=derived_parts,
+        sided_coverage=sided_coverage,
         created_at=datetime.now(timezone.utc).isoformat(),
         order_source=order_source,
     )
@@ -512,8 +820,19 @@ def validate_manifest(data: Dict[str, Any]) -> List[str]:
             errors.append(f"未知分组 {layer.get('group')!r}（图层 {layer_id}）")
         if layer.get("side") not in (None, "L", "R"):
             errors.append(f"side 只能是 L/R/null（图层 {layer_id}）")
+        if layer.get("status", "detected") not in {
+            "detected", "derived", "completed", "manual_required", "missing"
+        }:
+            errors.append(f"未知图层状态 {layer.get('status')!r}（图层 {layer_id}）")
+        if not layer.get("source_mask"):
+            errors.append(f"图层缺少 source_mask（图层 {layer_id}）")
+        if not layer.get("parent_group"):
+            errors.append(f"图层缺少 parent_group（图层 {layer_id}）")
+        confidence = layer.get("confidence")
+        if confidence is not None and not 0.0 <= float(confidence) <= 1.0:
+            errors.append(f"confidence 超出 [0, 1]（图层 {layer_id}）")
 
-    for key in ("rig_ready", "preview_ready"):
+    for key in ("rig_ready", "quality_ready", "preview_ready"):
         if not isinstance(data.get(key), bool):
             errors.append(f"{key} 必须为布尔值")
 

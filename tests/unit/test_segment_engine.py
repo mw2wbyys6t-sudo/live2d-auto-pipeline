@@ -232,6 +232,10 @@ class TestLayerComposer:
 
         occluded = (face | hair_front) & ~hair_back
         assert result["hair_back"]["completed"] is True
+        # 补全必须可追溯：面积与来源都要落在层元数据里，供 manifest 记账。
+        assert result["hair_back"]["status"] == "completed"
+        assert result["hair_back"]["provenance"] == "amodal_completion"
+        assert result["hair_back"]["completed_pixels"] == int(occluded.sum())
         assert occluded.any()
         assert np.all(hair_arr[occluded, 3] == 255)
         assert np.array_equal(hair_arr[hair_back], original[hair_back])

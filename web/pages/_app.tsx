@@ -18,6 +18,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/chat': 'AI 对话',
   '/export': '导出',
   '/health': '环境自检',
+  '/settings': '设置',
 };
 
 /** 单页工作台自带外壳，不能再套一层带侧边栏的 Layout；启动页同理。 */
