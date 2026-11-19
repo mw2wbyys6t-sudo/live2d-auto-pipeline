@@ -134,6 +134,8 @@ output-*/
 web/.next/
 web/.vercel/
 web/.cache/
+# 本地 `next build --distDir .next-verify` 的验证产物（约 66MB，机器本地）
+web/.next-verify/
 
 # --- Python 扩展模块构建产物 ---
 *.so
