@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -80,8 +81,9 @@ static std::vector<std::wstring> model_dirs() {
     DWORD n = GetEnvironmentVariableA("FACE_TRACKER_MODEL_DIR", env, sizeof(env));
     if (n > 0 && n < sizeof(env)) dirs.push_back(utf8_to_wide(env) + L"\\");
     std::wstring ed = exe_dir();
-    // 部署布局：models/ 与 exe 同目录
+    // 部署布局：models/ 与 exe 同目录（拆分包会把 YuNet / 478 点平铺进 models/）
     dirs.push_back(ed + L"models\\");
+    dirs.push_back(ed + L"models\\face\\");
     // 开发布局：native/face_tracker_cpp/build/ → 项目根（上三级）
     dirs.push_back(ed + L"..\\..\\..\\models\\face\\");
     dirs.push_back(ed + L"..\\..\\..\\models\\");
@@ -117,6 +119,9 @@ struct App {
     Params prev;
     int camera_id = 0;
     float fps = 0;
+    // 中性姿态自标定：pitch_ratio 因人而异（实测 0.56~0.68），近距离收敛，
+    // 避免每个人都被顶到一个固定的抬头/低头角。
+    float pitch_neutral = kPitchRatioNeutral;
     uint32_t frame_count = 0;
     steady_clock::time_point last_fps_time = steady_clock::now();
     bool mesh_warned = false;
@@ -143,6 +148,7 @@ struct App {
             if (cam.open(id, w, h, aw, ah, err)) {
                 running = true;
                 prev.clear();
+                pitch_neutral = kPitchRatioNeutral;
                 frame_count = 0;
                 last_fps_time = steady_clock::now();
                 emit(json{{"type", "started"}, {"camera_id", id}, {"width", aw}, {"height", ah}});
@@ -156,7 +162,8 @@ struct App {
             emit(json{{"type", "stopped"}});
         } else if (c == "status") {
             emit(json{{"type", "status"}, {"running", running}, {"camera_id", camera_id},
-                      {"fps", fps}, {"smoothing", smoothing}, {"deadzone", deadzone}});
+                      {"fps", fps}, {"smoothing", smoothing}, {"deadzone", deadzone},
+                      {"pitch_neutral", pitch_neutral}});
         } else if (c == "set_smoothing") {
             float a = cmd.value("alpha", 0.5f);
             smoothing = std::max(0.0f, std::min(1.0f, a));
@@ -194,7 +201,13 @@ struct App {
                 float score = 0;
                 if (mesh.infer(frame.rgb.data(), frame.width, frame.height, f, pts, score, err)) {
                     bs = compute_blendshapes_468(pts);
-                    estimate_head_rotation_468(pts, head);
+                    estimate_head_rotation_468(pts, head, pitch_neutral);
+                    // 仅在接近正视时慢速收敛中性值，避免侧脸/仰头污染标定。
+                    if (head.pitch_ratio > 0.35f && head.pitch_ratio < 1.10f &&
+                        std::fabs(head.yaw) < 10.0f && std::fabs(head.roll) < 8.0f) {
+                        pitch_neutral = pitch_neutral * 0.98f + head.pitch_ratio * 0.02f;
+                        head.pitch = pitch_from_ratio(head.pitch_ratio, pitch_neutral);
+                    }
                     has_face = true;
                     mesh_ok = true;
                 } else if (!err.empty() && !mesh_warned) {
@@ -306,10 +319,12 @@ static int selftest(const wchar_t* path) {
             json lm = json::array();
             for (const auto& p : pts) lm.push_back(json::array({p.x, p.y, p.z}));
             j["landmarks"] = lm;
-            j["blendshapes"] = compute_blendshapes_468(pts);
+            Params bs = compute_blendshapes_468(pts);
+            j["blendshapes"] = bs;
             HeadRotation hr;
             estimate_head_rotation_468(pts, hr);
             j["head_rotation"] = json{{"pitch", hr.pitch}, {"yaw", hr.yaw}, {"roll", hr.roll}};
+            j["live2d_params"] = blendshapes_to_live2d(bs, &hr);
         } else {
             j["score"] = score;
             j["mesh_error"] = err.empty() ? "low score" : err;

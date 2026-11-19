@@ -15,7 +15,17 @@ struct Point3 {
 
 struct HeadRotation {
     float pitch = 0, yaw = 0, roll = 0;
+    // 原始归一化量：调用方可用它对中性姿态做自标定（每人脸比例不同）。
+    float pitch_ratio = 0;  // 鼻-下巴 / 额头-鼻 的 2D 距离比
+    float yaw_offset = 0;   // 鼻尖相对面部中线的偏移（按面宽归一化）
 };
+
+// 中性姿态下的 pitch_ratio 参考值。真实人脸（含 Lena 测试图）实测约 0.56~0.68，
+// 早期写死 1.2 会让 pitch 长期饱和到 ±30°。
+constexpr float kPitchRatioNeutral = 0.62f;
+
+// 比值 → 俯仰角（度）。neutral 可传自标定值。
+float pitch_from_ratio(float ratio, float neutral);
 
 using Params = std::map<std::string, float>;
 
@@ -30,8 +40,9 @@ Params compute_blendshapes_468(const std::vector<Point3>& points);
 Params compute_blendshapes_5pt(Point3 left_eye, Point3 right_eye, Point3 nose_tip,
                                Point3 left_mouth, Point3 right_mouth);
 
-// 468 点 → 头姿；点数不足返回 false。
-bool estimate_head_rotation_468(const std::vector<Point3>& points, HeadRotation& out);
+// 468 点 → 头姿；点数不足返回 false。pitch_neutral 可用自标定值覆盖。
+bool estimate_head_rotation_468(const std::vector<Point3>& points, HeadRotation& out,
+                                float pitch_neutral = kPitchRatioNeutral);
 
 // 5 关键点 → 头姿。
 HeadRotation estimate_head_rotation_5pt(Point3 left_eye, Point3 right_eye, Point3 nose_tip,

@@ -224,7 +224,14 @@ Params compute_blendshapes_5pt(Point3 left_eye, Point3 right_eye, Point3 nose_ti
 
 // ─────────────────── 头部姿态 ───────────────────
 
-bool estimate_head_rotation_468(const std::vector<Point3>& points, HeadRotation& out) {
+float pitch_from_ratio(float ratio, float neutral) {
+    if (neutral < 1e-6f) neutral = kPitchRatioNeutral;
+    // 比值偏离中性 100% 对应 60°，再夹到 ±30°（Live2D 参数范围）。
+    return clampf((ratio / neutral - 1.0f) * 60.0f, -30.0f, 30.0f);
+}
+
+bool estimate_head_rotation_468(const std::vector<Point3>& points, HeadRotation& out,
+                                float pitch_neutral) {
     if (points.size() < 468) return false;
     auto pt = [&](size_t i) { return points[i]; };
 
@@ -241,17 +248,19 @@ bool estimate_head_rotation_468(const std::vector<Point3>& points, HeadRotation&
     // Yaw: 鼻尖偏离面部中线
     float face_center_x = (left_face.x + right_face.x) * 0.5f;
     float nose_offset = (nose_tip.x - face_center_x) / face_width;
+    out.yaw_offset = nose_offset;
     out.yaw = clampf(nose_offset * 60.0f, -30.0f, 30.0f);
 
-    // Pitch: 鼻-下巴 vs 额头-鼻 距离比例
+    // Pitch: 鼻-下巴 vs 额头-鼻 距离比例（2D 投影会随俯仰整体缩放，用比值消掉）
     float dcx = chin.x - nose_tip.x, dcy = chin.y - nose_tip.y;
     float dfx = nose_tip.x - forehead.x, dfy = nose_tip.y - forehead.y;
     float nose_to_chin = std::sqrt(dcx * dcx + dcy * dcy);
     float forehead_to_nose = std::sqrt(dfx * dfx + dfy * dfy);
     float total_height = nose_to_chin + forehead_to_nose;
     if (total_height < 1e-6f) return false;
-    float ratio = nose_to_chin / forehead_to_nose;
-    out.pitch = clampf((ratio - 1.2f) * 50.0f, -30.0f, 30.0f);
+    float ratio = nose_to_chin / std::max(forehead_to_nose, 1e-6f);
+    out.pitch_ratio = ratio;
+    out.pitch = pitch_from_ratio(ratio, pitch_neutral);
     return true;
 }
 
@@ -324,8 +333,10 @@ Params blendshapes_to_live2d(const Params& bs, const HeadRotation* head) {
     p["ParamEyeBallY"] = clampf(eye_y, -1.0f, 1.0f);
 
     if (head) {
-        p["ParamAngleX"] = clampf(head->pitch, -30.0f, 30.0f);
-        p["ParamAngleY"] = clampf(head->yaw, -30.0f, 30.0f);
+        // Live2D 约定：AngleX=左右转(yaw)、AngleY=上下抬(-pitch)、AngleZ=歪头(roll)。
+        // 与 api_server.py 主链路一致；此前 X/Y 互换会让转头变成点头。
+        p["ParamAngleX"] = clampf(head->yaw, -30.0f, 30.0f);
+        p["ParamAngleY"] = clampf(-head->pitch, -30.0f, 30.0f);
         p["ParamAngleZ"] = clampf(head->roll, -30.0f, 30.0f);
     } else {
         p["ParamAngleX"] = 0.0f;
@@ -333,8 +344,8 @@ Params blendshapes_to_live2d(const Params& bs, const HeadRotation* head) {
         p["ParamAngleZ"] = 0.0f;
     }
 
-    p["ParamBodyAngleX"] = p["ParamAngleY"] * 0.3f;
-    p["ParamBodyAngleY"] = p["ParamAngleX"] * 0.2f;
+    p["ParamBodyAngleX"] = p["ParamAngleX"] * 0.3f;
+    p["ParamBodyAngleY"] = p["ParamAngleY"] * 0.2f;
     p["ParamBreath"] = 0.5f;
     return p;
 }
