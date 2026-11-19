@@ -214,6 +214,14 @@ export class Live2DPlayer {
   /** 动作组 → 已解析的动作文件。 */
   private motionGroups: Map<string, MotionFile[]> = new Map();
   private motion: MotionPlayback | null = null;
+  /**
+   * 交叉淡化中的上一个动作。切换动作时旧动作不立刻丢弃，而是在
+   * ``MOTION_CROSSFADE_SECONDS`` 内继续推进并按权重让位 —— 否则新动作从
+   * 自己的第 0 秒开始时，旧动作被冻结在最后一帧，画面会出现一次硬切。
+   */
+  private motionFade: { playback: MotionPlayback; remain: number; total: number } | null = null;
+  /** 动作切换的交叉淡化时长（秒）。与文件自身的 FadeInTime 叠加生效。 */
+  private static readonly MOTION_CROSSFADE_SECONDS = 0.25;
   private idleEnabled = false;
   private physics: PhysicsEngine | null = null;
   private physicsDiagnostics = { chains: 0, loaded: false };
@@ -349,6 +357,7 @@ export class Live2DPlayer {
     this.externalHold.clear();
     this.motionGroups.clear();
     this.motion = null;
+    this.motionFade = null;
     this._idleClock = 0;
     this.physics = null;
     this.physicsDiagnostics = { chains: 0, loaded: false };
@@ -1012,7 +1021,7 @@ export class Live2DPlayer {
     if (enabled) {
       if (!this.motion) this.startIdleMotion();
     } else if (this.motion && this.motion.group === 'idle') {
-      this.motion = null;
+      this.switchMotion(null);
     }
   }
 
@@ -1020,18 +1029,38 @@ export class Live2DPlayer {
   playMotion(group: string, index = 0): boolean {
     const files = this.motionGroups.get(group);
     if (!files || !files[index]) return false;
-    this.motion = new MotionPlayback(files[index], group, index);
+    this.switchMotion(new MotionPlayback(files[index], group, index));
     return true;
   }
 
   stopMotion(): void {
-    this.motion = null;
+    this.switchMotion(null);
   }
 
   private startIdleMotion(): void {
     const files = this.motionGroups.get('idle') || this.motionGroups.values().next().value;
     if (!files || !files.length) return;
-    this.motion = new MotionPlayback(files[0], 'idle', 0);
+    this.switchMotion(new MotionPlayback(files[0], 'idle', 0));
+  }
+
+  /**
+   * 切换动作：旧动作进入交叉淡化队列，不立刻丢弃。
+   *
+   * 直接 ``this.motion = next`` 时，旧动作会冻结在最后一帧、新动作从第 0 秒
+   * 起步，两段之间出现一次可见的硬切（尤其是 idle → nod 这种姿态差较大的切换）。
+   * 这里让旧动作在 ``MOTION_CROSSFADE_SECONDS`` 内继续推进，与 ``updateMotion``
+   * 的混合权重配合，得到连续过渡。
+   */
+  private switchMotion(next: MotionPlayback | null): void {
+    const previous = this.motion;
+    if (previous && previous !== next) {
+      this.motionFade = {
+        playback: previous,
+        remain: Live2DPlayer.MOTION_CROSSFADE_SECONDS,
+        total: Live2DPlayer.MOTION_CROSSFADE_SECONDS,
+      };
+    }
+    this.motion = next;
   }
 
   /**
@@ -1170,25 +1199,49 @@ export class Live2DPlayer {
    * 只是眼皮抖一下。淡入仍按权重缓入，不会开局跳变。
    */
   private updateMotion(dt: number): void {
-    if (!this.motion && this.idleEnabled) this.startIdleMotion();
+    if (!this.motion && !this.motionFade && this.idleEnabled) this.startIdleMotion();
     const playback = this.motion;
-    if (!playback) return;
-    playback.advance(dt);
-    const weight = playback.weight;
+    const fade = this.motionFade;
+    if (!playback && !fade) return;
+    if (playback) playback.advance(dt);
+
+    // 交叉淡化权重：0 = 完全是旧动作，1 = 完全是新动作。
+    let mix = 1;
+    if (fade) {
+      fade.playback.advance(dt);
+      fade.remain -= dt;
+      mix = fade.total > 0 ? Math.min(1, Math.max(0, 1 - fade.remain / fade.total)) : 1;
+      if (fade.remain <= 0) this.motionFade = null;
+    }
+
+    const incoming = playback ? playback.sample() : new Map<string, number>();
+    const outgoing = fade ? fade.playback.sample() : new Map<string, number>();
+    // 动作自身的淡入淡出（非循环动作结尾自然衰减）；交叉淡化期间由 mix 接管，
+    // 否则新旧两份权重相乘会让过渡显得比设定更慢。
+    const weight = fade ? 1 : (playback ? playback.weight : 1);
+
     // 表情生效中的参数不直接落值：表情每帧叠在目标值上、再由 update() 的
     // 低通收敛，直接写 params 会让动作每帧把它按回自己的值，表情只剩 15%。
     const held = this.activeExpressionParameterIds();
-    playback.sample().forEach((value, id) => {
+    const ids = new Set<string>([...incoming.keys(), ...outgoing.keys()]);
+    ids.forEach((id) => {
       // 表情或外部输入正在驱动这个参数时不落值，否则每帧都会把它们按回动作自己的值。
       if (held.has(id) || this.externalHold.has(id)) return;
-      const target = clampToBounds(value, this.bounds.get(id));
+      const next = incoming.get(id);
+      const prev = outgoing.get(id);
+      // 新动作没有该参数曲线时保持当前值（用旧值当新值），不能被拉回 0。
+      const base = next !== undefined ? next : (prev ?? this.targetParams.get(id) ?? 0);
+      const blended = prev !== undefined && mix < 1
+        ? prev + (base - prev) * mix
+        : base;
+      const target = clampToBounds(blended, this.bounds.get(id));
       const targetNow = this.targetParams.get(id) ?? target;
       this.targetParams.set(
         id, weight >= 1 ? target : targetNow + (target - targetNow) * weight);
       const now = this.params.get(id) ?? target;
       this.params.set(id, weight >= 1 ? target : now + (target - now) * weight);
     });
-    if (playback.finished) this.motion = null;
+    if (playback && playback.finished) this.motion = null;
   }
 
   /**

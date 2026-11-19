@@ -2626,12 +2626,14 @@ def write_idle_motion(output_dir: str, character_name: str,
             log.info(f"physics 负责的参数不排 motion 曲线（避免双写）：{skipped}")
 
     builder = Motion3Builder()
-    document = builder.build_idle(animatable, defaults=defaults)
-    if document is None:
+    # 出厂动作组：idle（程序化待机）+ 关键帧动作（nod / look / talk）。
+    # 缺参数的组会自动跳过，因此没有头部或嘴部键形的模型只会得到它能做的组。
+    documents = builder.build_action_set(animatable, defaults=defaults)
+    if not documents:
         # 没有任何可驱动参数：不产出 motion 文件，清单里的 Motions 保持空。
         # 给动不了的参数排曲线会得到「文件齐全但画面一动不动」的假产物。
         return []
-    manifest = builder.export_to_directory(str(out), character_name, {"idle": document})
+    manifest = builder.export_to_directory(str(out), character_name, documents)
 
     data.setdefault("FileReferences", {})["Motions"] = manifest
     manifest_path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
@@ -2648,8 +2650,10 @@ def write_idle_motion(output_dir: str, character_name: str,
     except OSError as exc:
         log.warning(f"VTube Studio 配置写出失败（不影响模型本身）：{exc}")
     if files:
-        log.success(f"idle 动作已按权威可驱动集合生成："
-                    f"{len((document.get('Curves') or []))} 条曲线 -> {len(files)} 个文件")
+        curve_total = sum(len(doc.get("Curves") or []) for doc in documents.values())
+        log.success(f"动作已按权威可驱动集合生成："
+                    f"{len(documents)} 组 / {curve_total} 条曲线 -> {len(files)} 个文件 "
+                    f"（{'、'.join(documents)}）")
     return files
 
 
