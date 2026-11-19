@@ -53,6 +53,18 @@ class AmodalCompleter:
     DIFFUSION_MAX_ITERS = 512
     DIFFUSION_TOL = 0.05
 
+    #: 各补画方法的基线可信度。按方法而非像素内容打分，单调、可解释：
+    #: 学习式补画最可信；扩散在平涂上有边界约束；Telea 小洞可用；
+    #: 最近邻兜底只保证不漏底。
+    COMPLETION_CONFIDENCE = {
+        "pix2gestalt": 0.90,
+        "diffusion": 0.40,
+        "telea": 0.60,
+        "simple_fill": 0.30,
+        "none": 0.0,
+        "unknown": 0.0,
+    }
+
     def __init__(self, device: str = "auto") -> None:
         """Initialize the completer.
 
@@ -62,6 +74,9 @@ class AmodalCompleter:
         """
         self.device = self._resolve_device(device)
         self._pix2gestalt = None  # lazily loaded
+        #: 最近一次 :meth:`complete` 实际使用的补画方法（供 composer 记入
+        #: manifest；``None`` 表示还没调用过）。
+        self.last_method: Optional[str] = None
         log.debug(f"AmodalCompleter ready (cv2={HAS_CV2}, torch={HAS_TORCH}, device={self.device})")
 
     @staticmethod
@@ -113,6 +128,7 @@ class AmodalCompleter:
         # Nothing to fill
         if not occ.any():
             log.debug("complete: no occluded pixels; returning image unchanged")
+            self.last_method = "none"
             return image
 
         target_pixels = vis | occ
@@ -126,10 +142,12 @@ class AmodalCompleter:
         filled: Optional[np.ndarray] = None
 
         # 1) Try pix2gestalt learned model if available
+        self.last_method = "unknown"
         try:
             filled = self._inpaint_pix2gestalt(Image.fromarray(rgb, "RGB"), ~known)
             if filled is not None:
                 rgb = np.array(filled.convert("RGB"))
+                self.last_method = "pix2gestalt"
         except Exception as exc:  # pragma: no cover - model/runtime
             log.warning(f"pix2gestalt inpainting failed ({exc}); trying cv2")
 
@@ -147,13 +165,17 @@ class AmodalCompleter:
                 sub_unknown = np.ascontiguousarray(unknown[y0:y1, x0:x1])
                 if int((sub_unknown > 0).sum()) >= self.LARGE_HOLE_PIXELS:
                     rgb[y0:y1, x0:x1] = self._diffusion_fill(sub, sub_unknown > 0)
+                    self.last_method = "diffusion"
                 else:
                     rgb[y0:y1, x0:x1] = self._inpaint_cv2(sub, sub_unknown)
+                    self.last_method = "telea"
             except Exception as exc:
                 log.warning(f"OpenCV inpainting failed ({exc}); using simple fill")
                 rgb = self._simple_fill(rgb, occ, known=known)
+                self.last_method = "simple_fill"
         elif filled is None:
             rgb = self._simple_fill(rgb, occ, known=known)
+            self.last_method = "simple_fill"
 
         # Composite: keep original visible pixels, take filled for occluded
         out_rgb = arr[:, :, :3].copy()

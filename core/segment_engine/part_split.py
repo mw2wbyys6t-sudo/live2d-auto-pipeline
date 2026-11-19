@@ -21,6 +21,42 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
+
+class SplitNote(str):
+    """与 ``str`` 完全兼容的拆分备注，额外携带机器可读的 ``code`` / ``part``。
+
+    为什么不是普通 dataclass：现有的拆分函数返回 ``List[str]``，调用方与测试既做
+    ``"肘部" in message`` 子串判断，也做 ``not warnings`` 空表判断，还会直接
+    ``log.warning(message)``。继承 ``str`` 可以零成本保留这些语义，同时让 manifest
+    拿到结构化字段，把「降级原因」从日志提升为可审计证据。
+    """
+
+    code: str
+    part: Optional[str]
+
+    def __new__(cls, message: str, code: str, part: Optional[str] = None) -> "SplitNote":
+        obj = super().__new__(cls, message)
+        obj.code = code
+        obj.part = part
+        return obj
+
+
+#: 会让被拆分部件「不能按语义安全拆分」的机器码。命中即标 ``split_limited``，
+#: 该层可继续作为导出候选，但不得宣称高质量（见 staging spec 2026-11-19 INV-A2）。
+DEGRADATION_CODES = frozenset({
+    "limb_no_midline",
+    "limb_single_side",
+    "eye_low_contrast",
+    "eye_ratio_abnormal",
+    "hair_front_back_failed",
+    "depth_insufficient",
+    "depth_ratio_unbalanced",
+    "eye_detail_low_evidence",
+    "lash_not_separable",
+    "mouth_detail_low_evidence",
+    "mouth_closed_line",
+})
+
 #: Coarse mask name -> canonical base name used for the split layers.
 SIDED_SOURCE_PARTS: Dict[str, str] = {
     "arms": "arm",
@@ -89,7 +125,11 @@ _BAND_DERIVATIONS: Dict[str, Tuple[Tuple[str, str, float], ...]] = {
 
 #: Parts produced by geometric edge bands rather than by detection.
 DERIVED_PARTS = frozenset({"cuff", "skirt_hem", "collar", "waistband", "boot_cuff",
-                           "skirt_inner"})
+                           "skirt_inner",
+                           # P1 眼/口细节：全部由母掩码按像素证据再分，属派生层。
+                           "eye_pupil", "eye_highlight",
+                           "eyelash_upper", "eyelash_lower",
+                           "teeth", "tongue", "lip_upper", "lip_lower"})
 
 #: Eye masks that can be split into sclera (white) and iris by luminance.
 EYE_SOURCES: Dict[str, str] = {
@@ -324,14 +364,17 @@ def split_limb_parts(
         sides = split_mask_sides(mask, midline)
         if not sides:
             result[name] = mask
-            warnings.append(f"{name} 未能按中线拆分，保留整块")
+            warnings.append(SplitNote(
+                f"{name} 未能按中线拆分，保留整块", "limb_no_midline", name))
             continue
 
         for side, side_mask in sides.items():
             result[f"{base}_{side}"] = side_mask
 
         if len(sides) < 2:
-            warnings.append(f"{name} 只检测到单侧（{next(iter(sides))}），另一侧缺失")
+            warnings.append(SplitNote(
+                f"{name} 只检测到单侧（{next(iter(sides))}），另一侧缺失",
+                "limb_single_side", name))
 
     return result, warnings
 
@@ -371,7 +414,8 @@ def split_eye_parts(
         low, high = np.percentile(values, 20), np.percentile(values, 80)
         if high - low < 10:
             result[name] = mask
-            warnings.append(f"{name} 明暗差不足，未拆分眼白/瞳孔")
+            warnings.append(SplitNote(
+                f"{name} 明暗差不足，未拆分眼白/瞳孔", "eye_low_contrast", name))
             continue
 
         threshold = (low + high) / 2.0
@@ -380,7 +424,9 @@ def split_eye_parts(
         iris_ratio = float(iris.sum()) / max(1, int(mask.sum()))
         if not iris.any() or not sclera.any() or not 0.08 <= iris_ratio <= 0.8:
             result[name] = mask
-            warnings.append(f"{name} 眼白/瞳孔比例异常（{iris_ratio:.0%}），保留整块")
+            warnings.append(SplitNote(
+                f"{name} 眼白/瞳孔比例异常（{iris_ratio:.0%}），保留整块",
+                "eye_ratio_abnormal", name))
             continue
 
         result[f"irides_{side}"] = iris
@@ -620,12 +666,14 @@ def _ensure_hair_front_back(
         source = "上部 40%"
 
     if not new_front.any() or not new_back.any():
-        warnings.append("头发前后拆分失败，保留原掩码")
+        warnings.append(SplitNote(
+            "头发前后拆分失败，保留原掩码", "hair_front_back_failed", "hair"))
         return result, warnings
 
     result[HAIR_FRONT] = new_front
     result[HAIR_BACK] = new_back
-    warnings.append(f"头发前后由同一掩码按{source}拆分")
+    warnings.append(SplitNote(
+        f"头发前后由同一掩码按{source}拆分", "hair_front_back_inferred", "hair"))
     return result, warnings
 
 
@@ -675,7 +723,8 @@ def split_depth_parts(
 
         mask = np.asarray(mask, dtype=bool)
         if mask.shape != depth.shape:
-            warnings.append(f"{parent} 与深度图尺寸不一致，跳过")
+            warnings.append(SplitNote(
+                f"{parent} 与深度图尺寸不一致，跳过", "depth_size_mismatch", parent))
             continue
         total = int(mask.sum())
         if total < 100:
@@ -684,20 +733,23 @@ def split_depth_parts(
         values = depth[mask]
         low, high = np.percentile(values, 10), np.percentile(values, 90)
         if high - low < 0.02:
-            warnings.append(f"{parent} 深度差不足，未拆前后")
+            warnings.append(SplitNote(
+                f"{parent} 深度差不足，未拆前后", "depth_insufficient", parent))
             continue
 
         threshold = float(np.median(values))
         front = mask & (depth >= threshold)
         back = mask & (depth < threshold)
         if int(front.sum()) < total * 0.1 or int(back.sum()) < total * 0.1:
-            warnings.append(f"{parent} 前后比例失衡，保留整块")
+            warnings.append(SplitNote(
+                f"{parent} 前后比例失衡，保留整块", "depth_ratio_unbalanced", parent))
             continue
 
         result.pop(parent, None)
         result[front_name] = result.get(front_name, np.zeros_like(mask)) | front
         result[back_name] = result.get(back_name, np.zeros_like(mask)) | back
-        warnings.append(f"{parent} 按深度拆为 {front_name}/{back_name}")
+        warnings.append(SplitNote(
+            f"{parent} 按深度拆为 {front_name}/{back_name}", "depth_split_done", parent))
 
     return result, warnings
 
@@ -1313,12 +1365,16 @@ def split_skirt_inner(
 
 def refine_part_masks(
     part_masks: Dict[str, np.ndarray],
+    image_rgb: Optional[np.ndarray] = None,
 ) -> Tuple[Dict[str, np.ndarray], List[str]]:
     """对已分好的部件做几何细化：刘海分束 / 后侧发再分束 / 手臂分段 / 裙内层。
 
     必须在 ``split_hair_parts`` 与 ``split_garment_details`` **之后**调用：
     前者的前后发与侧束、后者的裙摆与腰带都已经切好，这里的阈值才是在真实
     剩余面积上判断的（否则会被即将切走的裙摆/袖口撑大）。
+
+    传入 ``image_rgb`` 时还会做 P1 眼/口细节拆分（瞳孔/高光/睫毛、牙齿/舌头/
+    上下唇）；不传时行为与原来完全一致，便于旧调用方与单测零改动。
     """
     result, warnings = split_hair_bangs_strands(part_masks)
     result, more = split_hair_side_strands(result)
@@ -1329,6 +1385,11 @@ def refine_part_masks(
     warnings.extend(more)
     result, more = split_skirt_inner(result)
     warnings.extend(more)
+    if image_rgb is not None:
+        result, more = split_eye_details(result, image_rgb)
+        warnings.extend(more)
+        result, more = split_mouth_details(result, image_rgb)
+        warnings.extend(more)
     return result, warnings
 
 
@@ -1345,3 +1406,259 @@ def sided_bases(names: Iterable[str]) -> List[str]:
                 bases.append(lowered[: -len(suffix)])
                 break
     return bases
+
+
+# ─────────────────── P1 眼部 / 口部细节拆分 ───────────────────
+#
+# 原则：只从**已归本层所有**的掩码里按像素证据再分，绝不跨层搬像素
+# （越界拆分会破坏 INV-3 的拆分守恒）。证据不足时保留整块并写出机器码，
+# 由 manifest 标成 split_limited / manual_required，而不是猜着拆。
+
+#: 眼部细节的证据阈值。
+EYE_DETAIL_MIN_AREA = 40
+EYE_DETAIL_MIN_CONTRAST = 25.0
+HIGHLIGHT_MIN_LUMA = 235.0
+HIGHLIGHT_MIN_GAP = 55.0
+HIGHLIGHT_RATIO_RANGE = (0.002, 0.15)
+PUPIL_RATIO_RANGE = (0.08, 0.60)
+LASH_MIN_SIDE_RATIO = 0.15
+
+#: 口部细节的证据阈值。闭口线高度不足时整块保留。
+MOUTH_DETAIL_MIN_HEIGHT = 10
+TEETH_MIN_LUMA = 195.0
+TEETH_MAX_SATURATION = 32.0
+TEETH_RATIO_RANGE = (0.01, 0.50)
+TONGUE_RED_MARGIN = 18.0
+TONGUE_RATIO_RANGE = (0.01, 0.40)
+
+
+def _luminance(rgb: np.ndarray) -> np.ndarray:
+    return (0.299 * rgb[..., 0] + 0.587 * rgb[..., 1]
+            + 0.114 * rgb[..., 2]).astype(np.float32)
+
+
+def _saturation(rgb: np.ndarray) -> np.ndarray:
+    arr = rgb[..., :3].astype(np.float32)
+    return (arr.max(axis=-1) - arr.min(axis=-1)).astype(np.float32)
+
+
+def _otsu_threshold(values: np.ndarray) -> Optional[float]:
+    """对一组亮度值做 Otsu 二分，返回阈值；全部同值时返回 ``None``。
+
+    为什么不用 p20/p80 的中点：瞳孔/高光在整块虹膜里往往只占几个百分点，
+    分位数会双双落在背景簇上（实测 9% 的瞳芯让 p20==p80），阈值于是退化成
+    「整块都算瞳孔」。Otsu 最大化类间方差，对小簇同样成立。
+    """
+    arr = np.asarray(values, dtype=np.float64).ravel()
+    if arr.size < 2:
+        return None
+    lo, hi = float(arr.min()), float(arr.max())
+    if hi - lo < 1.0:
+        return None
+    hist, edges = np.histogram(arr, bins=64, range=(lo, hi))
+    hist = hist.astype(np.float64)
+    total = hist.sum()
+    if total <= 0:
+        return None
+    p = hist / total
+    omega = np.cumsum(p)
+    centres = (edges[:-1] + edges[1:]) / 2.0
+    mu = np.cumsum(p * centres)
+    mu_t = mu[-1]
+    denom = omega * (1.0 - omega)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sigma_b = np.where(denom > 1e-12, (mu_t * omega - mu) ** 2 / denom, 0.0)
+    idx = int(np.argmax(sigma_b))
+    return float(centres[idx])
+
+
+def split_eye_details(
+    part_masks: Dict[str, np.ndarray],
+    image_rgb: np.ndarray,
+) -> Tuple[Dict[str, np.ndarray], List[str]]:
+    """在虹膜内拆瞳孔/高光，在睫毛内拆上下睫毛。
+
+    * 瞳孔：虹膜区域亮度较低的簇（占比须在合理区间，否则判为证据不足）；
+    * 高光：虹膜内接近镜面的极小亮簇；
+    * 上下睫毛：只对**已存在的** eyelash 掩码按眼睛中心线上下分区。
+
+    任何一步证据不足都保留母层，并写 ``SplitNote`` 说明原因。
+    """
+    result: Dict[str, np.ndarray] = dict(part_masks)
+    warnings: List[str] = []
+    rgb = np.asarray(image_rgb)
+    if rgb.ndim != 3 or rgb.shape[2] < 3:
+        return result, warnings
+
+    lum = _luminance(rgb)
+
+    for side in ("L", "R"):
+        iris_key = next((k for k in (f"irides_{side}", f"eye_iris_{side}")
+                         if k in result), None)
+        if iris_key is None:
+            continue
+        iris = np.asarray(result[iris_key], dtype=bool)
+        area = int(iris.sum())
+        if area < EYE_DETAIL_MIN_AREA:
+            warnings.append(SplitNote(
+                f"{iris_key} 面积 {area}px 不足以拆瞳孔/高光",
+                "eye_detail_low_evidence", iris_key))
+            continue
+
+        values = lum[iris]
+        low = float(np.percentile(values, 2))
+        high = float(np.percentile(values, 98))
+        if high - low < EYE_DETAIL_MIN_CONTRAST:
+            warnings.append(SplitNote(
+                f"{iris_key} 虹膜明暗差 {high - low:.0f} 不足，未拆瞳孔/高光",
+                "eye_detail_low_evidence", iris_key))
+            continue
+
+        lum_iris = float(values.mean())
+        # 高光：接近镜面的小亮簇
+        highlight = iris & (lum >= HIGHLIGHT_MIN_LUMA)
+        hr = float(highlight.sum()) / area
+        has_highlight = (
+            HIGHLIGHT_RATIO_RANGE[0] <= hr <= HIGHLIGHT_RATIO_RANGE[1]
+            and float(values.max()) - lum_iris >= HIGHLIGHT_MIN_GAP
+        )
+        if not has_highlight:
+            highlight = np.zeros_like(iris)
+
+        base = iris & ~highlight
+        base_area = int(base.sum())
+        # 瞳孔：剩余虹膜用 Otsu 二分（小簇也成立，不依赖分位点）
+        if base_area >= EYE_DETAIL_MIN_AREA:
+            thr = _otsu_threshold(lum[base])
+            if thr is None:
+                warnings.append(SplitNote(
+                    f"{iris_key} 虹膜亮度单一，未拆瞳孔",
+                    "eye_detail_low_evidence", iris_key))
+                continue
+            pupil = base & (lum <= thr)
+            pr = float(pupil.sum()) / max(1, base_area)
+            if PUPIL_RATIO_RANGE[0] <= pr <= PUPIL_RATIO_RANGE[1]:
+                result.pop(iris_key, None)
+                result[f"eye_pupil_{side}"] = pupil
+                # 虹膜余量沿用原键名，避免打断下游的 irides_* 绑定。
+                result[f"irides_{side}"] = base & ~pupil
+                if has_highlight:
+                    result[f"eye_highlight_{side}"] = highlight
+            else:
+                warnings.append(SplitNote(
+                    f"{iris_key} 瞳孔占比 {pr:.0%} 异常，保留整块虹膜",
+                    "eye_detail_low_evidence", iris_key))
+
+    # 上下睫毛：只在已有 eyelash 掩码上按眼睛中心线分区
+    for side in ("L", "R"):
+        lash_key = f"eyelash_{side}"
+        lash = result.get(lash_key)
+        if lash is None:
+            continue
+        lash = np.asarray(lash, dtype=bool)
+        total = int(lash.sum())
+        if total == 0:
+            continue
+        rows = np.where(lash.any(axis=1))[0]
+        top, bottom = int(rows.min()), int(rows.max())
+        if bottom - top < 3:
+            warnings.append(SplitNote(
+                f"{lash_key} 只有 {bottom - top + 1}px 高，无法分上下睫毛",
+                "lash_not_separable", lash_key))
+            continue
+        cut = (top + bottom) // 2
+        upper = lash.copy()
+        upper[cut:, :] = False
+        lower = lash.copy()
+        lower[:cut, :] = False
+        if (int(upper.sum()) < total * LASH_MIN_SIDE_RATIO
+                or int(lower.sum()) < total * LASH_MIN_SIDE_RATIO):
+            warnings.append(SplitNote(
+                f"{lash_key} 上下比例失衡，未拆上下睫毛",
+                "lash_not_separable", lash_key))
+            continue
+        result.pop(lash_key, None)
+        result[f"eyelash_upper_{side}"] = upper
+        result[f"eyelash_lower_{side}"] = lower
+
+    return result, warnings
+
+
+def split_mouth_details(
+    part_masks: Dict[str, np.ndarray],
+    image_rgb: np.ndarray,
+) -> Tuple[Dict[str, np.ndarray], List[str]]:
+    """把嘴部分成牙齿 / 舌头 / 上下唇。
+
+    只有**张口证据**（嘴部高度足够且能分出牙齿或舌头）才拆；闭口线一律整块
+    保留并写 ``mouth_closed_line``，绝不把一条唇线拆成上下两片假嘴唇。
+    """
+    result: Dict[str, np.ndarray] = dict(part_masks)
+    warnings: List[str] = []
+    mouth = result.get("mouth")
+    if mouth is None:
+        return result, warnings
+    mouth = np.asarray(mouth, dtype=bool)
+    total = int(mouth.sum())
+    if total == 0:
+        return result, warnings
+
+    rgb = np.asarray(image_rgb)
+    rows = np.where(mouth.any(axis=1))[0]
+    height = int(rows.max() - rows.min() + 1) if rows.size else 0
+    if height < MOUTH_DETAIL_MIN_HEIGHT:
+        warnings.append(SplitNote(
+            f"mouth 高度 {height}px（疑似闭口线），未拆唇/齿/舌",
+            "mouth_closed_line", "mouth"))
+        return result, warnings
+
+    lum = _luminance(rgb)
+    sat = _saturation(rgb)
+
+    teeth = mouth & (lum >= TEETH_MIN_LUMA) & (sat <= TEETH_MAX_SATURATION)
+    tr = float(teeth.sum()) / total
+    has_teeth = TEETH_RATIO_RANGE[0] <= tr <= TEETH_RATIO_RANGE[1]
+
+    red = ((rgb[..., 0].astype(np.float32) - rgb[..., 1].astype(np.float32) > TONGUE_RED_MARGIN)
+           & (rgb[..., 0].astype(np.float32) - rgb[..., 2].astype(np.float32) > TONGUE_RED_MARGIN)
+           & (lum < TEETH_MIN_LUMA))
+    tongue = mouth & red
+    if has_teeth:
+        tongue = tongue & ~teeth
+    gr = float(tongue.sum()) / total
+    has_tongue = TONGUE_RATIO_RANGE[0] <= gr <= TONGUE_RATIO_RANGE[1]
+
+    if not has_teeth and not has_tongue:
+        warnings.append(SplitNote(
+            "mouth 未找到牙齿/舌头证据，未拆口部细节",
+            "mouth_detail_low_evidence", "mouth"))
+        return result, warnings
+
+    base = mouth.copy()
+    if has_teeth:
+        base &= ~teeth
+    if has_tongue:
+        base &= ~tongue
+    if not base.any():
+        warnings.append(SplitNote(
+            "mouth 扣除牙齿/舌头后没有剩余唇部像素，保留整块",
+            "mouth_detail_low_evidence", "mouth"))
+        return result, warnings
+
+    base_rows = np.where(base.any(axis=1))[0]
+    cut = (int(base_rows.min()) + int(base_rows.max())) // 2
+    upper = base.copy()
+    upper[cut:, :] = False
+    lower = base.copy()
+    lower[:cut, :] = False
+
+    result.pop("mouth", None)
+    if has_teeth:
+        result["teeth"] = teeth
+    if has_tongue:
+        result["tongue"] = tongue
+    if upper.any():
+        result["lip_upper"] = upper
+    if lower.any():
+        result["lip_lower"] = lower
+    return result, warnings

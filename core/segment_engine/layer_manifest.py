@@ -116,9 +116,19 @@ PART_SPECS: Dict[str, Dict[str, Any]] = {
     "eyebrow": {"name_zh": "面部_眉毛", "group": "head_face", "z": 44, "sides": True},
     "eye_white": {"name_zh": "面部_眼白", "group": "head_face", "z": 45, "sides": True},
     "eye_iris": {"name_zh": "面部_瞳孔", "group": "head_face", "z": 46, "sides": True},
+    # P1 眼细节（split_eye_details）：由虹膜/睫毛掩码按像素证据再分。
+    "eye_pupil": {"name_zh": "面部_瞳芯", "group": "head_face", "z": 46, "sides": True},
+    "eye_highlight": {"name_zh": "面部_眼高光", "group": "head_face", "z": 47, "sides": True},
     "eyelash": {"name_zh": "面部_睫毛", "group": "head_face", "z": 47, "sides": True},
+    "eyelash_upper": {"name_zh": "面部_上睫毛", "group": "head_face", "z": 48, "sides": True},
+    "eyelash_lower": {"name_zh": "面部_下睫毛", "group": "head_face", "z": 47, "sides": True},
     "nose": {"name_zh": "面部_鼻", "group": "head_face", "z": 42, "sides": False},
     "mouth": {"name_zh": "面部_嘴", "group": "head_face", "z": 43, "sides": False},
+    # P1 口部细节（split_mouth_details）：只在张口证据充分时由 mouth 再分。
+    "teeth": {"name_zh": "面部_牙齿", "group": "head_face", "z": 43, "sides": False},
+    "tongue": {"name_zh": "面部_舌头", "group": "head_face", "z": 42, "sides": False},
+    "lip_upper": {"name_zh": "面部_上唇", "group": "head_face", "z": 44, "sides": False},
+    "lip_lower": {"name_zh": "面部_下唇", "group": "head_face", "z": 43, "sides": False},
     "neck": {"name_zh": "身体_脖子", "group": "body", "z": 30, "sides": False},
     "neck_shadow": {"name_zh": "身体_颈部阴影", "group": "body", "z": 31, "sides": False},
     "torso": {"name_zh": "身体_躯干", "group": "body", "z": 32, "sides": False},
@@ -376,6 +386,25 @@ def _limb_slot_satisfied(slot: str, emitted: Iterable[str]) -> bool:
     return all(_segment_present(alts, side, emitted_set) for alts in chain)
 
 
+#: 一个槽位可以由多个子层共同满足（母层在细节拆分后不再存在）。
+#: 口部细节拆分把 ``mouth`` 换成上下唇 + 齿/舌，若仍按 ``mouth`` 判缺件，
+#: 每张露齿的图都会被误判成「缺嘴」而失去预览资格。
+_SLOT_ALTS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
+    "mouth": (("lip_upper",), ("lip_lower",)),
+}
+
+
+def _slot_present(slot: str, emitted: Iterable[str]) -> bool:
+    """槽位是否有层满足：母层在，或各子层组都齐全。"""
+    emitted_set = emitted if isinstance(emitted, (set, frozenset)) else set(emitted)
+    if slot in emitted_set:
+        return True
+    groups = _SLOT_ALTS.get(slot)
+    if not groups:
+        return False
+    return all(any(alt in emitted_set for alt in group) for group in groups)
+
+
 def _slot_statuses(
     slot: str,
     status_by_qualified: Dict[str, List[str]],
@@ -446,6 +475,13 @@ class LayerEntry:
     amodal_completed: bool = False
     #: 遮挡补全新增的像素数（0 = 没有推断像素）。面积可核对才叫可追溯。
     completed_pixels: int = 0
+    #: 补全实际使用的算法（pix2gestalt/diffusion/telea/simple_fill/none）与基线可信度。
+    #: 两者必须成对出现，否则视为证据缺失，不得宣称高质量。
+    completion_method: Optional[str] = None
+    completion_confidence: Optional[float] = None
+    #: 拆分降级证据：部件无法按语义安全拆分时的原因原文（只导出候选，不算高质量）。
+    split_warnings: List[str] = field(default_factory=list)
+    split_limited: bool = False
     derived: bool = False
     depth: Optional[float] = None
     status: str = "detected"
@@ -467,6 +503,10 @@ class LayerEntry:
             "occluded_by": list(self.occluded_by),
             "amodal_completed": bool(self.amodal_completed),
             "completed_pixels": int(self.completed_pixels),
+            "completion_method": self.completion_method,
+            "completion_confidence": self.completion_confidence,
+            "split_warnings": list(self.split_warnings),
+            "split_limited": bool(self.split_limited),
             "derived": bool(self.derived),
             "depth": self.depth,
             "status": self.status,
@@ -623,6 +663,17 @@ def build_manifest(
                 occluded_by=list(layer.get("occluded_by", []) or []),
                 amodal_completed=bool(layer.get("completed", layer.get("amodal_completed", False))),
                 completed_pixels=int(layer.get("completed_pixels", 0) or 0),
+                completion_method=(
+                    str(layer["completion_method"])
+                    if layer.get("completion_method") is not None else None
+                ),
+                completion_confidence=(
+                    float(layer["completion_confidence"])
+                    if isinstance(layer.get("completion_confidence"), (int, float))
+                    else None
+                ),
+                split_warnings=[str(w) for w in (layer.get("split_warnings") or [])],
+                split_limited=bool(layer.get("split_limited", False)),
                 derived=canonical in DERIVED_PARTS,
                 depth=depth,
                 status=status,
@@ -662,9 +713,10 @@ def build_manifest(
                 extra_warnings.append(
                     f"{slot} 只拆出部分段（{'、'.join(present)}），缺段按未齐全处理")
 
-    missing_preview = [q for q in REQUIRED_FOR_PREVIEW if q not in emitted]
+    missing_preview = [q for q in REQUIRED_FOR_PREVIEW if not _slot_present(q, emitted)]
     missing_required = [q for q in REQUIRED_FOR_RIG
-                        if not _limb_slot_satisfied(q, emitted)]
+                        if not _limb_slot_satisfied(q, emitted)
+                        and not _slot_present(q, emitted)]
 
     status_by_qualified: Dict[str, List[str]] = {}
     for entry in entries:
@@ -673,6 +725,10 @@ def build_manifest(
         status_by_qualified.setdefault(qualified, []).append(entry.status)
     for required in REQUIRED_FOR_RIG:
         statuses = _slot_statuses(required, status_by_qualified)
+        if not statuses and required in _SLOT_ALTS:
+            # 母层已被细节拆分取代：汇总子层状态，避免把齐全的口部判成缺件。
+            statuses = [s for group in _SLOT_ALTS[required] for alt in group
+                        for s in status_by_qualified.get(alt, [])]
         if not statuses or all(value in {"manual_required", "missing"} for value in statuses):
             manual_required.append(required)
     manual_required.extend(
@@ -718,6 +774,26 @@ def build_manifest(
         extra_warnings.append(
             f"含遮挡补全层 {len(completed_entries)} 个（共 {inferred} px 为推断像素），"
             "补全区不计入原画证据")
+    # INV-A3：补全层必须带上「用什么方法补的、可信度多少」，否则证据链是断的。
+    completion_evidence_missing = [
+        entry for entry in completed_entries
+        if not entry.completion_method or entry.completion_confidence is None
+    ]
+    if completion_evidence_missing:
+        extra_warnings.append(
+            "补全层缺少方法/可信度证据："
+            + "、".join(entry.id for entry in completion_evidence_missing)
+        )
+    # INV-A1/A2：拆分降级原因已随层写入；这类层可以导出，但不能算高质量。
+    split_limited_entries = [entry for entry in entries if entry.split_limited]
+    if split_limited_entries:
+        reasons = "；".join(
+            f"{entry.id}：{entry.split_warnings[0] if entry.split_warnings else '拆分受限'}"
+            for entry in split_limited_entries
+        )
+        extra_warnings.append(
+            f"拆分降级 {len(split_limited_entries)} 项（仍可导出，需人工复核）：{reasons}"
+        )
     detection_evidence_ready = all(
         entry.confidence is not None and entry.confidence >= 0.5
         and entry.provenance not in {"unknown", "color_heuristic"}
@@ -727,6 +803,8 @@ def build_manifest(
         rig_ready
         and not manual_required
         and not completed_entries
+        and not split_limited_entries
+        and not completion_evidence_missing
         and all(
             entry.provenance not in {"unknown", "color_heuristic"}
             and entry.confidence is not None and entry.confidence >= 0.5

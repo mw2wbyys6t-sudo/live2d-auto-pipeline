@@ -22,6 +22,7 @@ from core.logger import get_logger
 from core.segment_engine import face_detect
 from core.segment_engine.amodal import AmodalCompleter
 from core.segment_engine.part_split import (
+    DEGRADATION_CODES,
     attach_depths,
     refine_part_masks,
     split_depth_parts,
@@ -87,7 +88,13 @@ class LayerComposer:
         "eyes", "eyes_left", "eyes_right",
         "eyewhite_left", "eyewhite_right",
         "irides_left", "irides_right",
+        # P1 眼细节（split_eye_details）：瞳孔在虹膜之前/同层，高光压在最上层。
+        "eye_pupil_left", "eye_pupil_right",
+        "eye_highlight_left", "eye_highlight_right",
         "eyelash_left", "eyelash_right",
+        # 上下睫毛（split_eye_details）：上睫毛在上、下睫毛贴下眼睑。
+        "eyelash_upper_left", "eyelash_upper_right",
+        "eyelash_lower_left", "eyelash_lower_right",
         # 眼泪：合成层，画在眼睛之上。静止时**不可见**（不透明度 0），
         # 由 ParamTears × ParamTearsL/R 淡入。
         "tear_left", "tear_right",
@@ -103,7 +110,10 @@ class LayerComposer:
         "eyebrows", "eyebrow_L", "eyebrow_R",
         "nose", "nose_mouth",
         # 口内：合成层，必须在嘴线**之前**（先画腔体，再画嘴唇）。
-        "mouth_cavity", "mouth",
+        "mouth_cavity",
+        # P1 口部细节（split_mouth_details）：腔体 -> 舌 -> 齿 -> 唇 -> 嘴线。
+        "tongue", "teeth", "lip_lower", "lip_upper",
+        "mouth",
         "neck",
         "clothes_top",
         # 19 类的上衣：与 clothes_top 同层，二者不同时出现（后端二选一）
@@ -375,16 +385,26 @@ class LayerComposer:
         # 几何细化（刘海分束 / 后侧发再分束 / 手臂分段 / 裙内层）必须排在
         # split_garment_details 之后：裙摆、腰带、袖口已经切走，剩余面积才是
         # 细化阈值的真实分母。深度前后拆分仍排在最后，作用于细化后的外层。
-        part_masks, refine_warnings = refine_part_masks(part_masks)
+        part_masks, refine_warnings = refine_part_masks(part_masks, img_arr)
         depth_warnings: List[str] = []
         if depth_map is not None:
             part_masks, depth_warnings = split_depth_parts(part_masks, depth_map)
         # 拆分之后统一收拾一遍：接回被切碎的缎带、丢掉看不见的碎层。
         # 必须放在所有 split_* 之后 —— 碎片是拆分本身产生的。
         part_masks = self._stabilize_masks(part_masks, (h, w))
-        for message in (split_warnings + eye_warnings + hair_warnings
-                        + refine_warnings + depth_warnings):
+        all_split_notes = (split_warnings + eye_warnings + hair_warnings
+                           + refine_warnings + depth_warnings)
+        for message in all_split_notes:
             log.warning(message)
+        # 拆分降级证据：把「不能按语义安全拆分」的原因按部件归集，随层写进
+        # manifest。此前这些事实只落在日志里，清单看不到，等于把受限推断
+        # 伪装成正常检测（见 staging spec 2026-11-19 INV-A1/A2）。
+        split_degraded: Dict[str, List[str]] = {}
+        for note in all_split_notes:
+            code = getattr(note, "code", None)
+            part = getattr(note, "part", None)
+            if code in DEGRADATION_CODES and part:
+                split_degraded.setdefault(str(part), []).append(str(note))
         if derived_parts:
             log.info(f"Derived garment layers: {derived_parts}")
 
@@ -453,6 +473,7 @@ class LayerComposer:
 
             completed = False
             completed_pixels = 0
+            completion_method: Optional[str] = None
             if part in self.AMODAL_PARTS and occluded_mask.any():
                 try:
                     completed_layer = self.amodal.complete(
@@ -469,6 +490,7 @@ class LayerComposer:
                     layer_arr[union, 3] = 255
                     completed = True
                     completed_pixels = int((union & ~mask).sum())
+                    completion_method = getattr(self.amodal, "last_method", None) or "unknown"
                 except Exception as exc:
                     log.warning(f"Amodal completion failed for '{part}': {exc}")
                     completion_rejected = f"amodal 补画失败: {exc}"
@@ -502,6 +524,16 @@ class LayerComposer:
                 # 补全证据：面积可核对；失败/被守卫拦下时该层必须人工复核。
                 "completed_pixels": completed_pixels,
                 "completion_rejected": completion_rejected,
+                # 补画方法与基线可信度：让「这块是推断出来的」可核对、可排序。
+                # 方法与置信度成对出现，缺失即契约违规（见 spec INV-A3）。
+                "completion_method": completion_method,
+                "completion_confidence": (
+                    self.amodal.COMPLETION_CONFIDENCE.get(completion_method, 0.0)
+                    if completion_method else None
+                ),
+                # 拆分降级证据：部件无法按语义安全拆分时，原因原文随层写出。
+                "split_warnings": list(split_degraded.get(part, [])),
+                "split_limited": bool(split_degraded.get(part)),
                 "status": ("completed" if completed
                            else "manual_required" if completion_rejected else None),
                 "provenance": ("amodal_completion" if completed
