@@ -172,6 +172,10 @@ desktop/gen/
 # 模型权重已由上方 *.onnx 规则覆盖。
 native/*/target/
 
+# --- C++ 面捕第三方头文件（json/ORT/stb，由 download_deps.ps1 获取，不入库） ---
+# 与模型/dll 同为脚本获取的构建依赖；build/ 已由顶层规则覆盖。
+native/face_tracker_cpp/third_party/
+
 # Tauri 前端占位页面需要入库（tauri::generate_context! 编译时嵌入）
 # 但顶层 dist/ 规则会把它一起忽略，所以先放行目录再保留 index.html
 !desktop/dist/

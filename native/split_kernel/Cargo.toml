@@ -1,0 +1,21 @@
+[package]
+name = "split_kernel"
+version = "0.1.0"
+edition = "2021"
+description = "Live2D 拆分/合成加速内核：与 Python 参考实现逐字节对拍的纯函数热点"
+# 与根目录 LICENSE 一致（AGPL-3.0，ADR-001 Rev.5）。
+license = "AGPL-3.0-only"
+
+[lib]
+name = "split_kernel"
+# cdylib 供 Python ctypes 加载；rlib 供 cargo test 做单元/对拍测试。
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# 零依赖：内核只做确定性数组数学，不引入任何运行时库，
+# 保证 DLL 可随仓库分发、无额外许可负担。
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

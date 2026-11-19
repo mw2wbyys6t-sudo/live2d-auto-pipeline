@@ -913,7 +913,17 @@ class LayerComposer:
         return sorted(names, key=lambda n: rank.get(n, len(rank)))
 
     def _alpha_over(self, stack, h: int, w: int) -> Optional[np.ndarray]:
-        """按绘制顺序把若干层叠成一张（None 项跳过）。"""
+        """按绘制顺序把若干层叠成一张（None 项跳过）。
+
+        首选 Rust 内核（native/split_kernel，与本函数 float64 公式逐字节
+        对拍，见 tests/unit/test_native_kernel.py）；DLL 缺失或关闭时
+        走下面的原实现，行为完全一致。
+        """
+        from core import native_kernel
+
+        native = native_kernel.alpha_over(stack, h, w)
+        if native is not None:
+            return native
         arrays = [a for a in stack if a is not None]
         if not arrays:
             return None
