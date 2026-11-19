@@ -243,29 +243,15 @@ class TextureAtlas:
         h: int,
         S: int,
     ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
-        best_x: Optional[int] = None
-        best_y: Optional[int] = None
-        best_h = float("inf")
-        best_idx: Optional[int] = None
+        """见 :meth:`UVUnwrapper._find_skyline_position`（单一权威实现）。
 
-        for i in range(len(skyline)):
-            x_pos = skyline[i][0]
-            if x_pos + w > S:
-                break
-            y_pos = 0
-            for j in range(i, len(skyline)):
-                if skyline[j][0] >= x_pos + w:
-                    break
-                y_pos = max(y_pos, skyline[j][1])
-            if y_pos + h > S:
-                continue
-            if y_pos < best_h:
-                best_h = y_pos
-                best_x = x_pos
-                best_y = y_pos
-                best_idx = i
+        这里曾是一份平行实现，与 mesh 侧各修各的；skyline 的插入不变量一旦
+        两处分叉，打包耗时会一边正常、一边指数退化。改为委托，延迟导入避免
+        exporter → mesh 的模块级新增依赖。
+        """
+        from live2d_builder.mesh.uv_unwrapper import UVUnwrapper
 
-        return best_x, best_y, best_idx
+        return UVUnwrapper._find_skyline_position(skyline, w, h, S)
 
     @staticmethod
     def _add_skyline_rect(
@@ -275,35 +261,10 @@ class TextureAtlas:
         w: int,
         h: int,
     ) -> None:
-        top = y + h
-        x_end = x + w
+        """见 :meth:`UVUnwrapper._add_skyline_rect`（单一权威实现）。"""
+        from live2d_builder.mesh.uv_unwrapper import UVUnwrapper
 
-        # Raise segments within the rect
-        for i in range(len(skyline)):
-            sx = skyline[i][0]
-            if sx >= x_end:
-                break
-            nx = skyline[i + 1][0] if i + 1 < len(skyline) else 10**9
-            if nx <= x:
-                continue
-            if sx == x:
-                skyline[i][1] = max(skyline[i][1], top)
-            elif sx < x:
-                skyline.insert(i + 1, [x, top])
-            elif x < sx < x_end:
-                skyline[i][1] = max(skyline[i][1], top)
-
-        if not skyline or skyline[-1][0] < x_end:
-            skyline.append([x_end, y])
-
-        # Merge equal-height neighbours
-        merged: List[List[int]] = []
-        for pt in skyline:
-            if merged and merged[-1][1] == pt[1]:
-                continue
-            merged.append([pt[0], pt[1]])
-        skyline.clear()
-        skyline.extend(merged)
+        UVUnwrapper._add_skyline_rect(skyline, x, y, w, h)
 
     # ------------------------------------------------------------------
     # Util

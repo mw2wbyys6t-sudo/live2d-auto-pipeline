@@ -503,7 +503,12 @@ class Model3Exporter:
         character_name: str,
     ) -> Path:
         """Export mesh data as JSON (vertices, UVs, indices per layer)."""
-        import numpy as np
+        # 与 moc3 编译共用同一套画布坐标 → 图集 UV 的映射，避免两份实现漂移。
+        # 延迟导入：moc3_pipeline 依赖较重，且此处只在导出时调用一次。
+        from live2d_builder.exporter.moc3_pipeline import uv_for_vertex
+
+        # _export_textures 已先行执行，图集摆放（含裁剪框 bbox）在此可用。
+        atlas_uvs: Dict[str, Dict] = getattr(self, "_last_atlas_uvs", {}) or {}
         mesh_export: Dict[str, Any] = {}
         for name, mesh in meshes.items():
             verts = mesh.get("vertices")
@@ -511,7 +516,7 @@ class Model3Exporter:
                 continue
             indices = mesh.get("indices", [])
             norm = mesh.get("vertices_norm")
-            mesh_export[name] = {
+            entry: Dict[str, Any] = {
                 "vertex_count": int(len(verts)),
                 "triangle_count": int(len(indices)),
                 "width": int(mesh.get("width", 0)),
@@ -522,6 +527,21 @@ class Model3Exporter:
                 ),
                 "indices": [list(t) for t in indices],
             }
+            # 逐顶点 UV + 纹理页：此前这份文件只写顶点/索引，验收工具读它时
+            # 拿不到 UV，于是所有层（含 hair_back）都被判成「UV evidence is
+            # missing」—— 实际 UV 只存在于 bindings.json 与 moc3 内部。
+            rect = atlas_uvs.get(str(name))
+            if rect is not None:
+                width = float(mesh.get("width", 0) or 0)
+                height = float(mesh.get("height", 0) or 0)
+                uvs: List[List[float]] = []
+                for vertex in (verts.tolist() if hasattr(verts, "tolist") else list(verts)):
+                    x, y = float(vertex[0]), float(vertex[1])
+                    u, v = uv_for_vertex(rect, x, y, width, height)
+                    uvs.append([u, v])
+                entry["uvs"] = uvs
+                entry["texture_page"] = int(rect.get("page") or 0)
+            mesh_export[name] = entry
         path = out_dir / f"{character_name}.meshes.json"
         path.write_text(
             json.dumps(mesh_export, ensure_ascii=False, indent=2),

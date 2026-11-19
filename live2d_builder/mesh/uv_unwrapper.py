@@ -306,8 +306,8 @@ class UVUnwrapper:
 
         return placements, leftover
 
+    @staticmethod
     def _find_skyline_position(
-        self,
         skyline: List[List[int]],
         w: int,
         h: int,
@@ -316,6 +316,9 @@ class UVUnwrapper:
         """Find the best position on the skyline for a rectangle (w, h).
 
         Returns (x, y, skyline_segment_index) or (None, None, None).
+
+        纯函数（不读实例状态），因此声明为 staticmethod，供
+        ``TextureAtlas._find_skyline_pos`` 直接复用。
         """
         best_x: Optional[int] = None
         best_y: Optional[int] = None
@@ -354,42 +357,40 @@ class UVUnwrapper:
         w: int,
         h: int,
     ) -> None:
-        """Insert a placed rectangle into the skyline, merging flat segments."""
-        new_x = x
-        new_top = y + h
+        """把矩形 ``[x, x+w) × [y, y+h)`` 并入 skyline。
+
+        以「关键 x 集合 + 高度查询」重建，保证结果严格满足 skyline 不变量：
+        起点 x 严格递增、无重复点、相邻段高度互异。
+
+        原实现边遍历边 ``insert``：一旦段与矩形部分重叠，同一 ``x`` 会被重复
+        插入，起点序列随即失去单调性；此后 ``_find_skyline_position`` 的内层
+        ``break`` 再也命中不了，段数按 2 的幂增长。实测 20 个真实部件就到
+        8194 段、1053 万次比较、单次打包 4 秒（正常应为毫秒级）。
+        """
+        top = y + h
         x_end = x + w
 
-        # Find segments overlapping the new rect
-        i = 0
-        while i < len(skyline):
-            sx, sy = skyline[i]
-            if sx >= x_end:
-                break
-            if sx + (skyline[i + 1][0] if i + 1 < len(skyline) else 10**9) <= x:
-                i += 1
+        def height_at(px: int) -> int:
+            """px 处的地面高度 = 起点不晚于 px 的最后一段。"""
+            height = 0
+            for sx, sy in skyline:
+                if sx <= px:
+                    height = sy
+                else:
+                    break
+            return height
+
+        # 只在原节点、矩形左右边界处切分，其余位置高度线性不变。
+        keys = sorted({pt[0] for pt in skyline} | {x, x_end})
+        rebuilt: List[List[int]] = []
+        for px in keys:
+            spot = height_at(px)
+            if x <= px < x_end:
+                # 矩形覆盖区内抬到矩形顶边；x_end 本身要恢复原高度。
+                spot = max(spot, top)
+            if rebuilt and rebuilt[-1][1] == spot:
                 continue
+            rebuilt.append([px, spot])
 
-            if sx == x:
-                # Replace segment start
-                skyline[i][1] = max(sy, new_top)
-            elif sx < x:
-                # Segment starts before x; insert a new point at x
-                skyline.insert(i + 1, [x, new_top])
-                i += 1
-            elif sx > x and sx < x_end:
-                # Interior segment gets raised
-                skyline[i][1] = max(sy, new_top)
-            i += 1
-
-        # Append end point if past last segment
-        if not skyline or skyline[-1][0] < x_end:
-            skyline.append([x_end, y])
-
-        # Merge adjacent segments with the same height
-        merged: List[List[int]] = []
-        for pt in skyline:
-            if merged and merged[-1][1] == pt[1]:
-                continue
-            merged.append([pt[0], pt[1]])
         skyline.clear()
-        skyline.extend(merged)
+        skyline.extend(rebuilt)
