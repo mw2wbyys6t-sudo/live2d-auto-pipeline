@@ -48,7 +48,12 @@ func RecordLatestGeneration(cfg *config.Config, resp *models.GenerateImageRespon
 		// 用户刷新一次左栏，那张假立绘就又变成一次"正常成功"了。
 		"fallback":        resp.Fallback,
 		"fallback_reason": resp.FallbackReason,
-		"created_at":      time.Now().Format(time.RFC3339),
+		// 部分成功同样必须落盘：否则刷新左栏后，这件的"后续失败"提示消失，
+		// 又变成一次看起来完整、实际没有分层/模型的作品。
+		"incomplete":        resp.Incomplete,
+		"incomplete_reason": resp.IncompleteReason,
+		"size_downgraded":   resp.SizeDowngraded,
+		"created_at":        time.Now().Format(time.RFC3339),
 	}
 	writeLatestGeneration(cfg, record)
 	appendGenerationHistory(cfg, record)

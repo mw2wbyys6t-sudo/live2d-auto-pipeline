@@ -39,7 +39,7 @@ from core.image_gen.base import (
     ImageProvider,
     checked_image_download,
 )
-from core.image_gen.prompt_lang import detect_lang, has_cjk
+from core.image_gen.prompt_lang import adapt_prompt, merge_negative, negative_tags
 from core.logger import get_logger
 
 log = get_logger("image_gen.openai_compat")
@@ -92,8 +92,12 @@ class OpenAICompatProvider(ImageProvider):
         if not self.is_available():
             raise GenerationError("OPENAI_API_KEY 未配置，OpenAI Compatible provider 不可用")
 
-        # 拼接负面提示：Images API 无独立字段，走提示词工程约定
-        full_prompt = prompt if not negative_prompt else f"{prompt}\n\nAvoid: {negative_prompt}"
+        # 中文先确定性映射成英文标签：Images API 背后多为 SD/Flux 系模型，
+        # 中文原样发送会显著降低构图质量。负面提示走提示词工程约定
+        # （Images API 没有独立的 negative 字段）。
+        adaptation = adapt_prompt(prompt)
+        negative = merge_negative(negative_prompt, negative_tags("en"))
+        full_prompt = f"{adaptation.text}\n\nAvoid: {negative}" if negative else adaptation.text
 
         payload = {
             "model": self.model,
@@ -153,8 +157,10 @@ class OpenAICompatProvider(ImageProvider):
             prompt=full_prompt,
             elapsed_seconds=round(time.time() - started, 2),
             metadata={
-                "prompt_lang": detect_lang(prompt),
-                "prompt_mismatch": has_cjk(prompt),
+                "prompt_lang": "zh" if adaptation.adapted else "en",
+                "prompt_mismatch": adaptation.mismatch,
+                "prompt_adapted": adaptation.adapted,
+                "negative_sent": negative,
             },
         )
 

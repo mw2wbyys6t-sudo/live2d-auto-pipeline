@@ -205,7 +205,12 @@ def get_section(name: str) -> SectionEntry:
 
 
 def build_layout(version: int) -> List[SectionEntry]:
-    """按格式版本返回实际使用的 section 序列。"""
+    """按格式版本返回实际使用的 section 序列。
+
+    注意：V5_00 **不能**只改头部版本字节。对官方 Cubism 5 产物（v5 头部）实测：
+    count info 区为 256 字节（64 个 int32），section 数为 150 个；而本表只有
+    100 个 section、count info 写 128 字节。v5 需要另建一套布局，写出仍用 V3_03。
+    """
     if version >= MocVersion.V3_03:
         return list(SECTION_LAYOUT) + list(ADDITIONAL_V303)
     return list(SECTION_LAYOUT)

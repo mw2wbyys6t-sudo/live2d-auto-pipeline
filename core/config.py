@@ -211,6 +211,31 @@ class SecureConfig:
         """Load configuration from all sources."""
         self._load_env_file()
         self._load_encrypted_keys()
+        self._apply_ui_settings()
+
+    def _apply_ui_settings(self):
+        """叠加设置页保存的非敏感项（优先级高于 .env）。
+
+        桌面版由 Go 后端把 ``LIVE2D_SETTINGS_FILE`` 传给子进程；缺失或损坏时
+        静默跳过，保持旧行为。敏感 Key 不在 settings.json 里，本方法也拒绝
+        任何敏感键，避免把 UI 配置误当密钥来源。
+        """
+        try:
+            from core.settings_file import apply_overrides
+        except Exception:
+            return
+        try:
+            apply_overrides(self)
+        except Exception:
+            return
+
+    def apply_overrides(self, values: Dict[str, str]) -> None:
+        """应用一组非敏感配置覆盖（写进 _config 与 os.environ）。"""
+        for key, value in values.items():
+            if key in self.SENSITIVE_KEYS:
+                continue
+            self._config[key] = value
+            os.environ[key] = value
 
     def _get_secret(self, key: str) -> Optional[str]:
         """Get a secret value: encrypted storage > private dict > env var."""

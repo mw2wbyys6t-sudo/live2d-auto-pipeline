@@ -21,7 +21,7 @@ import json
 import math
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from core.logger import get_logger
 from live2d_builder.exporter.moc3_lint import lint_document
@@ -36,6 +36,7 @@ from live2d_builder.exporter.moc3_model import (
     UnsupportedRig,
     WarpDeformerSpec,
     compile_static_rig,
+    resolve_pixels_per_unit,
 )
 from drivers.live2d_runtime.moc3_verify import (
     verify_moc3_consistency,
@@ -2220,6 +2221,35 @@ def split_clothes_top_transition(meshes: Dict[str, Dict[str, Any]],
             f"clothes_top seam y={cut_y:.3f} x=[{axis - side:.1f},{axis + side:.1f}]")
 
 
+def uv_for_vertex(
+    rect: Dict[str, Any],
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+) -> Tuple[float, float]:
+    """把画布坐标映射到图集 UV。
+
+    图集里存的是**裁剪后**的图层（``TextureAtlas.pack`` 按 alpha 包围盒裁剪，
+    否则 4K 立绘每层各占一整页）。``rect["bbox"]`` 记录裁剪框在画布上的位置，
+    这里先把顶点平移回裁剪坐标系再归一化；没有该字段时按整张画布处理（兼容
+    旧的整图 UV）。顶点可能落在裁剪框外 1px（网格留边），夹到 [0,1] 免得采样
+    到相邻层的像素。
+    """
+    u0, v0 = float(rect["u0"]), float(rect["v0"])
+    u1, v1 = float(rect["u1"]), float(rect["v1"])
+    bbox = rect.get("bbox")
+    if bbox:
+        bx, by, bw, bh = (float(v) for v in bbox)
+    else:
+        bx, by, bw, bh = 0.0, 0.0, float(width), float(height)
+    nx = (x - bx) / bw if bw else 0.0
+    ny = (y - by) / bh if bh else 0.0
+    nx = min(1.0, max(0.0, nx))
+    ny = min(1.0, max(0.0, ny))
+    return u0 + nx * (u1 - u0), v0 + ny * (v1 - v0)
+
+
 def build_rig_spec(
     builder_result: Dict[str, Any],
     atlas_uvs: Dict[str, Dict[str, float]],
@@ -2268,7 +2298,6 @@ def build_rig_spec(
         rect = atlas_uvs.get(name)
         if rect is None:
             raise UnsupportedRig(f"{name}: 图集中没有该层的 UV 摆放信息")
-        u0, v0, u1, v1 = rect["u0"], rect["v0"], rect["u1"], rect["v1"]
         # 图集可能有多页，网格必须指向自己所在的那一页。曾经漏传 texture_index，
         # 于是所有网格都取 0 号纹理：多页图集下只有第 0 页的层能画对，其余层的 UV
         # 落在别的页上，画面只剩零星碎片（实测：29 层 / 7 页的模型只画出 1.3 万像素）。
@@ -2276,20 +2305,16 @@ def build_rig_spec(
 
         vertices: List[List[float]] = []
         uvs: List[List[float]] = []
-        normals = mesh.get("vertices_norm")
         count = len(mesh["vertices"])
         for i, (x, y) in enumerate(mesh["vertices"]):
             x, y = float(x), float(y)
             vertices.append(list(to_model_xy(x, y, width, height)))
-            if normals is not None:
-                nx, ny = float(normals[i][0]), float(normals[i][1])
-            else:
-                nx, ny = x / width, y / height
             # 图集 v 直接沿用图像坐标（左上原点）：实测 live2d-py 不在上传时
             # 翻转纹理，多翻一次会让每个 UV 落进图集的透明留白，模型一个像素
             # 都画不出来（对照实验 tools/probe_uv_variant.py：as_is=0 像素，
             # 去掉这层翻转 = 13.5 万像素）。
-            uvs.append([u0 + nx * (u1 - u0), v0 + ny * (v1 - v0)])
+            u, v = uv_for_vertex(rect, x, y, width, height)
+            uvs.append([u, v])
 
         triangles = ensure_front_facing(
             vertices, [[int(a), int(b), int(c)] for a, b, c in mesh["indices"]])
@@ -2457,6 +2482,7 @@ def build_rig_spec(
         parameters=params,
         canvas_width=width,
         canvas_height=height,
+        pixels_per_unit=resolve_pixels_per_unit(width),
         deformers=deformer_specs,
         uncompiled_deformers=uncompiled,
         static_deformers=static,
@@ -2600,21 +2626,34 @@ def write_idle_motion(output_dir: str, character_name: str,
             log.info(f"physics 负责的参数不排 motion 曲线（避免双写）：{skipped}")
 
     builder = Motion3Builder()
-    document = builder.build_idle(animatable, defaults=defaults)
-    if document is None:
+    # 出厂动作组：idle（程序化待机）+ 关键帧动作（nod / look / talk）。
+    # 缺参数的组会自动跳过，因此没有头部或嘴部键形的模型只会得到它能做的组。
+    documents = builder.build_action_set(animatable, defaults=defaults)
+    if not documents:
         # 没有任何可驱动参数：不产出 motion 文件，清单里的 Motions 保持空。
         # 给动不了的参数排曲线会得到「文件齐全但画面一动不动」的假产物。
         return []
-    manifest = builder.export_to_directory(str(out), character_name, {"idle": document})
+    manifest = builder.export_to_directory(str(out), character_name, documents)
 
     data.setdefault("FileReferences", {})["Motions"] = manifest
     manifest_path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
                              encoding="utf-8")
     files = [str(out / entry["File"])
              for entries in manifest.values() for entry in entries]
+    # VTS 配置：没有它，导入后不会自动播放待机动作，物理链就没有输入，
+    # 头发/裙摆在整个使用期间一动不动（实测：两帧画面完全一致）。
+    idle_file = next((entry["File"] for entries in manifest.values()
+                      for entry in entries), "")
+    try:
+        from live2d_builder.exporter.vtube_json import write_vtube_json
+        write_vtube_json(str(out), character_name, idle_animation=idle_file)
+    except OSError as exc:
+        log.warning(f"VTube Studio 配置写出失败（不影响模型本身）：{exc}")
     if files:
-        log.success(f"idle 动作已按权威可驱动集合生成："
-                    f"{len((document.get('Curves') or []))} 条曲线 -> {len(files)} 个文件")
+        curve_total = sum(len(doc.get("Curves") or []) for doc in documents.values())
+        log.success(f"动作已按权威可驱动集合生成："
+                    f"{len(documents)} 组 / {curve_total} 条曲线 -> {len(files)} 个文件 "
+                    f"（{'、'.join(documents)}）")
     return files
 
 

@@ -71,7 +71,12 @@ def test_tiny_fragment_is_dropped() -> None:
 
 
 def test_split_names_satisfy_manifest_rig_requirements() -> None:
-    layers = [{"name": f"arm_{side}", "path": f"/tmp/arm_{side}.png"} for side in ("L", "R")]
+    # 名字解析与证据是两件事：这里只想证明 arm_L/arm_R 能落到 arm:L/arm:R，
+    # 所以显式给出检测证据（真实 sam2_gd 输出就是这样带 provenance 的）。
+    layers = [{"name": f"arm_{side}", "path": f"/tmp/arm_{side}.png",
+               "provenance": "detector", "confidence": 0.9,
+               "source_mask": f"arm_{side}"}
+              for side in ("L", "R")]
     manifest = build_manifest(layers, source=SOURCE_SEMANTIC, canvas=(100, 100))
 
     assert "arm:L" not in manifest.missing_required
@@ -122,6 +127,30 @@ def test_skirt_hem_is_split_into_left_and_right() -> None:
     assert "waistband" in masks
     assert {"skirt_hem_L", "skirt_hem_R", "waistband"} <= set(derived)
     assert not (masks["skirt_hem_L"] & masks["skirt_hem_R"]).any()
+
+
+def test_skirt_hem_split_is_lossless_for_parent_mask_with_trailing_ribbon() -> None:
+    skirt = _rect(180, 120, 20, 100, 40, 150)
+    skirt[151:176, 58:62] = True
+    skirt[40, 20:23] = True
+
+    masks, _ = split_garment_details({"clothes_bottom": skirt}, (120, 180))
+
+    reconstructed = masks["clothes_bottom"] | masks["skirt_hem_L"] | masks["skirt_hem_R"] | masks["waistband"]
+    assert np.array_equal(reconstructed, skirt)
+    assert not (masks["clothes_bottom"] & masks["skirt_hem_L"]).any()
+    assert not (masks["clothes_bottom"] & masks["skirt_hem_R"]).any()
+    assert not (masks["skirt_hem_L"] & masks["skirt_hem_R"]).any()
+
+
+def test_skirt_hem_is_not_extended_by_a_thin_top_ribbon() -> None:
+    skirt = _rect(180, 120, 20, 100, 40, 150)
+    skirt[40, 20:23] = True
+
+    masks, _ = split_garment_details({"clothes_bottom": skirt}, (120, 180))
+
+    hem_y = np.where((masks["skirt_hem_L"] | masks["skirt_hem_R"]).any(axis=1))[0]
+    assert hem_y.min() >= 141
 
 
 def test_collar_is_cut_from_top_band() -> None:
@@ -359,3 +388,48 @@ def test_derived_layers_are_flagged_in_manifest() -> None:
     )
     assert manifest.layers[0].derived is True
     assert manifest.to_dict()["layers"][0]["derived"] is True
+
+
+class TestEdgeBandIgnoresThinTails:
+    def test_tail_does_not_push_band_into_sliver(self):
+        """裙下飘带尾巴把范围拉长时，裙摆带仍必须切在裙体上。"""
+        from core.segment_engine.part_split import _edge_band
+
+        mask = np.zeros((400, 200), dtype=bool)
+        mask[50:300, 40:160] = True      # 裙体：250 行
+        mask[300:380, 100:102] = True    # 2px 宽的飘带尾巴：80 行
+        band, remainder = _edge_band(mask, "bottom", 0.08)
+        assert band is not None and remainder is not None
+        # 8% × 250 = 20 行 × 120 列 ≈ 2400px，而不是尾巴上的几十像素
+        assert band.sum() > 1500
+        # 尾巴必须留在 remainder 里，不能被并进裙摆带
+        assert remainder[350, 100]
+        assert not band[350, 100]
+
+    def test_band_stays_inside_dense_body(self):
+        from core.segment_engine.part_split import _edge_band
+
+        mask = np.zeros((300, 120), dtype=bool)
+        mask[20:220, 10:110] = True
+        band, _ = _edge_band(mask, "top", 0.08)
+        assert band is not None
+        # 顶部 8% × 200 = 16 行
+        rows = np.where(band.any(axis=1))[0]
+        assert rows.min() == 20 and rows.max() == 35
+
+
+class TestSkirtHemIsUsable:
+    def test_hem_layer_has_real_mass(self):
+        """曾经只有 74px 被剪枝、连带 SkirtHem 链消失；现在必须是实体带。"""
+        from core.segment_engine.part_split import split_garment_details
+
+        h, w = 400, 200
+        masks = {"clothes_bottom": np.zeros((h, w), dtype=bool)}
+        masks["clothes_bottom"][60:300, 30:170] = True
+        masks["clothes_bottom"][300:390, 95:99] = True   # 飘带尾巴
+        out, derived = split_garment_details(masks, (w, h))
+        hem = np.zeros((h, w), dtype=bool)
+        for key, mask in out.items():
+            if key.startswith("skirt_hem"):
+                hem |= np.asarray(mask, dtype=bool)
+        assert hem.sum() > 1500

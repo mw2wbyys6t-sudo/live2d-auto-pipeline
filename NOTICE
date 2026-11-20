@@ -1,0 +1,70 @@
+Pygmalion Studio
+Copyright (C) 2026 Pygmalion Studio Team
+
+本软件以 GNU Affero General Public License v3.0（AGPL-3.0）发布，完整许可
+文本见同目录 LICENSE。对外提供网络服务时，另须履行 AGPL-3.0 §13 的源码
+提供义务。
+
+本 NOTICE 汇总随分发产物一同提供的第三方组件署名与许可信息。各组件仍按
+其原始许可授权；如本文件与组件自带许可文本不一致，以组件自带文本为准。
+
+======================================================================
+一、Live2D Cubism Core（专有软件，重要）
+======================================================================
+本安装包的 Python 运行时通过 live2d-py 0.8.1 随附 Live2D Cubism Core 二进制
+（例如 live2d/v3/_common.dll、live2d/v3/_v3cpp.pyd 及 FrameworkShaders）。
+
+- 著作权：归 Live2D Inc. 所有。
+- 许可范围：live2d-py 的 MIT 许可只覆盖其 Python 包装层，不覆盖 Cubism Core。
+- 使用 / 分发条件：受 Live2D Cubism SDK Release License 与 Live2D Software
+  License Agreement 约束；个人与小规模事业者通常可免费发布，但扩大规模或
+  特定用途需另行取得 Live2D 授权。
+- 官方条款：https://www.live2d.com/en/sdk/license/
+- SDK 下载：https://www.live2d.com/en/sdk/download/native/
+- live2d-py（包装层 MIT）：https://github.com/Arkueid/live2d-py
+
+如你不接受上述条款，请勿使用依赖 Cubism Core 的「官方内核逐像素验收」与
+「原生透明桌宠」功能。
+
+======================================================================
+二、随包分发的主要第三方组件
+======================================================================
+完整许可文本随对应 Python 包保存在 site-packages/*.dist-info/licenses/；
+Web 产物另见各 npm 包自带的 LICENSE 文件。
+
+| 组件 | 许可 | 上游 |
+|---|---|---|
+| CPython 3.12 | PSF-2.0 | https://www.python.org/ |
+| numpy | BSD-3-Clause（聚合 0BSD / MIT / Zlib / CC0-1.0） | https://numpy.org/ |
+| Pillow | MIT-CMU（HPND） | https://python-pillow.org/ |
+| scipy | BSD-3-Clause；随附 libgfortran（GPL-3.0-or-later WITH GCC-exception-3.1）、libquadmath（LGPL-2.1-or-later） | https://scipy.org/ https://gcc.gnu.org/ |
+| scikit-learn | BSD-3-Clause | https://scikit-learn.org/ |
+| psd-tools | MIT | https://github.com/psd-tools/psd-tools |
+| py-moc3 | MIT | https://github.com/Arkueid/py-moc3 |
+| live2d-py | MIT（包装层）+ Live2D 专有 Core | https://github.com/Arkueid/live2d-py |
+| pygame / pygame-ce | LGPL-2.1-or-later | https://www.pygame.org/ |
+| edge-tts | LGPL-3.0 | https://github.com/rany2/edge-tts |
+| mediapipe | Apache-2.0 | https://github.com/google-ai-edge/mediapipe |
+| onnxruntime / onnxruntime-directml | MIT | https://github.com/microsoft/onnxruntime |
+| opencv-python(-headless) | Apache-2.0（捆绑 FFmpeg 为 LGPL-2.1-or-later） | https://github.com/opencv/opencv-python |
+| cryptography | Apache-2.0 OR BSD-3-Clause | https://github.com/pyca/cryptography |
+| requests | Apache-2.0 | https://github.com/psf/requests |
+| aiohttp / aiofiles | Apache-2.0 | https://github.com/aio-libs |
+| fastapi / python-multipart | MIT / Apache-2.0 | https://github.com/fastapi/fastapi |
+| uvicorn / websockets | BSD-3-Clause | https://github.com/encode |
+| rich / sounddevice | MIT | https://github.com/Textualize/rich https://github.com/spatialaudio/python-sounddevice |
+| soundfile | BSD-3-Clause（捆绑 libsndfile 为 LGPL-2.1-or-later） | https://github.com/bastibe/python-soundfile |
+| PyOpenGL | BSD-3-Clause | https://github.com/mcfletch/pyopengl |
+| Next.js / React / React DOM / PixiJS | MIT | https://nextjs.org/ https://react.dev/ https://pixijs.com/ |
+| lucide-react | ISC | https://lucide.dev/ |
+
+弱 copyleft 组件（LGPL）的对应源码获取地址：
+- pygame：https://github.com/pygame/pygame
+- pygame-ce：https://github.com/pygame-community/pygame-ce
+- edge-tts：https://github.com/rany2/edge-tts
+- libgfortran / libquadmath：https://gcc.gnu.org/git/?p=gcc.git
+- libsndfile：https://github.com/libsndfile/libsndfile
+- FFmpeg：https://ffmpeg.org/download.html
+
+本 NOTICE 由 scripts/check-license-bundle.sh 与 LICENSE 一起校验，并随
+桌面安装包、Web 构建包与导出模型包分发。

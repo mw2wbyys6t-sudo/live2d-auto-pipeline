@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { APP_NAME, APP_VERSION } from '../lib/brand';
-import { Boxes, LayoutDashboard } from 'lucide-react';
+import { Boxes, LayoutDashboard, Settings } from 'lucide-react';
 
 interface NavItem {
   href: string;
@@ -10,10 +10,11 @@ interface NavItem {
   match?: (pathname: string) => boolean;
 }
 
-// 目前只有这两条真实链路可走；角色库 / AI 对话 / 环境自检先撤掉，等做完再放回来。
+// 目前只有这三条真实链路可走；角色库 / AI 对话先撤掉，等做完再放回来。
 const NAV_ITEMS: NavItem[] = [
   { href: '/studio', label: '工作台', icon: LayoutDashboard, match: (p) => p.startsWith('/studio') },
   { href: '/models', label: '模型库', icon: Boxes, match: (p) => p.startsWith('/models') },
+  { href: '/settings', label: '设置', icon: Settings, match: (p) => p.startsWith('/settings') },
 ];
 
 interface SidebarProps {

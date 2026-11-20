@@ -35,6 +35,15 @@ SKIRT_KEYWORDS = (
 #: 尾巴。只认 ``tail`` 整词 —— ``detail`` 里也含 tail，按子串会误判。
 TAIL_KEYWORDS = ("tail", "尾巴", "尾")
 
+#: 头饰 / 飘带 / 发饰：挂在头部外沿的独立碎件，走自己的短摆链。
+ACCESSORY_KEYWORDS = (
+    "accessories", "accessory", "hair_accessory", "ribbon", "bow",
+    "头饰", "发饰", "飘带", "蝴蝶结",
+)
+
+#: 裙下摆：与裙体分开画的荷叶边，要有自己的（滞后）摆链。
+SKIRT_HEM_KEYWORDS = ("skirt_hem", "hem", "frill", "下摆", "裙边", "荷叶边")
+
 #: 兽耳。必须比 ``ear`` 更具体：19 类的 ``earwear``（耳饰）与人类的
 #: ``ear_L`` 都不能被当成会摆动的兽耳。
 ANIMAL_EAR_KEYWORDS = (

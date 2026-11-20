@@ -67,10 +67,11 @@ pub fn blendshapes_to_live2d(
     p.insert("ParamEyeBallX".into(), clamp(eye_x, -1.0, 1.0));
     p.insert("ParamEyeBallY".into(), clamp(eye_y, -1.0, 1.0));
 
-    // 头部旋转
+    // 头部旋转（Live2D 约定：X=左右转 yaw、Y=上下抬 -pitch、Z=歪头 roll，
+    // 与 api_server.py 主链路一致；此前 X/Y 互换会让转头变成点头）
     if let Some(h) = head {
-        p.insert("ParamAngleX".into(), clamp(h.pitch, -30.0, 30.0));
-        p.insert("ParamAngleY".into(), clamp(h.yaw, -30.0, 30.0));
+        p.insert("ParamAngleX".into(), clamp(h.yaw, -30.0, 30.0));
+        p.insert("ParamAngleY".into(), clamp(-h.pitch, -30.0, 30.0));
         p.insert("ParamAngleZ".into(), clamp(h.roll, -30.0, 30.0));
     } else {
         p.insert("ParamAngleX".into(), 0.0);
@@ -79,8 +80,8 @@ pub fn blendshapes_to_live2d(
     }
 
     // 身体角度（跟随头部）
-    p.insert("ParamBodyAngleX".into(), *p.get("ParamAngleY").unwrap_or(&0.0) * 0.3);
-    p.insert("ParamBodyAngleY".into(), *p.get("ParamAngleX").unwrap_or(&0.0) * 0.2);
+    p.insert("ParamBodyAngleX".into(), *p.get("ParamAngleX").unwrap_or(&0.0) * 0.3);
+    p.insert("ParamBodyAngleY".into(), *p.get("ParamAngleY").unwrap_or(&0.0) * 0.2);
 
     // 呼吸默认值
     p.insert("ParamBreath".into(), 0.5);
@@ -117,5 +118,42 @@ pub fn apply_deadzone(params: &mut HashMap<String, f32>, threshold: f32) {
                 params.insert(name.to_string(), default);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::HeadRotation;
+
+    /// Live2D 约定：AngleX=左右转(yaw)、AngleY=上下抬(-pitch)。
+    /// 早期 X/Y 互换会让转头变成点头，这条断言锁住语义。
+    #[test]
+    fn head_angles_map_to_correct_live2d_axes() {
+        let bs = HashMap::new();
+        let head = HeadRotation { pitch: 10.0, yaw: 20.0, roll: 5.0 };
+        let p = blendshapes_to_live2d(&bs, Some(&head));
+        assert!((p["ParamAngleX"] - 20.0).abs() < 1e-6, "AngleX 应取 yaw");
+        assert!((p["ParamAngleY"] + 10.0).abs() < 1e-6, "AngleY 应取 -pitch");
+        assert!((p["ParamAngleZ"] - 5.0).abs() < 1e-6, "AngleZ 应取 roll");
+        assert!((p["ParamBodyAngleX"] - 6.0).abs() < 1e-6);
+        assert!((p["ParamBodyAngleY"] + 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn missing_head_falls_back_to_neutral() {
+        let p = blendshapes_to_live2d(&HashMap::new(), None);
+        assert_eq!(p["ParamAngleX"], 0.0);
+        assert_eq!(p["ParamAngleY"], 0.0);
+        assert_eq!(p["ParamAngleZ"], 0.0);
+    }
+
+    #[test]
+    fn precomputed_pitch_ratio_is_not_saturated() {
+        // 真实正面人脸实测 ratio≈0.56~0.68，旧公式写死 1.2 会饱和到 -30°
+        let pitch = crate::head_pose::pitch_from_ratio(0.62, crate::head_pose::PITCH_RATIO_NEUTRAL);
+        assert!(pitch.abs() < 1.0, "中性比值应接近 0°，实际 {pitch}");
+        let up = crate::head_pose::pitch_from_ratio(0.75, crate::head_pose::PITCH_RATIO_NEUTRAL);
+        assert!(up > 5.0 && up < 30.0, "抬头应给出正且未饱和的角度，实际 {up}");
     }
 }

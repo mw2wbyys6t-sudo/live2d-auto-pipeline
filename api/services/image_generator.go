@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -53,12 +54,12 @@ func (g *ImageGenerator) GenerateWithCharacter(req models.GenerateRequest) (*mod
 		return nil, err
 	}
 
-	// 设置默认值
+	// 设置默认值：竖版立绘是 Live2D 的主流构图，方图会切脚。
 	if req.Width <= 0 {
 		req.Width = 1024
 	}
 	if req.Height <= 0 {
-		req.Height = 1024
+		req.Height = 1536
 	}
 	req.Width, req.Height = ClampImageDimensions(req.Width, req.Height)
 	if req.Seed == 0 {
@@ -128,16 +129,41 @@ func validateEngineSelection(req models.GenerateRequest) error {
 		}
 	}
 	local := provider == "comfyui" || provider == "sd_webui"
-	if (model != "" || lora != "") && !local {
+	pollinations := provider == "pollinations"
+	if lora != "" {
 		if provider == "" {
-			return fmt.Errorf("%w：指定模型或 LoRA 时必须同时指定引擎（comfyui 或 sd_webui），"+
+			return fmt.Errorf("%w：指定 LoRA 时必须同时指定引擎（comfyui 或 sd_webui），"+
 				"否则无法确定由谁加载本地文件", ErrInvalidEngineSelection)
 		}
-		return fmt.Errorf("%w：引擎 %q 不支持指定模型 / LoRA；"+
-			"只有 comfyui 与 sd_webui 使用本地模型文件", ErrInvalidEngineSelection, provider)
+		if !local {
+			return fmt.Errorf("%w：引擎 %q 不支持指定模型 / LoRA；"+
+				"只有 comfyui 与 sd_webui 使用本地模型文件",
+				ErrInvalidEngineSelection, provider)
+		}
+	}
+	if model != "" {
+		switch {
+		case local:
+			// 本地底模文件名，原样透传。
+		case pollinations:
+			if !pollinationsModelPattern.MatchString(model) {
+				return fmt.Errorf("%w：pollinations 模型名只能包含字母、数字、点、下划线与短横线",
+					ErrInvalidEngineSelection)
+			}
+		case provider == "":
+			return fmt.Errorf("%w：指定模型时必须同时指定引擎，否则无法确定由谁加载",
+				ErrInvalidEngineSelection)
+		default:
+			return fmt.Errorf("%w：引擎 %q 不支持指定模型；只有 comfyui / sd_webui 用本地底模，"+
+				"pollinations 可用 flux / turbo / kontext",
+				ErrInvalidEngineSelection, provider)
+		}
 	}
 	return nil
 }
+
+// pollinationsModelPattern 限制透传到上游 URL 的模型名，避免任意字符串。
+var pollinationsModelPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,40}$`)
 
 // pythonWorkflowResult 对应 Python WorkflowEngine.run() 返回的 JSON 结构
 type pythonWorkflowResult struct {
@@ -154,6 +180,9 @@ type pythonWorkflowResult struct {
 	ErrorCode string                 `json:"error_code,omitempty"`
 	Steps     map[string]interface{} `json:"steps,omitempty"`
 	Prompt    *workflowPrompt        `json:"prompt,omitempty"`
+	// Partial：worker 已产出立绘、但后续阶段失败。此时 CharacterImage 有效，
+	// 不能按「整条失败」处理（那会把真图换成占位图）。
+	Partial bool `json:"partial,omitempty"`
 }
 
 // workflowPrompt 是 core/workflow.py 写下的提示词链路记录。
@@ -172,6 +201,9 @@ func applyWorkflowPrompt(resp *models.GenerateImageResponse, py *pythonWorkflowR
 	if resp == nil || py == nil || py.Prompt == nil {
 		return
 	}
+	// 用户原文必须回传：历史记录的 prompt 取自这里，缺了它左栏会把作品
+	// 显示成「未命名作品」，用户也看不出这件是哪句提示词生成的。
+	resp.PromptUser = py.Prompt.User
 	resp.EffectivePrompt = py.Prompt.Effective
 	resp.PromptSent = py.Prompt.Sent
 	resp.PromptLang = py.Prompt.Lang
@@ -221,6 +253,11 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 		"--live2d-export", // 默认导出 Live2D
 	}
 
+	// 4K 画布：>0 时规范化阶段把立绘放大到该高度，分层/PSD/moc3 按高分辨率产出。
+	if req.CanvasHeight > 0 {
+		args = append(args, "--canvas-height", fmt.Sprintf("%d", req.CanvasHeight))
+	}
+
 	if req.CharacterID != "" {
 		args = append(args, "--character-id", req.CharacterID)
 	}
@@ -240,6 +277,17 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 	}
 	if req.DeployDesktop {
 		args = append(args, "--deploy-desktop")
+	}
+	// 多候选择优：1 = 关闭（不传，保持旧参数形态）。
+	if req.Candidates > 1 {
+		candidates := req.Candidates
+		if candidates > 4 {
+			candidates = 4
+		}
+		args = append(args, "--candidates", fmt.Sprintf("%d", candidates))
+	}
+	if req.NormalizeCanvas != nil && !*req.NormalizeCanvas {
+		args = append(args, "--no-normalize-canvas")
 	}
 	if req.NegativePrompt != "" {
 		args = append(args, "--negative-prompt", req.NegativePrompt)
@@ -264,6 +312,10 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 		"PYTHONPATH="+g.cfg.Python.ScriptsDir,
 		"LIVE2D_PROJECT_ROOT="+g.cfg.Python.ScriptsDir,
 	)
+	// 设置页的非敏感项（本地引擎地址/模型/画幅）由 Python 侧读取 settings.json。
+	if settingsFile := os.Getenv("LIVE2D_SETTINGS_FILE"); settingsFile != "" {
+		cmd.Env = append(cmd.Env, "LIVE2D_SETTINGS_FILE="+settingsFile)
+	}
 
 	// 工作流超时更长（生图+分割+绑定比较耗时）
 	timeout := g.cfg.GetPythonTimeout() * 5
@@ -307,6 +359,8 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 		return nil, fmt.Errorf("解析工作流结果失败: %v", err)
 	}
 
+	imagePath, imageOK := workflowImagePath(g.cfg, &pyResult)
+
 	if !pyResult.Success {
 		errMsg := pyResult.Error
 		if errMsg == "" {
@@ -317,26 +371,79 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 		if pyResult.ErrorCode == "no_image_engine" {
 			return nil, ErrNoImageEngine
 		}
+		// 部分成功：立绘已经画出来了，只是后续阶段（分层/绑定/PSD）失败。
+		// 以前这里整条判失败，调用方再回退本地占位图 —— 已经拿到的真图被
+		// 一张几何剪影替换，用户既看不到真实原因，也拿不到可用的立绘。
+		if partial := partialFailureResponse(g.cfg, req, &pyResult); partial != nil {
+			return partial, nil
+		}
 		return nil, fmt.Errorf("工作流失败: %s (state: %s)", errMsg, pyResult.ErrorState)
 	}
 
-	// 构建响应
-	imagePath := pyResult.CharacterImage
+	if !imageOK {
+		return nil, fmt.Errorf("工作流成功但未找到生成的图片（state: %s）", pyResult.ErrorState)
+	}
+	return buildWorkflowResponse(g.cfg, req, &pyResult, imagePath), nil
+}
+
+// partialFailureResponse 处理「图已生成、后续步骤失败」的半成功结果。
+//
+// 返回 nil 表示不属于部分成功（没声明 partial、或声明了但磁盘上没有图），
+// 调用方应继续按整条失败处理。这条分支存在的唯一目的，是不让已经画好的
+// 真图因为分层/绑定失败被占位图替换。
+func partialFailureResponse(cfg *config.Config, req models.GenerateRequest,
+	py *pythonWorkflowResult) *models.GenerateImageResponse {
+	if py == nil || py.Success || !py.Partial {
+		return nil
+	}
+	imagePath, ok := workflowImagePath(cfg, py)
+	if !ok {
+		return nil
+	}
+	errMsg := py.Error
+	if errMsg == "" {
+		errMsg = "unknown error"
+	}
+	resp := buildWorkflowResponse(cfg, req, py, imagePath)
+	resp.Incomplete = true
+	resp.IncompleteReason = fmt.Sprintf(
+		"立绘已生成，但后续步骤失败（%s）：%s", py.ErrorState, errMsg)
+	return resp
+}
+
+// workflowImagePath 解析并校验工作流产出的立绘路径。
+//
+// 优先用顶层的 character_image；老版本只在 steps.generate.path 里留痕，
+// 所以两处都认。文件不存在时返回 false —— 让调用方按「没有图」处理，
+// 而不是把一个必然 404 的路径塞进响应。
+func workflowImagePath(cfg *config.Config, py *pythonWorkflowResult) (string, bool) {
+	imagePath := py.CharacterImage
 	if imagePath == "" {
-		// 尝试从 steps.generate.path 获取
-		if genStep, ok := pyResult.Steps["generate"].(map[string]interface{}); ok {
+		if genStep, ok := py.Steps["generate"].(map[string]interface{}); ok {
 			if p, ok := genStep["path"].(string); ok {
 				imagePath = p
 			}
 		}
 	}
-	if !filepath.IsAbs(imagePath) {
-		imagePath = filepath.Join(g.cfg.Output.BaseDir, imagePath)
+	if imagePath == "" {
+		return "", false
 	}
+	if !filepath.IsAbs(imagePath) {
+		imagePath = filepath.Join(cfg.Output.BaseDir, imagePath)
+	}
+	if _, err := os.Stat(imagePath); err != nil {
+		return "", false
+	}
+	return imagePath, true
+}
 
-	// 角色产物落在 output/characters/<id>/ 下，URL 必须由真实路径推导；
-	// 「/output/ + basename」会让生成结果在角色模式下直接 404。
-	imageURL := OutputURLFor(g.cfg, imagePath)
+// buildWorkflowResponse 把 Python 工作流结果映射成 API 响应。
+//
+// 角色产物落在 output/characters/<id>/ 下，URL 必须由真实路径推导；
+// 「/output/ + basename」会让生成结果在角色模式下直接 404。
+func buildWorkflowResponse(cfg *config.Config, req models.GenerateRequest,
+	py *pythonWorkflowResult, imagePath string) *models.GenerateImageResponse {
+	imageURL := OutputURLFor(cfg, imagePath)
 	if imageURL == "" {
 		imageURL = "/output/" + filepath.Base(imagePath)
 	}
@@ -350,27 +457,41 @@ func (g *ImageGenerator) generateWithWorkflow(req models.GenerateRequest) (*mode
 		Height:      req.Height,
 		Source:      "workflow_v0.10.2",
 		CreatedAt:   time.Now(),
-		LayersDir:   pyResult.LayersDir,
-		OutputDir:   pyResult.OutputDir,
-		CharacterID: pyResult.CharacterID,
-		Steps:       pyResult.Steps,
+		LayersDir:   py.LayersDir,
+		OutputDir:   py.OutputDir,
+		CharacterID: py.CharacterID,
+		Steps:       py.Steps,
+	}
+
+	// 上游可能降尺寸（免密通道约 0.6MP 上限）：以 Python 记录的**真实**
+	// 像素为准，请求尺寸只作回退 —— 否则界面会把一张 627×940 的图标成
+	// 1024×1536，用户以为拿到了原尺寸，实际是放大过的糊图。
+	if genStep, ok := py.Steps["generate"].(map[string]interface{}); ok {
+		if v, ok := genStep["width"].(float64); ok && v > 0 {
+			resp.Width = int(v)
+		}
+		if v, ok := genStep["height"].(float64); ok && v > 0 {
+			resp.Height = int(v)
+		}
+		if downgraded, ok := genStep["size_downgraded"].(bool); ok {
+			resp.SizeDowngraded = downgraded
+		}
 	}
 
 	// 提取 PSD 路径和 model3.json 路径
-	if psdStep, ok := pyResult.Steps["psd"].(map[string]interface{}); ok {
+	if psdStep, ok := py.Steps["psd"].(map[string]interface{}); ok {
 		if p, ok := psdStep["psd_path"].(string); ok {
 			resp.PSDPath = p
 		}
 	}
-	if rigStep, ok := pyResult.Steps["rigging"].(map[string]interface{}); ok {
+	if rigStep, ok := py.Steps["rigging"].(map[string]interface{}); ok {
 		if p, ok := rigStep["model3_json"].(string); ok {
 			resp.Model3JSON = p
 		}
 	}
 
-	applyWorkflowPrompt(resp, &pyResult)
-
-	return resp, nil
+	applyWorkflowPrompt(resp, py)
+	return resp
 }
 
 func min(a, b int) int {

@@ -130,8 +130,10 @@ class BlendShapeMapper:
         # Head rotation from landmarks (if available via external computation)
         if landmarks and "head_rotation" in landmarks:
             rot = landmarks["head_rotation"]
-            params["ParamAngleX"] = max(-30.0, min(30.0, rot.get("pitch", 0.0)))
-            params["ParamAngleY"] = max(-30.0, min(30.0, rot.get("yaw", 0.0)))
+            # Live2D 约定：X=左右转(yaw)、Y=上下抬(-pitch)、Z=歪头(roll)，
+            # 与 api_server._tracking_loop 一致。
+            params["ParamAngleX"] = max(-30.0, min(30.0, rot.get("yaw", 0.0)))
+            params["ParamAngleY"] = max(-30.0, min(30.0, -rot.get("pitch", 0.0)))
             params["ParamAngleZ"] = max(-30.0, min(30.0, rot.get("roll", 0.0)))
         else:
             # Default head angles
@@ -139,9 +141,9 @@ class BlendShapeMapper:
             params.setdefault("ParamAngleY", 0.0)
             params.setdefault("ParamAngleZ", 0.0)
 
-        # Body angle derived from head yaw (partial follow)
-        params["ParamBodyAngleX"] = params.get("ParamAngleY", 0.0) * 0.3
-        params["ParamBodyAngleY"] = params.get("ParamAngleX", 0.0) * 0.2
+        # Body angle derived from head angles (partial follow)
+        params["ParamBodyAngleX"] = params.get("ParamAngleX", 0.0) * 0.3
+        params["ParamBodyAngleY"] = params.get("ParamAngleY", 0.0) * 0.2
 
         # Breath default
         params.setdefault("ParamBreath", 0.5)

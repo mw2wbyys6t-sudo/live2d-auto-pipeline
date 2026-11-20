@@ -1,7 +1,7 @@
 import { ReactNode, useState } from 'react';
 import Link from 'next/link';
 import Head from 'next/head';
-import { Menu, Activity } from 'lucide-react';
+import { Menu, Activity, Settings } from 'lucide-react';
 import Sidebar from './Sidebar';
 import ConnectionStatus from './ConnectionStatus';
 import { APP_NAME } from '../lib/brand';
@@ -47,6 +47,9 @@ export default function Layout({ children, title, actions }: LayoutProps) {
             <div className="flex items-center gap-2 sm:gap-3">
               {actions}
               <ConnectionStatus className="hidden sm:flex" />
+              <Link href="/settings" className="btn-icon" aria-label="设置" title="设置">
+                <Settings className="h-4 w-4" />
+              </Link>
               <Link href="/health" className="btn-icon" aria-label="环境自检" title="环境自检">
                 <Activity className="h-4 w-4" />
               </Link>

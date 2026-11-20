@@ -37,6 +37,7 @@ type Handler struct {
 	wsHub          *services.WSHub
 	modelDL        *services.ModelDownloader
 	capMgr         *services.CapabilityManager
+	settings       *services.SettingsService
 	startTime      time.Time
 }
 
@@ -54,6 +55,8 @@ func NewHandler(cfg *config.Config, imageGenerator *services.ImageGenerator, cac
 		startTime:      time.Now(),
 	}
 	h.nativeBridge = services.NewNativeBridge(cfg, h.wsHub)
+	// 设置服务复用同一个 PythonBridge：Key 的读写都经保险库，Go 不落明文。
+	h.settings = services.NewSettingsService(cfg, h.pythonBridge)
 
 	// 启动缓存清理守护进程
 	if cache != nil {
@@ -721,9 +724,9 @@ func (h *Handler) RecomputeCharacterEmbedding(c *gin.Context) {
 // ======================================================================
 
 // ListImageProviders 报告图像生成的上游路由状态：哪些 provider 已配置可用、
-// 哪些已注册但缺 Key。前端生成页据此展示可选项，避免选中后才发现没 Key。
+// 哪些已注册但缺 Key。detail 供前端渲染「可用 / 缺 Key / 离线」徽标。
 func (h *Handler) ListImageProviders(c *gin.Context) {
-	available, registered, err := h.pythonBridge.ListImageProviders(c.Request.Context())
+	detail, vault, err := h.pythonBridge.ProviderDetail(c.Request.Context())
 	if err != nil {
 		// 查询失败不阻塞前端：给前端固定的业务状态，错误详情（可能含本机
 		// 路径/上游原文）只记日志，不随响应体下发。
@@ -731,14 +734,35 @@ func (h *Handler) ListImageProviders(c *gin.Context) {
 		c.JSON(http.StatusOK, models.Response{
 			Success: true,
 			Message: "上游状态暂不可用",
-			Data:    map[string]interface{}{"available": []map[string]interface{}{}, "registered": []string{}, "query_ok": false},
+			Data: map[string]interface{}{
+				"available": []map[string]interface{}{}, "registered": []string{},
+				"detail": []map[string]interface{}{}, "vault_available": false, "query_ok": false,
+			},
 		})
 		return
 	}
+	available := make([]map[string]interface{}, 0, len(detail))
+	registered := make([]string, 0, len(detail))
+	for _, item := range detail {
+		name, _ := item["name"].(string)
+		if name == "" {
+			continue
+		}
+		registered = append(registered, name)
+		if ok, _ := item["available"].(bool); ok {
+			available = append(available, map[string]interface{}{
+				"name":         name,
+				"display_name": item["display_name"],
+				"requires_key": item["requires_key"],
+			})
+		}
+	}
 	c.JSON(http.StatusOK, models.Response{Success: true, Data: map[string]interface{}{
-		"available":  available,
-		"registered": registered,
-		"query_ok":   true,
+		"available":       available,
+		"registered":      registered,
+		"detail":          detail,
+		"vault_available": vault,
+		"query_ok":        true,
 	}})
 }
 

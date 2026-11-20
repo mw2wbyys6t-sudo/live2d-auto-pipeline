@@ -15,6 +15,15 @@ fn degrees(r: f32) -> f32 {
     r * 180.0 / std::f32::consts::PI
 }
 
+/// 中性姿态下的 pitch_ratio 参考值（与 C++ 版 kPitchRatioNeutral 一致）。
+pub const PITCH_RATIO_NEUTRAL: f32 = 0.62;
+
+/// 比值 → 俯仰角（度）：偏离中性 100% 对应 60°。
+pub fn pitch_from_ratio(ratio: f32, neutral: f32) -> f32 {
+    let n = if neutral < 1e-6 { PITCH_RATIO_NEUTRAL } else { neutral };
+    (ratio / n - 1.0) * 60.0
+}
+
 /// 从 MediaPipe 468 点估算头部旋转 (pitch/yaw/roll)。
 ///
 /// 使用关键面部特征点的几何关系：
@@ -62,9 +71,10 @@ pub fn estimate_head_rotation_468(points: &[Point]) -> Option<HeadRotation> {
     if total_height < 1e-6 {
         return None;
     }
-    // 正常比例约 1.2（下巴到鼻 > 额头到鼻），前倾时减小
+    // 正常比例实测约 0.56~0.68（额头到鼻的 2D 投影比鼻到下巴长），
+    // 早期按 1.2 写死会让 pitch 长期饱和到 -30°。
     let ratio = nose_to_chin / forehead_to_nose;
-    let pitch = ((ratio - 1.2) * 50.0).max(-30.0).min(30.0);
+    let pitch = pitch_from_ratio(ratio, PITCH_RATIO_NEUTRAL).max(-30.0).min(30.0);
 
     Some(HeadRotation { pitch, yaw, roll })
 }

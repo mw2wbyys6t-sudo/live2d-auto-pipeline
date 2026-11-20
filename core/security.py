@@ -113,9 +113,24 @@ def validate_psd_file(filepath: str, max_size_mb: int = 500, max_layers: int = 2
     Validate a PSD/PSB file for safety before parsing.
     Prevents zip bombs, decompression bombs, and malicious files.
     """
-    valid, reason = validate_image_path(filepath, max_size_mb=max_size_mb)
+    # 这里不能直接复用 ``validate_image_path``：它按**图片**扩展名白名单校验，
+    # 而白名单里没有 .psd / .psb，于是任何 PSD 都会被判成「不支持的图片格式」，
+    # PSD 输入路径等于被封死。路径安全与体积上限仍照旧校验，格式由下面的
+    # magic/version/尺寸字段逐项确认。
+    ext = Path(filepath).suffix.lower()
+    if ext not in ('.psd', '.psb'):
+        return False, f"Unsupported PSD extension: {ext}（需要 .psd 或 .psb）"
+
+    valid, reason = validate_path(filepath)
     if not valid:
         return False, reason
+    if not os.path.isfile(filepath):
+        return False, f"File not found: {filepath}"
+    try:
+        if os.path.getsize(filepath) / (1024 * 1024) > max_size_mb:
+            return False, f"File too large: > {max_size_mb}MB"
+    except OSError:
+        return False, "Cannot read file size"
 
     try:
         file_size = os.path.getsize(filepath)

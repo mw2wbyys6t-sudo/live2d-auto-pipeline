@@ -95,7 +95,14 @@ func TestBothExportScriptsRecordPartsVerdict(t *testing.T) {
 		"生产导出脚本": stage,
 		"导出桥脚本":   bridgeExportLive2DScript,
 	} {
-		for _, key := range []string{`meta["parts"]`, `"missing_preview": list(inputs.missing_preview)`} {
+		for _, key := range []string{
+			`meta["parts"]`,
+			`"missing_preview": list(inputs.missing_preview)`,
+			// P0 readiness 必须落盘：只有 preview_ready 时，上游无法区分
+			// 「缺一个 mouth」与「必需部件缺件/需人工复核」。
+			`"rig_ready": inputs.parts_rig_ready`,
+			`"quality_ready": inputs.parts_quality_ready`,
+		} {
 			if !strings.Contains(code, key) {
 				t.Errorf("%s没有把部件结论写进 build_meta.json（缺 %q）", name, key)
 			}

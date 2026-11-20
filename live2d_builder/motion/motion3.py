@@ -55,6 +55,59 @@ _DEFAULT_IDLE_AMPLITUDE = 0.20
 # 黄金分割比的小数部分：相邻组相位差异最大、且不落在 2π 的有理倍数上。
 _IDLE_PHASE_STEP = 0.6180339887498949
 
+# 出厂附带的关键帧动作。键是动作组名（Cubism 的 Motions 分组），值是
+# 「参数 → [(时间占比 0..1, 键形内的归一化位置 0..1), ...]」。
+#
+# 归一化位置的含义：0 = 该参数键形最小值、1 = 最大值。这样同一份表既能驱动
+# ±30° 的头角，也能驱动 0..1 的嘴部开合，不必为每类参数写一套换算。
+#
+# 只使用**键形里真实存在**的参数：缺失的参数会被 build_keyframed 跳过，
+# 所以没有手臂参数的模型不会因为「挥手」动作而产出空文件。
+_ACTION_SPECS: Dict[str, Dict[str, Any]] = {
+    # 点头：低头→回位→轻微抬头→回位，同时闭一次眼、眉眼跟着压一点。
+    "nod": {
+        "duration": 2.4,
+        "loop": False,
+        "tracks": {
+            "ParamAngleY": [(0.0, 0.5), (0.18, 0.92), (0.38, 0.12), (0.62, 0.5), (1.0, 0.5)],
+            "ParamBodyAngleY": [(0.0, 0.5), (0.18, 0.70), (0.38, 0.32), (0.62, 0.5), (1.0, 0.5)],
+            "ParamEyeLOpen": [(0.0, 1.0), (0.22, 0.0), (0.38, 1.0), (1.0, 1.0)],
+            "ParamEyeROpen": [(0.0, 1.0), (0.22, 0.0), (0.38, 1.0), (1.0, 1.0)],
+            "ParamBrowLY": [(0.0, 0.5), (0.30, 0.28), (0.60, 0.5), (1.0, 0.5)],
+            "ParamBrowRY": [(0.0, 0.5), (0.30, 0.28), (0.60, 0.5), (1.0, 0.5)],
+        },
+    },
+    # 环顾：头与身体左右转，眼球先于头部到位（真实注视是眼先动）。
+    "look": {
+        "duration": 3.0,
+        "loop": False,
+        "tracks": {
+            "ParamAngleX": [(0.0, 0.5), (0.20, 0.86), (0.50, 0.14), (0.80, 0.5), (1.0, 0.5)],
+            "ParamAngleZ": [(0.0, 0.5), (0.20, 0.58), (0.50, 0.42), (0.80, 0.5), (1.0, 0.5)],
+            "ParamBodyAngleX": [(0.0, 0.5), (0.20, 0.62), (0.50, 0.38), (0.80, 0.5), (1.0, 0.5)],
+            "ParamEyeBallX": [(0.0, 0.5), (0.14, 0.92), (0.44, 0.08), (0.74, 0.5), (1.0, 0.5)],
+            "ParamEyeBallY": [(0.0, 0.5), (0.30, 0.60), (0.65, 0.42), (1.0, 0.5)],
+        },
+    },
+    # 说话：嘴部开合 + 口型变化，循环播放；首尾同值才能无缝衔接。
+    "talk": {
+        "duration": 4.0,
+        "loop": True,
+        "tracks": {
+            "ParamMouthOpenY": [(0.0, 0.0), (0.12, 0.78), (0.24, 0.12), (0.36, 0.62),
+                                (0.48, 0.08), (0.60, 0.72), (0.72, 0.18), (0.86, 0.55),
+                                (1.0, 0.0)],
+            "ParamMouthForm": [(0.0, 0.5), (0.25, 0.66), (0.50, 0.40), (0.75, 0.62), (1.0, 0.5)],
+            "ParamCheek": [(0.0, 0.5), (0.5, 0.58), (1.0, 0.5)],
+            "ParamAngleX": [(0.0, 0.5), (0.30, 0.54), (0.70, 0.46), (1.0, 0.5)],
+            "ParamAngleY": [(0.0, 0.5), (0.25, 0.53), (0.75, 0.47), (1.0, 0.5)],
+            "ParamEyeLOpen": [(0.0, 1.0), (0.42, 1.0), (0.47, 0.0), (0.62, 1.0), (1.0, 1.0)],
+            "ParamEyeROpen": [(0.0, 1.0), (0.42, 1.0), (0.47, 0.0), (0.62, 1.0), (1.0, 1.0)],
+        },
+    },
+}
+
+
 # 左右侧别标记：``ParamEyeLOpen`` / ``ParamBrowLY`` / ``ParamTearsL`` / ``ParamShoulderL``。
 # 只换左右、不换轴向 —— ``ParamAngleX`` 与 ``ParamAngleY`` 不共用波形。
 _SIDE_MARKER = re.compile(r"(?<=[a-z])[LR](?=[A-Z0-9]|$)")
@@ -309,6 +362,129 @@ class Motion3Builder:
             },
             "Curves": curves,
         }
+
+    # ------------------------------------------------------------------
+    # 关键帧动作
+    # ------------------------------------------------------------------
+
+    def times_for(self, duration: float) -> List[float]:
+        """按 fps 采样一条 ``duration`` 秒曲线的时间轴（含首尾）。"""
+        if duration <= 0:
+            raise ValueError("duration 必须为正")
+        steps = int(round(duration * self.fps))
+        return [round(i / self.fps, 6) for i in range(steps + 1)]
+
+    @staticmethod
+    def _frame_value(frames: Sequence[tuple], frac: float) -> float:
+        """在关键帧表上线性插值；``frac`` 是 0..1 的时间占比。"""
+        pts = sorted((float(t), float(v)) for t, v in frames)
+        if not pts:
+            return 0.5
+        if frac <= pts[0][0]:
+            return pts[0][1]
+        if frac >= pts[-1][0]:
+            return pts[-1][1]
+        for (t0, v0), (t1, v1) in zip(pts, pts[1:]):
+            if frac <= t1:
+                span = t1 - t0
+                return v1 if span <= 0 else v0 + (v1 - v0) * ((frac - t0) / span)
+        return pts[-1][1]
+
+    def build_keyframed(
+        self,
+        drivable: Dict[str, Sequence[float]],
+        defaults: Optional[Dict[str, float]],
+        tracks: Dict[str, Sequence[tuple]],
+        loop: bool,
+        duration: Optional[float] = None,
+    ) -> Optional[dict]:
+        """按关键帧表生成一组动作曲线。
+
+        关键帧值是该参数**键形区间内的归一化位置**（0=最小值，1=最大值），
+        采样时映射回真实键值，因此天然不会越出已编译的键形 —— 与 ``build_idle``
+        的约束一致（越界只能外推，画面会乱）。
+
+        只保留 ``drivable`` 里真实存在、且键形非退化的参数：缺参数的模型不会
+        得到「文件齐全但画面不动」的假动作。
+        """
+        dur = float(duration if duration is not None else self.duration)
+        if dur <= 0:
+            raise ValueError("duration 必须为正")
+        times = self.times_for(dur)
+        curves: List[Dict[str, Any]] = []
+
+        for parameter_id, frames in tracks.items():
+            keys = [float(k) for k in (drivable.get(parameter_id) or [])]
+            if len(keys) < 2:
+                continue
+            low, high = float(min(keys)), float(max(keys))
+            if not high > low:
+                continue
+            pts = sorted((float(t), float(v)) for t, v in frames)
+            if loop and len(pts) >= 2 and abs(pts[0][1] - pts[-1][1]) > 1e-9:
+                # 循环动作首尾不同会导致环回跳变：以首帧为准收口。
+                pts = pts[:-1] + [(pts[-1][0], pts[0][1])]
+            segments: List[float] = []
+            for time_point in times:
+                frac = time_point / dur
+                pos = min(1.0, max(0.0, self._frame_value(pts, frac)))
+                value = low + (high - low) * pos
+                if segments:
+                    segments.append(0)        # 段类型：线性
+                segments.append(round(time_point, 6))
+                segments.append(round(value, 6))
+            curves.append({
+                "Target": "Parameter",
+                "Id": parameter_id,
+                "Segments": segments,
+            })
+
+        if not curves:
+            return None
+
+        segment_count = sum((len(c["Segments"]) - 2) // 3 for c in curves)
+        point_count = sum((len(c["Segments"]) - 2) // 3 + 1 for c in curves)
+        return {
+            "Version": 3,
+            "Meta": {
+                "Duration": round(dur, 6),
+                "Fps": self.fps,
+                "Loop": bool(loop),
+                "AreBeziersRestricted": True,
+                "CurveCount": len(curves),
+                "TotalSegmentCount": segment_count,
+                "TotalPointCount": point_count,
+                "UserDataCount": 0,
+                "TotalUserDataSize": 0,
+            },
+            "Curves": curves,
+        }
+
+    def build_action_set(
+        self,
+        drivable: Dict[str, Sequence[float]],
+        defaults: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, dict]:
+        """生成出厂动作组：idle + 关键帧动作（缺参数的组自动跳过）。
+
+        返回 ``{组名: motion3 文档}``，可直接交给 ``export_to_directory``。
+        组名与 Cubism 的 Motions 键一致，前端 ``playMotion(group)`` 就能点名播放。
+        """
+        documents: Dict[str, dict] = {}
+        idle = self.build_idle(drivable, defaults=defaults)
+        if idle is not None:
+            documents["idle"] = idle
+        for group, spec in _ACTION_SPECS.items():
+            document = self.build_keyframed(
+                drivable,
+                defaults,
+                spec["tracks"],
+                loop=bool(spec["loop"]),
+                duration=float(spec["duration"]),
+            )
+            if document is not None:
+                documents[group] = document
+        return documents
 
     # ------------------------------------------------------------------
     # 落盘

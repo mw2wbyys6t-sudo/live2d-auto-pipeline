@@ -116,3 +116,49 @@ def test_moc3_rejection_and_layer_order_issues_are_both_reported():
     assert status["deployment_ready"] is False
     assert status["deployment_blockers"] == [
         "官方内核拒绝: inconsistent", "层序错位: mouth"]
+
+
+# ---------- P0 分层 readiness 同样计入阻塞 ----------
+
+def test_rig_not_ready_blocks_an_otherwise_ready_model():
+    """内核接受 ≠ P0 部件齐全：缺件/需人工复核的分层不得报 ready。"""
+    status = derive_deployment_status(
+        _rigging(runtime_ready=True, moc3_blocker=None),
+        layer_order_issues=[],
+        layer_readiness={"rig_ready": False, "quality_ready": False,
+                         "missing_required": ["arm:R"], "psd_success": True},
+    )
+
+    assert status["deployment_ready"] is False
+    assert status["artifact_type"] == "preparation_bundle"
+    assert any("rig_ready" in b and "arm:R" in b
+               for b in status["deployment_blockers"])
+
+
+def test_failed_psd_write_blocks_ready_even_when_moc3_is_ready():
+    """P0 必须交付 PSD；PNG 包降级/写出失败不得被报告为可部署。"""
+    status = derive_deployment_status(
+        _rigging(runtime_ready=True),
+        layer_order_issues=[],
+        layer_readiness={"rig_ready": True, "quality_ready": True,
+                         "psd_success": False, "psd_error": "psd-tools 未安装"},
+    )
+
+    assert status["deployment_ready"] is False
+    assert any("PSD" in b and "psd-tools" in b
+               for b in status["deployment_blockers"])
+
+
+def test_ready_layering_keeps_ready_and_reports_quality_separately():
+    """成对断言：rig_ready 时不得被误拦；quality_ready 单独如实报告。"""
+    status = derive_deployment_status(
+        _rigging(runtime_ready=True),
+        layer_order_issues=[],
+        layer_readiness={"rig_ready": True, "quality_ready": False,
+                         "psd_success": True},
+    )
+
+    assert status["deployment_ready"] is True
+    assert status["rig_ready"] is True
+    assert status["quality_ready"] is False
+    assert status["deployment_blockers"] == []

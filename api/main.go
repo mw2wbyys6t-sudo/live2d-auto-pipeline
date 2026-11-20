@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -14,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -48,6 +51,21 @@ func main() {
 	// 桌面打包布局：发现 <res>/app/core/workflow.py 时，把解释器/源码/用户数据
 	// 目录解析到安装资源目录与 %APPDATA%/文档（ADR-010）。开发源码树不触发。
 	config.ApplyDesktopLayout(cfg, *configPath != "")
+
+	// 设置页保存的非敏感项落在用户可写目录；把路径交给所有 Python 子进程，
+	// 让「保存即生效」无需重启（每次生成都会重新读盘）。
+	_ = os.Setenv("LIVE2D_SETTINGS_FILE", config.SettingsPath(cfg))
+
+	// Go 侧日志落盘。桌面壳 spawn 后端时把 stdout/stderr 都接到 NUL
+	// （desktop/src/lib.rs），handlers.serverError 记录的真实原因此前只写进
+	// 无人读取的 stdout —— 安装版出故障时用户只能看到「服务暂不可用」。
+	if logFile, err := setupBackendLog(cfg.LogsDir()); err != nil {
+		log.Printf("[warn] 后端日志落盘失败（仅输出到 stderr）: %v", err)
+	} else if logFile != nil {
+		// 信号退出走 os.Exit，defer 不会执行；os.File 无缓冲，每次 Write 已落盘，
+		// 这里的 Close 只是给测试与正常返回路径收尾。
+		defer logFile.Close()
+	}
 
 	// 把可写数据根交给所有 Python 子进程。core/logger.py 与 core/secure_storage.py
 	// 用它决定日志与保险库落在哪；不注入时它们退回 LIVE2D_PROJECT_ROOT，也就是
@@ -250,6 +268,40 @@ func main() {
 	}
 }
 
+// backendLogMaxBytes 是单份 backend.log 的轮转阈值：超过就在启动时挪成
+// backend.log.1，避免长期运行把用户数据目录撑大。
+const backendLogMaxBytes = 8 << 20
+
+// setupBackendLog 把 Go 侧日志（含 serverError 记录的真实原因、gin 访问日志）
+// 同时写到 logs/backend.log 与 stderr，返回日志文件句柄供调用方收尾。
+//
+// 背景：桌面壳 spawn 后端时把 stdout/stderr 接到 NUL（desktop/src/lib.rs），
+// 而 handlers.serverError 只把异常原文写日志、响应固定为「服务暂不可用，
+// 请稍后重试」。结果安装版出故障时，唯一能定位根因的那行 log.Printf 被直接
+// 丢弃 —— 内置 Python 缺 numpy 导致分层失败那次就是这样，用户拿到的只有
+// 一句无从下手的提示。落盘后可在「设置 → 诊断」显示的 logs 目录里直接取证。
+func setupBackendLog(logDir string) (*os.File, error) {
+	if strings.TrimSpace(logDir) == "" {
+		return nil, nil
+	}
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return nil, err
+	}
+	logPath := filepath.Join(logDir, "backend.log")
+	if info, err := os.Stat(logPath); err == nil && info.Size() >= backendLogMaxBytes {
+		_ = os.Rename(logPath, logPath+".1")
+	}
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	w := io.MultiWriter(os.Stderr, f)
+	log.SetOutput(w)
+	gin.DefaultWriter = w
+	gin.DefaultErrorWriter = w
+	return f, nil
+}
+
 func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 	// API 路由组
 	api := r.Group("/api")
@@ -309,6 +361,10 @@ func setupRoutes(r *gin.Engine, h *handlers.Handler) {
 
 		// 生成上游状态 + 外部素材导入 v0.10.1
 		api.GET("/providers", h.ListImageProviders)
+		// 设置页：非敏感项写 settings.json，API Key 写 Python 加密保险库
+		api.GET("/settings", h.GetSettings)
+		api.PUT("/settings", h.UpdateSettings)
+		api.POST("/settings/test", h.TestProvider)
 		api.GET("/gpu", h.GetGPUStatus)
 		api.POST("/import/psd", h.ImportPSD)
 		api.POST("/import/pngs", h.ImportPNGs)
@@ -747,6 +803,20 @@ func validateRequestMiddleware() gin.HandlerFunc {
 				"error": "缺少User-Agent头",
 			})
 			return
+		}
+
+		// Windows 工具（PowerShell 的 Set-Content -Encoding UTF8、记事本另存
+		// UTF-8）会给 JSON 加 UTF-8 BOM。Go 的 encoding/json 不认 BOM，会直接
+		// 报 "invalid character '\ufeff' looking for beginning of value" —— 用户
+		// 只看到「参数错误」，看不出是编码问题。这里在解析前剥掉 3 字节 BOM；
+		// 只处理 application/json，multipart 上传与 WS 升级的 body 一律不动。
+		if c.ContentType() == "application/json" && c.Request.Body != nil {
+			reader := bufio.NewReader(c.Request.Body)
+			if head, _ := reader.Peek(3); len(head) == 3 &&
+				head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF {
+				_, _ = reader.Discard(3)
+			}
+			c.Request.Body = io.NopCloser(reader)
 		}
 
 		c.Next()

@@ -1,12 +1,14 @@
-import { KeyboardEvent } from 'react';
+import { KeyboardEvent, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { AlertTriangle, Info, Link2, Link2Off, Loader2, Wand2, XCircle } from 'lucide-react';
 import { useWorkbench } from '../../../lib/workbench-context';
 import { codePointLength, isGenerateShortcut, sliceCodePoints } from '../../../lib/ime';
+import { apiClient, type ProviderStatusItem } from '../../../lib/api-client';
 import {
+  CANVAS_PRESETS,
   PROMPT_ENGINES,
   PROMPT_TAG_GROUPS as TAG_GROUPS,
   PROMPT_TEMPLATES as TEMPLATES,
-  RESOLUTIONS,
 } from '../../../lib/catalog';
 
 const MAX_PROMPT = 2000;
@@ -25,8 +27,12 @@ export default function PromptPanel() {
     setPrompt,
     negativePrompt,
     setNegativePrompt,
-    resolution,
-    setResolution,
+    canvasPreset,
+    setCanvasPreset,
+    candidates,
+    setCandidates,
+    pollinationsSeed,
+    setPollinationsSeed,
     consistency,
     setConsistency,
     characterId,
@@ -48,6 +54,37 @@ export default function PromptPanel() {
 
   const length = codePointLength(prompt);
   const sentDiffers = !!current?.promptSent && current.promptSent !== prompt.trim();
+
+  // 引擎列表来自后端真实注册表：带「可用 / 缺 Key / 离线」状态。
+  // 查询失败时退回 catalog 的静态表，至少不挡住生成。
+  const [providerDetail, setProviderDetail] = useState<ProviderStatusItem[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void apiClient
+      .listProviders()
+      .then((res) => {
+        if (alive && res.detail?.length) setProviderDetail(res.detail);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const engineOptions = providerDetail
+    ? [
+        { id: 'auto', label: '自动选择（按优先级）' },
+        ...providerDetail
+          .filter((p) => p.name !== 'local_placeholder')
+          .map((p) => {
+            const status = p.available ? '可用' : p.requires_key ? '缺 Key' : p.local ? '离线' : '不可用';
+            return { id: p.name, label: `${p.display_name || p.name} · ${status}` };
+          }),
+      ]
+    : PROMPT_ENGINES;
+
+  const isLocalEngine = engine === 'comfyui' || engine === 'sd_webui';
+  const isPollinations = engine === 'pollinations';
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (!isGenerateShortcut(e)) return;
@@ -128,65 +165,110 @@ export default function PromptPanel() {
       </section>
 
       <section>
-        <div className="section-label mb-1.5">分辨率</div>
-        <div className="flex gap-1 rounded-xl border border-black/[0.07] bg-ink-950/50 p-1">
-          {RESOLUTIONS.map((r) => (
+        <div className="section-label mb-1.5">画幅</div>
+        <div className="grid grid-cols-2 gap-1 rounded-xl border border-black/[0.07] bg-ink-950/50 p-1">
+          {CANVAS_PRESETS.map((preset) => (
             <button
-              key={r}
-              onClick={() => setResolution(r)}
-              className={`flex-1 rounded-lg py-1.5 text-xs transition-colors ${
-                resolution === r
+              key={preset.id}
+              onClick={() => setCanvasPreset(preset.id)}
+              className={`rounded-lg py-1.5 text-[11px] transition-colors ${
+                canvasPreset === preset.id
                   ? 'bg-sakura-500/15 text-sakura-600 ring-1 ring-inset ring-sakura-500/30'
                   : 'text-haze-400 hover:bg-black/[0.04] hover:text-haze-200'
               }`}
             >
-              <span className="tabular-nums">{r}²</span>
+              {preset.label}
             </button>
           ))}
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <div>
+            <label htmlFor="candidates" className="mb-1 block text-[10px] text-haze-500">
+              候选数 <span className="text-haze-600">（1 = 关闭择优）</span>
+            </label>
+            <input
+              id="candidates"
+              type="number"
+              min={1}
+              max={4}
+              className="field"
+              value={candidates}
+              onChange={(e) => setCandidates(Math.min(4, Math.max(1, Number(e.target.value) || 1)))}
+            />
+          </div>
+          <div>
+            <label htmlFor="seed" className="mb-1 block text-[10px] text-haze-500">
+              种子 <span className="text-haze-600">（0 = 随机）</span>
+            </label>
+            <input
+              id="seed"
+              type="number"
+              min={0}
+              className="field"
+              value={pollinationsSeed}
+              onChange={(e) => setPollinationsSeed(Math.max(0, Number(e.target.value) || 0))}
+            />
+          </div>
         </div>
       </section>
 
       <section>
         <div className="section-label mb-1.5">生图引擎</div>
         <select value={engine} onChange={(e) => setEngine(e.target.value)} className="field">
-          {PROMPT_ENGINES.map((option) => (
+          {engineOptions.map((option) => (
             <option key={option.id} value={option.id}>
               {option.label}
             </option>
           ))}
         </select>
 
-        {engine !== 'auto' && (
+        {(isLocalEngine || isPollinations) && (
           <div className="mt-2 space-y-2">
             <div>
               <label htmlFor="engine-model" className="mb-1 block text-[10px] text-haze-500">
-                底模文件名 <span className="text-haze-600">（留空 = 用引擎当前默认模型）</span>
+                {isPollinations ? 'Pollinations 模型' : '底模文件名'}
+                <span className="text-haze-600">
+                  {isPollinations ? '（flux / turbo / kontext）' : '（留空 = 用引擎当前默认模型）'}
+                </span>
               </label>
               <input
                 id="engine-model"
                 value={imageModel}
                 onChange={(e) => setImageModel(e.target.value)}
-                placeholder="例如 illustriousXL_v01.safetensors"
+                placeholder={isPollinations ? 'flux' : '例如 illustriousXL_v01.safetensors'}
                 className="field"
               />
             </div>
-            <div>
-              <label htmlFor="engine-lora" className="mb-1 block text-[10px] text-haze-500">
-                LoRA 文件名 <span className="text-haze-600">（角色一致性，留空 = 不注入）</span>
-              </label>
-              <input
-                id="engine-lora"
-                value={lora}
-                onChange={(e) => setLora(e.target.value)}
-                placeholder="例如 char_style_v1.safetensors"
-                className="field"
-              />
-            </div>
+            {isLocalEngine && (
+              <div>
+                <label htmlFor="engine-lora" className="mb-1 block text-[10px] text-haze-500">
+                  LoRA 文件名 <span className="text-haze-600">（角色一致性，留空 = 不注入）</span>
+                </label>
+                <input
+                  id="engine-lora"
+                  value={lora}
+                  onChange={(e) => setLora(e.target.value)}
+                  placeholder="例如 char_style_v1.safetensors"
+                  className="field"
+                />
+              </div>
+            )}
             <p className="text-[10px] leading-relaxed text-haze-600">
-              底模放 models/checkpoints，LoRA 放 models/loras。6GB 显存建议先用 SD1.5
-              二次元底模调提示词，定稿再换 SDXL（启动 ComfyUI 时加 --lowvram）。
+              {isPollinations
+                ? '免密通道按 IP 限流，遇到 402 请到设置页配置 Seedream / SenseNova / OpenAI 兼容端点。'
+                : '底模放 models/checkpoints，LoRA 放 models/loras。6GB 显存建议先用 SD1.5 二次元底模调提示词，定稿再换 SDXL（启动 ComfyUI 时加 --lowvram）。'}
             </p>
           </div>
+        )}
+
+        {engine !== 'auto' && !isLocalEngine && !isPollinations && (
+          <p className="mt-2 text-[10px] leading-relaxed text-haze-600">
+            云端引擎的 Key、Base URL 与模型在
+            <Link href="/settings" className="mx-0.5 underline">
+              设置
+            </Link>
+            页配置；未配置时生成会回退本地占位图。
+          </p>
         )}
       </section>
 

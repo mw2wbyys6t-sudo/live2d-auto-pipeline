@@ -2,6 +2,8 @@
 
 纯逻辑，用桩件跑 —— 不需要 GPU，也不许去下载权重。
 """
+import json
+
 import pytest
 from PIL import Image
 
@@ -116,6 +118,21 @@ def test_recording_the_step_does_not_erase_the_degradation(tmp_path, monkeypatch
                for m in quality["defects"].get("required_parts", []))
 
 
+def test_recording_layering_step_adds_reconstruction_mae(tmp_path):
+    engine = _engine(tmp_path)
+    layers_dir = tmp_path / "reconstruction_layers"
+    layers_dir.mkdir()
+    source = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+    source.putpixel((3, 3), (220, 50, 70, 255))
+    source.save(layers_dir / "face.png")
+    result = {"steps": {}}
+
+    engine._record_layering_step(
+        result, str(layers_dir), {"layer_count": 1}, image=source)
+
+    assert result["steps"]["layering"]["reconstruction"]["mae"] == 0
+
+
 def test_auto_backend_fallback_is_not_labelled_degraded(tmp_path, monkeypatch):
     """auto 的常规回落不属于「点名的后端没做到」。"""
     engine = _engine(tmp_path)
@@ -152,3 +169,54 @@ def test_kmeans_only_path_skips_the_semantic_segmenter(tmp_path, monkeypatch):
     out, layer_result = engine._step_layering(Image.new("RGBA", (8, 8)), result, 1)
     assert layer_result["method"] == "kmeans"
     assert out == "km"
+
+
+# ---------------------------------------------------------------------------
+# T6：manifest 是 PSD 的唯一契约，必须先落盘再写出
+# ---------------------------------------------------------------------------
+
+def test_manifest_is_written_before_psd_export(tmp_path, monkeypatch):
+    """PSD 的分组/顺序来自 manifest；写出前它必须已经在磁盘上。
+
+    历史上 PSD 只按 ``ordered_names`` 平铺写层，组结构、坐标与来源证据全部
+    丢失，而结果里没有任何字段能让调用方发现这一点。
+    """
+    from pathlib import Path
+
+    engine = _engine(tmp_path)
+    layers_dir = tmp_path / "layers"
+    layers_dir.mkdir()
+    layer_dicts = []
+    for name in ("hair_back", "face", "mouth", "neck", "clothes_top"):
+        Image.new("RGBA", (16, 16), (0, 0, 0, 0)).save(layers_dir / f"{name}.png")
+        layer_dicts.append({
+            "name": name, "path": str(layers_dir / f"{name}.png"),
+            "pixel_count": 4, "provenance": "detector", "confidence": 0.9,
+        })
+    layer_result = {
+        "layers": layer_dicts, "layer_count": len(layer_dicts),
+        "method": "semantic", "output_dir": str(layers_dir),
+    }
+
+    seen = {}
+
+    def fake_create_psd(layers, output, **kwargs):
+        manifest_path = kwargs.get("manifest_path")
+        seen["manifest_path"] = manifest_path
+        seen["existed_at_call"] = bool(manifest_path) and Path(manifest_path).is_file()
+        return {"success": True, "psd_path": output,
+                "fallback": False, "layer_count": len(layer_dicts)}
+
+    monkeypatch.setattr(engine.psd_creator, "create_psd", fake_create_psd)
+
+    step = engine._export_layers(
+        str(layers_dir), layer_result, Image.new("RGBA", (16, 16)))
+
+    assert seen["existed_at_call"] is True, "PSD 写出时 manifest 还不存在"
+    assert Path(seen["manifest_path"]).name == "layer_manifest.json"
+    manifest = json.loads(Path(seen["manifest_path"]).read_text(encoding="utf-8"))
+    assert manifest["canvas"] == {"width": 16, "height": 16}
+    assert manifest["source"] == "semantic"
+    assert step["psd"]["success"] is True
+    assert step["manifest"]["rig_ready"] is False, "只剩 5 个部件时不得报 rig_ready"
+    assert "leg:L" in step["manifest"]["missing_required"]

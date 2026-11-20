@@ -89,9 +89,14 @@ class TestProviderRecordsSentPrompt:
         provider = PollinationsProvider.__new__(PollinationsProvider)
         sent = provider._build_live2d_prompt("粉色双马尾")
         assert "masterpiece" in sent  # SD/Flux 系只认英文标签
-        assert provider._prompt_metadata("粉色双马尾")["prompt_lang"] == "zh"
-        assert provider._prompt_metadata("粉色双马尾")["prompt_mismatch"] is True
+        meta = provider._prompt_metadata("粉色双马尾")
+        assert meta["prompt_lang"] == "zh"
+        assert meta["prompt_adapted"] is True
+        # 词表覆盖的常用词应被完整适配，不再误报「语言不匹配」。
+        assert meta["prompt_mismatch"] is False
         assert provider._prompt_metadata("pink twintails")["prompt_mismatch"] is False
+        # 词表外的长中文串仍要如实提示无法表达。
+        assert provider._prompt_metadata("紫色蝴蝶结搭配蕾丝花边")["prompt_mismatch"] is True
 
 
 class TestOpenAICompatSuccessPath:
@@ -130,7 +135,11 @@ class TestOpenAICompatSuccessPath:
         )
 
         assert result.success is True
-        assert result.prompt == "粉色双马尾\n\nAvoid: 低质量"
+        # 中文先确定性适配成英文标签；内置负向词与用户负向词合并下发。
+        assert result.prompt.startswith("pink twin tails")
+        assert "Avoid: 低质量" in result.prompt
+        assert "bad anatomy" in result.prompt
         assert result.metadata["prompt_lang"] == "zh"
-        assert result.metadata["prompt_mismatch"] is True
+        assert result.metadata["prompt_mismatch"] is False
+        assert result.metadata["prompt_adapted"] is True
         assert (tmp_path / "out.png").read_bytes() == png

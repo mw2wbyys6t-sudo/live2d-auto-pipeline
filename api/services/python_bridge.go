@@ -151,6 +151,11 @@ func (pb *PythonBridge) executePythonScript(parent context.Context, argv []strin
 		"LANG="+os.Getenv("LANG"),
 		"LIVE2D_PROJECT_ROOT="+pb.cfg.Python.ScriptsDir,
 	)
+	// 设置页保存的非敏感项（本地引擎地址/模型/默认画幅）由 Python 侧读取；
+	// 只传路径，不把值塞进命令行，避免日志与其他进程可见。
+	if settingsFile := os.Getenv("LIVE2D_SETTINGS_FILE"); settingsFile != "" {
+		cmd.Env = append(cmd.Env, "LIVE2D_SETTINGS_FILE="+settingsFile)
+	}
 
 	// 便携版（桌面安装包）：把 HF_HOME / HUGGINGFACE_HUB_CACHE 指向打包的
 	// 权重目录，让 transformers / huggingface_hub 从 {app}\runtime\hf-cache
@@ -579,13 +584,32 @@ func (pb *PythonBridge) SegmentImage(ctx context.Context, imagePath, method stri
 		"custom_root": filepath.Join(filepath.Dir(pb.cfg.Character.StorageDir), "models", "custom"),
 	}, 15*time.Minute)
 	if err != nil {
+		// 脚本在开工前就 mkdir(out_dir)，失败后留下空壳会让「最近分层」列表
+		// 多出一条点开空白的记录；只删空目录，非空一律保留。
+		removeEmptyDir(outDir)
 		return nil, err
 	}
 	inner, ok := res["result"].(map[string]interface{})
 	if !ok {
+		removeEmptyDir(outDir)
 		return nil, fmt.Errorf("分层脚本返回了意外的结果结构")
 	}
 	return inner, nil
+}
+
+// removeEmptyDir 只删除空目录，用于清理失败任务留下的 out_dir 空壳。
+//
+// 非空目录不动：那说明已经写进了产物（可能是上一次成功的图层），
+// 误删会直接把用户的产物清空。
+func removeEmptyDir(dir string) {
+	if strings.TrimSpace(dir) == "" {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) > 0 {
+		return
+	}
+	_ = os.Remove(dir)
 }
 
 // bridgeRecomputeEmbeddingScript 常量任务脚本：重算角色视觉 embedding。
@@ -637,12 +661,15 @@ func (pb *PythonBridge) RecomputeCharacterEmbedding(ctx context.Context, charact
 const bridgeListProvidersScript = `
 import sys, json
 from core.image_gen.router import ProviderRouter
+from core.config import config as _cfg
 router = ProviderRouter()
 info = router.get_provider_info()
 print(json.dumps({
     "available": router.get_available_providers(),
     "registered": [i.get("name") for i in info],
     "detail": info,
+    # 只有布尔：保险库是否可用，供设置页提示"Key 能否保存"。
+    "vault_available": getattr(_cfg, "_encrypted_config", None) is not None,
 }))
 `
 
@@ -672,6 +699,91 @@ func (pb *PythonBridge) ListImageProviders(ctx context.Context) ([]map[string]in
 		}
 	}
 	return outAvailable, registeredNames, nil
+}
+
+// ProviderDetail 返回每个上游的完整运行时状态（含测试尺寸/成本提示），
+// 以及加密保险库是否可用。设置页用它渲染「已配 Key / 缺 Key / 离线」。
+func (pb *PythonBridge) ProviderDetail(ctx context.Context) ([]map[string]interface{}, bool, error) {
+	res, err := pb.runBridgeTask(ctx, bridgeListProvidersScript, nil, 60*time.Second)
+	if err != nil {
+		return nil, false, err
+	}
+	inner, ok := res["result"].(map[string]interface{})
+	if !ok {
+		return nil, false, fmt.Errorf("provider 查询返回了意外的结果结构")
+	}
+	vault, _ := inner["vault_available"].(bool)
+	raw, _ := inner["detail"].([]interface{})
+	detail := make([]map[string]interface{}, 0, len(raw))
+	for _, item := range raw {
+		if m, ok := item.(map[string]interface{}); ok {
+			detail = append(detail, m)
+		}
+	}
+	return detail, vault, nil
+}
+
+// bridgeProviderKeyScript 常量任务脚本：把 API Key 写入/删除加密保险库。
+// Key 只出现在 0600 的临时 JSON 参数文件里，不进命令行、不进源码。
+const bridgeProviderKeyScript = `
+import sys, json
+from core.settings_ops import save_key, delete_key
+params = json.loads(open(sys.argv[1], encoding="utf-8").read())
+if params.get("delete"):
+    delete_key(params["provider"])
+else:
+    save_key(params["provider"], params["value"])
+print(json.dumps({"ok": True}))
+`
+
+// SaveProviderKey 把 Key 写入 Python 加密保险库（Go 不保留明文）。
+func (pb *PythonBridge) SaveProviderKey(ctx context.Context, provider, value string) error {
+	_, err := pb.runBridgeTask(ctx, bridgeProviderKeyScript, map[string]interface{}{
+		"provider": provider,
+		"value":    value,
+	}, 30*time.Second)
+	return err
+}
+
+// DeleteProviderKey 删除保险库里的 Key（幂等）。
+func (pb *PythonBridge) DeleteProviderKey(ctx context.Context, provider string) error {
+	_, err := pb.runBridgeTask(ctx, bridgeProviderKeyScript, map[string]interface{}{
+		"provider": provider,
+		"delete":   true,
+	}, 30*time.Second)
+	return err
+}
+
+// bridgeProbeScript 常量任务脚本：真实出图测试（直接调 provider，不走 workflow）。
+const bridgeProbeScript = `
+import sys, json
+from core.image_gen.probe import probe
+params = json.loads(open(sys.argv[1], encoding="utf-8").read())
+print(json.dumps(probe(params["provider"], params["out_dir"]), ensure_ascii=False))
+`
+
+// ProbeProvider 对单个上游做一次最小尺寸真实出图，返回脱敏后的结论。
+func (pb *PythonBridge) ProbeProvider(ctx context.Context, provider, outDir string) (map[string]interface{}, error) {
+	if err := validateWithinBase(outDir, pb.cfg.Output.BaseDir, "测试输出目录"); err != nil {
+		return nil, err
+	}
+	res, err := pb.runBridgeTask(ctx, bridgeProbeScript, map[string]interface{}{
+		"provider": provider,
+		"out_dir":  outDir,
+	}, 120*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	inner, ok := res["result"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("测试脚本返回了意外的结果结构")
+	}
+	// 绝对路径不出后端：只给前端可直接加载的 URL。
+	if p, _ := inner["image_path"].(string); p != "" {
+		inner["image_url"] = OutputURLFor(pb.cfg, p)
+		delete(inner, "image_path")
+	}
+	return inner, nil
 }
 
 // ImportPSDLayers 用 psd-tools 把外部 PSD 的每个像素图层按原始坐标
@@ -905,19 +1017,34 @@ if meta_file.is_file():
             "hollow": bool(inputs.parts_hollow),
             "missing_preview": list(inputs.missing_preview),
             "source": inputs.parts_source,
+            # P0 分层 readiness：rig_ready=false 表示必需部件缺件或需人工复核，
+            # 此时即使 moc3 被内核接受，产物也只是准备包而不是可交付模型。
+            "rig_ready": inputs.parts_rig_ready,
+            "quality_ready": inputs.parts_quality_ready,
+            "manual_required": list(inputs.manual_required),
+            "derived_parts": list(inputs.derived_parts),
         }
         meta_file.write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 for issue in order_issues:
     sys.stderr.write("[warn] 层序错位: " + str(issue.get("message")) + "\n")
 
-# FF-15：产出物必须内含许可证全文（ADR-001 Rev.4）。与 Python 降级服务共用
+# FF-15：产出物必须内含许可证全文（ADR-001 Rev.5）。与 Python 降级服务共用
 # core/license_bundle.py 这一份真源，两条导出链路的产出物才会一致。
+# 写不进去就**阻断导出**：宁可让用户重试，也不能产出不合规的包。
 try:
     from core.license_bundle import install_license_bundle
-    install_license_bundle(Path(out_dir))
+    written = install_license_bundle(Path(out_dir))
 except Exception as exc:
-    sys.stderr.write("[warn] 许可文件写入失败: " + str(exc) + "\n")
+    sys.stderr.write("[error] 许可文件写入失败: " + str(exc) + "\n")
+    sys.exit(1)
+if not written:
+    sys.stderr.write("[error] 仓库根缺少 LICENSE，无法产出合规的导出包\n")
+    sys.exit(1)
+if (not any(n.startswith(("LICENSE", "COPYING")) for n in written)
+        or not any(n.startswith("NOTICE") for n in written)):
+    sys.stderr.write("[error] 导出包许可文件不完整: " + str(written) + "\n")
+    sys.exit(1)
 
 # 只回传路径与状态；网格 / 骨骼等中间数据可达数 MB，不进 API 响应。
 keys = ("output_dir", "model3_json", "moc3_ref", "textures", "texture_files",

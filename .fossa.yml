@@ -33,6 +33,12 @@ project:
   #    正确做法：FOSSA 后台 → 该项目 → Settings → Issues Policies → 选中策略。
   #    这里保留声明，是为了让 CLI 新建项目 / 新克隆副本时用上同一套策略。
   policy: AGPL-3.0 Distribution
+  #
+  # ⚠️ 2026-11-12 公共 API 复核：组织当前 access_level = free，
+  #    `AGPL-3.0 Distribution` 策略尚未创建；项目实际绑定的是内置
+  #    `Standard Bundle Distribution`（policyId 271431）。Free 计划不能
+  #    自定义策略 / 逐条忽略，而三个内置模板对 AGPL 只会 Flag 或 Deny。
+  #    因此这行 policy 只是「升级后新建项目」的目标值，不是当前生效值。
 
 # 分析目标路径过滤：排除归档与文档，仅扫生产相关路径
 paths:

@@ -38,8 +38,12 @@ def det(x0, y0, x1, y1, score=0.7, label="thing"):
 
 
 def offline_segmenter(monkeypatch, detections=None, masks=None, sam_kind="sam2"):
-    """A segmenter whose model-facing seams are replaced by canned answers."""
-    seg = Sam2GroundingDinoSegmenter(device="cpu")
+    """A segmenter whose model-facing seams are replaced by canned answers.
+
+    颜色补全默认关掉：这些用例测的是"检测器给了什么"，而合成测试图没有
+    可用的颜色结构，补全会凭空造出部件、掩盖真实行为。补全本身另有专门用例。
+    """
+    seg = Sam2GroundingDinoSegmenter(device="cpu", fill_missing_with_color=False)
     monkeypatch.setattr(Sam2GroundingDinoSegmenter, "load", lambda self: self)
     seg._loaded = True
     seg._sam_kind = sam_kind
@@ -501,6 +505,56 @@ class TestLayerContract:
         assert result["missing_parts"] == sorted(SemanticSegmenter.STANDARD_PARTS)
 
 
+class TestLayerEvidence:
+    """每层的来源与置信度必须可追溯：检测、颜色、几何拆分不能混成一个来源。"""
+
+    def test_detected_layer_carries_detector_provenance(self, monkeypatch, tmp_path):
+        mask = np.zeros((160, 120), dtype=bool)
+        mask[20:80, 30:90] = True
+        seg = offline_segmenter(
+            monkeypatch, {"face": [det(30, 20, 90, 80, score=0.61)]},
+            {(30, 20, 90, 80): mask})
+
+        result = seg.layer(make_image(), output_dir=str(tmp_path))
+        face = next(l for l in result["layers"] if l["name"] == "face")
+
+        assert face["provenance"] == "detector"
+        assert face["confidence"] == pytest.approx(0.61)
+        assert face["status"] == "detected"
+        assert face["source_mask"] == "face"
+
+    def test_derived_splits_never_masquerade_as_detections(self, monkeypatch, tmp_path):
+        h, w = 160, 120
+        arms = np.zeros((h, w), dtype=bool)
+        arms[60:140, 5:25] = True
+        arms[60:140, 95:115] = True
+        seg = offline_segmenter(
+            monkeypatch, {"arms": [det(5, 60, 115, 140, score=0.8)]},
+            {(5, 60, 115, 140): arms})
+
+        result = seg.layer(make_image(), output_dir=str(tmp_path))
+        derived = [l for l in result["layers"] if l["name"] != "arms"]
+
+        assert derived, "左右手臂应被拆成派生层"
+        assert all(l["provenance"] == "derived_geometry" for l in derived)
+        assert all(l["status"] == "derived" for l in derived)
+        # 派生层不继承检测分数：凭空给个 0.8 会让质量门误判为有证据。
+        assert all(l["confidence"] is None for l in derived)
+
+    def test_color_fill_is_labelled_heuristic_without_confidence(self):
+        layers = [{"name": "clothes_top"}]
+        Sam2GroundingDinoSegmenter._annotate_evidence(
+            layers,
+            {"clothes_top": {"detected": False, "confidence": 0.0}},
+            mask_names={"clothes_top"},
+            color_filled={"clothes_top"},
+        )
+
+        assert layers[0]["provenance"] == "color_heuristic"
+        assert layers[0]["status"] == "derived"
+        assert layers[0].get("confidence") is None
+
+
 class TestSemanticWiring:
     def test_model_type_passes_through_selector(self):
         seg = SemanticSegmenter(device="cpu", model_type="sam2_gd")
@@ -533,3 +587,111 @@ class TestSemanticWiring:
 
         SemanticSegmenter(device="cpu", model_type="sam2_gd").segment(make_image())
         assert seen["segmented"] is True
+
+
+class TestCatchAllSuppression:
+    def _seg(self):
+        return Sam2GroundingDinoSegmenter(device="cpu", fill_missing_with_color=False)
+
+    def test_box_shared_by_two_other_queries_is_dropped(self):
+        img_area = 120 * 160
+        dets = {
+            "clothes_top": [det(10, 10, 110, 150, 0.40)],
+            "clothes_bottom": [det(11, 11, 111, 151, 0.39)],
+            "arms": [det(10, 10, 110, 150, 0.38)],
+        }
+        out = self._seg()._suppress_catch_all(dets, img_area)
+        assert out == {}, "四个查询返回同一个整身框时必须全部丢掉"
+
+    def test_large_box_unique_to_one_query_survives(self):
+        """真裙子本来就占 0.2 以上，只有"多个查询共用"才是兜底框。"""
+        img_area = 120 * 160
+        dets = {"clothes_bottom": [det(10, 10, 110, 150, 0.39)]}
+        out = self._seg()._suppress_catch_all(dets, img_area)
+        assert out == dets
+
+    def test_small_shared_boxes_are_not_suppressed(self):
+        """脸/眼这类小框本来就会重叠，不能按"重复"处理。"""
+        img_area = 120 * 160
+        dets = {"face": [det(40, 20, 80, 60, 0.7)], "neck": [det(42, 20, 78, 58, 0.6)]}
+        out = self._seg()._suppress_catch_all(dets, img_area)
+        assert out == dets
+
+
+class TestFaceAreaPriors:
+    def test_oversized_nose_mask_is_dropped(self):
+        h, w = 160, 120
+        face = np.zeros((h, w), dtype=bool)
+        face[10:110, 10:110] = True          # 10000 px
+        nose = np.zeros((h, w), dtype=bool)
+        nose[20:80, 20:80] = True            # 3600 px = 36% of face
+        seg = Sam2GroundingDinoSegmenter(device="cpu", fill_missing_with_color=False)
+        masks, notes = seg._enforce_face_area_priors({"face": face, "nose": nose})
+        assert "nose" not in masks
+        assert notes
+
+    def test_plausible_nose_mask_is_kept(self):
+        h, w = 160, 120
+        face = np.zeros((h, w), dtype=bool)
+        face[10:110, 10:110] = True
+        nose = np.zeros((h, w), dtype=bool)
+        nose[80:84, 60:64] = True            # 16 px
+        seg = Sam2GroundingDinoSegmenter(device="cpu", fill_missing_with_color=False)
+        masks, notes = seg._enforce_face_area_priors({"face": face, "nose": nose})
+        assert "nose" in masks
+        assert notes == []
+
+
+class TestColorFill:
+    def test_fill_only_takes_pixels_no_other_part_owns(self, monkeypatch):
+        seg = Sam2GroundingDinoSegmenter(device="cpu", fill_missing_with_color=False)
+        h, w = 160, 120
+        face = np.zeros((h, w), dtype=bool)
+        face[10:40, 10:40] = True
+        candidate = np.zeros((h, w), dtype=bool)
+        candidate[10:40, 10:40] = True       # 与 face 重叠
+        candidate[60:120, 10:100] = True     # 只有这块是新的
+        monkeypatch.setattr(
+            SemanticSegmenter,
+            "_fallback_color_segment",
+            lambda self, image, fg=None: {"clothes_top": candidate},
+        )
+        masks, filled = seg._fill_missing_with_color({"face": face}, make_image())
+        assert filled == ["clothes_top"]
+        assert not (masks["clothes_top"] & face).any()
+        assert int(masks["clothes_top"].sum()) == int(candidate.sum() - face.sum())
+
+
+class TestFaceFeatureFill:
+    def test_tiny_nose_is_filled_from_color_inside_face(self, monkeypatch):
+        """色阶启发式给出的鼻子只有十几像素，必须能补进来。"""
+        seg = Sam2GroundingDinoSegmenter(device="cpu", fill_missing_with_color=False)
+        h, w = 160, 120
+        face = np.zeros((h, w), dtype=bool)
+        face[40:100, 30:90] = True
+        nose_px = np.zeros((h, w), dtype=bool)
+        nose_px[65:68, 58:62] = True          # 12px
+        monkeypatch.setattr(
+            SemanticSegmenter,
+            "_fallback_color_segment",
+            lambda self, image, fg=None: {"nose": nose_px},
+        )
+        masks, filled = seg._fill_missing_with_color({"face": face}, make_image())
+        assert "nose" in filled
+        assert int(masks["nose"].sum()) == 12
+
+    def test_face_feature_outside_face_is_rejected(self, monkeypatch):
+        """颜色给的五官如果在脸外，说明是误判，不能补。"""
+        seg = Sam2GroundingDinoSegmenter(device="cpu", fill_missing_with_color=False)
+        h, w = 160, 120
+        face = np.zeros((h, w), dtype=bool)
+        face[40:100, 30:90] = True
+        stray = np.zeros((h, w), dtype=bool)
+        stray[10:20, 10:20] = True
+        monkeypatch.setattr(
+            SemanticSegmenter,
+            "_fallback_color_segment",
+            lambda self, image, fg=None: {"nose": stray},
+        )
+        masks, filled = seg._fill_missing_with_color({"face": face}, make_image())
+        assert "nose" not in masks

@@ -42,6 +42,8 @@ class MinimalModelSpec:
 
 def build_minimal_model(spec: MinimalModelSpec) -> Moc3Container:
     """构建一个内在自洽的最小模型（1 部件 / 1 网格 / 1 参数）。"""
+    # 仍按 V3_03 写出：moc3 v5 不是只改头部版本字节——count info 扩到 256 字节、
+    # section 从 100 个增到 150 个，官方 Core 会把只改了版本号的产物判为不一致。
     doc = Moc3Container(version=ms.MocVersion.V3_03)
     doc.canvas = CanvasInfo(
         pixels_per_unit=1.0,

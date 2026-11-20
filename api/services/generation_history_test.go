@@ -236,6 +236,53 @@ func TestRealGenerationIsNotMarkedFallback(t *testing.T) {
 	}
 }
 
+// 部分成功标记同样必须落盘。
+//
+// 场景：立绘已经生成，后续分层/绑定失败。若只把 incomplete 挂在当次响应上，
+// 用户刷新左栏后这件作品就变回「看起来完整、实际没有分层和模型」，
+// 与 fallback 丢失是同一类可诊断性缺陷。
+func TestIncompleteFlagSurvivesIntoHistory(t *testing.T) {
+	cfg := historyTestConfig(t)
+	dir := filepath.Join(cfg.Output.BaseDir, "characters", "char_1")
+	resp := sampleGeneration(t, cfg, dir, filepath.Join(dir, "image.png"), "银发少女")
+	resp.Incomplete = true
+	resp.IncompleteReason = "立绘已生成，但后续步骤失败（layering）：_fblas DLL 缺失"
+	RecordLatestGeneration(cfg, resp)
+
+	read := func(file string) map[string]interface{} {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(cfg.Output.BaseDir, file))
+		if err != nil {
+			t.Fatalf("读 %s 失败: %v", file, err)
+		}
+		if file == generationsHistoryFileName {
+			var items []map[string]interface{}
+			if err := json.Unmarshal(data, &items); err != nil {
+				t.Fatalf("历史不是合法 JSON: %v", err)
+			}
+			if len(items) != 1 {
+				t.Fatalf("历史条目 = %d", len(items))
+			}
+			return items[0]
+		}
+		var one map[string]interface{}
+		if err := json.Unmarshal(data, &one); err != nil {
+			t.Fatalf("latest 不是合法 JSON: %v", err)
+		}
+		return one
+	}
+
+	for _, file := range []string{latestGenerationFileName, generationsHistoryFileName} {
+		record := read(file)
+		if got, _ := record["incomplete"].(bool); !got {
+			t.Errorf("%s: incomplete 应为 true，实得 %v", file, record["incomplete"])
+		}
+		if reason, _ := record["incomplete_reason"].(string); reason == "" {
+			t.Errorf("%s: incomplete_reason 为空，用户就不知道为什么没有分层产物", file)
+		}
+	}
+}
+
 // 导出必须把历史条目一起改掉，否则左栏会把同一件作品显示成两条。
 //
 // 实测（2026-10-30，已安装的 v0.10.10）：/api/generations 返回 6 条，

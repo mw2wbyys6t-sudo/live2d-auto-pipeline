@@ -26,6 +26,14 @@ from core.security import (
 
 log = get_logger("psd_parser")
 
+#: 变体组的语义标记。命中即按「替代状态」归类，用于保留表情/手势/服装变体。
+#: 只认**组名/层名里的真实命名**，不从像素猜测，避免凭空造出变体（INV-M3-2）。
+VARIANT_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+    "expression": ("表情", "expression", "emotion", "顔", "표정"),
+    "gesture": ("手势", "动作", "gesture", "pose", "ポーズ", "제스처"),
+    "outfit": ("服装", "换装", "备用", "outfit", "costume", "alternate", "衣装"),
+}
+
 
 class PSDValidationError(Exception):
     """Raised when a PSD file fails security validation."""
@@ -76,27 +84,49 @@ class PSDParser:
             return self._parse_header_only(filepath)
 
     def _parse_with_psd_tools(self, filepath: str) -> Dict[str, Any]:
-        """Parse using psd-tools library."""
+        """Parse using psd-tools library.
+
+        刻意不用 ``psd.descendants()``：它把树扁平化，父子关系与组路径全部丢失，
+        于是「保留原组结构」无法被审计（父规格要求输入 PSD 的组关系是权威来源）。
+        这里手工递归，逐层记录 ``parent`` / ``group_path`` / ``index_in_parent``。
+        """
         from psd_tools import PSDImage
 
         psd = PSDImage.open(filepath)
 
-        layers_info = []
-        for i, layer in enumerate(psd.descendants()):
-            # P2-2: Stable issue ID using layer name hash + position
-            stable_id = self._make_stable_layer_id(layer.name or f"layer_{i}", i, layer.offset, layer.size)
-            layers_info.append({
-                "index": i,
-                "stable_id": stable_id,
-                "name": layer.name or f"Layer {i}",
-                "visible": layer.visible,
-                "offset": (layer.offset[0] if hasattr(layer, 'offset') else 0,
-                          layer.offset[1] if hasattr(layer, 'offset') else 0),
-                "size": (layer.size[0] if hasattr(layer, 'size') else psd.width,
-                        layer.size[1] if hasattr(layer, 'size') else psd.height),
-                "kind": str(layer.kind) if hasattr(layer, 'kind') else "unknown",
-                "opacity": getattr(layer, 'opacity', 255),
-            })
+        layers_info: List[Dict[str, Any]] = []
+
+        def walk(container, parent_name: Optional[str], parent_path: str,
+                 depth: int) -> None:
+            for index, layer in enumerate(container):
+                name = layer.name or f"Layer {len(layers_info)}"
+                group_path = f"{parent_path}/{name}" if parent_path else name
+                is_group = bool(layer.is_group()) if hasattr(layer, "is_group") else False
+                offset = getattr(layer, "offset", (0, 0)) or (0, 0)
+                size = getattr(layer, "size", (psd.width, psd.height)) or (
+                    psd.width, psd.height)
+                # P2-2: 稳定 ID 用层名 + 位置哈希，同一文件多次运行不变。
+                stable_id = self._make_stable_layer_id(
+                    name, len(layers_info), tuple(offset), tuple(size))
+                layers_info.append({
+                    "index": len(layers_info),
+                    "index_in_parent": index,
+                    "stable_id": stable_id,
+                    "name": name,
+                    "parent": parent_name,
+                    "group_path": group_path,
+                    "depth": depth,
+                    "is_group": is_group,
+                    "visible": bool(layer.visible),
+                    "offset": (offset[0], offset[1]),
+                    "size": (size[0], size[1]),
+                    "kind": str(layer.kind) if hasattr(layer, "kind") else "unknown",
+                    "opacity": getattr(layer, "opacity", 255),
+                })
+                if is_group:
+                    walk(layer, name, group_path, depth + 1)
+
+        walk(psd, None, "", 0)
 
         return {
             "valid": True,
@@ -108,6 +138,8 @@ class PSDParser:
             "color_mode": str(getattr(psd, 'color_mode', 'RGB')),
             "layer_count": len(layers_info),
             "layers": layers_info,
+            "variants": detect_variants(layers_info),
+            "variants_status": "ok",
         }
 
     def _parse_header_only(self, filepath: str) -> Dict[str, Any]:
@@ -135,6 +167,8 @@ class PSDParser:
             "color_mode": color_mode_names.get(color_mode, f"Unknown({color_mode})"),
             "layer_count": None,  # Can't count without psd-tools
             "layers": [],
+            "variants": [],
+            "variants_status": "unavailable",
             "note": "Header only - install psd-tools for full layer parsing",
         }
 
@@ -150,6 +184,85 @@ class PSDParser:
         key = f"{name}|{ox},{oy}|{sw}x{sh}"
         h = hashlib.sha256(key.encode('utf-8')).hexdigest()[:12]
         return f"LAYER-{h}"
+
+
+def _variant_kind(name: str) -> Optional[str]:
+    """按组名/层名里的命名标记判定变体类别；无标记返回 ``None``。"""
+    lowered = str(name).lower()
+    for kind, keywords in VARIANT_KEYWORDS.items():
+        if any(keyword.lower() in lowered for keyword in keywords):
+            return kind
+    return None
+
+
+def _leaves_under(layers: List[Dict[str, Any]], group_path: str) -> List[Dict[str, Any]]:
+    prefix = group_path + "/"
+    return [layer for layer in layers
+            if not layer.get("is_group")
+            and str(layer.get("group_path", "")).startswith(prefix)]
+
+
+def detect_variants(layers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """从解析出的图层树里识别「互斥可见的替代组」，即表情/手势/服装变体。
+
+    判据只有两条，且都必须成立（避免凭空造变体，见 INV-M3-2）：
+    1. 组名带真实语义标记（:data:`VARIANT_KEYWORDS`）；
+    2. 同父级下、同类别的兄弟组**可见性互斥**（同一时刻至多一个可见）——
+       这正是 PSD 里「换装/换表情」的常见组织方式。
+
+    返回每个变体组一条记录，``members`` 为组内叶子层名，``visible_members``
+    为其中当前可见的叶子。不修改任何图层，也不生成新像素。
+    """
+    groups = [layer for layer in layers if layer.get("is_group")]
+    buckets: Dict[Tuple[Optional[str], str], List[Dict[str, Any]]] = {}
+    for group in groups:
+        kind = _variant_kind(str(group.get("name", "")))
+        if kind is None:
+            continue
+        buckets.setdefault((group.get("parent"), kind), []).append(group)
+
+    variants: List[Dict[str, Any]] = []
+    for (parent, kind), siblings in buckets.items():
+        if len(siblings) < 2:
+            continue
+        # 同时可见说明这些组是并列可叠加的部件，不是互斥状态。
+        if sum(1 for group in siblings if group.get("visible")) > 1:
+            continue
+        for group in siblings:
+            path = str(group.get("group_path", group.get("name", "")))
+            members = [str(leaf.get("name")) for leaf in _leaves_under(layers, path)]
+            visible_members = [
+                str(leaf.get("name")) for leaf in _leaves_under(layers, path)
+                if leaf.get("visible")
+            ]
+            variants.append({
+                "name": str(group.get("name")),
+                "group_path": path,
+                "parent": parent,
+                "kind": kind,
+                "visible": bool(group.get("visible")),
+                "members": members,
+                "visible_members": visible_members,
+            })
+    return variants
+
+
+def png_input_meta(width: int, height: int) -> Dict[str, Any]:
+    """单张 PNG 输入的素材元数据：显式声明「无变体」而不是留空猜。
+
+    父规格 INV-6 要求普通单张立绘不得凭空生成未画出的表情/手势/服装；
+    这里用明确的 ``not_applicable`` 状态把「确实没有」与「解析失败」区分开，
+    下游不必再靠 ``variants == []`` 猜。
+    """
+    return {
+        "valid": True,
+        "source": "png",
+        "width": int(width),
+        "height": int(height),
+        "layers": [],
+        "variants": [],
+        "variants_status": "not_applicable",
+    }
 
 
 def validate_and_parse_psd(filepath: str) -> Dict[str, Any]:

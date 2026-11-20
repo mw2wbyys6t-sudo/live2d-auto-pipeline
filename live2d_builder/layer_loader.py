@@ -68,6 +68,15 @@ class ExportLayerInputs:
     # 清单里的分层来源原样带出：``color_cluster`` 与「上游没画出人」的
     # 拒绝理由不一样，混成一句话用户就没法照着做。
     parts_source: str = ""
+    # P0 rig 就绪：必需部件齐全且不含需人工复核项。None = 未判定。
+    # 与 ``parts_ready``（仅预览）分开：预览够用不代表能左右独立绑定。
+    parts_rig_ready: Optional[bool] = None
+    # 高质量就绪：在前者基础上要求每层都有可追溯 provenance 与足够 confidence。
+    parts_quality_ready: Optional[bool] = None
+    # 清单要求人工复核/确认的部件 id（缺件也计入）。
+    manual_required: List[str] = field(default_factory=list)
+    # 允许导出但来源是派生/推断的部件 id。
+    derived_parts: List[str] = field(default_factory=list)
 
 
 def load_export_inputs(layers_dir: str) -> ExportLayerInputs:
@@ -137,6 +146,12 @@ def load_export_inputs(layers_dir: str) -> ExportLayerInputs:
         missing_preview=missing,
         parts_hollow=readiness is not None and is_hollow(missing),
         parts_source=str((readiness or {}).get("source") or ""),
+        parts_rig_ready=(None if readiness is None
+                         else readiness.get("rig_ready")),
+        parts_quality_ready=(None if readiness is None
+                             else readiness.get("quality_ready")),
+        manual_required=list((readiness or {}).get("manual_required") or []),
+        derived_parts=list((readiness or {}).get("derived_parts") or []),
     )
 
 
@@ -197,6 +212,13 @@ def read_parts_readiness(layers_dir: str) -> Optional[Dict[str, Any]]:
         "preview_ready": data["preview_ready"],
         "missing_preview": list(data.get("missing_preview") or []),
         "source": str(data.get("source") or ""),
+        # 1.1 schema 的 readiness 三态：缺字段时保持 None（未知），不猜 False。
+        "rig_ready": (data.get("rig_ready")
+                      if isinstance(data.get("rig_ready"), bool) else None),
+        "quality_ready": (data.get("quality_ready")
+                          if isinstance(data.get("quality_ready"), bool) else None),
+        "manual_required": list(data.get("manual_required") or []),
+        "derived_parts": list(data.get("derived_parts") or []),
     }
 
 

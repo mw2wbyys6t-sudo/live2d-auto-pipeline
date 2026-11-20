@@ -55,13 +55,19 @@ func (nb *NativeBridge) FindBinary() string {
 		exeName = "face_tracker.exe"
 	}
 
-	// 2. 开发模式：项目根/native/face_tracker/target/release/
+	// 2. 开发模式（首选 C++ 版）：项目根/native/face_tracker_cpp/build/
+	cppPath := filepath.Join(nb.cfg.Python.ScriptsDir, "native", "face_tracker_cpp", "build", exeName)
+	if _, err := os.Stat(cppPath); err == nil {
+		return cppPath
+	}
+
+	// 3. 开发模式（Rust 版回退）：项目根/native/face_tracker/target/release/
 	devPath := filepath.Join(nb.cfg.Python.ScriptsDir, "native", "face_tracker", "target", "release", exeName)
 	if _, err := os.Stat(devPath); err == nil {
 		return devPath
 	}
 
-	// 3. 生产模式：与 Go 二进制同目录
+	// 4. 生产模式：与 Go 二进制同目录
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
 		prodPath := filepath.Join(exeDir, exeName)
@@ -112,7 +118,7 @@ func (nb *NativeBridge) StartTracking() error {
 
 	binary := nb.FindBinary()
 	if binary == "" {
-		return fmt.Errorf("未找到 face_tracker 二进制文件，请先编译：cd native/face_tracker && cargo build --release")
+		return fmt.Errorf("未找到 face_tracker 二进制文件，请先编译：native/face_tracker_cpp/build.bat（或 cd native/face_tracker && cargo build --release）")
 	}
 
 	cmd := exec.Command(binary)

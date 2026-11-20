@@ -3,7 +3,7 @@
 > **读者（Audience）**：维护者与合规负责人。
 > **文档类型（Diátaxis）**：explanation + how-to。
 > **真相源（Source of Truth）**：包元数据清单由 [`scripts/fossa_license_inventory.py`](../scripts/fossa_license_inventory.py) 实算；FOSSA 另做依赖内嵌许可证深扫，两者口径不同。本文件记录判定依据与后台操作步骤。
-> **最后校验（Last verified）**：2026-11-18（FOSSA 摘要 72 issues = 58 Flagged + 7 Denied + 5 Outdated + 2 Vulnerabilities；逐条载体复核见 §3.2.2，载体核对脚本见 `scripts/fossa_license_carrier_check.py`；本项目自身协议自 v0.10.10 起为 AGPL-3.0 + 商业授权双轨，见 ADR-001 Rev.5）。上一轮：2026-10-29（revision scan `126535209`，commit `42a99c7`）。
+> **最后校验（Last verified）**：2026-11-14（浏览器实读 FOSSA Issues 页，revision scan `129901049`，commit `9756014`：**64 licensing = 6 Denied + 58 Flagged**，另 2 条同一 CVE 的 security、3 条 quality；逐条载体复核见 §3.2.2，载体核对脚本见 `scripts/fossa_license_carrier_check.py`；本项目自身协议自 v0.10.10 起为 AGPL-3.0 + 商业授权双轨，见 ADR-001 Rev.5）。上一轮：2026-11-03（`main@8f1ad93d`）。
 
 ---
 
@@ -20,14 +20,27 @@
 
 ## 1. 结论先说
 
-当前 GitHub legacy status 为 **65 条 License Compliance issue**（2026-10-29）；同一 FOSSA 扫描的公共摘要分为 **57 条 Flagged + 7 条 Denied**。逐项 issue 详情需要 Maintainer Access，不能把 65 条一概归因成“策略未配置”，更不能全部放行。
+2026-11-12 通过 FOSSA **公共项目 API**（未登录，只读元数据）复核到当前真实状态：
 
-2026-10-29 的本地清单：**714 项依赖**中 ALLOW 692 / REVIEW 22 / DENY 0 / 未知 0，另有 **2 项第一方组件**（自有 crate，不适用本策略）。这个结论**只覆盖 PyPI、npm、crates.io、Go 的包元数据**，没有覆盖 FOSSA 在 OpenCV、Pillow 等依赖内部发现的 GPL 等许可证文本，因此不能用来否定当前 7 条 Denied。
+- 项目 `public: true`，最新已分析 revision = `9756014da9a851d86d98a6e047b652b9246eb9bd`（2026-11-12 09:49）。
+- 未解决 issue：**69 = 64 licensing + 3 quality + 2 security**（2026-11-14 实读：64 licensing = **6 Denied + 58 Flagged**）。
+- **6 条 Denied 全部是 CC-BY-SA**：`numpy 2.4.6` 1 条（载体是 `packaging/licenses/_spdx.py` 的 SPDX 标识表，不是许可授权）、`next 16.4.3` 1 条（`next/dist/compiled/*/LICENSE` 里的 CC 链接，只用于构建静态导出）、`golang.org/x/text v0.43.0` 4 条（`cases/map_test.go` 里作为大小写折叠测试输入的 URL 字符串，`_test.go` 不进二进制）。
+- **58 条 Flagged 集中在 8 个包**：scipy 8、opencv-python 9、opencv-python-headless 9、@img/sharp-* 14、pygame 5、pygame-ce 4、pillow 2、numpy 1，以及 onnxruntime / onnxruntime-directml / next / urllib3 各 1（MPL-2.0）、edge-tts 1（LGPL-3.0）、golang.org/x/crypto 1（openssl-ssleay）、项目自身 AGPL 1。载体性质与处置见 §3.2.2。
+- **项目当前绑定的策略是内置 `Standard Bundle Distribution`（policyId `271431`），不是 `AGPL-3.0 Distribution`**。
+- 组织 `access_level = free`。
+
+这带来一个必须先说清的约束：FOSSA 三个内置模板对 AGPL 全部是 **Flag for Review** 或 **Deny**，没有任何内置模板会 Approve AGPL；而自定义策略与逐条忽略规则属于付费能力。因此在 Free 计划下：
+
+- 项目自身的 AGPL-3.0 `LICENSE` 会一直被标记，**无法通过后台绑定把 License Compliance 归零**；
+- `.fossa.yml` 的 `policy:` 字段只影响新建项目，不会改变已存在项目的绑定；
+- 在没有升级到可自定义策略的计划之前，正确的做法是保留 `Standard Bundle Distribution` 并把 64 条 licensing issue 作为**已记录的已知例外**，而不是反复尝试绑定一个尚不存在的策略。
+
+逐项 issue 详情需要 Maintainer Access，不能把 64 条一概归因成“策略未配置”，更不能全部放行。一旦组织升级并创建 `AGPL-3.0 Distribution`，再按下文 §3.2 的三档规则绑定与复核。
 
 仓库侧与后台必须分开处理：
 
 - **仓库侧**：保留强 copyleft / 非商业条款的 Deny 规则；发现实际进入发行产物且不兼容的依赖时，替换或移除，而不是放宽策略。
-- **FOSSA 后台**：维护者逐条打开 57+7 项，核对依赖、许可证和发行产物。弱 copyleft 按 §3.2 审阅；Denied 只有在证明对应组件未进入产物或许可证识别有误时，才能按单条 issue 处理。
+- **FOSSA 后台**：维护者逐条打开 58+7 项，核对依赖、许可证和发行产物。弱 copyleft 按 §3.2 审阅；Denied 只有在证明对应组件未进入产物或许可证识别有误时，才能按单条 issue 处理。
 - **验收**：重新扫描同一提交，确认 License Compliance 为 0；若保留经审阅的例外，必须能看到逐条依据，不能只凭状态变绿。
 
 本地包元数据清单仍可复现，但它不是 FOSSA 深扫的替代品：
@@ -102,6 +115,14 @@ Name = `FOSSA_API_KEY`，Secret = 刚复制的 key。
 > 于是 FOSSA 会判「项目自身违规」—— 这是 License Compliance issue 里
 > 最先要消掉的一类误报。
 
+> ⚠️ **2026-11-12 实测：这一步目前做不了。** 组织 `access_level = free`，
+> `AGPL-3.0 Distribution` 策略尚不存在，项目实际绑定的是内置
+> `Standard Bundle Distribution`（policyId `271431`）。Free 计划下
+> `Create Policy` 与 `Add Ignore Rule` 都会引导升级；而三个内置模板对 AGPL
+> 只会 Flag 或 Deny，不会 Approve。因此**在升级到可自定义策略的计划之前，
+> 不要反复改 `.fossa.yml` 或尝试绑定**：项目自身的 AGPL 标记无法归零，
+> 应把 64 条 licensing issue 作为已记录的已知例外。升级后再执行本节步骤。
+
 ### 3.2 填三档规则
 
 FOSSA 的规则分三档：**Approve**（永不记 issue）、**Flag for Review**（记 issue 待人工批准）、**Deny**（记 issue 要求移除）。
@@ -175,6 +196,7 @@ GPL-3.0 依赖不再天然违规；但它会把「整体必须以 GPL-3.0 或 AG
 ```
 GPL-2.0
 GPL-2.0-only
+GPL-2.0-or-later
 SSPL-1.0
 BUSL-1.1
 Elastic-2.0
@@ -182,11 +204,19 @@ Commons Clause
 CC-BY-NC-3.0
 CC-BY-NC-4.0
 CC-BY-NC-SA-4.0
+CC-BY-SA-1.0
+CC-BY-SA-2.0
+CC-BY-SA-2.5
+CC-BY-SA-3.0
+CC-BY-SA-4.0
 ```
 
+> `GPL-2.0-or-later` 理论上可经 GPL-3.0 中转，但组合链条复杂，按 Deny 处理、需要时单独评估。
+> CC-BY-SA 放进 Deny 是为了与当前后台的 7 条 Denied 保持一致：本仓库出现的 CC-BY-SA
+> 全部是测试文件、旧 pin 或构建期引用，不随产物分发，逐条按 `Component_not_present` 忽略。
+
 > `GPL-2.0-only` 与 AGPL-3.0 **不兼容**（GPL-2.0 无 "or later" 时无法升级到
-> GPL-3.0，也就走不到 §13 的互认路径），保持 Deny。`GPL-2.0-or-later` 理论上
-> 可经 GPL-3.0 中转，但组合链条复杂，按 Deny 处理、需要时单独评估。
+> GPL-3.0，也就走不到 §13 的互认路径），保持 Deny。
 
 #### 3.2.1 那 7 条 Denied 的逐项复核（2026-11-03 完成）
 
@@ -228,7 +258,10 @@ Licensing Active 由 65 降到 **57**（−7 条 Denied，−1 条 Apache-in-cod
 
 ### 3.2.2 2026-11-18 那次扫描（72 issues）的逐条复核
 
-本次扫描摘要：**72 issues = 58 Flagged License + 7 Denied License + 5 Outdated + 2 Vulnerabilities**。
+该轮文档记录的摘要：**72 issues = 58 Flagged License + 7 Denied License + 5 Outdated + 2 Vulnerabilities**。
+> ⚠️ 2026-11-12 用 FOSSA 公共项目 API 实测当前后台为 **69 = 64 licensing + 3 quality + 2 security**，
+> 且项目仍绑定在内置 `Standard Bundle Distribution`、组织为 free 计划。下表的逐条载体结论仍然有效，
+> 但“绑定 AGPL-3.0 Distribution 后即可归零”的前提目前不成立，见 §1 与 §3.1 的说明。
 下面按**载体**逐条给结论 —— 判据是「这条 ID 在依赖里到底有没有许可证全文载体」，
 而不是扫描器的编号。可复现命令见 [`scripts/fossa_license_carrier_check.py`](../scripts/fossa_license_carrier_check.py)：
 
@@ -301,6 +334,26 @@ scipy 的 Kokkos mdspan（`Apache-2.0 WITH LLVM-exception`）只存在于 scipy 
 它会重新出现在依赖树里 —— 届时上游 GitHub 为 Apache-2.0，可用 FOSSA 的
 **依赖级规则**（按 dependency name 匹配 `segment-anything`）单独 Approve。
 
+### 3.4 专有组件：Live2D Cubism Core（不是 MIT，必须随 NOTICE 披露）
+
+`live2d-py==0.8.1` 的 PyPI 元数据写的是 `License-Expression: MIT`，但 wheel 内实际
+包含 `live2d/v3/_common.dll`、`live2d/v3/_v3cpp.pyd` 与 `FrameworkShaders` —— 这些是
+**Live2D Cubism Core**，著作权归 Live2D Inc.，不属于 MIT 包装层的授权范围。上游仓库
+也明确说明「本仓库不包含 Cubism Core 及 Framework（受许可限制）」。
+
+因此：
+
+- 不能把 `live2d-py` 笼统标成「MIT 宽松依赖」；正确表述是「包装层 MIT + Core 专有」。
+- 安装包随附 Core 时，分发条件由 **Live2D Cubism SDK Release License** 决定
+  （个人 / 小规模事业者通常可免费发布；规模或用途超出范围需另行取得 Live2D 授权）。
+- 根目录 `NOTICE` 第一节承载该署名与条款链接；FF-15 已把 `NOTICE` 纳入
+  `web/out`、`desktop/bundle`、`api/webui/dist` 与导出模型包的随附文件。
+- 若未来把 `live2d-py` 从安装包移出（改为用户自行安装并接受 Live2D EULA），需同时改
+  `requirements.desktop.txt` 与 `NOTICE`，并保持 `verify.py` 缺依赖时**如实失败而不是静默通过**。
+
+> 这也是 README 里「随包第三方组件均为宽松许可」那句话必须改写的原因：它既漏掉了
+> LGPL（pygame / edge-tts）与 scipy 随附的 GNU 运行时，也把专有的 Cubism Core 误归为 MIT。
+
 ---
 
 ## 4. CI 接线
@@ -338,10 +391,10 @@ export FOSSA_API_KEY=<你复制的 key>
 |---|---|---|---|
 | 依赖版本、CVE 治理 | ✅ | — | 已完成：`next` 16.4.0→16.4.1 等 |
 | SPDX 元数据补全（Cargo.toml 等） | ✅ | — | 已完成 |
-| 许可全文随产物分发（FF-15） | ✅ | — | 已完成：`scripts/check-license-bundle.sh` 闸门 |
+| 许可全文随产物分发（FF-15） | ✅ | — | 已完成：`scripts/check-license-bundle.sh` 闸门（LICENSE + NOTICE 逐字节校验） |
 | 分析范围收敛（排除归档/文档） | ✅ | — | 已完成：`.fossa.yml` 的 `paths.exclude` |
 | 许可策略的三档规则 | ❌ | ✅ | 只能后台建，仓库侧无法声明 |
-| 项目绑定哪个策略 | ❌ | ✅ | 官方明确：改 `.fossa.yml` 不生效 |
+| 项目绑定哪个策略 | ❌ | ✅ | 当前实际绑定内置 `Standard Bundle Distribution`（policyId `271431`）；Free 计划无法自定义策略 |
 | issue 明细逐条读取 | ❌ | ✅ | 登录态下 Issues 页可读全量（见 §3.2.1），无需企业 API |
 | 逐条 / 自动忽略规则 | ❌ | ✅ **Business 计划** | 实测 Free 计划点 `Add Ignore Rule` 直接弹定价页；自定义策略同样付费 |
 
@@ -351,6 +404,10 @@ export FOSSA_API_KEY=<你复制的 key>
 
 | 文件 | 作用 |
 |---|---|
+| `LICENSE` | 项目自身 AGPL-3.0 全文（唯一真源） |
+| `NOTICE` | 第三方组件署名 + Live2D Cubism Core 专有条款（随产物分发） |
+| [`docs/fossa-agpl3-review.md`](fossa-agpl3-review.md) | `AGPL-3.0 Distribution` 三档规则 + 64 条处理清单（升级后执行） |
+| [`docs/fossa-agpl3-review.csv`](fossa-agpl3-review.csv) | 64 行逐条复核表（含 42 行待导出填充） |
 | `.fossa.yml` | FOSSA 扫描配置（分析范围、项目定位符、策略名） |
 | `scripts/fossa_license_inventory.py` | 四生态依赖许可清单 + 策略建议生成器 |
 | `scripts/fossa_license_carrier_check.py` | FOSSA 报的 SPDX ID 在依赖里的**载体核对**（运行时 / 告知文件 / 文档 / 测试 / 无载体=误判） |

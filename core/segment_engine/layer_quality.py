@@ -433,6 +433,43 @@ def explained_fraction(masks: Dict[str, np.ndarray],
     return float((union & fg).sum()) / max(1, int(fg.sum()))
 
 
+#: 报告「未被任何部件认领」的区域时忽略的碎块（发丝、抗锯齿边）。
+UNEXPLAINED_REGION_MIN_PX = 400
+#: 最多报告几个区域（按面积降序）。
+UNEXPLAINED_REGION_TOP_N = 5
+
+
+def unexplained_regions(masks: Dict[str, np.ndarray],
+                        fg: np.ndarray) -> List[Dict[str, object]]:
+    """角色剪影里「没有任何部件认领」的连通区域。
+
+    为什么只报告不拦截：全局覆盖率（:data:`EXPLAINED_MIN`）会把一块整区域
+    平均掉 —— 实测一张图 7.7% 前景无人认领、其中最大一块 2254px，全局仍有
+    0.92 而通过。但直接用面积阈值拦截会误伤发丝与半透明边缘，所以这里把
+    **面积 + 位置**作为证据交给人工复核，闸门口径保持不动。
+    """
+    union = np.logical_or.reduce([m for m in masks.values()])
+    lost = np.asarray(fg, dtype=bool) & ~union
+    if not lost.any():
+        return []
+    num, labels = cv2.connectedComponents(lost.astype(np.uint8), connectivity=8)
+    total_fg = max(1, int(fg.sum()))
+    regions: List[Dict[str, object]] = []
+    for label in range(1, num):
+        area_mask = labels == label
+        area = int(area_mask.sum())
+        if area < UNEXPLAINED_REGION_MIN_PX:
+            continue
+        ys, xs = np.where(area_mask)
+        regions.append({
+            "area": area,
+            "ratio": round(area / total_fg, 4),
+            "bbox": [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())],
+        })
+    regions.sort(key=lambda item: int(item["area"]), reverse=True)
+    return regions[:UNEXPLAINED_REGION_TOP_N]
+
+
 def score(layers_dir: Path,
           require: Tuple[str, ...] = REQUIRED_PARTS,
           foreground: Optional[np.ndarray] = None) -> Dict[str, object]:
@@ -482,6 +519,11 @@ def score_masks(masks: Dict[str, np.ndarray],
         ),
         "explained_fraction": (
             round(explained_fraction(masks, foreground), 4)
+            if foreground is not None else None
+        ),
+        # 证据而非拦截：哪几块前景没有任何部件认领（见 unexplained_regions）。
+        "unexplained_regions": (
+            unexplained_regions(masks, foreground)
             if foreground is not None else None
         ),
     }
@@ -535,7 +577,11 @@ def selftest() -> int:
             "clothes_bottom": rect(65, 150, 135, 185),
             "arms": rect(40, 120, 60, 165),
             "hands": rect(38, 165, 52, 180),
-            "legs": rect(80, 185, 120, 199),
+            "legs": rect(80, 185, 120, 194),
+            # 长袜与鞋现在是标准部位（检测器单独提示），干净集必须包含它们，
+            # 否则自检会把它们报成"缺失"，看起来像误报。
+            "legwear": rect(84, 194, 116, 197),
+            "footwear": rect(86, 197, 114, 199),
             "accessories": rect(95, 120, 105, 150),
         }
 

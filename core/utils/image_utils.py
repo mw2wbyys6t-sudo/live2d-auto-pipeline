@@ -257,6 +257,55 @@ def cutout_by_silhouette(img: Image.Image) -> Image.Image:
     return Image.fromarray(arr, "RGBA")
 
 
+def normalize_character_canvas(
+    img: Image.Image,
+    width: int = 1024,
+    height: int = 1536,
+    margin: float = 0.06,
+) -> Image.Image:
+    """把生成图规范成 Live2D 立绘画布。
+
+    生成模型给的是"构图随缘"的方图：人物可能贴边、偏左、只占半幅。分层与
+    绑定都假设"角色完整、居中、四周留边"，所以这里统一做：
+
+    1. 取最大前景 bbox（alpha 有内容就用 alpha，否则用剪影估计）；
+    2. 等比缩放，保证人物落在 ``(1-2*margin)`` 的安全区内；
+    3. 居中贴到目标画布（透明底），四周留边；
+    4. 轻锐化，抵消缩放带来的糊化。
+
+    返回值一定是 ``width×height``，供后续分层/导出直接使用。
+    """
+    target_w = max(64, int(width))
+    target_h = max(64, int(height))
+    margin = min(0.24, max(0.0, float(margin)))
+    rgba = img.convert("RGBA")
+
+    alpha = np.array(rgba.getchannel("A"))
+    coverage = float((alpha > 8).mean())
+    if coverage < 0.02:
+        # 原始生成图通常 alpha 全 255；用连通剪影估计真实前景。
+        silhouette = estimate_foreground_silhouette(np.array(rgba.convert("RGB")))
+        alpha_img = Image.fromarray((silhouette.astype(np.uint8) * 255), "L")
+    else:
+        alpha_img = Image.fromarray(alpha, "L")
+
+    bbox = alpha_img.point(lambda v: 255 if v > 8 else 0).getbbox()
+    if not bbox:
+        return rgba.resize((target_w, target_h), Image.LANCZOS)
+
+    subject = rgba.crop(bbox)
+    avail_w = max(1, int(target_w * (1.0 - 2 * margin)))
+    avail_h = max(1, int(target_h * (1.0 - 2 * margin)))
+    scale = min(avail_w / subject.width, avail_h / subject.height)
+    new_w = max(1, int(round(subject.width * scale)))
+    new_h = max(1, int(round(subject.height * scale)))
+    subject = subject.resize((new_w, new_h), Image.LANCZOS)
+
+    canvas = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
+    canvas.paste(subject, ((target_w - new_w) // 2, (target_h - new_h) // 2), subject)
+    return canvas.filter(ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=3))
+
+
 def _remove_background_corner(img: Image.Image) -> Image.Image:
     """基于自估剪影的背景移除。
 

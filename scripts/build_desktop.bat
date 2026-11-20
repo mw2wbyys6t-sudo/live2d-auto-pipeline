@@ -22,6 +22,9 @@ if errorlevel 1 (echo 资源版本化失败 & exit /b 1)
 echo [3/5] 复制静态产物到内嵌目录 api\webui\dist ...
 if exist api\webui\dist rmdir /s /q api\webui\dist
 mkdir api\webui\dist 2>nul
+rem .gitkeep 是 go:embed 在干净检出时必须存在的占位物；rmdir 会把它一起删掉，
+rem 不补回来会让本地构建在 git 里留下「删除 .gitkeep」的假改动。
+type nul > api\webui\dist\.gitkeep
 robocopy web\out api\webui\dist /E /NFL /NDL /NJH /NJS >nul
 if errorlevel 8 (echo 静态产物复制失败 & exit /b 1)
 

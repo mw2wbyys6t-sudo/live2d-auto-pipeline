@@ -1563,7 +1563,7 @@ def test_compile_logs_the_reorder(caplog):
     才与终端是不是 TTY 无关（本地失败、CI 恰好通过的那种"环境相关测试"）。
 
     C1 提交（d964f240）不带这条：它成对依赖 moc3_model.compile_static_rig 的重排
-    log，那半属 C2 的审查小修。备份 F:\\tmp\\task3-stepC-wip-7c29bf3b.patch。
+    log，那半属 C2 的审查小修（对应补丁只存在于本地，未入库）。
     """
     logger_name = "live2d.exporter.moc3_model"
     caplog.set_level(logging.INFO, logger=logger_name)
@@ -1684,7 +1684,10 @@ def test_head_rig_is_authored_as_the_only_head_rotation_owner():
     head = _authored("HeadRig")
     assert head["profile"] == "head_xy"
     assert head["parameters"] == ["ParamAngleX", "ParamAngleY"]
-    assert {"face", "nose", "accessories"} <= set(head["targets"])
+    assert {"face", "nose"} <= set(head["targets"])
+    # 头饰改由 AccessorySwing 独占（它 under HeadRig，头部转动照样继承），
+    # 一块网格只能挂一个变形器，HeadRig 不能再点名 accessories。
+    assert "accessories" not in set(head["targets"])
     # 刚体侧转只有一条：HeadRotationZ（rotation），绕 Head 关节、挂在 BodySway 下。
     rotation = _authored("HeadRotationZ")
     assert rotation["type"] == "rotation"
@@ -1727,7 +1730,11 @@ def test_cheek_and_tear_no_longer_need_their_own_head_field():
     built = _built()
     assert "HeadRig" in built, "真实层名下 HeadRig 必须真的建出来（否则重蹈 rotation 的覆辙）"
     assert built["HeadRig"]["profile"] == "head_xy"
-    assert set(built["HeadRig"]["targets"]) >= {"face", "nose", "accessories"}
+    assert set(built["HeadRig"]["targets"]) >= {"face", "nose"}
+    # 头饰有独立摆链：归属 AccessorySwing，且该变形器挂在 HeadRig 之下 ——
+    # 头部转动靠继承，摆动靠 ParamAccessorySwing，两者不再争同一块网格。
+    assert built["AccessorySwing"]["under"] == "HeadRig"
+    assert "accessories" in built["AccessorySwing"]["targets"]
 
 
 def test_fade_layers_are_listed_by_layer_name_in_the_head_rig_targets():

@@ -257,9 +257,13 @@ func DefaultConfig() *Config {
 			MaxRequestBodySize: 10 * 1024 * 1024,
 			MaxHeaderBytes:     1 * 1024 * 1024,
 			ReadTimeout:        30 * time.Second,
-			WriteTimeout:       180 * time.Second,
-			ReadHeaderTimeout:  5 * time.Second,
-			IdleTimeout:        120 * time.Second,
+			// 生成接口是同步的（handler 里直接 await Python 工作流），所以这个值
+			// 必须大于最长的一次生成耗时。实测 sam2_gd 后端（文本提示 + SAM 掩码）
+			// 单张 1024×1536 需要 266~321 秒、4K 需要约 257 秒 —— 原先的 180 秒会在
+			// Python 还没写出产物时就把连接掐掉，前端只看到一次网络失败。
+			WriteTimeout:      900 * time.Second,
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       120 * time.Second,
 			// CORS 白名单：登记**非回环**来源（自定义域名、反向代理后的前端）。
 			// 本机回环来源（localhost / 127.0.0.1 / [::1]）由 originAllowed 按
 			// 「任意端口」放行 —— 开发时前端常因 3000 被占用换到 3001/3200，

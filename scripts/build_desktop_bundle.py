@@ -5,9 +5,10 @@
 
     bundle/
       live2d-api.exe          Go 后端（内嵌 Web 工作台 UI）
-      face_tracker.exe        Rust 原生面捕
+      face_tracker.exe        原生面捕（C++ build/ 优先，Rust release/ 兜底）
       onnxruntime.dll         面捕 load-dynamic 依赖（须与 exe 同目录）
       models/face_detection_yunet_2023mar.onnx
+      models/face_landmark_478.onnx   C++ 478 点网格（含虹膜）
       models/rembg/isnet-anime.onnx   前景（抠图）权重，分层质量的地基
       python/                 嵌入式 CPython 3.12（含离线 site-packages）
       app/                    Python 工程源码树（core/ drivers/ ...）
@@ -63,6 +64,17 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# 面捕可执行文件：C++ 版（478 点 + 虹膜）优先，Rust 版兜底。
+# 与 api/services/native_bridge.go、drivers/face_tracker/native_tracker.py 的
+# 搜索顺序保持一致，避免「开发跑 C++、安装包跑 Rust」的行为漂移。
+TRACKER_CPP_EXE = ROOT / "native" / "face_tracker_cpp" / "build" / "face_tracker.exe"
+TRACKER_RUST_EXE = ROOT / "native" / "face_tracker" / "target" / "release" / "face_tracker.exe"
+
+
+def _default_tracker_exe() -> Path:
+    return TRACKER_CPP_EXE if TRACKER_CPP_EXE.is_file() else TRACKER_RUST_EXE
+
 
 # ---------------------------------------------------------------------------
 # 钉死的下载物（版本升级时必须同步更新 scripts/windows/hashes.json）
@@ -571,6 +583,14 @@ def copy_license_bundle(dest: Path) -> None:
         sys.exit(f"❌ 许可文件写入失败（FF-15 要求产出物内含许可全文）：{exc}")
     if not written:
         sys.exit("❌ 仓库根找不到 LICENSE —— 无法产出合规的安装包（FF-15）")
+    names = {Path(name).name for name in written}
+    has_license = any(n.startswith(("LICENSE", "COPYING")) for n in names)
+    has_notice = any(n.startswith("NOTICE") for n in names)
+    if not has_license or not has_notice:
+        sys.exit(
+            "❌ 许可文件不完整（LICENSE 与 NOTICE 必须同时存在）—— "
+            "FF-15 要求第三方署名随安装包分发"
+        )
     print(f"    [许可] {', '.join(written)} → {dest}")
 
 
@@ -670,9 +690,8 @@ def main() -> int:
     ap.add_argument("--go-exe", default=str(ROOT / "api" / "live2d-api.exe"),
                     help="Go 后端可执行文件")
     ap.add_argument("--face-tracker-exe",
-                    default=str(ROOT / "native" / "face_tracker" / "target" / "release"
-                                / "face_tracker.exe"),
-                    help="Rust 原生面捕可执行文件")
+                    default=str(_default_tracker_exe()),
+                    help="原生面捕可执行文件（默认 C++ build/ 优先，Rust release/ 兜底）")
     ap.add_argument("--skip-python", action="store_true", help="复用已解压的 python/")
     ap.add_argument("--skip-wheels", action="store_true", help="跳过 wheel 下载/安装")
     ap.add_argument("--skip-app", action="store_true", help="跳过源码树复制")
@@ -784,6 +803,16 @@ def main() -> int:
         verify_hash(yunet, hashes.get("yunet-onnx", ""), "yunet-onnx", record)
         shutil.copy2(yunet, models_dir / YUNET_NAME)
         print(f"    [onnx] models/{YUNET_NAME}")
+
+        # C++ 版面捕的 478 点网格（含虹膜）：缺失时原生链路只能回退 YuNet 5 点。
+        mesh_src = ROOT / "models" / "face" / "face_landmark_478.onnx"
+        if mesh_src.is_file() and mesh_src.stat().st_size > 0:
+            shutil.copy2(mesh_src, models_dir / "face_landmark_478.onnx")
+            print(f"    [onnx] models/face_landmark_478.onnx "
+                  f"{human((models_dir / 'face_landmark_478.onnx').stat().st_size)}")
+        else:
+            print("    [warn] 缺少 models/face/face_landmark_478.onnx："
+                  "原生面捕将回退 5 点，建议补齐后再打包")
 
         landmarker = download(FACE_LANDMARKER_URL, cache / FACE_LANDMARKER_NAME,
                               offline=offline)

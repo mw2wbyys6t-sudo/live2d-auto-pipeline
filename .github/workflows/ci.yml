@@ -210,6 +210,14 @@ jobs:
         working-directory: web
         run: npm ci
 
+      # FOSSA 的两条 CVE-2026-112366（picomatch ReDoS）全部来自 tailwindcss
+      # 的构建期依赖链，上游暂无修复版本。门禁不阻断 dev-only 命中，但要求
+      # 生产依赖树里绝不能出现该包，且生产 audit 不得有 high/critical ——
+      # 否则一旦它被某个运行时依赖拉进来，这里会直接失败。
+      - name: 生产依赖漏洞门禁（dev-only 命中只告警）
+        working-directory: web
+        run: npm run security:audit
+
       - name: TypeScript check
         working-directory: web
         run: npx tsc --noEmit

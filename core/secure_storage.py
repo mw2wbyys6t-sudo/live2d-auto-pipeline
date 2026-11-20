@@ -355,6 +355,15 @@ class EncryptedConfig:
         self._cache[provider] = api_key
         return self._storage.store_api_key(provider, api_key, str(self._file))
 
+    def delete_api_key(self, provider: str) -> bool:
+        """Delete a provider key from the encrypted file and drop its cache.
+
+        缓存必须一起清：只删文件时，同进程随后 ``get_api_key`` 仍会命中
+        内存缓存，表现为"删掉的 Key 又活了"。
+        """
+        self._cache.pop(provider, None)
+        return self._storage.delete_api_key(provider, str(self._file))
+
     def get_api_key(self, provider: str) -> Optional[str]:
         if provider in self._cache:
             return self._cache[provider]

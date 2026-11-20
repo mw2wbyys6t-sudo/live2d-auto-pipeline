@@ -62,6 +62,8 @@ config.portable.json
 # Local agent/skill working state (the distilled versions live in docs/)
 .autocase/
 .superpowers/
+# 本机 AI 助手产物（设计草稿、临时 skill、会话记录）——不属于项目代码
+.trae/
 
 # Local agent HTML share packages (large binary artifacts, never shipped)
 .trae-html-share-packages/
@@ -79,6 +81,11 @@ api/config.dev.json
 # 浏览器面捕 WASM 运行时（约 33MB Emscripten 产物，第三方胶水代码）
 # 已 vendored 到 web/public/mediapipe/wasm 供离线使用；不入库，缺失时前端自动回退 CDN
 web/public/mediapipe/
+
+# FF-15：许可文件由 web/scripts/copy-license.mjs 在 prebuild 时从仓库根复制，
+# 入库副本会与唯一真源漂移，因此不提交。
+web/public/LICENSE
+web/public/NOTICE
 
 # 桌面版构建产物（由 scripts/build_desktop.bat 生成）
 dist/
@@ -127,6 +134,8 @@ output-*/
 web/.next/
 web/.vercel/
 web/.cache/
+# 本地 `next build --distDir .next-verify` 的验证产物（约 66MB，机器本地）
+web/.next-verify/
 
 # --- Python 扩展模块构建产物 ---
 *.so
@@ -165,6 +174,10 @@ desktop/gen/
 # 模型权重已由上方 *.onnx 规则覆盖。
 native/*/target/
 
+# --- C++ 面捕第三方头文件（json/ORT/stb，由 download_deps.ps1 获取，不入库） ---
+# 与模型/dll 同为脚本获取的构建依赖；build/ 已由顶层规则覆盖。
+native/face_tracker_cpp/third_party/
+
 # Tauri 前端占位页面需要入库（tauri::generate_context! 编译时嵌入）
 # 但顶层 dist/ 规则会把它一起忽略，所以先放行目录再保留 index.html
 !desktop/dist/
@@ -174,6 +187,8 @@ desktop/dist/*
 # --- 根目录调试产物（下划线前缀的临时记录、可视化报告；开发期随手生成，绝不入库） ---
 /_*.txt
 /rig_visual_report.json
+# UI 走查截图（本机调试产物）
+.screenshots/
 
 # Tauri 打包用的 Go 二进制（由 build_tauri_release 脚本复制进来，不入库）
 # 保留 .gitkeep 让目录存在于 git 中，Tauri resources glob 才不会报错

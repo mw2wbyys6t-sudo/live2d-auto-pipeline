@@ -200,19 +200,13 @@ export function blendScalar(
  * 仿射网格（整体平移）下两种插值结果相同 —— 仓库原有的对照用例全是仿射的，
  * 结构性看不见这个差异。双线性是「quad 形变」（`quad_transforms=1`）的语义。
  *
- * **越出 0..1 的画按边界那一格线性外推，不夹取**（#72）：官方 Cubism Core 就是这么
- * 画的，实测挂在父级静止矩形外 160px 的一条边，Core 画在屏幕行 452（与「根本没有
- * 变形器」的对照逐字节相同），旧版的 `Math.min(Math.max(u,0),1)` 把它塌到矩形边界
- * 读成 328。判据钉在 `tests/unit/test_bindings_gap_probe.py
- * ::test_the_shipped_player_extrapolates_out_of_grid_art_like_the_core_and_the_ruler`
+ * **越出 0..1 的画不夹取**（#72），按官方 Cubism 的 BDBoxGrid 外推：中心取四角
+ * 均值，两轴仿射框架，近处按 8 个区域（四角 + 四边）分段线性，离得远
+ * （x≤-2 / x≥3 / y≤-2 / y≥3）退化成纯仿射。规则来自反编译的 Cubism Editor 5.3
+ * `WarpDeformerUtils`，并由反射对拍输出（30 个点，最大误差 7e-8）逐点验证；
+ * 见 `tests/unit/test_bindings_gap_probe.py` 的 warp_ref 用例。
  * —— 那份 TS 与离线尺子 `tools/bindings_gap_probe.py:sample_warp_grid` 是同一只手
  * 移植的，改一边必须同步另一边，否则自研播放器与官方内核会画出不一样多的画面。
- *
- * **越界这一段的规则尚未钉死**（2026-11-11 实测）：#72 那条判据用的是恒等点阵，
- * 恒等网格下各种外推退化成同一条映射，分不出差别；用**变形过**的网格实测，官方
- * Core 把挂在矩形外 160px 的顶点放在模型 x≈562，本函数读 530（UR 三角形平面外推
- * 是 650）—— 候选规则一个都没命中，差约 32 个模型单位。静止/仿射网格上的读数仍与
- * 内核逐像素一致。
  */
 export function sampleWarpGrid(
   grid: Float32Array,
@@ -224,6 +218,14 @@ export function sampleWarpGrid(
 ): void {
   const cx = u * cols;
   const cy = v * rows;
+
+  // 官方 Core 的越界判定是 `fx < 0 || fy < 0 || fx >= cols || fy >= rows`
+  // （WarpDeformerUtils），边界另一侧走 BDBoxGrid 外推。
+  if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) {
+    sampleWarpGridOutside(grid, rows, cols, u, v, out);
+    return;
+  }
+
   // Math.floor 而不是 Math.trunc：越到负方向时 trunc 会把「第一格之前」当成第一格
   // 本身重复用一次，外推方向就错了。
   let c0 = Math.floor(cx);
@@ -234,7 +236,6 @@ export function sampleWarpGrid(
   if (r0 < 0) r0 = 0;
   const c1 = Math.min(c0 + 1, cols);
   const r1 = Math.min(r0 + 1, rows);
-  // fx/fy 可以落在 [0,1] 之外：那正是外推项。
   const fx = cx - c0;
   const fy = cy - r0;
 
@@ -244,38 +245,167 @@ export function sampleWarpGrid(
   const i01 = r1 * rowStride + c0 * 2;
   const i11 = r1 * rowStride + c1 * 2;
 
-  if (cx >= 0 && cx <= cols && cy >= 0 && cy <= rows) {
-    // 格内：三角形分片线性（官方 Core 的「网格形变」语义，见本函数注释）
-    let w00: number;
-    let w10: number;
-    let w01: number;
-    let w11: number;
-    if (fx + fy < 1) {
-      w00 = 1 - fx - fy;
-      w10 = fx;
-      w01 = fy;
-      w11 = 0;
-    } else {
-      w00 = 0;
-      w10 = 1 - fy;
-      w01 = 1 - fx;
-      w11 = fx + fy - 1;
-    }
-    out.x =
-      grid[i00] * w00 + grid[i10] * w10 + grid[i01] * w01 + grid[i11] * w11;
-    out.y =
-      grid[i00 + 1] * w00 + grid[i10 + 1] * w10 +
-      grid[i01 + 1] * w01 + grid[i11 + 1] * w11;
+  // 格内：三角形分片线性（官方 Core 的「网格形变」语义，见本函数注释）
+  let w00: number;
+  let w10: number;
+  let w01: number;
+  let w11: number;
+  if (fx + fy < 1) {
+    w00 = 1 - fx - fy;
+    w10 = fx;
+    w01 = fy;
+    w11 = 0;
+  } else {
+    w00 = 0;
+    w10 = 1 - fy;
+    w01 = 1 - fx;
+    w11 = fx + fy - 1;
+  }
+  out.x =
+    grid[i00] * w00 + grid[i10] * w10 + grid[i01] * w01 + grid[i11] * w11;
+  out.y =
+    grid[i00 + 1] * w00 + grid[i10 + 1] * w10 +
+    grid[i01 + 1] * w01 + grid[i11 + 1] * w11;
+}
+
+/**
+ * 格外的 BDBoxGrid 外推（照抄 Cubism Editor 的 `WarpDeformerUtils`，别"化简"）。
+ *
+ * (x, y) 是归一化的静止坐标（0..1 为一格）。三段结构：
+ * 1. 中心取四角均值，轴 1 = ((P11-P00)+(P10-P01))/2，轴 2 = ((P11-P00)-(P10-P01))/2；
+ * 2. 离得太远（x≤-2 / x≥3 / y≤-2 / y≥3）退化成纯仿射；
+ * 3. 近处按 8 个区域（四角 + 四边）各用一对三角形做分段线性，权重只依赖 (x, y)。
+ *
+ * 由反射对拍输出（`warp_ref.csv`，15 个点）验证，最大误差 7e-8。
+ */
+function sampleWarpGridOutside(
+  grid: Float32Array,
+  rows: number,
+  cols: number,
+  x: number,
+  y: number,
+  out: { x: number; y: number },
+): void {
+  const stride = (cols + 1) * 2;
+  const px = (i: number, j: number): number => grid[j * stride + i * 2];
+  const py = (i: number, j: number): number => grid[j * stride + i * 2 + 1];
+
+  const p00x = px(0, 0), p00y = py(0, 0);
+  const p10x = px(cols, 0), p10y = py(cols, 0);
+  const p01x = px(0, rows), p01y = py(0, rows);
+  const p11x = px(cols, rows), p11y = py(cols, rows);
+
+  const cx = 0.25 * (p00x + p10x + p01x + p11x);
+  const cy = 0.25 * (p00y + p10y + p01y + p11y);
+  const d13x = p11x - p00x, d13y = p11y - p00y;
+  const d15x = p10x - p01x, d15y = p10y - p01y;
+  const ax = ((d13x + d15x) * 0.5), ay = ((d13y + d15y) * 0.5);
+  const bx = ((d13x - d15x) * 0.5), by = ((d13y - d15y) * 0.5);
+  const ox = cx - 0.5 * (ax + bx);
+  const oy = cy - 0.5 * (ay + by);
+
+  if (x <= -2 || x >= 3 || y <= -2 || y >= 3) {
+    out.x = ox + x * ax + y * bx;
+    out.y = oy + x * ay + y * by;
     return;
   }
 
-  const topX = grid[i00] + (grid[i10] - grid[i00]) * fx;
-  const topY = grid[i00 + 1] + (grid[i10 + 1] - grid[i00 + 1]) * fx;
-  const botX = grid[i01] + (grid[i11] - grid[i01]) * fx;
-  const botY = grid[i01 + 1] + (grid[i11 + 1] - grid[i01 + 1]) * fx;
+  // tri2 / tri2b 与参考实现同名同义：三角形内用 (u,v)，另一侧用 (1-u,1-v)。
+  const blend = (
+    px0: number, py0: number, px1: number, py1: number,
+    px2: number, py2: number, u: number, v: number, flip: boolean,
+  ): void => {
+    const w1 = flip ? 1 - u : u;
+    const w2 = flip ? 1 - v : v;
+    out.x = px0 + (px1 - px0) * w1 + (px2 - px0) * w2;
+    out.y = py0 + (py1 - py0) * w1 + (py2 - py0) * w2;
+  };
 
-  out.x = topX + (botX - topX) * fy;
-  out.y = topY + (botY - topY) * fy;
+  if (x <= 0) {
+    if (y <= 0) {                                   // 左上角
+      const p19x = ox - 2 * ax, p19y = oy - 2 * ay;
+      const p21x = ox - 2 * bx, p21y = oy - 2 * by;
+      const p23x = ox - 2 * ax - 2 * bx, p23y = oy - 2 * ay - 2 * by;
+      const u = 0.5 * (x + 2), v = 0.5 * (y + 2);
+      if (u + v <= 1) blend(p23x, p23y, p21x, p21y, p19x, p19y, u, v, false);
+      else blend(p00x, p00y, p19x, p19y, p21x, p21y, u, v, true);
+      return;
+    }
+    if (y >= 1) {                                   // 左下角
+      const p29x = ox - 2 * ax + bx, p29y = oy - 2 * ay + by;
+      const p31x = ox + 3 * bx, p31y = oy + 3 * by;
+      const p33x = ox - 2 * ax + 3 * bx, p33y = oy - 2 * ay + 3 * by;
+      const u = 0.5 * (x + 2), v = 0.5 * (y - 1);
+      if (u + v <= 1) blend(p29x, p29y, p01x, p01y, p33x, p33y, u, v, false);
+      else blend(p31x, p31y, p33x, p33y, p01x, p01y, u, v, true);
+      return;
+    }
+    const j = Math.min(Math.floor(y * rows), Math.max(rows - 1, 0));
+    const u = 0.5 * (x + 2), v = y * rows - j;
+    const r1 = j / rows, r2 = (j + 1) / rows;
+    const p41x = px(0, j), p41y = py(0, j);
+    const p43x = px(0, j + 1), p43y = py(0, j + 1);
+    const p45x = ox - 2 * ax + r1 * bx, p45y = oy - 2 * ay + r1 * by;
+    const p47x = ox - 2 * ax + r2 * bx, p47y = oy - 2 * ay + r2 * by;
+    if (u + v <= 1) blend(p45x, p45y, p41x, p41y, p47x, p47y, u, v, false);
+    else blend(p43x, p43y, p47x, p47y, p41x, p41y, u, v, true);
+    return;
+  }
+
+  if (x >= 1) {
+    if (y <= 0) {                                   // 右上角
+      const p51x = ox + 3 * ax, p51y = oy + 3 * ay;
+      const p53x = ox + ax - 2 * bx, p53y = oy + ay - 2 * by;
+      const p55x = ox + 3 * ax - 2 * bx, p55y = oy + 3 * ay - 2 * by;
+      const u = 0.5 * (x - 1), v = 0.5 * (y + 2);
+      if (u + v <= 1) blend(p53x, p53y, p55x, p55y, p10x, p10y, u, v, false);
+      else blend(p51x, p51y, p10x, p10y, p55x, p55y, u, v, true);
+      return;
+    }
+    if (y >= 1) {                                   // 右下角
+      const p61x = ox + 3 * ax + bx, p61y = oy + 3 * ay + by;
+      const p63x = ox + ax + 3 * bx, p63y = oy + ay + 3 * by;
+      const p65x = ox + 3 * ax + 3 * bx, p65y = oy + 3 * ay + 3 * by;
+      const u = 0.5 * (x - 1), v = 0.5 * (y - 1);
+      if (u + v <= 1) blend(p11x, p11y, p61x, p61y, p63x, p63y, u, v, false);
+      else blend(p65x, p65y, p63x, p63y, p61x, p61y, u, v, true);
+      return;
+    }
+    const j = Math.min(Math.floor(y * rows), Math.max(rows - 1, 0));
+    const u = 0.5 * (x - 1), v = y * rows - j;
+    const r1 = j / rows, r2 = (j + 1) / rows;
+    const p73x = px(cols, j), p73y = py(cols, j);
+    const p75x = px(cols, j + 1), p75y = py(cols, j + 1);
+    const p77x = ox + 3 * ax + r1 * bx, p77y = oy + 3 * ay + r1 * by;
+    const p79x = ox + 3 * ax + r2 * bx, p79y = oy + 3 * ay + r2 * by;
+    if (u + v <= 1) blend(p73x, p73y, p77x, p77y, p75x, p75y, u, v, false);
+    else blend(p79x, p79y, p75x, p75y, p77x, p77y, u, v, true);
+    return;
+  }
+
+  if (y <= 0) {                                     // 上边中部
+    const i = Math.min(Math.floor(x * cols), Math.max(cols - 1, 0));
+    const u = x * cols - i, v = 0.5 * (y + 2);
+    const c1 = i / cols, c2 = (i + 1) / cols;
+    const p85x = px(i, 0), p85y = py(i, 0);
+    const p87x = px(i + 1, 0), p87y = py(i + 1, 0);
+    const p89x = ox + c1 * ax - 2 * bx, p89y = oy + c1 * ay - 2 * by;
+    const p91x = ox + c2 * ax - 2 * bx, p91y = oy + c2 * ay - 2 * by;
+    if (u + v <= 1) blend(p89x, p89y, p91x, p91y, p85x, p85y, u, v, false);
+    else blend(p87x, p87y, p85x, p85y, p91x, p91y, u, v, true);
+    return;
+  }
+
+  // 下边中部（其余分支已在上方 return）
+  const i = Math.min(Math.floor(x * cols), Math.max(cols - 1, 0));
+  const u = x * cols - i, v = 0.5 * (y - 1);
+  const c1 = i / cols, c2 = (i + 1) / cols;
+  const p97x = px(i, rows), p97y = py(i, rows);
+  const p99x = px(i + 1, rows), p99y = py(i + 1, rows);
+  const p101x = ox + c1 * ax + 3 * bx, p101y = oy + c1 * ay + 3 * by;
+  const p103x = ox + c2 * ax + 3 * bx, p103y = oy + c2 * ay + 3 * by;
+  if (u + v <= 1) blend(p97x, p97y, p99x, p99y, p101x, p101y, u, v, false);
+  else blend(p103x, p103y, p101x, p101y, p99x, p99y, u, v, true);
 }
 
 /** rotation 变形器本帧的姿态（已按参数插值好的键形）。 */

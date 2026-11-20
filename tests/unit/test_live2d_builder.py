@@ -14,7 +14,7 @@ from live2d_builder.blendshapes.parameters import ParameterSet
 from live2d_builder.blendshapes.expressions import ExpressionBuilder
 from live2d_builder.physics.config import PhysicsBuilder
 from live2d_builder.exporter.model3_exporter import Model3Exporter
-from live2d_builder.exporter.moc3_model import DEFAULT_PIXELS_PER_UNIT
+from live2d_builder.exporter.moc3_model import resolve_pixels_per_unit
 from live2d_builder.exporter.texture_atlas import TextureAtlas
 from live2d_builder.validator.model_validator import ModelValidator
 from live2d_builder.pipeline import Live2DBuilder
@@ -404,6 +404,32 @@ class TestModel3Exporter:
             if result.get("physics3_json"):
                 assert Path(result["physics3_json"]).exists()
 
+    def test_meshes_json_carries_per_vertex_uv(self):
+        """meshes.json 必须带 uvs / texture_page。
+
+        验收工具（tools/rig_acceptance.py）只读这份文件，之前它只有顶点与
+        索引，于是每一层都被判成 "UV evidence is missing" —— hair_back 因为
+        排在第一个被首个点名，看起来像「只有 hair_back 缺 UV」。
+        """
+        gen = MeshGenerator(internal_spacing=20)
+        layers = make_test_layers()
+        meshes = {"hair_back": gen.generate(layers["hair_back"])}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Model3Exporter().export(
+                builder_result={"layers": layers, "meshes": meshes},
+                output_dir=tmpdir,
+                character_name="uv_char",
+            )
+            data = json.loads(
+                (Path(tmpdir) / "uv_char.meshes.json").read_text(encoding="utf-8"))
+
+        hair = data["hair_back"]
+        assert "uvs" in hair, "hair_back 缺 UV"
+        assert len(hair["uvs"]) == hair["vertex_count"]
+        for u, v in hair["uvs"]:
+            assert 0.0 <= u <= 1.0 and 0.0 <= v <= 1.0
+        assert isinstance(hair["texture_page"], int)
+
     def test_model3_layout_uses_the_real_canvas(self):
         """Layout 必须是真实画布尺寸，不能是固定占位。
 
@@ -418,8 +444,8 @@ class TestModel3Exporter:
                 layout = json.load(f)["Layout"]
         assert layout["Width"] == 128.0
         assert layout["Height"] == 128.0
-        # 与 moc3 画布段同一个 pixels_per_unit
-        assert layout["PixelsPerUnit"] == DEFAULT_PIXELS_PER_UNIT
+        # 与 moc3 画布段同一个 pixels_per_unit（= 画布宽度，跨度恒为 1 个单位宽）
+        assert layout["PixelsPerUnit"] == resolve_pixels_per_unit(128.0)
         # moc3 原点在画布中心
         assert layout["X"] == 0 and layout["Y"] == 0
         assert layout["CenterX"] == 0.0 and layout["CenterY"] == 0.0

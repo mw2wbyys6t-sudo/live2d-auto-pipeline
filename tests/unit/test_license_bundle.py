@@ -47,6 +47,11 @@ class TestLicenseBundle:
         assert any(n.startswith("LICENSE") or n.startswith("COPYING") for n in names), (
             f"许可文件清单里没有 LICENSE：{names}")
 
+    def test_license_files_contains_notice(self):
+        """第三方署名 NOTICE 必须随 LICENSE 一起分发（含 Live2D Core 条款）。"""
+        names = [p.name for p in license_files()]
+        assert "NOTICE" in names, f"许可文件清单里没有 NOTICE：{names}"
+
     def test_install_copies_license_byte_identical(self, tmp_path):
         written = install_license_bundle(tmp_path)
         assert written, "应至少复制出 LICENSE"
@@ -106,3 +111,7 @@ class TestExportPackageCarriesLicense:
         assert license_file.is_file(), (
             "导出目录缺少 LICENSE —— FF-15：产出物必须内含与仓库根逐字节一致的许可全文")
         assert license_file.read_bytes() == (repo_root() / "LICENSE").read_bytes()
+        notice_file = export_dir / "NOTICE"
+        assert notice_file.is_file(), (
+            "导出目录缺少 NOTICE —— FF-15：第三方署名必须随产物分发")
+        assert notice_file.read_bytes() == (repo_root() / "NOTICE").read_bytes()

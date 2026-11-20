@@ -762,29 +762,48 @@ def _probe_gpu_row() -> Dict[str, Any]:
 def _probe_tracker() -> Dict[str, Any]:
     """面捕组件的真实状态。
 
-    降级模式走 Python mediapipe（不是 Go 的 Rust 原生子进程），但检查项
-    的 key 必须与 Go 侧一致（tracker_exe / tracker_model / tracker_dll），
-    否则前端自检页在两种后端下显示的项目数会跳变。
+    优先看原生 face_tracker.exe（C++ 478 点）是否可用；不可用时看 mediapipe
+    降级链路。检查项的 key 必须与 Go 侧一致（tracker_exe / tracker_model /
+    tracker_dll），否则前端自检页在两种后端下显示的项目数会跳变。
     """
     detail: Dict[str, Any] = {}
+
+    native_ok = False
     try:
-        import mediapipe  # noqa: F401
+        from drivers.face_tracker import native_tracker
 
-        detail["exe_ok"] = True
-        detail["exe_detail"] = "mediapipe 面捕模块可用"
+        binary = native_tracker.find_binary()
+        models_dir = native_tracker.find_models_dir()
+        native_ok = bool(binary and models_dir)
+        detail["native_ok"] = native_ok
+        if native_ok:
+            detail["exe_ok"] = True
+            detail["exe_detail"] = f"原生面捕: {binary}"
+            detail["model_ok"] = True
+            detail["model_detail"] = f"ONNX 模型目录: {models_dir}"
     except Exception as exc:
-        detail["exe_ok"] = False
-        detail["exe_detail"] = f"mediapipe 不可导入: {type(exc).__name__}"
+        detail["native_ok"] = False
+        detail.setdefault("exe_detail", f"原生面捕探测失败: {type(exc).__name__}")
 
-    try:
-        from drivers.face_tracker.mediapipe_tracker import _find_face_landmarker_model
+    if not native_ok:
+        try:
+            import mediapipe  # noqa: F401
 
-        model_path = _find_face_landmarker_model()
-        detail["model_ok"] = model_path is not None
-        detail["model_detail"] = model_path or "未找到 face_landmarker.task（面捕不可用）"
-    except Exception as exc:
-        detail["model_ok"] = False
-        detail["model_detail"] = f"面捕模型探测失败: {type(exc).__name__}"
+            detail["exe_ok"] = True
+            detail["exe_detail"] = detail.get("exe_detail") or "mediapipe 面捕模块可用"
+        except Exception as exc:
+            detail["exe_ok"] = False
+            detail["exe_detail"] = f"mediapipe 不可导入: {type(exc).__name__}"
+
+        try:
+            from drivers.face_tracker.mediapipe_tracker import _find_face_landmarker_model
+
+            model_path = _find_face_landmarker_model()
+            detail["model_ok"] = model_path is not None
+            detail["model_detail"] = model_path or "未找到 face_landmarker.task（面捕不可用）"
+        except Exception as exc:
+            detail["model_ok"] = False
+            detail["model_detail"] = f"面捕模型探测失败: {type(exc).__name__}"
 
     try:
         importlib.import_module("onnxruntime")
@@ -1853,11 +1872,6 @@ def _run_segment(req: "SegmentRequest") -> Dict[str, Any]:
         from core.segment_engine.semantic import SemanticSegmenter
         result = SemanticSegmenter(model_type="auto").layer(img, output_dir=str(out_dir))
 
-    names = [l.get("name") for l in (result.get("layers") or []) if l.get("name")]
-    psd_result = PSDCreator().create_psd(
-        str(out_dir), str(out_dir / "character.psd"), ordered_names=names or None
-    )
-
     from core.segment_engine.layer_manifest import (
         build_manifest,
         source_for_method,
@@ -1872,7 +1886,12 @@ def _run_segment(req: "SegmentRequest") -> Dict[str, Any]:
         source=source,
         canvas=(img.width, img.height),
     )
+    # manifest 必须先落盘：PSD creator 以它为分组/坐标/顺序的唯一契约，
+    # 反过来再由它做写出后的重新读取校验。
     manifest_path = write_manifest(str(out_dir), manifest)
+    psd_result = PSDCreator().create_psd(
+        str(out_dir), str(out_dir / "character.psd"), manifest_path=manifest_path
+    )
 
     layers = [{
         "name": l.get("name", ""),
@@ -1891,13 +1910,17 @@ def _run_segment(req: "SegmentRequest") -> Dict[str, Any]:
         "psd_path": psd_result.get("psd_path", "") or "",
         "psd_url": to_output_url(psd_result.get("psd_path", "") or ""),
         "psd_success": bool(psd_result.get("success")),
+        "psd_error": psd_result.get("error") or "",
         "manifest_path": manifest_path,
         "manifest_url": to_output_url(manifest_path),
         "manifest_version": manifest.schema_version,
         "source": manifest.source,
         "rig_ready": manifest.rig_ready,
+        "quality_ready": manifest.quality_ready,
         "preview_ready": manifest.preview_ready,
         "missing_required": manifest.missing_required,
+        "manual_required": manifest.manual_required,
+        "derived_parts": manifest.derived_parts,
         "warnings": manifest.warnings,
     }
 
@@ -2108,15 +2131,24 @@ async def export_live2d(req: ExportLive2DRequest, background_tasks: BackgroundTa
         readiness = runtime_readiness(result)
         ready = readiness["runtime_ready"]
 
-        # FF-15：产出物必须内含许可证全文（ADR-001 Rev.4）。缺了它，用户把
+        # FF-15：产出物必须内含许可证全文（ADR-001 Rev.5）。缺了它，用户把
         # 模型包再分发出去时就没有任何许可声明 —— 这是合规缺口，不是装饰。
         # 真正的真源在 core/license_bundle.py，Go 导出桥用的是同一份。
+        # 写不进去就**阻断导出**：宁可让用户重试，也不能产出不合规的包。
         try:
             from core.license_bundle import install_license_bundle
 
-            install_license_bundle(export_dir)
+            written = install_license_bundle(export_dir)
         except Exception as exc:
-            logging.getLogger("api_server").warning("产出物许可文件写入失败: %s", exc)
+            logging.getLogger("api_server").error("产出物许可文件写入失败: %s", exc)
+            return err("导出失败：许可文件写入失败", 500)
+        if not written:
+            logging.getLogger("api_server").error("仓库根缺少 LICENSE，无法产出合规的导出包")
+            return err("导出失败：缺少许可文件", 500)
+        if (not any(n.startswith(("LICENSE", "COPYING")) for n in written)
+                or not any(n.startswith("NOTICE") for n in written)):
+            logging.getLogger("api_server").error("导出包许可文件不完整：%s", written)
+            return err("导出失败：缺少许可文件", 500)
 
         # Live2D 预览页需要直接下载 ZIP 包。
         # M6：zip 写在系统临时目录（不落在可被 /output/ 直接访问的输出根），
@@ -2387,6 +2419,8 @@ class _TrackerState:
     blendshapes: Dict[str, float] = {}
     head_rotation: Dict[str, float] = {}
     error: str = ""
+    # 当前面捕链路的实际来源：native（face_tracker.exe）或 mediapipe（降级）
+    source: str = ""
 
     # 面捕 WS 连接计数：面捕参数是本机摄像头的高频推流，必须限制并发连接数，
     # 防止恶意页面开大量 WS 把事件循环与带宽占满。
@@ -2416,6 +2450,7 @@ class _TrackerState:
         cls.blendshapes = {}
         cls.head_rotation = {}
         cls.error = ""
+        cls.source = ""
 
 
 def _tracking_loop() -> None:
@@ -2430,11 +2465,21 @@ def _tracking_loop() -> None:
                 break
             blends = tr.get_blendshapes() or {}
             rot = tr.get_head_rotation() or {}
-            params = mapper.map_to_live2d_params(blends, None)
-            if rot:
-                params["ParamAngleX"] = float(rot.get("yaw", 0))
-                params["ParamAngleY"] = float(-rot.get("pitch", 0))
-                params["ParamAngleZ"] = float(rot.get("roll", 0))
+            # 原生面捕自己已完成映射 + EMA 平滑 + 死区，直接采信它的参数；
+            # 只有 mediapipe 降级链路才在 Python 侧重算一次。
+            params: Dict[str, float] = {}
+            native_getter = getattr(tr, "get_live2d_params", None)
+            if callable(native_getter):
+                try:
+                    params = dict(native_getter() or {})
+                except Exception:
+                    params = {}
+            if not params:
+                params = mapper.map_to_live2d_params(blends, None)
+                if rot:
+                    params["ParamAngleX"] = float(rot.get("yaw", 0))
+                    params["ParamAngleY"] = float(-rot.get("pitch", 0))
+                    params["ParamAngleZ"] = float(rot.get("roll", 0))
             if _TrackerState.lock:
                 with _TrackerState.lock:
                     _TrackerState.params = params
@@ -2452,15 +2497,16 @@ def _tracking_loop() -> None:
 async def tracking_status():
     """面捕运行状态（对齐 Go /api/tracking/status）。
 
-    降级模式没有 Rust 原生子进程，source 标为 mediapipe；smoothing 取
-    BlendShapeMapper 的默认平滑系数，deadzone 恒为 0（Python 侧未实现死区）。
+    source 反映实际链路：原生 face_tracker.exe 可用时为 native，否则为
+    mediapipe 降级；smoothing 取 BlendShapeMapper 的默认平滑系数，
+    deadzone 恒为 0（原生链路自己处理死区）。
     """
     tracker = _PROBES.get("tracker", _PROBE_TTL, _probe_tracker)
     return ok({
         "running": bool(_TrackerState.running),
         "available": bool(tracker["exe_ok"] and tracker["model_ok"]),
         "enabled": True,
-        "source": "mediapipe",
+        "source": _TrackerState.source or ("native" if tracker.get("native_ok") else "mediapipe"),
         "camera_id": 0,
         "smoothing": 0.5,
         "deadzone": 0,
@@ -2469,19 +2515,36 @@ async def tracking_status():
 
 @app.post("/api/tracking/start")
 async def tracking_start():
-    """启动摄像头面捕（mediapipe），参数经 /ws/tracking 推送。"""
+    """启动摄像头面捕，参数经 /ws/tracking 推送。
+
+    优先原生 face_tracker.exe（C++ 478 点网格，自带平滑/死区），二进制或模型
+    缺失时回退 mediapipe —— 两条链路对外接口一致，前端无需区分。
+    """
     if _TrackerState.running:
         return ok({"running": True}, "面捕已在运行")
+
     try:
-        from drivers.face_tracker.mediapipe_tracker import FaceTracker
+        from drivers.face_tracker import native_tracker
+        use_native = native_tracker.available()
     except Exception as e:
-        # 模块缺失/加载失败的原文（含安装路径）只进日志
-        logging.getLogger("api_server").exception("面捕模块加载失败: %s", e)
-        return err("面捕模块当前不可用，请检查依赖安装", 500)
+        logging.getLogger("api_server").warning("原生面捕探测失败，回退 mediapipe: %s", e)
+        use_native = False
+
+    if not use_native:
+        try:
+            from drivers.face_tracker.mediapipe_tracker import FaceTracker  # noqa: F401
+        except Exception as e:
+            # 模块缺失/加载失败的原文（含安装路径）只进日志
+            logging.getLogger("api_server").exception("面捕模块加载失败: %s", e)
+            return err("面捕模块当前不可用，请检查依赖安装", 500)
 
     def _open():
-        from drivers.face_tracker.mediapipe_tracker import FaceTracker
-        t = FaceTracker()
+        if use_native:
+            from drivers.face_tracker.native_tracker import NativeFaceTracker
+            t = NativeFaceTracker()
+        else:
+            from drivers.face_tracker.mediapipe_tracker import FaceTracker
+            t = FaceTracker()
         t.start()
         return t
 
@@ -2494,9 +2557,19 @@ async def tracking_start():
             504,
         )
     except Exception as e:
-        return _server_error("摄像头启动", e)
+        # 原生进程启动失败（摄像头占用/模型缺失）时回退 mediapipe，避免整条面捕不可用
+        if use_native:
+            logging.getLogger("api_server").warning("原生面捕启动失败，回退 mediapipe: %s", e)
+            use_native = False
+            try:
+                tracker = await _to_thread_bounded(_open, TRACKING_START_TIMEOUT)
+            except Exception as fallback_err:
+                return _server_error("摄像头启动", fallback_err)
+        else:
+            return _server_error("摄像头启动", e)
 
     _TrackerState.tracker = tracker
+    _TrackerState.source = "native" if use_native else "mediapipe"
     # 诚实性修复：mediapipe/摄像头缺失时 FaceTracker.start() 会静默返回，
     # 旧实现无条件把 running 置 true，导致前端「假报已启动」。
     if not getattr(tracker, "is_running", lambda: False)():
@@ -2505,7 +2578,7 @@ async def tracking_start():
         except Exception:
             pass
         return err(
-            "面捕未能启动：摄像头未打开，或 mediapipe/cv2 依赖缺失。"
+            "面捕未能启动：摄像头未打开，或模型/依赖缺失。"
             "请检查摄像头是否被占用并确认依赖已安装后重试。",
             503,
         )
@@ -2514,7 +2587,7 @@ async def tracking_start():
     _TrackerState.error = ""
     _TrackerState.thread = threading.Thread(target=_tracking_loop, daemon=True)
     _TrackerState.thread.start()
-    return ok({"running": True}, "面捕已启动")
+    return ok({"running": True, "source": _TrackerState.source}, "面捕已启动")
 
 
 @app.post("/api/tracking/stop")

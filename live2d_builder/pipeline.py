@@ -24,6 +24,7 @@ from live2d_builder.bones.deformers import BoneHierarchy, DeformerHierarchy
 from live2d_builder.blendshapes.parameters import ParameterSet, STANDARD_PARAMETERS
 from live2d_builder.blendshapes.expressions import ExpressionBuilder
 from live2d_builder.layer_naming import (
+    ACCESSORY_KEYWORDS,
     ANIMAL_EAR_KEYWORDS,
     HAIR_KEYWORDS,
     TAIL_KEYWORDS,
@@ -31,7 +32,7 @@ from live2d_builder.layer_naming import (
 )
 from live2d_builder.physics.config import PhysicsBuilder, is_skirt_layer
 from live2d_builder.exporter.model3_exporter import Model3Exporter
-from live2d_builder.exporter.texture_atlas import TextureAtlas
+from live2d_builder.exporter.texture_atlas import content_box
 from live2d_builder.validator.model_validator import ModelValidator
 
 log = get_logger("rigging.pipeline")
@@ -54,12 +55,11 @@ class Live2DBuilder:
     5. Define parameter set (28 standard + custom parameters)
     6. Generate 28 expressions
     7. Build physics configuration
-    8. Bake texture atlases
-    9. Export model3.json + companion files
-    10. Validate the output
+    8. Export model3.json + companion files (含贴图图集与 moc3 编译)
+    9. Validate the output
     """
 
-    TOTAL_STEPS = 10
+    TOTAL_STEPS = 9
 
     def __init__(
         self,
@@ -96,9 +96,46 @@ class Live2DBuilder:
         self._deformer_tree: Dict[str, Any] = {}
         self._physics3: Dict[str, Any] = {}
 
+    #: 图集上限。4K 立绘的单个部件可达 2731×4096：优先用 4096 图集（去掉
+    #: padding 刚好装下），只有部件本身超过 4096 才升到 8192。
+    MAX_ATLAS_SIZE = 8192
+    #: 优先档：4K 画布（高 4096）的整块部件正好装下，且每页仅 64MB。
+    PREFERRED_ATLAS_SIZE = 4096
+
+    def _ensure_atlas_capacity(self, layers: Dict[str, Image.Image]) -> None:
+        """按最大部件的尺寸把图集抬到足够的 2 的幂（只升不降）。
+
+        4096 是优先档：4K 画布（高 4096）的整块部件正好卡在上限。若加上
+        padding 后越界，先尝试把 padding 降到 0 保住 4096，而不是直接跳到
+        8192 —— 8192 图集每页占 256MB，页数一多就把内存吃穿（实测 14 页
+        约 3.7GB）。只有部件本身超过 4096 才继续升到 8192。
+        """
+        if not layers:
+            return
+        raw = max(max(im.width, im.height) for im in layers.values())
+        padding = int(getattr(self.uv_unwrapper, "padding", 2))
+        needed = max(self.atlas_size, min(
+            self.MAX_ATLAS_SIZE, 1 << (raw + padding - 1).bit_length()))
+        if needed > self.PREFERRED_ATLAS_SIZE and raw <= self.PREFERRED_ATLAS_SIZE and padding:
+            # 去掉 padding 就能装进 4096：优先省内存，不升到 8192
+            padding = 0
+            needed = max(self.atlas_size, 1 << (raw - 1).bit_length())
+        if needed <= self.atlas_size and padding == int(
+            getattr(self.uv_unwrapper, "padding", 2)
+        ):
+            return
+        log.info(
+            f"Atlas size raised {self.atlas_size} → {needed} "
+            f"(largest part {raw}px, padding {padding})"
+        )
+        self.atlas_size = needed
+        self.uv_unwrapper = UVUnwrapper(
+            atlas_size=needed, padding=padding, algorithm="skyline"
+        )
+        self.exporter = Model3Exporter(max_atlas_size=needed)
+
     # ------------------------------------------------------------------
     # Main entry point
-    # ------------------------------------------------------------------
 
     def build(
         self,
@@ -125,6 +162,9 @@ class Live2DBuilder:
         # 部件沿轮廓少画约 1px，相邻部件之间漏出背景 —— 实测躯干 477/506/833
         # 三行整行丢失，静止就是一条细亮缝，动画里随部件位移时隐时现。
         layers = bleed_layers(layers, EDGE_BLEED_PX)
+        # 大画布（4K 立绘）下单个部件就可能超过默认 2048 图集上限，
+        # 直接在打包阶段抛 "exceeds max atlas size" 会让整条导出链失败。
+        self._ensure_atlas_capacity(layers)
         # 静止不可见的层（腮红/眼泪）在网格阶段要走"铺满 bbox 的规则网格"，
         # 见 _generate_meshes 的说明。
         self._layer_opacity: Dict[str, float] = {
@@ -138,7 +178,11 @@ class Live2DBuilder:
 
         # Step 2: UV layout
         log.step(2, self.TOTAL_STEPS, "Laying out UVs")
-        self._uv_data = self._layout_uvs(self._meshes, {})
+        self._uv_data = self._layout_uvs(
+            self._meshes,
+            {},
+            {name: content_box(img) for name, img in layers.items()},
+        )
 
         # Step 3: Bones
         log.step(3, self.TOTAL_STEPS, "Building bone hierarchy")
@@ -170,12 +214,8 @@ class Live2DBuilder:
         log.step(7, self.TOTAL_STEPS, "Building physics")
         self._physics3 = self._generate_physics(layers)
 
-        # Step 8: Bake textures
-        log.step(8, self.TOTAL_STEPS, "Baking texture atlases")
-        self._bake_textures(layers)
-
-        # Step 9: Export
-        log.step(9, self.TOTAL_STEPS, "Exporting model3.json")
+        # Step 8: Export
+        log.step(8, self.TOTAL_STEPS, "Exporting model3.json")
         builder_result = {
             "layers": layers,
             "meshes": self._meshes,
@@ -194,12 +234,12 @@ class Live2DBuilder:
             character_name=self.character_name,
             # motion 不在这里生成：导出期只有编译前的可驱动集合，看不见 warp
             # 变形器的参数带（实测 singer 包 27 个可驱动参数只排了 1 条曲线）。
-            # 现在由第 9b 步 compile_export_moc3 按权威集合生成，且生成在
+            # 现在由第 8b 步 compile_export_moc3 按权威集合生成，且生成在
             # motion 验收之前 —— 验收对象等于交付物。
         )
 
-        # Step 9b: Compile real moc3 and gate it on official Core acceptance
-        log.step(9, self.TOTAL_STEPS, "Compiling moc3")
+        # Step 8b: Compile real moc3 and gate it on official Core acceptance
+        log.step(8, self.TOTAL_STEPS, "Compiling moc3")
         from live2d_builder.exporter.moc3_pipeline import (
             compile_export_moc3,
             summarize_for_meta,
@@ -224,8 +264,8 @@ class Live2DBuilder:
         elif moc3_result["dropped"]:
             log.warning(f"moc3 已写出但存在未编译特性: {moc3_result['dropped']}")
 
-        # Step 10: Validate
-        log.step(10, self.TOTAL_STEPS, "Validating model")
+        # Step 9: Validate
+        log.step(9, self.TOTAL_STEPS, "Validating model")
         validation = self.validator.validate_all(str(self.output_dir))
         compatibility = self.validator.check_cubism_compatibility(str(self.output_dir))
 
@@ -418,11 +458,12 @@ class Live2DBuilder:
         self,
         meshes: Dict[str, Dict],
         atlas: Dict[str, Any],
+        content_boxes: Optional[Dict[str, Tuple[int, int, int, int]]] = None,
     ) -> Dict[str, Dict]:
         """Pack meshes into the texture atlas and compute UV coordinates."""
         if not meshes:
             return {}
-        result = self.uv_unwrapper.pack_meshes(meshes)
+        result = self.uv_unwrapper.pack_meshes(meshes, content_boxes=content_boxes)
         layout = self.uv_unwrapper.get_atlas_layout()
         npages = layout["counts"]["pages"]
         util = layout["counts"]["utilisation"] * 100
@@ -505,6 +546,7 @@ class Live2DBuilder:
         # `detail` 里含 tail 就误判成尾巴。
         hair_layers = [n for n in layers if matches_keywords(n, HAIR_KEYWORDS)]
         skirt_layers = [n for n in layers if is_skirt_layer(n)]
+        accessory_layers = [n for n in layers if matches_keywords(n, ACCESSORY_KEYWORDS)]
         has_ears = any(matches_keywords(n, ANIMAL_EAR_KEYWORDS) for n in layers)
         has_tail = any(matches_keywords(n, TAIL_KEYWORDS) for n in layers)
 
@@ -515,28 +557,11 @@ class Live2DBuilder:
         self.physics.build_breathing_physics()
         if skirt_layers:
             self.physics.build_skirt_physics(skirt_layers)
+        if accessory_layers:
+            self.physics.build_accessory_physics(accessory_layers)
         self.physics.build_ear_tail_physics(has_ears, has_tail)
 
         return self.physics.to_physics3_json()
-
-    def _bake_textures(self, layers: Dict[str, Image.Image]) -> List[str]:
-        """Bake layers into texture atlas images based on UV layout."""
-        if not self._uv_data:
-            log.warning("No UV data; texture baking skipped")
-            return []
-        try:
-            atlas_path = self.output_dir / f"{self.character_name}_baked.png"
-            written = TextureAtlas(max_size=self.atlas_size).bake_atlas(
-                layers=layers,
-                meshes=self._meshes,
-                uv_data=self._uv_data,
-                output_path=str(atlas_path),
-            )
-            log.info(f"Baked {len(written)} texture page(s)")
-            return written
-        except Exception as exc:
-            log.error(f"Texture baking failed: {exc}")
-            return []
 
     # ------------------------------------------------------------------
     # Packaging

@@ -86,7 +86,7 @@ python -m core.cli generate "蓝发猫耳少女，白色背景，日系赛璐璐
 
 | 相关项目 | 许可 | 借鉴 / 改进 |
 |---|---|---|
-| live2d-py | MIT | 用官方 Cubism Core 做逐像素验收；moc3 由本项目自行编译，不依赖 Cubism Editor 导出 |
+| live2d-py | MIT（Python 包装层）<br>Cubism Core 为 Live2D 专有 | 用官方 Cubism Core 做逐像素验收；moc3 由本项目自行编译，不依赖 Cubism Editor 导出。随包内置的 Core 二进制不属于 MIT 范围，须遵守 Live2D Cubism SDK Release License |
 | pixi-live2d-display | MIT | 借鉴浏览器端 Live2D 播放方式；本项目播放器直接读 `bindings.json` 做逐顶点形变，减少对官方 SDK 的依赖 |
 | See-through / l2d_sam_iter2 | Apache-2.0 | 借鉴部位解析思路，作为可选分层后端；模型缺失时自动降级，不阻塞主链路 |
 | SAM 2 / GroundingDINO | Apache-2.0 | 作为语义分层后端；在其上补了 19 类部位到 52 层的映射、遮挡补全与质量评分 |
@@ -94,7 +94,12 @@ python -m core.cli generate "蓝发猫耳少女，白色背景，日系赛璐璐
 | rembg / ISNet | MIT / 见模型页 | 用于抠图与前景剪影；改为权重直连，避免与 DirectML 版 onnxruntime 冲突 |
 | ComfyUI / Stable Diffusion WebUI | GPL-3.0 / AGPL-3.0 | 仅作为可选本地生图后端，通过 HTTP 调用，不做代码链接 |
 
-> 随包分发的第三方组件均为宽松许可（MIT / Apache-2.0 / BSD）；GPL 系组件只以独立进程或 HTTP 方式对接，不进入安装包。明细见 [docs/license-policy.md](docs/license-policy.md)。
+> 随包分发的第三方组件以 MIT / Apache-2.0 / BSD 为主，也包含弱 copyleft 与带例外的 GNU 运行时：
+> `pygame` / `edge-tts`（LGPL，以 import 方式使用）、`scipy` 随附的 libgfortran
+> （GPL-3.0-or-later WITH GCC-exception-3.1）与 libquadmath（LGPL-2.1-or-later）。
+> `live2d-py` 的 Python 包装层是 MIT，但其内置的 **Live2D Cubism Core 是 Live2D Inc. 的专有软件**，
+> 随包分发须遵守 Live2D Cubism SDK Release License。GPL-2.0-only / SSPL / BUSL 等强 copyleft
+> 组件不进入安装包。逐项依据与署名见 [docs/license-policy.md](docs/license-policy.md) 与根目录 `NOTICE`。
 
 ## 已知限制
 
@@ -156,4 +161,6 @@ scripts\build_tauri_release.bat
 - 个人 / 开源使用：遵循 [AGPL-3.0](LICENSE)
 - 商业闭源分发：需单独获得商业授权
 
-第三方依赖均为宽松许可（MIT / Apache-2.0 / BSD），明细见 [docs/license-policy.md](docs/license-policy.md)。
+第三方依赖以宽松许可为主，另有 LGPL 与带 GCC 例外的 GNU 运行时；`live2d-py` 内置的
+Live2D Cubism Core 为 Live2D Inc. 专有软件。逐项许可、载体与分发义务见
+[docs/license-policy.md](docs/license-policy.md) 与根目录 `NOTICE`。

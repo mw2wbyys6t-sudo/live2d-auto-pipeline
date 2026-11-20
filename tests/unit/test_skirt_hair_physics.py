@@ -203,3 +203,40 @@ def test_skirt_sway_profile_exists_and_moves_the_hem():
     assert out[0][0] == pytest.approx(50.0)          # 腰线钉住
     assert out[1][0] > 50.0                          # 下摆摆出去
     assert out[1][0] - 50.0 == pytest.approx(SKIRT_SWAY * 100.0)
+
+
+class TestPhysicsDriverCoverage:
+    """头发/裙子必须被"歪头、点头、侧身"驱动，而不是只吃前后转头。"""
+
+    def _inputs(self, built):
+        groups = built.get("groups") or [built]
+        return {
+            g["id"]: [i["id"] for i in g["inputs"]]
+            for g in groups if g.get("id")
+        }
+
+    def test_hair_front_reacts_to_tilt_and_nod(self):
+        pb = PhysicsBuilder()
+        built = pb.build_hair_physics(["hair_front"])
+        ins = self._inputs(built)["HairFront"]
+        assert "ParamAngleZ" in ins, "歪头(ParamAngleZ)必须驱动前发，否则头发像刚体"
+        assert "ParamAngleY" in ins
+
+    def test_hair_back_reacts_to_tilt_and_nod(self):
+        pb = PhysicsBuilder()
+        built = pb.build_hair_physics(["hair_back"])
+        ins = self._inputs(built)["HairBack"]
+        assert "ParamAngleZ" in ins
+        assert "ParamAngleY" in ins
+
+    def test_skirt_reacts_to_body_lean(self):
+        pb = PhysicsBuilder()
+        built = pb.build_skirt_physics(["clothes_bottom", "skirt_hem"])
+        ins = self._inputs(built)
+        assert "ParamBodyAngleZ" in ins["Skirt"]
+        assert "ParamBodyAngleZ" in ins["SkirtHem"]
+
+    def test_accessory_reacts_to_nod(self):
+        pb = PhysicsBuilder()
+        built = pb.build_accessory_physics(["accessories"])
+        assert "ParamAngleY" in self._inputs(built)["Accessory"]

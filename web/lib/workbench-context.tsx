@@ -16,9 +16,9 @@ import type {
   GenerationRequest,
   GenerationStep,
   LayerInfo,
-  Resolution,
   SegmentationMethod,
 } from '../types';
+import { canvasPresetOf, canvasSize, type CanvasPresetId } from './catalog';
 import {
   apiClient,
   getBackendWsUrl,
@@ -116,8 +116,15 @@ interface WorkbenchValue {
   setPrompt: (value: string) => void;
   negativePrompt: string;
   setNegativePrompt: (value: string) => void;
-  resolution: Resolution;
-  setResolution: (value: Resolution) => void;
+  /** 画幅预设（默认竖版 1024×1536，见 catalog.CANVAS_PRESETS）。 */
+  canvasPreset: CanvasPresetId;
+  setCanvasPreset: (value: CanvasPresetId) => void;
+  /** 多候选择优：1 = 关闭。 */
+  candidates: number;
+  setCandidates: (value: number) => void;
+  /** pollinations 随机种子；0 = 每次随机。 */
+  pollinationsSeed: number;
+  setPollinationsSeed: (value: number) => void;
   consistency: boolean;
   setConsistency: (value: boolean) => void;
   characterId: string;
@@ -169,14 +176,8 @@ interface WorkbenchValue {
 
 const WorkbenchContext = createContext<WorkbenchValue | null>(null);
 
-const RESOLUTIONS: readonly Resolution[] = [512, 768, 1024, 2048];
-
 function isWorkpiece(value: Workpiece | null): value is Workpiece {
   return value !== null;
-}
-
-function resolutionOf(width: number): Resolution | null {
-  return (RESOLUTIONS as readonly number[]).includes(width) ? (width as Resolution) : null;
 }
 
 function byCreatedDesc(a: Workpiece, b: Workpiece): number {
@@ -256,7 +257,11 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
 
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
-  const [resolution, setResolution] = useState<Resolution>(1024);
+  const [canvasPreset, setCanvasPreset] = useState<CanvasPresetId>('portrait');
+  const [candidates, setCandidates] = useState(1);
+  const [pollinationsSeed, setPollinationsSeed] = useState(0);
+  // 是否在生成后做立绘规范化；默认开启，设置页可关闭。
+  const [normalizeCanvas, setNormalizeCanvas] = useState(true);
   const [consistency, setConsistency] = useState(true);
   const [characterId, setCharacterId] = useState('');
   // 生图引擎：默认 auto（后端按优先级自动选，行为与旧版一致）。
@@ -389,10 +394,17 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     const draft = readDraft();
     (async () => {
-      const [chars, latest, records] = await Promise.all([
+      // 设置页的默认画幅/候选数/种子只作首屏兜底：读不到（旧后端/超时）就
+      // 用内置默认值，不能因为设置接口慢而卡住整个工作台。
+      const settingsPromise = Promise.race([
+        apiClient.getSettings().catch(() => null),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+      ]);
+      const [chars, latest, records, settings] = await Promise.all([
         apiClient.getCharacters().catch(() => [] as Character[]),
         apiClient.getLatestGeneration().catch(() => null),
         apiClient.listGenerations(50),
+        settingsPromise,
       ]);
       if (cancelled) return;
       const list = records.map(workFromRecord).filter(isWorkpiece);
@@ -412,14 +424,20 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
         setCurrentId(wanted.id);
         setPrompt(draft.prompt !== undefined ? draft.prompt : wanted.prompt);
         setCharacterId(wanted.characterId);
-        const res = resolutionOf(wanted.width);
-        if (res) setResolution(res);
+        setCanvasPreset(canvasPresetOf(wanted.width, wanted.height));
       } else {
         setPrompt(draft.prompt ?? '');
         setCharacterId(draft.characterId ?? '');
       }
       if (draft.negativePrompt !== undefined) setNegativePrompt(draft.negativePrompt);
-      if (draft.resolution) setResolution(draft.resolution);
+      if (draft.canvasPreset) {
+        setCanvasPreset(draft.canvasPreset);
+      } else if (settings) {
+        setCanvasPreset(canvasPresetOf(settings.generation.width, settings.generation.height));
+      }
+      setCandidates(draft.candidates ?? settings?.generation.candidates ?? 1);
+      setPollinationsSeed(draft.pollinationsSeed ?? settings?.generation.pollinations_seed ?? 0);
+      setNormalizeCanvas(settings?.generation.normalize ?? true);
       if (draft.consistency !== undefined) setConsistency(draft.consistency);
       const nextStage = draft.stage ?? 'generate';
       setStageState(nextStage);
@@ -442,14 +460,28 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     writeDraft({
       prompt,
       negativePrompt,
-      resolution,
+      canvasPreset,
+      candidates,
+      pollinationsSeed,
       consistency,
       characterId,
       stage,
       inspector,
       currentId: current?.id || '',
     });
-  }, [hydrated, prompt, negativePrompt, resolution, consistency, characterId, stage, inspector, current?.id]);
+  }, [
+    hydrated,
+    prompt,
+    negativePrompt,
+    canvasPreset,
+    candidates,
+    pollinationsSeed,
+    consistency,
+    characterId,
+    stage,
+    inspector,
+    current?.id,
+  ]);
 
   // ---------- 图层索引 ----------
   useEffect(() => {
@@ -538,8 +570,7 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       setCurrentId(work.id);
       setPrompt(work.prompt);
       setCharacterId(work.characterId);
-      const res = resolutionOf(work.width);
-      if (res) setResolution(res);
+      setCanvasPreset(canvasPresetOf(work.width, work.height));
       setSourceFileState(null);
       // 同一阶段在新作品上未必有产物：能留就留，留不住退到最近的可展示阶段。
       const target: StageId =
@@ -624,17 +655,21 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
     setGeneration({ running: true, steps: makeInitialSteps(), message: '已提交生成任务…', error: null });
     const controller = new AbortController();
     abortRef.current = controller;
+    const { width, height } = canvasSize(canvasPreset);
     const request: GenerationRequest = {
       prompt: text,
       negativePrompt: negativePrompt.trim() || undefined,
-      width: resolution,
-      height: resolution,
+      width,
+      height,
+      seed: pollinationsSeed > 0 ? pollinationsSeed : undefined,
       characterConsistency: consistency,
       characterId: consistency && characterId ? characterId : undefined,
       engine: engine === 'auto' ? undefined : engine,
-      // 底模 / LoRA 只在本地引擎上有意义；其它引擎传了会被后端 400 拒掉。
+      // 底模 / LoRA / 模型名只在对应引擎上有意义；后端会拒掉不匹配的组合。
       model: engine === 'auto' ? undefined : imageModel.trim() || undefined,
       lora: engine === 'auto' ? undefined : lora.trim() || undefined,
+      candidates: candidates > 1 ? candidates : undefined,
+      normalizeCanvas,
     };
     try {
       const result = await apiClient.generateStream(
@@ -687,7 +722,10 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
   }, [
     prompt,
     negativePrompt,
-    resolution,
+    canvasPreset,
+    candidates,
+    pollinationsSeed,
+    normalizeCanvas,
     consistency,
     characterId,
     engine,
@@ -828,6 +866,9 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
             promptMismatch: false,
             fallback: false,
             fallbackReason: '',
+            incomplete: false,
+            incompleteReason: '',
+            sizeDowngraded: false,
             createdAt: new Date().toISOString(),
           };
       upsertWork(nextWork);
@@ -874,6 +915,9 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
         promptMismatch: false,
         fallback: false,
         fallbackReason: '',
+        incomplete: false,
+        incompleteReason: '',
+        sizeDowngraded: false,
         createdAt: new Date().toISOString(),
       };
       upsertWork(work);
@@ -1204,8 +1248,12 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       setPrompt,
       negativePrompt,
       setNegativePrompt,
-      resolution,
-      setResolution,
+      canvasPreset,
+      setCanvasPreset,
+      candidates,
+      setCandidates,
+      pollinationsSeed,
+      setPollinationsSeed,
       consistency,
       setConsistency,
       characterId,
@@ -1264,7 +1312,9 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
       setInspector,
       prompt,
       negativePrompt,
-      resolution,
+      canvasPreset,
+      candidates,
+      pollinationsSeed,
       consistency,
       characterId,
       engine,
