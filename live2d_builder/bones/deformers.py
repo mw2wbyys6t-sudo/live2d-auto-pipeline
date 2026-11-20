@@ -953,13 +953,13 @@ class DeformerHierarchy:
         # 肩窝处就会错开（实测 ``ParamBodyAngleY = 10`` 时上身衣服横移 14.67px、
         # 手臂 0px）。抬落仍按这条变形器自己的成员高度算，幅度不变。
         {"name": "ShoulderLift_L", "parent": "ArmBack_L", "rows": 2, "cols": 2,
-         "type": "warp", "profile": "lift_lean",
+         "type": "warp", "profile": "lift_lean", "under": "ArmRotation_L",
          "parameters": ["ParamShoulderL", "ParamBodyAngleX", "ParamBodyAngleY",
                         "ParamBodySway", "ParamBreath"],
          "targets": ["arm_L", "upper_arm_back_left", "sleeve_L",
                      "cuff_L", "hand_L"]},
         {"name": "ShoulderLift_R", "parent": "ArmBack_R", "rows": 2, "cols": 2,
-         "type": "warp", "profile": "lift_lean",
+         "type": "warp", "profile": "lift_lean", "under": "ArmRotation_R",
          "parameters": ["ParamShoulderR", "ParamBodyAngleX", "ParamBodyAngleY",
                         "ParamBodySway", "ParamBreath"],
          "targets": ["arm_R", "upper_arm_back_right", "sleeve_R",
@@ -988,8 +988,36 @@ class DeformerHierarchy:
         "allow_empty_targets": True, "targets": [],
     }
 
+    #: 手臂刚体转动：绕肩关节（ArmBack_*）转整条手臂链。
+    #:
+    #: 为什么做成**空成员的父级**：手臂三层（上臂 / 袖口 / 手）刻意挂在同一条
+    #: ``ShoulderLift_*`` 上（见该条目的注释 —— 拆开会在腕口裂缝），所以 rotation
+    #: 不能去抢成员，只能挂在它**上面**当父级，靠 ``under`` 链旋转整棵子树。
+    #: 这正是 ``_cross_type_edge`` 注释里 2026-11-10 用官方 Core 逐像素验收过的
+    #: 「rotation 父 = warp」边（静止帧与 ±30° 都逐字节命中）。
+    #:
+    #: 参数绑定走 ``moc3_pipeline._driving_rotation_parameter``：枢轴 == ArmBack_*
+    #: → ``ParamArmLA/RA``。**前臂（ParamArmLB/RB）不在这里**：要让它生效必须把
+    #: 小臂/袖口/手从 ShoulderLift_* 里拆出来另挂一条 rotation，而那正是上面
+    #: 那条注释记着的「腕口被拉开」事故，属独立改动。
+    #:
+    #: ``requires_deformer``：手臂图层不存在时 ShoulderLift_* 不会建，这条空转的
+    #: rotation 也不该建 —— 否则 model3.json 里会多一个「有参数、拨了没画面」的滑块。
+    ARM_ROTATION_L: Dict = {
+        "name": "ArmRotation_L", "parent": "ArmBack_L", "type": "rotation",
+        "pivot_bone": "ArmBack_L", "allow_empty_targets": True, "targets": [],
+        "requires_deformer": "ShoulderLift_L",
+    }
+    ARM_ROTATION_R: Dict = {
+        "name": "ArmRotation_R", "parent": "ArmBack_R", "type": "rotation",
+        "pivot_bone": "ArmBack_R", "allow_empty_targets": True, "targets": [],
+        "requires_deformer": "ShoulderLift_R",
+    }
+
     DEFAULT_ROTATION_DEFORMERS: List[Dict] = [
         HEAD_ROTATION,
+        ARM_ROTATION_L,
+        ARM_ROTATION_R,
     ]
 
     def __init__(self) -> None:
@@ -1086,6 +1114,17 @@ class DeformerHierarchy:
         rotation_skipped: List[Dict] = []
         for spec in self.DEFAULT_ROTATION_DEFORMERS:
             targets = _matched_targets(spec)
+            # 空成员的父级 rotation 靠 under 链起作用：它要转的那棵子树没建出来时，
+            # 建它只会得到一个「有参数、拨了没画面」的滑块，直接不建并留痕。
+            required = str(spec.get("requires_deformer") or "")
+            if required and required not in self._by_name:
+                rotation_skipped.append({
+                    "name": spec["name"],
+                    "reason": f"子变形器 {required} 未创建（对应部件缺失）",
+                    "targets": [required],
+                    "available_sample": sorted(available_norm)[:6],
+                })
+                continue
             # 纯父级 rotation（如 HeadRotationZ）没有直接成员：它靠 under 链
             # 旋转整棵子树，targets 为空是正常状态，不算「未命中」。
             if not targets and not spec.get("allow_empty_targets"):

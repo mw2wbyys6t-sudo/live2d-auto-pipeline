@@ -15,17 +15,18 @@
 >
 > **分层侧**：`ParamArmLA/LB/RA/RB` 以前只写在绑定表 `ROTATION_KEYFORM_PARAMS` 里，
 > 没进标准参数表。绑定逻辑是「先查参数表再绑」，查不到就静默跳过 —— 于是手臂即使
-> 拆成独立图层也永远不会被驱动。本版把四个参数声明进标准表。
+> 拆成独立图层也永远不会被驱动。本版把四个参数声明进标准表，并补上了缺失的
+> `ArmRotation_L/R` 变形器，**上臂现在真的能绕肩转动**。
 >
 > **CI**：修掉两处让构建必挂的问题（第 3 节）：`core/workflow.py` 缺 `Tuple` 导入，
 > 3.11/3.12 在收集期就 NameError（本机 3.14 的惰性注解把它藏住了）；
 > 装配运行时依赖的 onnxruntime GitHub zip 资产根本不存在（404），改用 NuGet 官方包。
 >
-> **已知限制（本版未成立）**：① 手臂四参数已声明、`model3.json` 里已出现并可作为
-> 滑块驱动，但**手臂的 rotation 变形器仍未创建** —— 实测导出的 `bindings.json`
-> 14 条变形器里没有 `ArmRotation_*`，所以拖动 `ParamArmLA` 手臂依然不动。补齐它需要
-> 先把「肩部抬落 warp」改成无直接成员的父级（按子树取范围），是一次独立的绑骨改动；
-> ② 分层质量门仍把 amodal 补全造成的层间覆盖记成 defect（判定口径之争，非本版引入）。
+> **已知限制（本版未成立）**：① **前臂**（`ParamArmLB/RB`）仍是死参数：它要求把
+> 小臂/袖口/手从上臂变形器里拆出来另挂一条 rotation，而这正是「腕口被拉开」那条
+> 事故的成因（见 `deformers.py` 的注释），属独立改动；② 本图没有左臂，因此
+> `ParamArmLA` / `ParamShoulderL` 也是死的 —— 那是缺画，不是缺功能；
+> ③ 分层质量门仍把 amodal 补全造成的层间覆盖记成 defect（判定口径之争，非本版引入）。
 >
 > **打包状态**：本版安装包由 CI 在 tag 构建时产出，本机未验证安装。
 
@@ -42,17 +43,30 @@
 只打一行 `[updater] …`。签名公钥在 `desktop/tauri.conf.json` 的
 `plugins.updater.pubkey`，私钥只存在于 GitHub secret 与本机 `~/.tauri/`，不入库。
 
-### 2. 手臂四参数进入标准参数表
+### 2. 手臂：参数声明 + 缺失的转动变形器
 
 `live2d_builder/blendshapes/parameters.py` 增加 `ParamArmLA/LB/RA/RB`
-（±30，量纲 1 单位 = 1 度，与 `ParamAngleZ` 一致）。实测（`sam2_gd` 分层，36 层）：
+（±30，量纲 1 单位 = 1 度，与 `ParamAngleZ` 一致）。
+
+只加参数还不够：`DEFAULT_ROTATION_DEFORMERS` 里当时只有 `HeadRotationZ`，手臂图层
+全被 `ShoulderLift_*` 占用（`claimed` 先到先得），没有任何 rotation 去转它们。
+本版新增 `ArmRotation_L/R`，做成**空成员的父级**（`under` 链转整棵子树），
+`ShoulderLift_*` 挂到它下面 —— 手臂三层仍共用同一条抬落 warp（拆开必在腕口裂缝），
+转动则在更上层整体带过去。这条「rotation 父 = warp」的边 2026-11-10 已用官方 Core
+逐像素验收过（见 `moc3_pipeline._cross_type_edge`）。
+
+实测（`sam2_gd`，36 层，官方内核逐像素比对）：
 
 ```
-手臂参数 ['ParamShoulderL', 'ParamShoulderR', 'ParamArmLA', 'ParamArmLB', 'ParamArmRA', 'ParamArmRB']
+bindings: ArmRotation_R rotation ['ParamArmRA']，ShoulderLift_R 的 parent = ArmRotation_R
+model3:   手臂参数 [ParamShoulderL, ParamShoulderR, ParamArmLA, ParamArmLB, ParamArmRA, ParamArmRB]
+死参数扫描: ParamArmRA 动了；ParamShoulderR 仍动（抬肩未被破坏）
+            ParamArmLB/RB 仍死（前臂未接线，见已知限制①）
+            ParamArmLA / ParamShoulderL 死是因为本图没有左臂
 ```
 
-但同一次导出的 `bindings.json` 里没有手臂 rotation 变形器，所以**参数存在 ≠ 手臂会动**，
-详见上方「已知限制」①。
+手臂图层不存在时 `ArmRotation_*` 不会创建（`requires_deformer`），不会留下
+「有滑块、拨了没画面」的空转条目。
 
 ### 3. 两处必挂的构建修复
 

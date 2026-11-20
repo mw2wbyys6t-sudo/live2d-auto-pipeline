@@ -32,19 +32,48 @@ def _build(names):
     return DeformerHierarchy().build({}, _meshes(names), layer_names=names)
 
 
-def test_real_layer_names_produce_only_the_head_rotation():
-    """真实层名下的 rotation 只有 ``HeadRotationZ``。
+def test_real_layer_names_produce_the_head_and_two_arm_rotations():
+    """真实层名下的 rotation 是 ``HeadRotationZ`` + 左右两条 ``ArmRotation_*``。
 
-    ``HeadRotationZ`` 没有直接成员网格，靠 ``under`` 链转整颗 HeadRig 子树，
-    所以它不依赖层名匹配 —— 真实层名下必须建出来。眼球跟随不是 rotation
-    变形器（由 ParamEyeBallX/Y 键形负责），默认表里也不该再有空转的条目。
+    ``HeadRotationZ`` / ``ArmRotation_*`` 都没有直接成员网格，靠 ``under`` 链转
+    各自子树，所以它们不依赖层名匹配 —— 真实层名下必须建出来。眼球跟随不是
+    rotation 变形器（由 ParamEyeBallX/Y 键形负责），默认表里也不该再有空转的条目。
     """
     out = _build(REAL_LAYER_NAMES)
     types = {d["name"]: d["type"] for d in out["deformers"]}
     assert types, "warp 变形器应当照常建出来"
     assert set(types.values()) == {"warp", "rotation"}, types
-    assert [n for n, t in types.items() if t == "rotation"] == ["HeadRotationZ"]
+    assert [n for n, t in types.items() if t == "rotation"] == [
+        "HeadRotationZ", "ArmRotation_L", "ArmRotation_R"]
     assert out["rotation_skipped"] == []
+
+
+def test_arm_rotation_is_the_parent_of_the_shoulder_lift():
+    """手臂转动必须挂在肩部抬落**上面**当父级，而不是去抢手臂成员。
+
+    手臂三层（上臂 / 袖口 / 手）刻意共用 ``ShoulderLift_*``（拆开会在腕口裂缝），
+    所以 rotation 只能靠 ``under`` 链旋转整棵子树。枢轴用 ``ArmBack_*`` 骨骼 ——
+    绑定阶段据此命中 ``ParamArmLA/RA``。
+    """
+    out = _build(REAL_LAYER_NAMES)
+    by_name = {d["name"]: d for d in out["deformers"]}
+    for side in ("L", "R"):
+        rot = by_name[f"ArmRotation_{side}"]
+        assert rot["type"] == "rotation"
+        assert rot["pivot_bone"] == f"ArmBack_{side}"
+        assert rot["targets"] == [], "抢成员会把腕口拉裂，成员仍归肩部抬落"
+        lift = by_name[f"ShoulderLift_{side}"]
+        assert lift["under"] == f"ArmRotation_{side}"
+
+
+def test_arm_rotation_is_not_built_without_the_arm_layers():
+    """没有手臂图层就不该建空转的 rotation：否则多一个「拨了没画面」的滑块。"""
+    out = _build(["hair_back", "face", "clothes_top"])
+    names = [d["name"] for d in out["deformers"]]
+    assert "ArmRotation_L" not in names and "ArmRotation_R" not in names
+    skipped = {d["name"]: d["reason"] for d in out["rotation_skipped"]}
+    assert set(skipped) == {"ArmRotation_L", "ArmRotation_R"}
+    assert "ShoulderLift_L" in skipped["ArmRotation_L"]
 
 
 def test_numeric_index_prefix_does_not_lose_warp_deformers():
@@ -93,7 +122,8 @@ def test_rotation_deformer_is_still_created_when_targets_really_exist(monkeypatc
     out = _build(REAL_LAYER_NAMES)
 
     rotation = [d for d in out["deformers"] if d["type"] == "rotation"]
-    assert [d["name"] for d in rotation] == ["HeadRotationZ", "ProbeRotation"]
+    assert [d["name"] for d in rotation] == [
+        "HeadRotationZ", "ArmRotation_L", "ArmRotation_R", "ProbeRotation"]
     assert out["rotation_skipped"] == []
     probe = next(d for d in rotation if d["name"] == "ProbeRotation")
     assert probe["targets"] == ["shoes_L"]
