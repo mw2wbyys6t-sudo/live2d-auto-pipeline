@@ -624,6 +624,9 @@ class WorkflowEngine:
             "part_count": scored["part_count"],
             "missing_parts": scored["missing_parts"],
             "explained_fraction": scored["explained_fraction"],
+            # 未被任何部件认领的区域（面积/占比/bbox）。只作证据：人工复核时
+            # 直接照着 bbox 去原图找「丢了哪一块」，不改闸门口径。
+            "unexplained_regions": scored.get("unexplained_regions"),
         }
         if not verdict["ok"]:
             log.warning(f"分层质量未达门槛（{scored['defect_count']} 条缺陷）："

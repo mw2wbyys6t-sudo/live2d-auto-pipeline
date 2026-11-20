@@ -106,8 +106,12 @@ PART_PROMPTS: Dict[str, str] = {
     "neck": "neck . throat",
     "clothes_top": "shirt . blouse . top . jacket",
     "clothes_bottom": "skirt . pants . shorts . trousers",
-    "arms": "arm . sleeve",
-    "hands": "hand . hands",
+    "arms": "arm . sleeve . bare arm . forearm",
+    # 张开的手掌需要显式提到手指/掌心：实测同一张图 ``hand . hands`` 只召回
+    # 持麦那只手，加上 ``open hand . palm . fingers`` 后才会框出另一侧张开的
+    # 手掌（box 368,288-427,363）。缺了它，那只手会被并进上衣层，manifest
+    # 只剩 ``arm:R`` 缺件，模型里也生不出手臂参数。
+    "hands": "hand . hands . open hand . palm . fingers",
     "legs": "leg . thigh . calf",
     # 长袜/鞋：不单列时白色长袜会被并进腿的皮肤、鞋子并进腿的下端，
     # 模型就没有可单独驱动的袜子层。
