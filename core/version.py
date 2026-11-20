@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Pygmalion Studio - Version information (single source of truth)"""
 
-__version__ = "0.10.11"
-__version_info__ = (0, 10, 11)
-__release_date__ = "2026-10-28"
-__codename__ = "GPU Aware"
+__version__ = "0.10.12"
+__version_info__ = (0, 10, 12)
+__release_date__ = "2026-11-21"
+__codename__ = "Auto Update"
 
 VERSION = __version__
 VERSION_STRING = f"v{__version__}"

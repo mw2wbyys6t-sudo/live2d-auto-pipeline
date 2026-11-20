@@ -82,6 +82,19 @@ STANDARD_PARAMETERS: List[Dict[str, Any]] = [
     {"id": "ParamTailSwing",   "name": "Tail Swing",  "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["tail"]},
     {"id": "ParamShoulderL",   "name": "Shoulder L",  "min": -1.0,  "max": 1.0,  "default": 0.0, "groups": ["body"]},
     {"id": "ParamShoulderR",   "name": "Shoulder R",  "min": -1.0,  "max": 1.0,  "default": 0.0, "groups": ["body"]},
+    # 手臂四参数（上臂 A / 前臂 B，左右各一），与官方标准参数同名同量纲。
+    #
+    # 为什么必须在这里声明：ROTATION_KEYFORM_PARAMS 已经按
+    # ArmBack_L/R、ForearmBack_L/R 写好了手臂的转动绑定，但
+    # _driving_rotation_parameter 是「先查 parameters_by_id 再绑定」——
+    # 参数没进标准表时查不到 spec，手臂变形器就永远绑不上参数，
+    # 拆出来的 arm_upper / arm_lower 图层全程静态（v0.10.11 实测：
+    # model3.json 里只有 ParamShoulderL/R，没有这四个）。
+    # 量纲：_DEGREES_PER_UNIT = 1，即 1 单位 = 1 度，与 ParamAngleZ 一致。
+    {"id": "ParamArmLA",       "name": "Arm L A",     "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["body", "arms"]},
+    {"id": "ParamArmLB",       "name": "Arm L B",     "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["body", "arms"]},
+    {"id": "ParamArmRA",       "name": "Arm R A",     "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["body", "arms"]},
+    {"id": "ParamArmRB",       "name": "Arm R B",     "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["body", "arms"]},
 ]
 
 

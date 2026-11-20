@@ -45,14 +45,17 @@ if exist "%DLL_FILE%" (
     echo [skip] onnxruntime.dll 已存在
 ) else (
     echo [download] 正在下载 ONNX Runtime DLL...
-    REM 必须与 ort crate 匹配：ort 2.0.0-rc.14 要求 ONNX Runtime >= 1.31.x
-    powershell -Command "$ProgressPreference = 'SilentlyContinue'; $url = 'https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-win-x64-1.31.0.zip'; $tmp = '$env:TEMP\onnxruntime.zip'; Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing; Expand-Archive -Path $tmp -DestinationPath '$env:TEMP\ort_extract' -Force; $dll = Get-ChildItem '$env:TEMP\ort_extract' -Recurse -Filter onnxruntime.dll | Select-Object -First 1; Copy-Item $dll.FullName '%DLL_FILE%' -Force; Remove-Item $tmp -Force; Remove-Item '$env:TEMP\ort_extract' -Recurse -Force"
+    REM ort 2.0.0-rc.14 的 ORT_API_VERSION = 17（即最低支持 ONNX Runtime 1.17），
+    REM 这里钉 1.30.0 与 scripts/build_desktop_bundle.py、download_deps.ps1 一致。
+    REM 注意：GitHub release 并未提供 win-x64 的 zip（v1.30.0/v1.31.0 实测 404），
+    REM 改从 NuGet 官方包取 win-x64/native/onnxruntime.dll（包里另有 arm64，不能递归找）。
+    powershell -Command "$ProgressPreference = 'SilentlyContinue'; $url = 'https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.30.0/microsoft.ml.onnxruntime.1.30.0.nupkg'; $tmp = Join-Path $env:TEMP 'onnxruntime.nupkg'; $ext = Join-Path $env:TEMP 'ort_extract'; Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing; Expand-Archive -Path $tmp -DestinationPath $ext -Force; Copy-Item (Join-Path $ext 'runtimes\win-x64\native\onnxruntime.dll') '%DLL_FILE%' -Force; Remove-Item $tmp -Force; Remove-Item $ext -Recurse -Force"
     if exist "%DLL_FILE%" (
         echo [ok] onnxruntime.dll 下载完成
     ) else (
         echo [error] ONNX Runtime DLL 下载失败！请手动下载：
-        echo        https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-win-x64-1.31.0.zip
-        echo        解压后将 onnxruntime.dll 放到: %DLL_FILE%
+        echo        https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.30.0/microsoft.ml.onnxruntime.1.30.0.nupkg
+        echo        解压后取 runtimes\win-x64\native\onnxruntime.dll 放到: %DLL_FILE%
     )
 )
 

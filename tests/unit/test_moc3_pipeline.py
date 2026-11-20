@@ -324,6 +324,33 @@ def test_arm_and_hair_deformers_bind_official_params(bone, pid):
     assert spec.static_deformers == []
 
 
+def test_real_standard_parameters_bind_the_arm_rotation_deformer():
+    """真实标准参数表必须能让手臂转动变形器绑上参数。
+
+    这是「手臂图层拆出来了但手臂不动」的直接回归点：绑定表
+    ``ROTATION_KEYFORM_PARAMS`` 里早有 ParamArmLA/LB/RA/RB，但
+    ``STANDARD_PARAMETERS`` 没声明它们 —— ``_driving_rotation_parameter`` 是
+    「先查 parameters_by_id 再绑定」，查不到就直接返回空，手臂变形器全程静态，
+    导出的 model3.json 里也只剩 ParamShoulderL/R（v0.10.11 实测）。
+    """
+    from live2d_builder.blendshapes.parameters import ParameterSet
+
+    params = [{"Id": p["id"], "Min": p["min"], "Max": p["max"], "Value": p["default"]}
+              for p in ParameterSet().values()]
+    for bone, pid in (("ArmBack_L", "ParamArmLA"), ("ForearmBack_L", "ParamArmLB"),
+                      ("ArmBack_R", "ParamArmRA"), ("ForearmBack_R", "ParamArmRB")):
+        px, py = _ARM_HAIR_BONES[bone]
+        result = _builder_result(
+            {"a": _mesh()},
+            deformers=[{"name": f"{bone}_d", "type": "rotation", "targets": ["a"],
+                        "pivot": [px, py], "angle": 0.0}],
+            params=params)
+        result["bone_positions"] = dict(_ARM_HAIR_BONES)
+        spec = build_rig_spec(result, {"a": _uv()})
+        assert spec.deformers[0].parameter_id == pid
+        assert spec.static_deformers == []
+
+
 _HEAD_PARAMS = [{"Id": "ParamAngleX", "Min": -30, "Max": 30, "Value": 0},
                 {"Id": "ParamAngleY", "Min": -30, "Max": 30, "Value": 0},
                 {"Id": "ParamAngleZ", "Min": -30, "Max": 30, "Value": 0}]

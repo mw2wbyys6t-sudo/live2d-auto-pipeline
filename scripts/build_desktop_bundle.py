@@ -123,11 +123,27 @@ ISNET_ANIME_URLS = (
     "download/v0.0.0/" + ISNET_ANIME_NAME,
 )
 
-ONNXRUNTIME_VERSION = "1.31.0"
-ONNXRUNTIME_URL = (
-    "https://github.com/microsoft/onnxruntime/releases/download/"
-    f"v{ONNXRUNTIME_VERSION}/onnxruntime-win-x64-{ONNXRUNTIME_VERSION}.zip"
+# 面捕 exe 以 load-dynamic 方式加载 exe 同目录的 onnxruntime.dll，因此必须随包。
+#
+# 下载源改用 NuGet 的 Microsoft.ML.OnnxRuntime（微软官方、版本化）：
+# 包里就是 runtimes/win-x64/native/onnxruntime.dll。
+# 此前钉的是 GitHub release 的
+#   .../releases/download/v1.31.0/onnxruntime-win-x64-1.31.0.zip
+# 该资产并不存在（实测 404；v1.30.0 同样 404）——官方 release 并未给
+# Windows x64 提供这个 zip，于是每次构建都在「装配运行时」阶段整条挂掉
+# （run 44768521668 / 44770816782 均止步 [4/5]）。
+# 版本与 native/face_tracker_cpp/download_deps.ps1 的 v1.30.0 保持一致。
+ONNXRUNTIME_VERSION = "1.30.0"
+ONNXRUNTIME_ARTIFACT = f"onnxruntime-{ONNXRUNTIME_VERSION}-win-x64.nupkg"
+ONNXRUNTIME_URLS = (
+    "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/"
+    f"{ONNXRUNTIME_VERSION}/microsoft.ml.onnxruntime.{ONNXRUNTIME_VERSION}.nupkg",
+    "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/"
+    f"{ONNXRUNTIME_VERSION}",
 )
+# NuGet 包里 x64 与 arm64 两个架构都有，必须显式取 x64：
+# 用 rglob("onnxruntime.dll") 会按目录名先命中 win-arm64。
+ONNXRUNTIME_INNER = Path("runtimes") / "win-x64" / "native" / "onnxruntime.dll"
 
 # MediaPipe Tasks 人脸关键点模型：mediapipe>=0.10.30 删除了经典 solutions API，
 # drivers/face_tracker 会在缺少 solutions 时改用 Tasks FaceLandmarker，需要此模型。
@@ -777,20 +793,20 @@ def main() -> int:
         copy_binary(Path(args.go_exe), dest / "live2d-api.exe", "Go 后端")
         copy_binary(Path(args.face_tracker_exe), dest / "face_tracker.exe", "原生面捕")
 
-        ort_zip = download(ONNXRUNTIME_URL,
-                           cache / f"onnxruntime-win-x64-{ONNXRUNTIME_VERSION}.zip",
-                           offline=offline)
+        ort_zip = download_any(ONNXRUNTIME_URLS,
+                               cache / ONNXRUNTIME_ARTIFACT,
+                               offline=offline)
         extract_dir = cache / f"ort-{ONNXRUNTIME_VERSION}"
-        dll = next(extract_dir.rglob("onnxruntime.dll"), None) \
-            if extract_dir.is_dir() else None
-        if dll is None:
+        dll = extract_dir / ONNXRUNTIME_INNER
+        if not dll.is_file():
             # 校验失败会删掉 dll 再退出；此时解压目录还在，必须重解压而不是报缺失。
             if extract_dir.is_dir():
                 shutil.rmtree(extract_dir)
             extract_zip(ort_zip, extract_dir)
-            dll = next(extract_dir.rglob("onnxruntime.dll"), None)
-        if dll is None:
-            sys.exit(f"❌ 在 {extract_dir} 中未找到 onnxruntime.dll")
+            dll = extract_dir / ONNXRUNTIME_INNER
+        if not dll.is_file():
+            sys.exit(f"❌ 在 {extract_dir} 中未找到 {ONNXRUNTIME_INNER}"
+                     "（NuGet 包布局变化？）")
         verify_hash(dll, hashes.get("onnxruntime-dll", ""), "onnxruntime-dll",
                     record, evict=ort_zip)
         dest.mkdir(parents=True, exist_ok=True)

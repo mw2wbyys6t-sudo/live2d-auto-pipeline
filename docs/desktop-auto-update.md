@@ -29,6 +29,9 @@ CI 构建时用私钥签名，仓库里只放公钥。私钥已在本机生成�
 > 没有这两个 secret 时，打 tag 会在「Prepare updater manifest」步骤失败并明确报错，
 > 不会静默产出一个装不上更新的包。
 
+> 普通 `main` 推送的构建会自动关掉 `createUpdaterArtifacts`（`--config` 覆盖），
+> 所以没配 secret 也能正常出安装包；只有 tag 构建才需要它。
+
 ## 发版步骤
 
 1. 同时把两个版本号改到同一个新版本（否则 `latest.json` 与安装包版本不一致）：

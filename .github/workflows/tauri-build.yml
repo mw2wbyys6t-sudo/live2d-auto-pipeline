@@ -185,8 +185,18 @@ jobs:
 
       - name: Build Tauri app + NSIS installer
         working-directory: desktop
-        run: cargo tauri build --bundles nsis --verbose
+        run: |
+          # 只有 tag 构建才需要 updater 产物（.nsis.zip + .sig）。main/dispatch
+          # 构建关掉 createUpdaterArtifacts，否则没配 TAURI_SIGNING_PRIVATE_KEY
+          # 时 tauri 会直接报错，把一次普通合并变成失败构建。
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            cargo tauri build --bundles nsis --verbose
+          } else {
+            cargo tauri build --bundles nsis --verbose --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          }
+          exit $LASTEXITCODE
         env:
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
           # 自动更新签名：私钥只存在于仓库 secret，公钥在 tauri.conf.json 的
           # plugins.updater.pubkey。没有私钥时 createUpdaterArtifacts 会失败，
           # 因此这里必须提供；密钥丢失则已发布版本无法再被更新（需换新公钥）。
