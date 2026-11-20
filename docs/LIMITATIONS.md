@@ -104,6 +104,12 @@
   见 `tests/unit/test_deformer_hierarchy_rotation.py`。
   眼球的跟随实际由 `eye_track_keyforms`（`ParamEyeBallX/Y` 双轴 + `Eyeball_L/R` 权重
   → 眼白/虹膜）承担 —— 那是平移而非旋转，用 rotation 变形器语义本就不对。
+- **前臂转动（`ParamArmLB/RB`）仍是死参数**。上臂已可用：`ArmRotation_L/R`（空成员的
+  rotation，绕 `ArmBack_*`）作为 `ShoulderLift_*` 的**父级**转整条手臂链，
+  2026-11-21 实测 `ParamArmRA` 在官方内核下逐像素生效、`ParamShoulderR` 抬肩未被破坏。
+  前臂要生效必须把小臂 / 袖口 / 手从 `ShoulderLift_*` 里拆出来另挂一条 rotation，
+  而拆开正是「腕口被拉开 38px、袖口/手位移 0px」那条实测事故的成因
+  （见 `deformers.py` 中 `ShoulderLift_*` 的注释），属独立绑骨改动。
 - **warp 变形器**已可编译并过官方内核 + 逐像素验收。
 - **网格键形（逐顶点键形带）已开启**（`moc3_pipeline.MESH_KEYFORMS_ENABLED = True`），
   保留为急停开关。曾经整体关闭的现象是：模型里有 ≥2 个网格带键形时，官方 Cubism Core 在
