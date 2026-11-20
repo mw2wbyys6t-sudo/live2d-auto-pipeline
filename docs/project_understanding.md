@@ -197,7 +197,7 @@ tauri-build.yml 仅 bundle `desktop/bin/*`（live2d-api.exe + face_tracker.exe�
 - `live2d_py-0.8.1-cp311-abi3-win_amd64.whl`（0.64MB，包装层 MIT；内置 Cubism Core 为 Live2D 专有）PyPI 200，含完整 live2d/v3（`_v3cpp.pyd`+`_common.dll`+shaders），API 面与 verify.py 吻合；
 - `live2d_py-1.0.0-cp311-abi3-win_amd64.whl`（0.45MB）存在但**无 live2d.v3 模块**，不兼容本仓库验收链（§4.1）；
 - python.org FTP：`python-3.12.10-embed-amd64.zip` 200（11.1MB）；3.12.11+ 已从 FTP 下架（404），**基础包钉 3.12.10**；
-- YuNet `face_detection_yunet_2023mar.onnx`（opencv_zoo raw）与 onnxruntime-win-x64-1.31.0.zip（ort rc.14 要求 ≥1.31）URL 见 download_models.bat，P0 脚本加 SHA256。
+- YuNet `face_detection_yunet_2023mar.onnx`（opencv_zoo raw）URL 见 download_models.bat，P0 脚本加 SHA256；`onnxruntime.dll` 取自 NuGet `Microsoft.ML.OnnxRuntime/1.30.0` 的 `runtimes/win-x64/native/`（GitHub release 未提供 win-x64 zip，v1.30.0/v1.31.0 均 404；ort rc.14 的 `ORT_API_VERSION = 17`，即最低支持 1.17，1.30.0 满足）。
 
 ## 9. P0 设计决策预告（详见 P0 ADR）
 

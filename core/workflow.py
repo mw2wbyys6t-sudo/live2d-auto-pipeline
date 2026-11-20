@@ -19,7 +19,7 @@ import time
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, List, Union
+from typing import Optional, Dict, Any, Callable, List, Union, Tuple
 
 from PIL import Image, ImageFilter
 import numpy as np

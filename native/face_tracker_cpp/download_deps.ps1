@@ -82,14 +82,18 @@ if (Test-Path $dllDest) {
         Copy-Item $pipDll $dllDest -Force
         Write-Host '[ok] onnxruntime.dll (copied from local pip package)'
     } else {
-        Write-Host '[download] onnxruntime.dll (official zip, large)...'
-        $tmp = Join-Path $env:TEMP 'onnxruntime_cpp.zip'
+        Write-Host '[download] onnxruntime.dll (NuGet package)...'
+        # GitHub release 没有提供 win-x64 的 zip（v1.30.0 / v1.31.0 实测都是 404），
+        # 改从 NuGet 官方包取：Microsoft.ML.OnnxRuntime 是 nupkg（本质是 zip），
+        # 里面 runtimes/win-x64/native/onnxruntime.dll 就是 CPU 版运行时。
+        # 注意必须显式取 win-x64：包里同时有 win-arm64，递归找会先命中 arm64。
+        $tmp = Join-Path $env:TEMP 'onnxruntime_cpp.nupkg'
         $ext = Join-Path $env:TEMP 'ort_extract_cpp'
         try {
-            Invoke-WebRequest -Uri 'https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-win-x64-1.30.0.zip' -OutFile $tmp -UseBasicParsing
+            Invoke-WebRequest -Uri 'https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.30.0/microsoft.ml.onnxruntime.1.30.0.nupkg' -OutFile $tmp -UseBasicParsing
             Expand-Archive -Path $tmp -DestinationPath $ext -Force
-            $dll = Get-ChildItem $ext -Recurse -Filter onnxruntime.dll | Select-Object -First 1
-            Copy-Item $dll.FullName $dllDest -Force
+            $dll = Join-Path $ext 'runtimes\win-x64\native\onnxruntime.dll'
+            Copy-Item $dll $dllDest -Force
             Write-Host '[ok] onnxruntime.dll'
         } catch {
             Write-Host "[error] onnxruntime.dll failed: $($_.Exception.Message)"
