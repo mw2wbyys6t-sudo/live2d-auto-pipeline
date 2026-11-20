@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Pygmalion Studio",
-  "version": "0.10.11",
+  "version": "0.10.12",
   "identifier": "com.pygmalion.studio",
   "build": {
     "frontendDist": "dist"
@@ -23,6 +23,7 @@
     ],
     "resources": { "bundle/": "" },
     "externalBin": [],
+    "createUpdaterArtifacts": true,
     "copyright": "Copyright (c) 2026 Pygmalion",
     "category": "DeveloperTool",
     "shortDescription": "AI-powered Live2D character creation pipeline",
@@ -33,6 +34,17 @@
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": true
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU2MjBCNTMwNzBBNzBFQjQKUldTMERxZHdNTFVnVnM0akIveDcxblQways3VXRjYzhmMEZLNVFxTFB0Y2JtdVFkcmhzc2lEWHYK",
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

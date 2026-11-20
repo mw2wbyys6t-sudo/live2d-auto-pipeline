@@ -1,0 +1,2 @@
+# 装配产物占位。`scripts/build_desktop_bundle.py` 会往这里放嵌入式运行时；
+# tauri.conf.json 的 resources {"bundle/": ""} 要求该目录在构建期存在。
