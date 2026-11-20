@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pygmalion Studio v0.10.11 - One-Click Installer
+Pygmalion Studio v0.10.12 - One-Click Installer
 
 Usage:
     python install.py              # Full install (core + desktop pet)
@@ -143,7 +143,7 @@ class InstallState:
 def print_header():
     print(f"""
 {C.CYAN}{C.BOLD}╔══════════════════════════════════════════════════════════╗
-║       🎭 Pygmalion Studio v0.10.11 - Installer      ║
+║       🎭 Pygmalion Studio v0.10.12 - Installer      ║
 ║       AI Character → Live2D Model → Desktop Pet          ║
 ╚══════════════════════════════════════════════════════════╝{C.RESET}
 """)

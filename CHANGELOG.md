@@ -4,6 +4,80 @@
 
 ---
 
+## [v0.10.12] — 2026-11-21 — 装一次就不用再手动升级
+
+> 本节只写**已经当场实测成立**的事，以及**明确还没成立**的事。
+>
+> **主线**：桌面端接入 Tauri 官方 updater。启动后后台检查 GitHub Release 的
+> `latest.json`，版本更高就下载、用内置公钥验签、安装并重启；任何失败只写 stderr，
+> 不影响主程序启动。发版链路同时打通：推 tag → CI 构建 NSIS → 产出 `.nsis.zip` /
+> `.sig` / `latest.json` 并挂到该 Release。
+>
+> **分层侧**：`ParamArmLA/LB/RA/RB` 以前只写在绑定表 `ROTATION_KEYFORM_PARAMS` 里，
+> 没进标准参数表。绑定逻辑是「先查参数表再绑」，查不到就静默跳过 —— 于是手臂即使
+> 拆成独立图层也永远不会被驱动。本版把四个参数声明进标准表。
+>
+> **CI**：修掉两处让构建必挂的问题（第 3 节）：`core/workflow.py` 缺 `Tuple` 导入，
+> 3.11/3.12 在收集期就 NameError（本机 3.14 的惰性注解把它藏住了）；
+> 装配运行时依赖的 onnxruntime GitHub zip 资产根本不存在（404），改用 NuGet 官方包。
+>
+> **已知限制（本版未成立）**：① 手臂四参数已声明、`model3.json` 里已出现并可作为
+> 滑块驱动，但**手臂的 rotation 变形器仍未创建** —— 实测导出的 `bindings.json`
+> 14 条变形器里没有 `ArmRotation_*`，所以拖动 `ParamArmLA` 手臂依然不动。补齐它需要
+> 先把「肩部抬落 warp」改成无直接成员的父级（按子树取范围），是一次独立的绑骨改动；
+> ② 分层质量门仍把 amodal 补全造成的层间覆盖记成 defect（判定口径之争，非本版引入）。
+>
+> **打包状态**：本版安装包由 CI 在 tag 构建时产出，本机未验证安装。
+
+### 1. 桌面端：启动即检查更新
+
+`desktop/src/lib.rs` 新增 `check_for_updates`，在 `setup` 末尾用
+`tauri::async_runtime::spawn` 起一个后台任务：
+
+1. 读 `plugins.updater.endpoints` 的 `latest.json`（`releases/latest/download/…`）；
+2. 比版本，本地不低就直接返回；
+3. 高则 `download_and_install` → `app.restart()`。
+
+后台是真的后台：后端等待、窗口创建、启动页轮询都不受它影响；网络超时或验签失败
+只打一行 `[updater] …`。签名公钥在 `desktop/tauri.conf.json` 的
+`plugins.updater.pubkey`，私钥只存在于 GitHub secret 与本机 `~/.tauri/`，不入库。
+
+### 2. 手臂四参数进入标准参数表
+
+`live2d_builder/blendshapes/parameters.py` 增加 `ParamArmLA/LB/RA/RB`
+（±30，量纲 1 单位 = 1 度，与 `ParamAngleZ` 一致）。实测（`sam2_gd` 分层，36 层）：
+
+```
+手臂参数 ['ParamShoulderL', 'ParamShoulderR', 'ParamArmLA', 'ParamArmLB', 'ParamArmRA', 'ParamArmRB']
+```
+
+但同一次导出的 `bindings.json` 里没有手臂 rotation 变形器，所以**参数存在 ≠ 手臂会动**，
+详见上方「已知限制」①。
+
+### 3. 两处必挂的构建修复
+
+- `core/workflow.py` 的 `-> Tuple[int, int]` 少了 `Tuple` 导入。Python 3.14 默认惰性
+  求值注解，所以本机全绿；CI 的 3.11/3.12 在 `class WorkflowEngine` 创建时求值，
+  直接 `NameError`，连带 7 个测试文件收集失败（`CI/CD Pipeline` 红）。
+- 装配安装包运行时要从 GitHub release 下 `onnxruntime-win-x64-1.31.0.zip` ——
+  该资产不存在（实测 1.30.0/1.31.0 都是 404），`Tauri Desktop Build` 每次止步
+  「Assemble desktop runtime bundle」。改从 NuGet `Microsoft.ML.OnnxRuntime/1.30.0`
+  取 `runtimes/win-x64/native/onnxruntime.dll`，并更新 `scripts/windows/hashes.json`
+  的 SHA256 锁定；`download_models.bat` 与 `download_deps.ps1` 的失效链接一并改掉。
+  （`ort 2.0.0-rc.14` 的 `ORT_API_VERSION = 17`，最低只需要 ONNX Runtime 1.17。）
+
+### 4. 发版流程
+
+版本号唯一真源仍是 `core/version.py`，其余位置由 `tests/unit/test_release_version_single_source.py`
+逐条对撞（本轮已同步 `api_server.py` / `api/handlers/handlers.go` / `web/package.json` /
+`desktop/Cargo.toml` / `desktop/tauri.conf.json` / `desktop/Cargo.lock` / `install.py`）。
+
+发版：`git tag v0.10.12 && git push origin v0.10.12`。只有 tag 构建会签名并生成
+`latest.json`；普通 `main` 构建用 `--config` 关掉 `createUpdaterArtifacts`，
+所以在没配签名私钥的仓库里也能出安装包。
+
+---
+
 ## [v0.10.11] — 2026-11-02 — 自研渲染：导出的模型在浏览器里真的动
 
 > 本节只写**已经当场实测成立**的事，以及**明确还没成立**的事。

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.11-ff69b4?style=flat-square" alt="version"></a>
+  <a href="https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases"><img src="https://img.shields.io/badge/version-0.10.12-ff69b4?style=flat-square" alt="version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="license"></a>
   <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square" alt="platform">
   <img src="https://img.shields.io/badge/Python-3.11+-blue?style=flat-square" alt="python">
@@ -37,7 +37,7 @@
 
 ## 快速开始
 
-1. 打开 [Releases](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases)，下载 `Pygmalion.Studio_0.10.11_x64-setup.exe`
+1. 打开 [Releases](https://github.com/mw2wbyys6t-sudo/live2d-auto-pipeline/releases)，下载 `Pygmalion.Studio_0.10.12_x64-setup.exe`
 2. 安装后从开始菜单启动
 3. 输入一句角色描述，依次完成 **生成 → 分层 → 预览 → 导出**
 
