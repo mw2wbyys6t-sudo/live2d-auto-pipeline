@@ -198,4 +198,7 @@ desktop/bin/*
 # Tauri 打包装配目录（由 scripts/build_desktop_bundle.py 生成：嵌入式 Python +
 # site-packages + 源码树 + exe/dll/模型，多 GB，绝不入库）。
 # tauri.conf.json 用 resources map 形式 {"bundle/": ""} 读取此目录。
-desktop/bundle/
+# 但 `resources` 在编译期就会被校验，目录缺失时 cargo build 直接失败，
+# 因此与 desktop/bin 同样用「忽略内容 + 保留占位」的写法。
+desktop/bundle/*
+!desktop/bundle/.gitkeep

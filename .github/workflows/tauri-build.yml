@@ -186,6 +186,12 @@ jobs:
       - name: Build Tauri app + NSIS installer
         working-directory: desktop
         run: cargo tauri build --bundles nsis --verbose
+        env:
+          # 自动更新签名：私钥只存在于仓库 secret，公钥在 tauri.conf.json 的
+          # plugins.updater.pubkey。没有私钥时 createUpdaterArtifacts 会失败，
+          # 因此这里必须提供；密钥丢失则已发布版本无法再被更新（需换新公钥）。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       # 签名 Tauri 壳与最终 NSIS 安装包（用户实际双击的就是这个 setup.exe）。
       - name: Sign installer and app shell (no-op unless configured)
@@ -264,10 +270,64 @@ jobs:
           "path=$($f.FullName)" >> $env:GITHUB_OUTPUT
           "name=$($f.Name)" >> $env:GITHUB_OUTPUT
 
+      # 生成自动更新清单。桌面端的 updater 拉取
+      # releases/latest/download/latest.json，比对 version 后下载对应平台的包，
+      # 并用 tauri.conf.json 里的 pubkey 校验签名。版本号以 tauri.conf.json 为准：
+      # 用户那边的自动更新只会「升到更高版本」，所以发版前必须把这里与
+      # desktop/Cargo.toml 的 version 一起改。
+      - name: Prepare updater manifest (latest.json)
+        if: startsWith(github.ref, 'refs/tags/')
+        id: upd
+        shell: pwsh
+        run: |
+          $bundleDir = 'desktop/target/release/bundle/nsis'
+          # 优先 updater 专用的 .nsis.zip（体积小、官方用于增量更新），
+          # 老版本 tauri 只产出 setup.exe.sig，这里两种都认。
+          $zip = Get-ChildItem "$bundleDir/*.nsis.zip" -ErrorAction SilentlyContinue |
+                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($zip) {
+            $sigPath = "$($zip.FullName).sig"
+            $artifact = $zip
+          } else {
+            $artifact = Get-ChildItem "$bundleDir/*-setup.exe" |
+                        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            $sigPath = "$($artifact.FullName).sig"
+          }
+          if (-not $artifact) { Write-Error '未找到可更新的安装包产物'; exit 1 }
+          if (-not (Test-Path $sigPath)) {
+            Write-Error "缺少签名文件：$sigPath（TAURI_SIGNING_PRIVATE_KEY 未配置？）"
+            exit 1
+          }
+          $version = (Get-Content desktop/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($artifact.Name)"
+          $manifest = [ordered]@{
+            version   = $version
+            notes     = "Pygmalion Studio $version"
+            pub_date  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            platforms = [ordered]@{
+              'windows-x86_64' = [ordered]@{
+                signature = (Get-Content $sigPath -Raw).Trim()
+                url       = $url
+              }
+            }
+          }
+          $out = Join-Path $bundleDir 'latest.json'
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $out -Encoding utf8
+          Write-Host "updater artifact: $($artifact.Name)"
+          Write-Host "latest.json version: $version"
+          "artifact=$($artifact.FullName)" >> $env:GITHUB_OUTPUT
+          "signature=$sigPath" >> $env:GITHUB_OUTPUT
+          "manifest=$out" >> $env:GITHUB_OUTPUT
+
       - name: Attach installer to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ github.ref_name }}
-          files: ${{ steps.nsis.outputs.path }}
+          # setup.exe 给人手动安装；.nsis.zip + .sig + latest.json 给自动更新。
+          files: |
+            ${{ steps.nsis.outputs.path }}
+            ${{ steps.upd.outputs.artifact }}
+            ${{ steps.upd.outputs.signature }}
+            ${{ steps.upd.outputs.manifest }}
           fail_on_unmatched_files: true

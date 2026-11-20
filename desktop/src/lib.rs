@@ -194,10 +194,35 @@ fn backend_error(state: tauri::State<AppState>) -> Option<String> {
     state.backend_error.lock().unwrap().clone()
 }
 
+/// 启动后静默检查更新；有新版则下载安装并重启。
+///
+/// 更新是增强项，任何失败都只记日志，绝不影响主程序启动（`setup` 里是
+/// spawn 出去的，连网络超时都不会卡住启动页）。
+async fn check_for_updates(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| e.to_string())?;
+    let Some(update) = update else {
+        return Ok(());
+    };
+
+    eprintln!("[updater] 发现新版本 {}，开始下载", update.version);
+    update
+        .download_and_install(|_chunk, _total| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
+    // 安装完成即重启到新版本，用户不需要手动退出。
+    app.restart();
+    #[allow(unreachable_code)]
+    Ok(())
+}
+
 pub fn run() {
     let already_running = is_backend_online();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             backend: Mutex::new(None),
             backend_error: Mutex::new(None),
@@ -259,6 +284,16 @@ pub fn run() {
                     }));
                 }
             }
+
+            // 自动更新：后台检查，不阻塞窗口与后端就绪流程。
+            // 注意用 app.handle() 而不是上面那个 handle —— 后者已被后端等待线程
+            // move 走（E0382）。
+            let updater_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = check_for_updates(updater_handle).await {
+                    eprintln!("[updater] 检查更新失败: {err}");
+                }
+            });
 
             Ok(())
         })
