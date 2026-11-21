@@ -63,6 +63,12 @@ ROTATION_KEYFORM_PARAMS: Dict[str, Dict[str, Any]] = {
     "ParamArmLB": {"pivot": "ForearmBack_L", "groups": {"arms"}},
     "ParamArmRA": {"pivot": "ArmBack_R", "groups": {"arms"}},
     "ParamArmRB": {"pivot": "ForearmBack_R", "groups": {"arms"}},
+    # 腿部：髋(LA/RA) 与 膝(LB/RB)。官方标准参数表没有腿部转动，命名沿用本仓库
+    # 的手臂约定。**不进网格路径**（没有 "mesh": True）：腿由 rotation 变形器承担。
+    "ParamLegLA": {"pivot": "Leg_L", "groups": {"legs"}},
+    "ParamLegLB": {"pivot": "Calf_L", "groups": {"legs"}},
+    "ParamLegRA": {"pivot": "Leg_R", "groups": {"legs"}},
+    "ParamLegRB": {"pivot": "Calf_R", "groups": {"legs"}},
     # 头发：官方三参数（前/侧/后）。呆毛(Hair_Top)归入前发组 —— 这是命名约定，
     # 不是格式推断；左右侧发共用 ParamHairSide。
     "ParamHairFront": {"pivots": ("Hair_Front", "Hair_Top"), "groups": {"hair"}},

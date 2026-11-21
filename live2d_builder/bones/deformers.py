@@ -1014,10 +1014,43 @@ class DeformerHierarchy:
         "requires_deformer": "ShoulderLift_R",
     }
 
+    #: 腿部两节转动：髋（Leg_*）与膝（Calf_*）。
+    #:
+    #: 与手臂不同，腿部图层此前**不属于任何变形器**（默认表里没有任何 warp 抢
+    #: thigh/calf/sock/boot），所以这里可以直接带成员，不需要「空成员父级」那套：
+    #:   ``LegRotation_L``（髋）→ ``LegLowerRotation_L``（膝，under 髋）
+    #: 髋转时整条腿跟着走，膝转只动小腿及以下 —— 走路/屈膝这类动作才成立。
+    #:
+    #: 参数绑定同样靠枢轴命中：Leg_L → ``ParamLegLA``、Calf_L → ``ParamLegLB``。
+    LEG_ROTATION_L: Dict = {
+        "name": "LegRotation_L", "parent": "Leg_L", "type": "rotation",
+        "pivot_bone": "Leg_L", "targets": ["leg_upper_L", "thigh_L", "leg_L"],
+    }
+    LEG_LOWER_ROTATION_L: Dict = {
+        "name": "LegLowerRotation_L", "parent": "Calf_L", "type": "rotation",
+        "pivot_bone": "Calf_L", "under": "LegRotation_L",
+        "targets": ["leg_lower_L", "calf_L", "sock_L", "stocking_L",
+                    "boot_L", "shoes_L", "foot_L"],
+    }
+    LEG_ROTATION_R: Dict = {
+        "name": "LegRotation_R", "parent": "Leg_R", "type": "rotation",
+        "pivot_bone": "Leg_R", "targets": ["leg_upper_R", "thigh_R", "leg_R"],
+    }
+    LEG_LOWER_ROTATION_R: Dict = {
+        "name": "LegLowerRotation_R", "parent": "Calf_R", "type": "rotation",
+        "pivot_bone": "Calf_R", "under": "LegRotation_R",
+        "targets": ["leg_lower_R", "calf_R", "sock_R", "stocking_R",
+                    "boot_R", "shoes_R", "foot_R"],
+    }
+
     DEFAULT_ROTATION_DEFORMERS: List[Dict] = [
         HEAD_ROTATION,
         ARM_ROTATION_L,
         ARM_ROTATION_R,
+        LEG_ROTATION_L,
+        LEG_LOWER_ROTATION_L,
+        LEG_ROTATION_R,
+        LEG_LOWER_ROTATION_R,
     ]
 
     def __init__(self) -> None:

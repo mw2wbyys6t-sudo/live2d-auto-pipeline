@@ -68,6 +68,17 @@ model3:   手臂参数 [ParamShoulderL, ParamShoulderR, ParamArmLA, ParamArmLB, 
 手臂图层不存在时 `ArmRotation_*` 不会创建（`requires_deformer`），不会留下
 「有滑块、拨了没画面」的空转条目。
 
+**腿部关节（本版新增）**：此前腿部图层不属于任何变形器，走路/屈膝在结构上就不可能。
+现在补了两节链：`LegRotation_L/R`（髋，枢轴 `Leg_*`）→ `LegLowerRotation_L/R`
+（膝，枢轴 `Calf_*`，`under` 髋）。参数为 `ParamLegLA/LB/RA/RB`（±30，1 单位 = 1 度）。
+腿部图层不存在时四条 rotation 不创建（走 `rotation_skipped` 并带原因），半身像不会
+多出空转滑块。
+
+这里踩到了与手臂同一类、但是**另一层**的坑：参数进了标准表还不够，
+`moc3_pipeline.ROTATION_KEYFORM_PARAMS` 里也必须有「枢轴 → 参数」的映射。
+实测只加参数与变形器时，四条腿部 rotation 的 `axes` 全是空（静态）；补上映射后
+`bindings.json` 才变成 `LegRotation_L → ParamLegLA` 等四条。
+
 ### 3. 两处必挂的构建修复
 
 - `core/workflow.py` 的 `-> Tuple[int, int]` 少了 `Tuple` 导入。Python 3.14 默认惰性
@@ -108,6 +119,33 @@ FOSSA 的三个 status check 长期红叉，但根因是 **Free 计划 + 内置
 > 注意：扫描关闭只改变上报深度，不代表那 64/3/2 条被「修好」了。日后升级到可自定义
 > 策略的计划后，重新打开扫描并按 [fossa-agpl3-review.md](docs/fossa-agpl3-review.md)
 > 逐条处置即可恢复。
+
+### 6. 动作库：加上挥手与走路
+
+出厂动作此前只有 `idle / nod / look / talk`，全部只动头、躯干、眼、嘴 —— 这也是
+「人物做不出复杂动作」的直接原因。本版补了两组：
+
+| 组 | 循环 | 驱动 |
+| --- | --- | --- |
+| `wave` | 否（收尾回静止值） | `ParamArmRA` + `ParamShoulderR` + 头/身体微侧 + 一次眨眼 |
+| `walk` | 是（首尾同值） | `ParamLegLA/RB` 髋反相摆动 + `ParamLegLB/RB` 膝盖 + 躯干起伏 + 手臂反向摆 |
+
+两组都带 `requires` 守卫：依赖的关节参数**没有真键形**时整组不产出。这样半身像
+不会得到一份「名字叫 walk、画面只有躯干在晃」的假动作 —— 与 `motion3.py` 文件头
+「参数缺失的组直接跳过」的原则一致。
+
+实测（`sam2_gd`，36 层，同一张立绘）导出目录从 4 个动作变成 6 个：
+`idle / look / nod / talk / walk / wave`；死参数扫描从「46 个里动 24 个」变成
+**「46 个里动 30 个」**，新增可动的正是 `ParamEyeLOpen/ROpen`（探针修正后）
+与 `ParamLegLA/LB/RA/RB`（髋/膝绑定）。仍不动的 16 个全部是「本图没有那份画」：
+眉毛 6、独立发束 4、兽耳/尾巴 2、左臂 3、右前臂 1（见已知限制①）。
+
+### 7. 死参数探针的误判
+
+`tools/probe_dead_parameters.py` 以前一律把参数推到 `max`。`ParamEyeLOpen` 是
+min 0 / max 1 / default 1，推到 max 等于没动 —— 于是眼睑开合被报成死参数。
+现在取**离静止值最远**的那个极值，键形退化成单点（min==max==default）时跳过而不是
+判死。`tests/unit/test_probe_dead_parameters.py` 锁住这四种情形。
 
 ---
 

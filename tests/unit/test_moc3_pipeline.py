@@ -351,6 +351,33 @@ def test_real_standard_parameters_bind_the_arm_rotation_deformer():
         assert spec.static_deformers == []
 
 
+def test_real_standard_parameters_bind_the_leg_rotation_deformer():
+    """腿部髋/膝也要按枢轴绑上 ParamLegLA/LB/RA/RB。
+
+    与手臂同一个坑、但是另一层：参数进了标准表还不行，``ROTATION_KEYFORM_PARAMS``
+    里也必须有一条「枢轴 → 参数」的映射，否则 ``_driving_rotation_parameter``
+    根本不会考虑这个参数。2026-11-21 实测：只加参数与变形器时，四条腿部 rotation
+    的 ``axes`` 全是空（静态），补上映射后才绑上。
+    """
+    from live2d_builder.blendshapes.parameters import ParameterSet
+
+    params = [{"Id": p["id"], "Min": p["min"], "Max": p["max"], "Value": p["default"]}
+              for p in ParameterSet().values()]
+    bones = {"Leg_L": (-30.0, 240.0), "Calf_L": (-30.0, 340.0),
+             "Leg_R": (30.0, 240.0), "Calf_R": (30.0, 340.0)}
+    for bone, pid in (("Leg_L", "ParamLegLA"), ("Calf_L", "ParamLegLB"),
+                      ("Leg_R", "ParamLegRA"), ("Calf_R", "ParamLegRB")):
+        px, py = bones[bone]
+        result = _builder_result(
+            {"a": _mesh()},
+            deformers=[{"name": f"{bone}_d", "type": "rotation", "targets": ["a"],
+                        "pivot": [px, py], "angle": 0.0}],
+            params=params)
+        result["bone_positions"] = dict(bones)
+        spec = build_rig_spec(result, {"a": _uv()})
+        assert spec.deformers[0].parameter_id == pid
+
+
 _HEAD_PARAMS = [{"Id": "ParamAngleX", "Min": -30, "Max": 30, "Value": 0},
                 {"Id": "ParamAngleY", "Min": -30, "Max": 30, "Value": 0},
                 {"Id": "ParamAngleZ", "Min": -30, "Max": 30, "Value": 0}]

@@ -110,6 +110,10 @@
   前臂要生效必须把小臂 / 袖口 / 手从 `ShoulderLift_*` 里拆出来另挂一条 rotation，
   而拆开正是「腕口被拉开 38px、袖口/手位移 0px」那条实测事故的成因
   （见 `deformers.py` 中 `ShoulderLift_*` 的注释），属独立绑骨改动。
+- **腿部关节（髋/膝）已接上**（2026-11-21）：`LegRotation_L/R`（枢轴 `Leg_*`）→
+  `LegLowerRotation_L/R`（枢轴 `Calf_*`，`under` 髋），参数 `ParamLegLA/LB/RA/RB`。
+  此前腿部图层不属于任何变形器，走路/屈膝在结构上不可能。半身像没有腿图层时
+  四条 rotation 不创建，`rotation_skipped` 会带原因。
 - **warp 变形器**已可编译并过官方内核 + 逐像素验收。
 - **网格键形（逐顶点键形带）已开启**（`moc3_pipeline.MESH_KEYFORMS_ENABLED = True`），
   保留为急停开关。曾经整体关闭的现象是：模型里有 ≥2 个网格带键形时，官方 Cubism Core 在

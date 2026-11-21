@@ -32,20 +32,51 @@ def _build(names):
     return DeformerHierarchy().build({}, _meshes(names), layer_names=names)
 
 
-def test_real_layer_names_produce_the_head_and_two_arm_rotations():
-    """真实层名下的 rotation 是 ``HeadRotationZ`` + 左右两条 ``ArmRotation_*``。
+def test_real_layer_names_produce_head_arm_and_leg_rotations():
+    """真实层名下的 rotation：头 + 双臂 + 双腿（髋/膝各一节）。
 
-    ``HeadRotationZ`` / ``ArmRotation_*`` 都没有直接成员网格，靠 ``under`` 链转
-    各自子树，所以它们不依赖层名匹配 —— 真实层名下必须建出来。眼球跟随不是
-    rotation 变形器（由 ParamEyeBallX/Y 键形负责），默认表里也不该再有空转的条目。
+    ``HeadRotationZ`` / ``ArmRotation_*`` 没有直接成员网格，靠 ``under`` 链转
+    各自子树；``LegRotation_*`` / ``LegLowerRotation_*`` 直接带成员（腿部图层
+    本来就不属于任何 warp）。它们都不依赖层名匹配的「空成员」技巧，所以真实层名
+    下必须建出来。眼球跟随不是 rotation 变形器（由 ParamEyeBallX/Y 键形负责）。
     """
     out = _build(REAL_LAYER_NAMES)
     types = {d["name"]: d["type"] for d in out["deformers"]}
     assert types, "warp 变形器应当照常建出来"
     assert set(types.values()) == {"warp", "rotation"}, types
     assert [n for n, t in types.items() if t == "rotation"] == [
-        "HeadRotationZ", "ArmRotation_L", "ArmRotation_R"]
+        "HeadRotationZ", "ArmRotation_L", "ArmRotation_R",
+        "LegRotation_L", "LegLowerRotation_L", "LegRotation_R", "LegLowerRotation_R"]
     assert out["rotation_skipped"] == []
+
+
+def test_leg_rotations_are_chained_hip_then_knee():
+    """髋转带动整条腿，膝转只动小腿及以下 —— 走路/屈膝才能在一条链上成立。
+
+    腿部图层此前不属于任何变形器，所以这里可以直接带成员（不像手臂要躲开
+    肩部抬落 warp）。枢轴取 ``Leg_*`` / ``Calf_*``，绑定阶段据此命中
+    ``ParamLegLA/LB`` 与 ``ParamLegRA/RB``。
+    """
+    out = _build(REAL_LAYER_NAMES)
+    by_name = {d["name"]: d for d in out["deformers"]}
+    for side in ("L", "R"):
+        hip = by_name[f"LegRotation_{side}"]
+        knee = by_name[f"LegLowerRotation_{side}"]
+        assert hip["pivot_bone"] == f"Leg_{side}"
+        assert knee["pivot_bone"] == f"Calf_{side}"
+        assert knee["under"] == f"LegRotation_{side}"
+        # 成员不重叠：大腿归髋、小腿及以下归膝
+        assert set(hip["targets"]).isdisjoint(knee["targets"])
+
+
+def test_leg_rotations_are_skipped_when_leg_layers_are_missing():
+    """半身像（没有腿）不该产出四条空转的腿部 rotation。"""
+    out = _build(["hair_back", "face", "clothes_top", "arm_L", "arm_R"])
+    names = [d["name"] for d in out["deformers"]]
+    assert not [n for n in names if n.startswith("Leg")]
+    skipped = {d["name"] for d in out["rotation_skipped"]}
+    assert {"LegRotation_L", "LegLowerRotation_L",
+            "LegRotation_R", "LegLowerRotation_R"} <= skipped
 
 
 def test_arm_rotation_is_the_parent_of_the_shoulder_lift():
@@ -72,7 +103,7 @@ def test_arm_rotation_is_not_built_without_the_arm_layers():
     names = [d["name"] for d in out["deformers"]]
     assert "ArmRotation_L" not in names and "ArmRotation_R" not in names
     skipped = {d["name"]: d["reason"] for d in out["rotation_skipped"]}
-    assert set(skipped) == {"ArmRotation_L", "ArmRotation_R"}
+    assert {"ArmRotation_L", "ArmRotation_R"} <= set(skipped)
     assert "ShoulderLift_L" in skipped["ArmRotation_L"]
 
 
@@ -114,19 +145,23 @@ def test_rotation_deformer_is_still_created_when_targets_really_exist(monkeypatc
     这一条防止后人为了「消掉告警」把判定逻辑一起删掉，从而连带废掉 rotation 能力。
     """
     spec = {"name": "ProbeRotation", "parent": "Eye_L", "pivot": (-35, -40),
-            "type": "rotation", "targets": ["shoes_L"]}
+            "type": "rotation", "targets": ["probe_layer"]}
     monkeypatch.setattr(
         DeformerHierarchy, "DEFAULT_ROTATION_DEFORMERS",
         DeformerHierarchy.DEFAULT_ROTATION_DEFORMERS + [spec])
 
-    out = _build(REAL_LAYER_NAMES)
+    # 用一个没被任何默认变形器占用的层名：claimed 是先到先得，借用手臂/腿部
+    # 现成层名会被上一条 rotation 抢走，从而误判成「rotation 不再创建」。
+    out = _build(REAL_LAYER_NAMES + ["probe_layer"])
 
     rotation = [d for d in out["deformers"] if d["type"] == "rotation"]
     assert [d["name"] for d in rotation] == [
-        "HeadRotationZ", "ArmRotation_L", "ArmRotation_R", "ProbeRotation"]
+        "HeadRotationZ", "ArmRotation_L", "ArmRotation_R",
+        "LegRotation_L", "LegLowerRotation_L", "LegRotation_R", "LegLowerRotation_R",
+        "ProbeRotation"]
     assert out["rotation_skipped"] == []
     probe = next(d for d in rotation if d["name"] == "ProbeRotation")
-    assert probe["targets"] == ["shoes_L"]
+    assert probe["targets"] == ["probe_layer"]
 
 
 def test_no_rotation_skips_are_reported_for_the_shipped_defaults():
