@@ -46,6 +46,7 @@ def test_real_layer_names_produce_head_arm_and_leg_rotations():
     assert set(types.values()) == {"warp", "rotation"}, types
     assert [n for n, t in types.items() if t == "rotation"] == [
         "HeadRotationZ", "ArmRotation_L", "ArmRotation_R",
+        "ForearmRotation_L", "ForearmRotation_R",
         "LegRotation_L", "LegLowerRotation_L", "LegRotation_R", "LegLowerRotation_R"]
     assert out["rotation_skipped"] == []
 
@@ -157,6 +158,7 @@ def test_rotation_deformer_is_still_created_when_targets_really_exist(monkeypatc
     rotation = [d for d in out["deformers"] if d["type"] == "rotation"]
     assert [d["name"] for d in rotation] == [
         "HeadRotationZ", "ArmRotation_L", "ArmRotation_R",
+        "ForearmRotation_L", "ForearmRotation_R",
         "LegRotation_L", "LegLowerRotation_L", "LegRotation_R", "LegLowerRotation_R",
         "ProbeRotation"]
     assert out["rotation_skipped"] == []
@@ -214,17 +216,61 @@ def test_the_fade_follow_deformers_are_gone_even_with_the_layers_present():
                for d in _build(names)["deformers"])
 
 
-def test_shoulder_lift_carries_cuff_and_hand_with_the_arm():
-    """袖口与手是小臂末端的独立图层，必须挂在同一条肩部变形器上。
+def test_shoulder_lift_carries_cuff_and_hand_through_the_forearm_rotation():
+    """袖口与手必须在抬肩的**子树**里 —— 现在它们挂在肘关节上，靠 ``under`` 继承。
 
     实测（2026-11-01，singer 导出件）：``ParamShoulderL = 1`` 时 ``arm_L``
     抬 38.40px，而 ``cuff_L`` / ``hand_L`` 位移 **0px**；``ParamShoulderR = 1``
     时 ``arm_R`` 抬 56.88px，``cuff_R`` / ``hand_R`` 0px —— 腕口被拉开。
+
+    2026-11-21 拆肘关节后，这条不变量从「同一条变形器的成员」升级成
+    「同一条变形器的**子树**成员」：抬落仍是父级 warp，肘在它下面。
+    父级静止矩形按子孙并集计算，所以腕口依然落在父网格之内、抬落幅度不变
+    （``moc3_pipeline.rect_covering_descendants``）。
     """
     out = _build(REAL_LAYER_NAMES)
-    warp = {d["name"]: d for d in out["deformers"] if d["type"] == "warp"}
-    assert warp["ShoulderLift_L"]["targets"] == ["arm_L", "cuff_L", "hand_L"]
-    assert warp["ShoulderLift_R"]["targets"] == ["arm_R", "cuff_R", "hand_R"]
+    by_name = {d["name"]: d for d in out["deformers"]}
+    for side in ("L", "R"):
+        lift = by_name[f"ShoulderLift_{side}"]
+        elbow = by_name[f"ForearmRotation_{side}"]
+        assert elbow["under"] == f"ShoulderLift_{side}"
+        assert set(lift["targets"]) == {f"arm_{side}"}
+        assert {f"cuff_{side}", f"hand_{side}"} <= set(elbow["targets"])
+
+
+def test_shoulder_lift_recognises_arm_upper_naming():
+    """SAM 分层产出的是 ``arm_upper_*``，抬肩 warp 必须认得这个写法。
+
+    拆分前这条不变量是靠「袖口/手也在 targets 里」兜住的；袖口/手归肘关节后，
+    若 targets 只写 ``arm_*``，本图一个都命中不了 → 抬落 warp、肩转动、
+    肘关节三条一起消失（2026-11-21 实测：19 条变形器掉到 17 条）。
+    """
+    names = ["arm_upper_L", "arm_lower_L", "cuff_L", "hand_L",
+             "arm_upper_R", "arm_lower_R", "cuff_R", "hand_R"]
+    out = _build(names)
+    by_name = {d["name"]: d for d in out["deformers"]}
+    for side in ("L", "R"):
+        assert by_name[f"ShoulderLift_{side}"]["targets"] == [f"arm_upper_{side}"]
+        assert set(by_name[f"ForearmRotation_{side}"]["targets"]) == {
+            f"arm_lower_{side}", f"cuff_{side}", f"hand_{side}"}
+
+
+def test_forearm_rotation_pivots_on_the_elbow_bone():
+    """肘关节绕 ForearmBack_* 转，绑定阶段据此命中 ParamArmLB/RB。"""
+    out = _build(REAL_LAYER_NAMES)
+    by_name = {d["name"]: d for d in out["deformers"]}
+    for side in ("L", "R"):
+        elbow = by_name[f"ForearmRotation_{side}"]
+        assert elbow["type"] == "rotation"
+        assert elbow["pivot_bone"] == f"ForearmBack_{side}"
+        assert elbow["targets"]
+
+
+def test_forearm_rotation_is_skipped_without_the_arm():
+    """没有上臂就没有抬落 warp，肘关节也不该建。"""
+    out = _build(["hair_back", "face", "clothes_top", "cuff_L", "hand_L"])
+    names = [d["name"] for d in out["deformers"]]
+    assert "ForearmRotation_L" not in names and "ForearmRotation_R" not in names
 
 
 def test_shoulder_lift_targets_shrink_to_what_really_exists():

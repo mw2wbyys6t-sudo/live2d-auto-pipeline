@@ -952,18 +952,26 @@ class DeformerHierarchy:
         # 躯干的四个倾摆轴也要挂进来：手臂画在身子两侧，只有衣服倾摆而手臂不动，
         # 肩窝处就会错开（实测 ``ParamBodyAngleY = 10`` 时上身衣服横移 14.67px、
         # 手臂 0px）。抬落仍按这条变形器自己的成员高度算，幅度不变。
+        # 袖口 / 手 / 小臂**不在这条 warp 里**：它们由下级的 ``ForearmRotation_*``
+        # 承担肘关节，抬肩时通过 ``under`` 链继承这里的形变（父级静止矩形按子孙并集
+        # 计算，所以既不会出现「越出父网格」，抬落幅度也与拆分前逐值相同 ——
+        # 见 ``moc3_pipeline.rect_covering_descendants``）。
         {"name": "ShoulderLift_L", "parent": "ArmBack_L", "rows": 2, "cols": 2,
          "type": "warp", "profile": "lift_lean", "under": "ArmRotation_L",
          "parameters": ["ParamShoulderL", "ParamBodyAngleX", "ParamBodyAngleY",
                         "ParamBodySway", "ParamBreath"],
-         "targets": ["arm_L", "upper_arm_back_left", "sleeve_L",
-                     "cuff_L", "hand_L"]},
+         # 上臂的各种命名都要认：SAM 分层产出的是 ``arm_upper_L``，PSD/旧版是
+         # ``arm_L`` / ``upper_arm_back_left``。2026-11-21 实测：只写 ``arm_L`` 时
+         # 本图一个都命中不了 —— 拆分前之所以没事，是因为袖口/手也在 targets 里
+         # 兜住了；拆分后它们归肘关节，这里必须自己把上臂认全。
+         "targets": ["arm_upper_L", "upper_arm_L", "arm_L",
+                     "upper_arm_back_left", "sleeve_L"]},
         {"name": "ShoulderLift_R", "parent": "ArmBack_R", "rows": 2, "cols": 2,
          "type": "warp", "profile": "lift_lean", "under": "ArmRotation_R",
          "parameters": ["ParamShoulderR", "ParamBodyAngleX", "ParamBodyAngleY",
                         "ParamBodySway", "ParamBreath"],
-         "targets": ["arm_R", "upper_arm_back_right", "sleeve_R",
-                     "cuff_R", "hand_R"]},
+         "targets": ["arm_upper_R", "upper_arm_R", "arm_R",
+                     "upper_arm_back_right", "sleeve_R"]},
     ]
 
     # ---- rotation 变形器 ----
@@ -1014,6 +1022,28 @@ class DeformerHierarchy:
         "requires_deformer": "ShoulderLift_R",
     }
 
+    #: 前臂（肘）转动：绕 ``ForearmBack_*`` 转小臂，成员是小臂与末端附件。
+    #:
+    #: 层级：``ArmRotation_*``（肩，空成员）→ ``ShoulderLift_*``（warp，只带上臂）
+    #: → ``ForearmRotation_*``（肘）。父级静止矩形按**子孙并集**计算
+    #: （``moc3_pipeline.rect_covering_descendants``），所以腕口仍落在抬落 warp 的
+    #: 控制网格之内，抬落幅度也按并集高度算 —— 2026-11-21 拆分时专门保住这两点，
+    #: 否则会重演「腕口被拉开 38.40px」的老事故。
+    #:
+    #: ``requires_deformer``：没有上臂图层时抬落 warp 不建，肘关节也不建。
+    FOREARM_ROTATION_L: Dict = {
+        "name": "ForearmRotation_L", "parent": "ForearmBack_L", "type": "rotation",
+        "pivot_bone": "ForearmBack_L", "under": "ShoulderLift_L",
+        "targets": ["arm_lower_L", "forearm_L", "cuff_L", "hand_L"],
+        "requires_deformer": "ShoulderLift_L",
+    }
+    FOREARM_ROTATION_R: Dict = {
+        "name": "ForearmRotation_R", "parent": "ForearmBack_R", "type": "rotation",
+        "pivot_bone": "ForearmBack_R", "under": "ShoulderLift_R",
+        "targets": ["arm_lower_R", "forearm_R", "cuff_R", "hand_R"],
+        "requires_deformer": "ShoulderLift_R",
+    }
+
     #: 腿部两节转动：髋（Leg_*）与膝（Calf_*）。
     #:
     #: 与手臂不同，腿部图层此前**不属于任何变形器**（默认表里没有任何 warp 抢
@@ -1047,6 +1077,8 @@ class DeformerHierarchy:
         HEAD_ROTATION,
         ARM_ROTATION_L,
         ARM_ROTATION_R,
+        FOREARM_ROTATION_L,
+        FOREARM_ROTATION_R,
         LEG_ROTATION_L,
         LEG_LOWER_ROTATION_L,
         LEG_ROTATION_R,

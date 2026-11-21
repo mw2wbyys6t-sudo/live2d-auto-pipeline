@@ -22,11 +22,9 @@
 > 3.11/3.12 在收集期就 NameError（本机 3.14 的惰性注解把它藏住了）；
 > 装配运行时依赖的 onnxruntime GitHub zip 资产根本不存在（404），改用 NuGet 官方包。
 >
-> **已知限制（本版未成立）**：① **前臂**（`ParamArmLB/RB`）仍是死参数：它要求把
-> 小臂/袖口/手从上臂变形器里拆出来另挂一条 rotation，而这正是「腕口被拉开」那条
-> 事故的成因（见 `deformers.py` 的注释），属独立改动；② 本图没有左臂，因此
-> `ParamArmLA` / `ParamShoulderL` 也是死的 —— 那是缺画，不是缺功能；
-> ③ 分层质量门仍把 amodal 补全造成的层间覆盖记成 defect（判定口径之争，非本版引入）。
+> **已知限制（本版未成立）**：① 本图没有左臂，因此 `ParamArmLA` / `ParamShoulderL`
+> 曾是死的 —— 那是缺画，不是缺功能（补全左右臂后已复查为活）；
+> ② 分层质量门仍把 amodal 补全造成的层间覆盖记成 defect（判定口径之争，非本版引入）。
 >
 > **打包状态**：本版安装包由 CI 在 tag 构建时产出，本机未验证安装。
 
@@ -51,22 +49,40 @@
 只加参数还不够：`DEFAULT_ROTATION_DEFORMERS` 里当时只有 `HeadRotationZ`，手臂图层
 全被 `ShoulderLift_*` 占用（`claimed` 先到先得），没有任何 rotation 去转它们。
 本版新增 `ArmRotation_L/R`，做成**空成员的父级**（`under` 链转整棵子树），
-`ShoulderLift_*` 挂到它下面 —— 手臂三层仍共用同一条抬落 warp（拆开必在腕口裂缝），
-转动则在更上层整体带过去。这条「rotation 父 = warp」的边 2026-11-10 已用官方 Core
-逐像素验收过（见 `moc3_pipeline._cross_type_edge`）。
+`ShoulderLift_*` 挂到它下面 —— 转动在更上层整体带过去。这条「rotation 父 = warp」
+的边 2026-11-10 已用官方 Core 逐像素验收过（见 `moc3_pipeline._cross_type_edge`）。
+
+**肘关节（同版补完）**：`ForearmRotation_L/R` 绕 `ForearmBack_*` 转小臂，挂在
+`ShoulderLift_*` 之下，成员是小臂 + 袖口 + 手。层级变成
+`ArmRotation_*`（肩）→ `ShoulderLift_*`（warp，只带上臂）→ `ForearmRotation_*`（肘）。
+
+这里有两个必须同时保住的点，否则会重演 2026-11-01 的「腕口被拉开 38.40px」：
+
+1. 抬落 warp 的静止矩形改为按**子孙并集**计算（`rect_covering_descendants`），
+   腕口仍在父网格之内 —— 口径与拆分前逐值一致，`HeadRig` / `BodySway` 等有子级的
+   其它 profile 仍按直接成员算，不受影响；
+2. 抬落幅度（成员高度 × 12%）与 `_torso_depth` 的共享尺度也改用该并集，
+   否则拆完手感会变轻。
+
+并且补上了一个拆分才暴露的命名问题：SAM 分层产出的是 `arm_upper_*`，而抬落 warp
+原来只写 `arm_*`。拆分前它靠「袖口/手也在 targets 里」兜住，拆分后袖口/手归肘关节，
+若不认 `arm_upper_*`，抬落 warp、肩转动、肘关节会一起消失（实测 19 → 17 条变形器）。
 
 实测（`sam2_gd`，36 层，官方内核逐像素比对）：
 
 ```
-bindings: ArmRotation_R rotation ['ParamArmRA']，ShoulderLift_R 的 parent = ArmRotation_R
+bindings: ArmRotation_R  → ParamArmRA（parent 空）
+          ShoulderLift_R → parent ArmRotation_R
+          ForearmRotation_L/R → ParamArmLB / ParamArmRB（parent ShoulderLift_*）
+deformers: 19 → 23；HeadRig / NeckBand / HairBackSwing / MouthOpen / EyeBlink_R
+           的 rest 与 grids 与拆分前逐值相同
 model3:   手臂参数 [ParamShoulderL, ParamShoulderR, ParamArmLA, ParamArmLB, ParamArmRA, ParamArmRB]
-死参数扫描: ParamArmRA 动了；ParamShoulderR 仍动（抬肩未被破坏）
-            ParamArmLB/RB 仍死（前臂未接线，见已知限制①）
-            ParamArmLA / ParamShoulderL 死是因为本图没有左臂
+死参数扫描: 46 个里动 34 个（拆分前 30）；仍死的 12 个全是本图没有那份画
+           （眉毛 6 / 独立发束 4 / 兽耳 / 尾巴）
 ```
 
-手臂图层不存在时 `ArmRotation_*` 不会创建（`requires_deformer`），不会留下
-「有滑块、拨了没画面」的空转条目。
+手臂/前臂图层不存在时 `ArmRotation_*` / `ForearmRotation_*` 不会创建
+（`requires_deformer`），不会留下「有滑块、拨了没画面」的空转条目。
 
 **腿部关节（本版新增）**：此前腿部图层不属于任何变形器，走路/屈膝在结构上就不可能。
 现在补了两节链：`LegRotation_L/R`（髋，枢轴 `Leg_*`）→ `LegLowerRotation_L/R`

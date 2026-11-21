@@ -104,12 +104,14 @@
   见 `tests/unit/test_deformer_hierarchy_rotation.py`。
   眼球的跟随实际由 `eye_track_keyforms`（`ParamEyeBallX/Y` 双轴 + `Eyeball_L/R` 权重
   → 眼白/虹膜）承担 —— 那是平移而非旋转，用 rotation 变形器语义本就不对。
-- **前臂转动（`ParamArmLB/RB`）仍是死参数**。上臂已可用：`ArmRotation_L/R`（空成员的
-  rotation，绕 `ArmBack_*`）作为 `ShoulderLift_*` 的**父级**转整条手臂链，
-  2026-11-21 实测 `ParamArmRA` 在官方内核下逐像素生效、`ParamShoulderR` 抬肩未被破坏。
-  前臂要生效必须把小臂 / 袖口 / 手从 `ShoulderLift_*` 里拆出来另挂一条 rotation，
-  而拆开正是「腕口被拉开 38px、袖口/手位移 0px」那条实测事故的成因
-  （见 `deformers.py` 中 `ShoulderLift_*` 的注释），属独立绑骨改动。
+- **前臂（肘）转动已接上**（2026-11-21）：`ForearmRotation_L/R` 绕 `ForearmBack_*`
+  转小臂，成员是小臂 / 袖口 / 手，层级为 `ArmRotation_*`（肩）→ `ShoulderLift_*`
+  （warp，只带上臂）→ `ForearmRotation_*`（肘）。拆分时保住了两条不变量：抬落 warp
+  的静止矩形按**子孙并集**计算（腕口仍在父网格内），抬落幅度与共享尺度也按该并集，
+  因此不会重演「腕口被拉开 38.40px」。实测 `bindings.json` 中
+  `ForearmRotation_L → ParamArmLB`、`ForearmRotation_R → ParamArmRB`。
+  同一轮还修了命名缺口：抬落 warp 现在同时认 `arm_upper_*`（SAM 分层）与
+  `arm_*` / `upper_arm_back_*`（PSD/旧版）。
 - **腿部关节（髋/膝）已接上**（2026-11-21）：`LegRotation_L/R`（枢轴 `Leg_*`）→
   `LegLowerRotation_L/R`（枢轴 `Calf_*`，`under` 髋），参数 `ParamLegLA/LB/RA/RB`。
   此前腿部图层不属于任何变形器，走路/屈膝在结构上不可能。半身像没有腿图层时

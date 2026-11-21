@@ -1752,11 +1752,22 @@ def build_deformers(specs: List[MeshSpec],
             # :func:`rect_covering_descendants`（#72 的产物侧修法 —— 画留在父级网格
             # 之内，Core / 自研播放器 / 离线尺子才读同一个数）。没有 warp 子孙时
             # 这份并集就是 members 本身，今天的根级产物一个字节都不变。
-            rect = _member_rect(rect_covering_descendants(name, members_by_name, parents))
+            covering = rect_covering_descendants(name, members_by_name, parents)
+            rect = _member_rect(covering)
             # 成员网格**静止姿态**的并集范围（不含键形摆动）。形变量要按它算，
             # 否则嘴/眼会被含键形的外包框放大好几倍（见 _open_down_grids）。
-            mesh_rect = _rest_rect(members)
+            #
+            # 抬落类 profile 用**子孙并集**：把手/袖口拆到子级 rotation 之后，
+            # ``ShoulderLift_*`` 的直接成员只剩上臂，若仍按直接成员算，
+            # ``_lift_lean_deform`` 的抬落幅度（成员高度 × 12%）与 ``_torso_depth``
+            # 的共享尺度都会跟着变 —— 那是「拆关节」顺手改掉了抬肩手感。
+            # 其余 profile 必须**保持直接成员口径**：HeadRig / BodySway 都有子级，
+            # 换口径会把头场与躯干倾摆的尺度一起改掉。
             profile = str(entry.get("profile") or "")
+            if profile in ("lift", "lift_lean"):
+                mesh_rect = _rest_rect(covering)
+            else:
+                mesh_rect = _rest_rect(members)
             param_ids = _profile_parameter_ids(entry)
             if profile == "hair_sway":
                 # 自适应分割数：长发/宽发束按自身尺寸补足控制点，作者表的值是下限。
