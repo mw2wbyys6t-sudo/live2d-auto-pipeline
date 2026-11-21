@@ -387,12 +387,22 @@ export FOSSA_API_KEY=<你复制的 key>
 
 ## 5. 仓库侧能改什么、不能改什么
 
+> **2026-11-21 状态变更**：项目负责人在 FOSSA 后台把三个 **issue 扫描开关**
+> （`licensingIssueScanningEnabled` / `securityIssueScanningEnabled` /
+> `qualityIssueScanningEnabled`）全部关闭。FOSSA 公共 API 实测随后为
+> `unresolved_issue_count = 0`（licensing/security/quality 均 0），因此三个 status
+> check 不再报错。**这不是把问题修掉了，而是把扫描深度让给了仓库内可复现的闸门**：
+> `npm audit`、`python -m pip_audit -r requirements.txt`、`web/scripts/security-audit.mjs`、
+> `scripts/check-license-bundle.sh` 与 `NOTICE`。若日后升级到可自定义策略的计划，
+> 重新打开扫描并按 §3 绑定 `AGPL-3.0 Distribution` 即可恢复逐条治理。
+
 | 事项 | 仓库侧 | FOSSA 后台 | 备注 |
 |---|---|---|---|
-| 依赖版本、CVE 治理 | ✅ | — | 已完成：`next` 16.4.0→16.4.1 等 |
+| 依赖版本、CVE 治理 | ✅ | — | 已完成：`next` 16.4.0→16.4.6（修掉 7 条 Next.js GHSA，security 9→2） |
 | SPDX 元数据补全（Cargo.toml 等） | ✅ | — | 已完成 |
 | 许可全文随产物分发（FF-15） | ✅ | — | 已完成：`scripts/check-license-bundle.sh` 闸门（LICENSE + NOTICE 逐字节校验） |
 | 分析范围收敛（排除归档/文档） | ✅ | — | 已完成：`.fossa.yml` 的 `paths.exclude` |
+| issue 扫描开关（三类） | ❌ | ✅ | 2026-11-21 已关闭，计数归 0；恢复需后台重新打开 |
 | 许可策略的三档规则 | ❌ | ✅ | 只能后台建，仓库侧无法声明 |
 | 项目绑定哪个策略 | ❌ | ✅ | 当前实际绑定内置 `Standard Bundle Distribution`（policyId `271431`）；Free 计划无法自定义策略 |
 | issue 明细逐条读取 | ❌ | ✅ | 登录态下 Issues 页可读全量（见 §3.2.1），无需企业 API |

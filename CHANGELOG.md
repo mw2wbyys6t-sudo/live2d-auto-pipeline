@@ -90,6 +90,25 @@ model3:   手臂参数 [ParamShoulderL, ParamShoulderR, ParamArmLA, ParamArmLB, 
 `latest.json`；普通 `main` 构建用 `--config` 关掉 `createUpdaterArtifacts`，
 所以在没配签名私钥的仓库里也能出安装包。
 
+### 5. FOSSA 扫描开关关闭（依赖治理改由仓库闸门承担）
+
+FOSSA 的三个 status check 长期红叉，但根因是 **Free 计划 + 内置
+`Standard Bundle Distribution` 策略**：内置模板对 AGPL 只会 Flag/Deny，而本项目
+自身就是 AGPL-3.0，64 条 licensing 在仓库侧无法归零（详见
+[license-policy.md](docs/license-policy.md) §1 / §5）。
+
+本版的处理：
+- 真实可修的部分已经修掉 —— `next` 升到 16.4.6，FOSSA 重扫确认 Security **9 → 2**
+  （剩下两条 picomatch 无上游修复版本）；
+- 负责人关闭了 licensing / security / quality 三个 **issue 扫描**开关，公共 API 实测
+  三类计数均为 0，status check 不再报错；
+- 依赖治理改为仓库内可复现闸门：`npm audit`、`python -m pip_audit -r requirements.txt`、
+  `web/scripts/security-audit.mjs`、`scripts/check-license-bundle.sh` + `NOTICE`。
+
+> 注意：扫描关闭只改变上报深度，不代表那 64/3/2 条被「修好」了。日后升级到可自定义
+> 策略的计划后，重新打开扫描并按 [fossa-agpl3-review.md](docs/fossa-agpl3-review.md)
+> 逐条处置即可恢复。
+
 ---
 
 ## [v0.10.11] — 2026-11-02 — 自研渲染：导出的模型在浏览器里真的动
