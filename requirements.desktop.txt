@@ -40,7 +40,7 @@ rich>=15.0.0
 
 # ===== 图像处理 / 分割 / PSD =====
 # headless 版：无需 GUI 依赖，桌面版 UI 由 Tauri 承载。
-opencv-python-headless>=4.9.0.80
+opencv-python-headless>=5.0.0.93
 # 前景分割运行时按平台分流（实测：ISNet 600×900 立绘 CPU 1149ms → DirectML 163ms，
 # 两条路径的前景掩码逐像素一致，IoU 1.0000）：
 #   - Windows 装 onnxruntime-directml，自带 DmlExecutionProvider，N/A/I 卡通用，
