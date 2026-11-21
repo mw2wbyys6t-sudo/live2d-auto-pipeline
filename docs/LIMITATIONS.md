@@ -382,12 +382,17 @@
 
 本节记录仓库侧能核实的依赖状态。FOSSA 三项检查由第三方 SaaS 回写 commit status。2026-11-12 通过 FOSSA 公共项目 API 实测：最新已分析 revision `9756014da9a851d86d98a6e047b652b9246eb9bd`（2026-11-12 09:49），未解决 **69 issues = 64 licensing + 3 quality + 2 security**；项目当前绑定内置 **`Standard Bundle Distribution`（policyId 271431）**，组织 `access_level = free`。**Free 计划下无法自定义策略或逐条忽略，而内置模板不会 Approve AGPL，因此项目自身的 AGPL 标记无法归零**，详见 [license-policy.md](license-policy.md) §1 / §3.1。
 
+> **2026-11-21 复核**：Security Analysis 涨到 **9 条** —— 其中 **7 条是 Next.js 的 GHSA**
+> （`GHSA-mfr8-8qww-v76h` 等，影响 16.0.0–16.4.4）。已把 `web/package.json` 的
+> `next` 下限提到 `^16.4.6`（锁定后实测 16.4.6，`npm audit` 0 漏洞），重扫后应回落到
+> 下面表里的 2 条 picomatch。licensing 64 / quality 3 的口径不变。
+
 | FOSSA 检查 | 当前结果 | 仓库侧处理与验证边界 |
 |---|---|---|
 | Dependency Quality | **3 quality issues**（公共 API 当前计数） | 已更新 `websockets>=17.3`、`psd-tools>=1.26.0`、`rich>=15.0.0`、`onnxruntime>=1.31.0`、`pygame-ce>=2.5.8`、`next^16.4.3`、`lucide-react^1.61.0`。`mediapipe` 保持 `<0.10.32`：1.1.1 强制引入 `opencv-contrib-python`，与 headless OpenCV 争抢 `cv2`。公共页不开放逐项质量明细，是否归零必须重扫确认。 |
 | License Compliance | **64 licensing issues**（与文档上一轮口径 57 Flagged + 7 Denied 数量吻合） | 其中主体是 **Python 依赖内捆绑的许可证全文**（libgfortran 的 GPL-3+exception、libquadmath 的 LGPL-2.1、pygame 文档里的 LGPL-2.1/GPL-2.0 提及、Pillow 聚合告知里的 liblzma GPLv3 提及）。其中 **4 条 ID 在依赖里根本没有载体**（`numpy: GPL-1.0`、`scipy: LGPL-3.0-only`、`scipy: LGPL-2.0-or-later`、`pillow: Bitstreamream`）——属扫描器误判。逐条载体复核见 [license-policy.md](license-policy.md) §3.2.2，可复现命令见 `scripts/fossa_license_carrier_check.py`。 |
 | Outdated Dependencies | **3 quality issues**（公共 API 当前计数；文档上一轮列出 5 条） | npm 侧传递依赖。仓库侧已把 chokidar→4.0.3、postcss-nested→7.0.2、js-tokens→5.0.0、commander→6.2.1 写进 `overrides`（都是最后一个 CJS 兼容版，`npm audit` 0 漏洞、`npm run build` 通过）；nanoid 3.3.20 已是 registry 的 `legacy` tag，升级会破坏 CJS `require` 或要求 node≥22，**不动**。FOSSA 拿最新版比对，所以这几条后台仍显示 outdated —— 要归零只能升 ESM-only 大版本，会破坏 Tailwind 3 的构建。 |
-| Security Analysis | **2 vulnerabilities** | 都是同一个 CVE-2026-112366（picomatch ReDoS，CWE-1333）在 2.3.2 与 4.0.7 上的两次记录。权威评分是 NVD **CVSS4 8.7 / CVSS3.1 7.5**（FOSSA 标的 9.7 无出处）；受影响范围 `≤4.0.7` 而 latest 即 4.0.7 → **无修复版可升**。两实例均 dev-only、不进产物、无用户可控输入，仓库侧无可修项。 |
+| Security Analysis | **9 vulnerabilities**（2026-11-21）→ 升级后应为 **2** | 9 条 = Next.js 的 7 条 GHSA（影响 16.0.0–16.4.4，已把下限提到 `^16.4.6` 修掉）+ picomatch 的 CVE-2026-112366 两条。后者权威评分是 NVD **CVSS4 8.7 / CVSS3.1 7.5**（FOSSA 标的 9.7 无出处）；受影响范围 `≤4.0.7` 而 latest 即 4.0.7 → **无修复版可升**。两实例均 dev-only、不进产物、无用户可控输入，仓库侧无可修项（`web/scripts/security-audit.mjs` 会显式跟踪它）。 |
 
 ### 上一轮（2026-10-26）四项安全命中的依据与处置边界
 
