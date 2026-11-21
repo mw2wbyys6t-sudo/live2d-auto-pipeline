@@ -95,6 +95,16 @@ STANDARD_PARAMETERS: List[Dict[str, Any]] = [
     {"id": "ParamArmLB",       "name": "Arm L B",     "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["body", "arms"]},
     {"id": "ParamArmRA",       "name": "Arm R A",     "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["body", "arms"]},
     {"id": "ParamArmRB",       "name": "Arm R B",     "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["body", "arms"]},
+    # 腿部四参数（大腿 A / 小腿 B，左右各一）。官方标准参数表里没有腿部转动，
+    # 这两对是本仓库的命名约定，量纲与手臂一致（1 单位 = 1 度）。
+    #
+    # 与手臂同一个坑：LegRotation_L/R、LegLowerRotation_L/R 的枢轴分别是
+    # Leg_L/R（髋）与 Calf_L/R（膝），绑定阶段同样「先查参数表再绑」——
+    # 参数不在这里声明，腿即使拆成独立图层也永远是静态的。
+    {"id": "ParamLegLA",       "name": "Leg L A",     "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["lower", "legs"]},
+    {"id": "ParamLegLB",       "name": "Leg L B",     "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["lower", "legs"]},
+    {"id": "ParamLegRA",       "name": "Leg R A",     "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["lower", "legs"]},
+    {"id": "ParamLegRB",       "name": "Leg R B",     "min": -30.0, "max": 30.0, "default": 0.0, "groups": ["lower", "legs"]},
 ]
 
 

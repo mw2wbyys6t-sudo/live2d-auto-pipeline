@@ -77,6 +77,18 @@ def _build(workdir: Path) -> Path:
     return next(workdir.glob("*.model3.json"))
 
 
+def probe_value(lo: float, hi: float, default: float) -> float | None:
+    """取**离静止值最远**的那个极值；键形退化成单点时返回 None。
+
+    此前一律推 ``hi``：``ParamEyeLOpen``（min 0 / max 1 / default 1）推到 max
+    等于没动，于是眼睑开合被误判成死参数 —— 而它恰恰是最常用的一个。
+    """
+    value = hi if abs(hi - default) >= abs(default - lo) else lo
+    if abs(value - default) < 1e-9:
+        return None
+    return value
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--model", default=None, help="现成的 model3.json；不给就现搭")
@@ -98,7 +110,12 @@ def main() -> int:
                 continue
             lo = float(spec.get("Min", 0.0))
             hi = float(spec.get("Max", 0.0))
-            value = hi if hi != lo else lo + 1.0
+            default = float(spec.get("Value", 0.0))
+            value = probe_value(lo, hi, default)
+            if value is None:
+                # 键形退化成单点（min == max == default）：无从验证，跳过而不是判死。
+                print(f"  {pid:20s} 键形无跨度（min==max），跳过")
+                continue
             probe = render_probe(str(manifest), {pid: value})
             if not probe["ok"]:
                 print(f"  {pid:20s} 渲染失败：{probe.get('blocker')}")
