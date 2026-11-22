@@ -31,6 +31,11 @@ jobs:
         # Python 3.10 已于 2026-10-01 结束官方安全支持；且 requirements.txt 的
         # 下限（Pillow 13 / rembg 2.0.86 / scikit-learn 1.9）官方均要求 >= 3.11。
         python-version: ["3.11", "3.12"]
+    env:
+      # codecov v7 不再接受无令牌上传：未配置 secret 时会返回
+      # "Token required - not valid tokenless upload"，action 自己吞掉非零退出，
+      # 只在日志里留一条 error。这里用 env 暴露给 step 的 if 判断，没配就跳过。
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -104,9 +109,11 @@ jobs:
 
       - name: Upload coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        if: matrix.python-version == '3.11'
+        if: matrix.python-version == '3.11' && env.CODECOV_TOKEN != ''
         with:
-          file: ./coverage.xml
+          # v7 的入参名是 files（复数）；旧写法 file 会被忽略并报
+          # "Unexpected input(s) 'file'"，等于根本没指定报告。
+          files: ./coverage.xml
 
       # FF-1 依赖方向 lint —— warn-only baseline。
       # 现存 8 处历史反向依赖（见 scripts/lint_architecture.py 顶部清单）尚未清零，
