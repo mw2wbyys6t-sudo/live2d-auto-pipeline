@@ -1407,6 +1407,7 @@ DEFORMER_PROFILES: Dict[str, tuple] = {
 #: 保持静态 —— 同其它 profile 的「宁可不驱动，也不交半套」。
 OPACITY_KEYFORM_LAYERS: Dict[str, tuple] = {
     "cheek": (("ParamCheek", (0.0, 1.0)),),
+    "mouth_open": (("ParamMouthOpenY", (0.0, 1.0)),),
     "tear_left": (("ParamTears", (0.0, 1.0)), ("ParamTearsL", (0.0, 1.0))),
     "tear_right": (("ParamTears", (0.0, 1.0)), ("ParamTearsR", (0.0, 1.0))),
 }

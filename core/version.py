@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pygmalion Studio - Version information (single source of truth)"""
 
-__version__ = "0.10.12"
+__version__ = "0.10.12-beta"
 __version_info__ = (0, 10, 12)
 __release_date__ = "2026-11-21"
 __codename__ = "Auto Update"

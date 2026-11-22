@@ -12,8 +12,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-#: 本轮正式版本（桌面端自动更新 + 手臂四参数）。
-RELEASE_VERSION = "0.10.12"
+#: 本轮预发布版本。
+RELEASE_VERSION = "0.10.12-beta"
 
 
 def _read(rel: str) -> str:
@@ -22,7 +22,7 @@ def _read(rel: str) -> str:
 
 def test_version_single_source_declares_release_version():
     body = _read("core/version.py")
-    assert re.search(rf'^__version__ = "{RELEASE_VERSION}"$', body, re.M), \
+    assert re.search(rf'^__version__ = "{re.escape(RELEASE_VERSION)}"$', body, re.M), \
         "core/version.py 是版本号唯一真源"
 
 
@@ -30,12 +30,12 @@ def test_version_info_tuple_matches_single_source():
     from core.version import __version__, __version_info__
 
     assert __version__ == RELEASE_VERSION
-    assert __version_info__ == tuple(int(part) for part in RELEASE_VERSION.split("."))
+    assert __version_info__ == (0, 10, 12)
 
 
 def test_python_backend_version_matches_single_source():
     body = _read("api_server.py")
-    match = re.search(r'^VERSION = "v([0-9.]+)-py"', body, re.M)
+    match = re.search(r'^VERSION = "v(.+?)-py"', body, re.M)
     assert match, "api_server.py 应声明与真源同版本的后端标识"
     assert match.group(1) == RELEASE_VERSION
 
@@ -43,7 +43,7 @@ def test_python_backend_version_matches_single_source():
 def test_go_backend_version_matches_single_source():
     """Go 后端也有一处硬编码版本（诊断页会把它当 detail 显示），同样会漂移。"""
     body = _read("api/handlers/handlers.go")
-    match = re.search(r'const Version = "v([0-9.]+)-go"', body)
+    match = re.search(r'const Version = "v(.+?)-go"', body)
     assert match, "api/handlers/handlers.go 应声明后端版本常量"
     assert match.group(1) == RELEASE_VERSION, "Go 后端版本与 core/version.py 漂移"
 
@@ -102,6 +102,6 @@ def test_web_ui_does_not_hardcode_version():
 
 def test_changelog_top_entry_is_release_version():
     body = _read("CHANGELOG.md")
-    first = re.search(r"^## \[v([0-9.]+)\]", body, re.M)
+    first = re.search(r"^## \[v([^]]+)\]", body, re.M)
     assert first, "CHANGELOG 顶部应有版本条目"
     assert first.group(1) == RELEASE_VERSION, "CHANGELOG 顶部条目必须就是本轮发布版本"

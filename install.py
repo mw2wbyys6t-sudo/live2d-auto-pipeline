@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pygmalion Studio v0.10.12 - One-Click Installer
+Pygmalion Studio v0.10.12-beta - One-Click Installer
 
 Usage:
     python install.py              # Full install (core + desktop pet)

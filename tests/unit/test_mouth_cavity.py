@@ -50,3 +50,65 @@ def test_thin_closed_mouth_does_not_create_a_duplicate(tmp_path):
     path = _write_mouth(tmp_path, lambda d: d.line((20, 40, 140, 40), fill=(30, 20, 20, 255), width=2))
     cavity = LayerComposer()._synthesize_mouth_cavity({"mouth": {"path": str(path)}}, ["mouth"], 80, 160)
     assert cavity is None
+
+
+def test_thin_closed_mouth_gets_separate_inferred_open_expression(tmp_path):
+    size = 100
+    face = np.zeros((size, size, 4), dtype=np.uint8)
+    face[10:90, 10:90] = (246, 218, 198, 255)
+    mouth = np.zeros_like(face)
+    mouth[55:57, 45:55] = (45, 26, 28, 255)
+    Image.fromarray(face).save(tmp_path / "face.png")
+    Image.fromarray(mouth).save(tmp_path / "mouth.png")
+    layers = {
+        "face": {"path": str(tmp_path / "face.png")},
+        "mouth": {"path": str(tmp_path / "mouth.png")},
+    }
+
+    made = LayerComposer().synthesize_face_geometry(layers, size, size, tmp_path)
+
+    assert "mouth_open" in made
+    assert layers["mouth"]["path"].endswith("mouth.png")
+    assert layers["mouth_open"]["rest_opacity"] == 0.0
+    assert layers["mouth_open"]["provenance"] == "inferred_expression"
+    open_layer = np.asarray(Image.open(layers["mouth_open"]["path"]).convert("RGBA"))
+    assert int((open_layer[..., 3] > 0).sum()) > int((mouth[..., 3] > 0).sum())
+    assert open_layer[..., 3].max() == 255
+
+
+def test_small_unannotated_mouth_does_not_invent_teeth_or_tongue(tmp_path):
+    size = 100
+    face = np.zeros((size, size, 4), dtype=np.uint8)
+    face[10:90, 10:90] = (246, 218, 198, 255)
+    mouth = np.zeros_like(face)
+    mouth[55:57, 45:55] = (45, 26, 28, 255)
+    Image.fromarray(face).save(tmp_path / "face.png")
+    Image.fromarray(mouth).save(tmp_path / "mouth.png")
+    layers = {
+        "face": {"path": str(tmp_path / "face.png")},
+        "mouth": {"path": str(tmp_path / "mouth.png")},
+    }
+
+    LayerComposer().synthesize_face_geometry(layers, size, size, tmp_path)
+
+    assert "teeth" not in layers
+    assert "tongue" not in layers
+
+
+def test_open_mouth_aperture_is_below_original_lip_line_and_inside_face():
+    composer = LayerComposer()
+    face = np.zeros((40, 50, 4), dtype=np.uint8)
+    face[5:35, 5:45] = (246, 218, 198, 255)
+    mouth = np.zeros_like(face)
+    mouth[18:20, 23:27] = (45, 26, 28, 255)
+
+    opened = composer._synthesize_open_mouth(face, mouth)
+
+    assert opened is not None
+    mask = opened[..., 3] > 0
+    assert mask.sum() > 0
+    ys, _ = np.where(mask)
+    lip_y = np.where(mouth[..., 3] > 0)[0].max()
+    assert ys.max() > lip_y
+    assert not mask[:5].any() and not mask[35:].any()
+    assert not mask[:, :5].any() and not mask[:, 45:].any()

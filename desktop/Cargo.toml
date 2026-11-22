@@ -1,6 +1,6 @@
 [package]
 name = "pygmalion-studio"
-version = "0.10.12"
+version = "0.10.12-beta"
 description = "Pygmalion Studio - Desktop Application (Pygmalion)"
 authors = ["Pygmalion"]
 edition = "2021"

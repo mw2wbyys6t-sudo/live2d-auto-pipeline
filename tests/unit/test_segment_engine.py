@@ -462,11 +462,12 @@ class TestSynthesisedFaceGeometry:
     def test_layers_are_synthesised(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _, layers, order = self._compose(tmpdir)
-            for name in ("eyelid_left", "eyelid_right", "mouth_cavity"):
+            for name in ("eyelid_left", "eyelid_right", "mouth_cavity", "mouth_open"):
                 assert layers[name].get("synthesized") is True
                 assert Path(layers[name]["path"]).is_file()
-        assert {"eyelid_left", "eyelid_right", "mouth_cavity"} <= set(layers)
+        assert {"eyelid_left", "eyelid_right", "mouth_cavity", "mouth_open"} <= set(layers)
         assert order.index("mouth_cavity") < order.index("mouth")
+        assert order.index("mouth_cavity") < order.index("mouth_open") < order.index("mouth")
         # 闭眼图画在眼球**下面**（= 排在眼球之前）
         assert order.index("eyelid_left") < order.index("irides_left")
         # 腮红在脸皮上、五官之下；眼泪在眼睛之上
@@ -499,19 +500,19 @@ class TestSynthesisedFaceGeometry:
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             _, layers, order = self._compose(tmpdir)
-            for name in ("cheek", "tear_left", "tear_right"):
+            for name in ("cheek", "tear_left", "tear_right", "mouth_open"):
                 assert name in layers, f"{name} 没有合成出来"
                 assert float(layers[name]["rest_opacity"]) == 0.0, (
                     f"{name} 的 rest_opacity 不是 0，静止画面会被改动")
             # 有像素内容（不是空层），只是静止时透明
-            for name in ("cheek", "tear_left", "tear_right"):
+            for name in ("cheek", "tear_left", "tear_right", "mouth_open"):
                 arr = np.array(Image.open(layers[name]["path"]).convert("RGBA"))
                 assert (arr[..., 3] > 0).any(), f"{name} 是空层，等于没做"
             # 尊重 rest_opacity 的合成结果 == 完全不含这些层的结果
             visible = self._composite(layers, order)
             without = self._composite(
                 {k: v for k, v in layers.items()
-                 if k not in ("cheek", "tear_left", "tear_right")}, order)
+                 if k not in ("cheek", "tear_left", "tear_right", "mouth_open")}, order)
         diff = np.abs(visible - without).max()
         assert diff < 1.0, f"静止时仍有 {diff} 的差异，淡入层没被隐去"
 
@@ -578,6 +579,30 @@ class TestSynthesisedFaceGeometry:
         fill = cavity[open_cavity][:, :3].mean(axis=0)
         assert fill[0] - fill[2] > line[0] - line[2], (
             f"口内色不够暖：嘴线 {line} / 口内 {fill}")
+
+    def test_open_mouth_layer_is_separate_and_inferred(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, layers, _ = self._compose(tmpdir)
+            opened = np.array(Image.open(layers["mouth_open"]["path"]).convert("RGBA"))
+            mouth = np.array(Image.open(layers["mouth"]["path"]).convert("RGBA"))
+        mask = opened[..., 3] > 0
+        assert mask.any()
+        assert np.where(mask)[0].max() > np.where(mouth[..., 3] > 0)[0].max()
+        assert layers["mouth_open"]["rest_opacity"] == 0.0
+        assert layers["mouth_open"]["provenance"] == "inferred_expression"
+        assert layers["mouth_open"]["status"] == "manual_review_required"
+
+    def test_eyelid_layers_remain_side_specific(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _, layers, _ = self._compose(tmpdir)
+            left = np.array(Image.open(layers["eyelid_left"]["path"]).convert("RGBA"))[..., 3] > 0
+            right = np.array(Image.open(layers["eyelid_right"]["path"]).convert("RGBA"))[..., 3] > 0
+            left_eye = np.array(Image.open(layers["irides_left"]["path"]).convert("RGBA"))[..., 3] > 0
+            right_eye = np.array(Image.open(layers["irides_right"]["path"]).convert("RGBA"))[..., 3] > 0
+        assert left[left_eye].all()
+        assert right[right_eye].all()
+        assert not (left & right_eye).any()
+        assert not (right & left_eye).any()
 
     def test_synthesis_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmpdir:

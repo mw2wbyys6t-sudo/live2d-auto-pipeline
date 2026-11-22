@@ -1,7 +1,6 @@
 package services
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +17,8 @@ import (
 )
 
 type ImageGenerator struct {
-	cfg *config.Config
+	cfg         *config.Config
+	runWorkflow func(models.GenerateRequest) (*models.GenerateImageResponse, error)
 }
 
 func NewImageGenerator(cfg *config.Config) *ImageGenerator {
@@ -27,22 +27,9 @@ func NewImageGenerator(cfg *config.Config) *ImageGenerator {
 	}
 }
 
-// GenerateImage 生成图片，使用自研本地生成器（保持向后兼容）
+// GenerateImage 保留旧接口但不再返回离线占位图。
 func (g *ImageGenerator) GenerateImage(req models.GenerateImageRequest) (*models.GenerateImageResponse, error) {
-	// 设置默认值
-	if req.Width <= 0 {
-		req.Width = 512
-	}
-	if req.Height <= 0 {
-		req.Height = 768
-	}
-	req.Width, req.Height = ClampImageDimensions(req.Width, req.Height)
-	if req.Seed == 0 {
-		req.Seed = rand.Intn(999999999)
-	}
-
-	return g.generateWithLocalGenerator(req,
-		"没有可用的图像服务：这是本地几何占位图，不是 AI 画出的人物。")
+	return nil, errors.New("图片生成接口已停用，请使用角色生成工作流并配置可用图像引擎")
 }
 
 // GenerateWithCharacter 使用角色一致性和语义分割生成（v0.10.0）
@@ -70,25 +57,15 @@ func (g *ImageGenerator) GenerateWithCharacter(req models.GenerateRequest) (*mod
 	}
 
 	// 优先使用 workflow.py 新工作流
-	resp, err := g.generateWithWorkflow(req)
+	workflow := g.generateWithWorkflow
+	if g.runWorkflow != nil {
+		workflow = g.runWorkflow
+	}
+	resp, err := workflow(req)
 	if err == nil {
 		return resp, nil
 	}
-
-	// 回退到本地生成器
-	fmt.Fprintf(os.Stderr, "[WARN] 工作流生成失败，回退到本地生成器: %v\n", err)
-	legacyReq := models.GenerateImageRequest{
-		Prompt:  req.Prompt,
-		Width:   req.Width,
-		Height:  req.Height,
-		Seed:    req.Seed,
-		ModelID: req.ModelID,
-	}
-	// 真实原因必须跟着产物走，不能只写 stderr：实测（2026-10-30 安装包）
-	// 免密上游 402 时用户看到的是一次正常成功 + 一张占位图，
-	// 而"为什么没生成"只在服务端日志里。
-	return g.generateWithLocalGenerator(legacyReq,
-		fmt.Sprintf("生成链路失败，已回退本地占位图：%v", err))
+	return nil, err
 }
 
 // ErrNoImageEngine 表示本机没有任何可用的图像引擎（没配 Key、也没起 ComfyUI /
@@ -501,169 +478,13 @@ func min(a, b int) int {
 	return b
 }
 
-// generateWithLocalGenerator 使用自研本地生成器生成图片。
-//
-// fallbackReason 说明**为什么**拿到的是占位图（没配图像服务 / 上游失败），
-// 它会随响应与历史记录一起落盘：占位图本身是有意为之的离线兜底，
-// 但把它当成一次正常成功展示才是缺陷 —— 调用方必须交代原因。
-func (g *ImageGenerator) generateWithLocalGenerator(req models.GenerateImageRequest, fallbackReason string) (*models.GenerateImageResponse, error) {
-	scriptPath := filepath.Join(g.cfg.Python.ScriptsDir, "local_image_generator.py")
-
-	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("本地生成器脚本不存在: %s", scriptPath)
-	}
-
-	if err := os.MkdirAll(g.cfg.Output.BaseDir, 0755); err != nil {
-		return nil, fmt.Errorf("创建输出目录失败: %v", err)
-	}
-
-	args := []string{
-		scriptPath,
-		"--output", g.cfg.Output.BaseDir,
-		"--width", fmt.Sprintf("%d", req.Width),
-		"--height", fmt.Sprintf("%d", req.Height),
-		"--steps", "25",
-		"--seed", fmt.Sprintf("%d", req.Seed),
-		"--quality", "standard",
-	}
-
-	if req.ModelID != "" {
-		args = append(args, "--model", req.ModelID)
-	}
-
-	if !req.NoLive2DOpt {
-		// 默认启用Live2D优化
-	}
-
-	if req.Prompt != "" {
-		prompt := truncatePromptRunes(req.Prompt, promptMaxRunes)
-		if strings.HasPrefix(prompt, "-") {
-			prompt = " " + prompt
-		}
-		args = append(args, "--", prompt)
-	}
-
-	// 单图生成本地调用：沿用 Python 执行预算（默认 120s，受配置控制），
-	// 防止生成脚本挂起（模型加载卡死/等待输入）导致 goroutine 与请求永久泄漏。
-	genCtx, cancelGen := context.WithTimeout(context.Background(), g.cfg.GetPythonTimeout())
-	defer cancelGen()
-	cmd := exec.CommandContext(genCtx, g.cfg.Python.PythonPath, args...)
-	cmd.Dir = g.cfg.Python.ScriptsDir
-	cmd.Env = append(os.Environ(),
-		"PYTHONIOENCODING=utf-8",
-		"LIVE2D_PROJECT_ROOT="+g.cfg.Python.ScriptsDir,
-	)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if genCtx.Err() == context.DeadlineExceeded {
-			fmt.Fprintf(os.Stderr, "[ERROR] 本地生成器执行超时（限制%ds）\n", int(g.cfg.GetPythonTimeout().Seconds()))
-			return nil, fmt.Errorf("本地生成器执行超时（限制%d秒）", int(g.cfg.GetPythonTimeout().Seconds()))
-		}
-		fmt.Fprintf(os.Stderr, "[ERROR] 本地生成器执行失败: %v\n输出: %s\n", err, string(output))
-		return nil, fmt.Errorf("本地生成器执行失败，请检查服务端日志")
-	}
-
-	outputStr := string(output)
-	outputPath := g.parseOutputPath(outputStr)
-
-	if outputPath == "" {
-		return nil, fmt.Errorf("无法从输出中解析图片路径")
-	}
-
-	if !filepath.IsAbs(outputPath) {
-		outputPath = filepath.Join(g.cfg.Output.BaseDir, outputPath)
-	}
-
-	imageURL := OutputURLFor(g.cfg, outputPath)
-	if imageURL == "" {
-		imageURL = "/output/" + filepath.Base(outputPath)
-	}
-
-	return &models.GenerateImageResponse{
-		ImagePath: outputPath,
-		ImageURL:  imageURL,
-		Seed:      req.Seed,
-		Width:     req.Width,
-		Height:    req.Height,
-		Source:    "local_generator_v3",
-		CreatedAt: time.Now(),
-		// 这条路径已经产出了图片文件，success 必须为 true：前端（web/lib/api-client.ts
-		// 的 mapLegacyResponse）按 data.success 判断成败，漏赋值会把「生成成功」
-		// 显示成失败。
-		// 但 success=true 不等于「拿到了 AI 立绘」——占位与否由下面这两个字段说。
-		Success:        true,
-		Fallback:       true,
-		FallbackReason: fallbackReason,
-	}, nil
-}
-
-// parseOutputPath 从输出中解析图片路径
-func (g *ImageGenerator) parseOutputPath(output string) string {
-	lines := strings.Split(output, "\n")
-
-	for _, line := range lines {
-		if strings.Contains(line, "文件:") || strings.Contains(line, "图片已保存:") ||
-			strings.Contains(line, "character_") || strings.Contains(line, "optimized_") {
-			parts := strings.Fields(line)
-			for _, part := range parts {
-				if strings.HasSuffix(part, ".png") {
-					return part
-				}
-			}
-		}
-	}
-
-	// 尝试从output目录查找最新文件
-	outputDir := g.cfg.Output.BaseDir
-	if files, err := os.ReadDir(outputDir); err == nil {
-		var latestFile os.DirEntry
-		var latestTime time.Time
-		for _, file := range files {
-			if strings.HasSuffix(file.Name(), ".png") {
-				if info, err := file.Info(); err == nil {
-					if info.ModTime().After(latestTime) {
-						latestTime = info.ModTime()
-						latestFile = file
-					}
-				}
-			}
-		}
-		if latestFile != nil {
-			return filepath.Join(outputDir, latestFile.Name())
-		}
-	}
-
-	return ""
-}
-
 // CheckLocalGeneratorStatus 检查本地生成器状态
 func (g *ImageGenerator) CheckLocalGeneratorStatus() (bool, string) {
-	scriptPath := filepath.Join(g.cfg.Python.ScriptsDir, "local_image_generator.py")
-	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		return false, "本地生成器脚本不存在"
-	}
-
-	// 检查新工作流
 	workflowPath := filepath.Join(g.cfg.Python.ScriptsDir, "core", "workflow.py")
 	if _, err := os.Stat(workflowPath); err == nil {
 		return true, "工作流就绪"
 	}
-
-	// import torch/diffusers 冷启动较慢，给 60s 上限；挂起的解释器不能
-	// 让状态检查请求永久阻塞。
-	depCtx, cancelDep := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancelDep()
-	cmd := exec.CommandContext(depCtx, g.cfg.Python.PythonPath, "-c", "import diffusers; import torch; import PIL")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if depCtx.Err() == context.DeadlineExceeded {
-			return false, "依赖检查超时（>60s），Python 环境可能异常"
-		}
-		return false, fmt.Sprintf("缺少依赖: %s", string(output))
-	}
-
-	return true, "本地生成器就绪"
+	return false, "角色生成工作流脚本不存在"
 }
 
 // findTopLevelJSON 在 stdout 中找到第一个最外层 JSON 对象的起止位置。

@@ -94,6 +94,15 @@ def _export(tmp_path: Path, builder_result):
     )
 
 
+def test_export_result_includes_all_passed_atlas_gates(tmp_path):
+    _exporter, result = _export(tmp_path, _builder_result())
+
+    report = result["export_validation"]
+    assert report["atlas_layout"]["ok"] is True
+    assert report["atlas_pixels"]["ok"] is True
+    assert report["model_vertex_uvs"]["ok"] is True
+
+
 def test_model3_layout_agrees_with_the_moc3_canvas(tmp_path):
     """model3.json 的 Layout 必须与编译出的 moc3 画布段同值。
 

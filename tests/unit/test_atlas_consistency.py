@@ -14,6 +14,7 @@ from live2d_builder.exporter.atlas_consistency import (
     verify_atlas_pixels,
     verify_model_uvs,
 )
+from live2d_builder.exporter.model3_exporter import Model3Exporter
 from live2d_builder.exporter.moc3_pipeline import uv_for_vertex
 from live2d_builder.exporter.texture_atlas import TextureAtlas
 
@@ -203,3 +204,87 @@ def test_missing_inputs_report_unverified_not_pass() -> None:
     assert verify_atlas_layout({})["ok"] is None
     assert verify_atlas_pixels({}, {})["ok"] is None
     assert verify_model_uvs({}, {})["ok"] is None
+
+
+def test_export_blocks_atlas_failure_before_texture_write(tmp_path, monkeypatch) -> None:
+    exporter = Model3Exporter()
+    layer = _layer(8, 8, (10, 20, 30, 255))
+    monkeypatch.setattr(
+        "live2d_builder.exporter.model3_exporter.verify_atlas_layout",
+        lambda _result: {"available": True, "ok": False, "errors": ["bad layout"]},
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="atlas layout"):
+        exporter._export_textures({"face": layer}, tmp_path, "gate")
+
+    assert not list(tmp_path.glob("*.texture_*.png"))
+
+
+def test_export_blocks_when_layers_are_missing(tmp_path) -> None:
+    exporter = Model3Exporter()
+
+    with pytest.raises(ValueError, match="没有图层"):
+        exporter._export_textures({}, tmp_path, "gate")
+
+    assert not list(tmp_path.glob("*.texture_*.png"))
+
+
+def test_export_blocks_unverified_atlas_pixels_before_texture_write(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "live2d_builder.exporter.model3_exporter.verify_atlas_layout",
+        lambda _result: {"available": True, "ok": True, "errors": []},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "live2d_builder.exporter.model3_exporter.verify_atlas_pixels",
+        lambda _result, _layers: {"available": False, "ok": None, "errors": ["missing"]},
+        raising=False,
+    )
+    exporter = Model3Exporter()
+
+    with pytest.raises(ValueError, match="atlas pixels"):
+        exporter._export_textures({"face": _layer(8, 8, (10, 20, 30, 255))},
+                                  tmp_path, "gate")
+
+    assert not list(tmp_path.glob("*.texture_*.png"))
+
+
+def test_export_blocks_pixel_checker_skips(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "live2d_builder.exporter.model3_exporter.verify_atlas_pixels",
+        lambda _result, _layers: {"available": True, "ok": True, "errors": [],
+                                  "skipped": ["large: resampled"]},
+        raising=False,
+    )
+    exporter = Model3Exporter()
+
+    with pytest.raises(ValueError, match="atlas pixels 未验证"):
+        exporter._export_textures({"large": _layer(8, 8, (10, 20, 30, 255))},
+                                  tmp_path, "gate")
+
+    assert not list(tmp_path.glob("*.texture_*.png"))
+
+
+def test_export_blocks_vertex_uv_failure_before_model3_write(tmp_path, monkeypatch) -> None:
+    from live2d_builder.exporter import model3_exporter as module
+
+    layer = _layer(8, 8, (10, 20, 30, 255))
+    monkeypatch.setattr(module, "verify_atlas_layout",
+                        lambda _result: {"available": True, "ok": True, "errors": []},
+                        raising=False)
+    monkeypatch.setattr(module, "verify_atlas_pixels",
+                        lambda _result, _layers: {"available": True, "ok": True, "errors": []},
+                        raising=False)
+    monkeypatch.setattr(module, "verify_model_uvs",
+                        lambda *_args, **_kwargs: {"available": True, "ok": False,
+                                                   "errors": ["bad vertex uv"]},
+                        raising=False)
+    monkeypatch.setattr(exporter := Model3Exporter(), "_export_textures",
+                        lambda *_args: ["gate.texture_00.png"])
+
+    with pytest.raises(ValueError, match="model vertex UV"):
+        exporter.export({"layers": {"face": layer}, "meshes": {}},
+                        str(tmp_path), "gate")
+
+    assert not (tmp_path / "gate.model3.json").exists()

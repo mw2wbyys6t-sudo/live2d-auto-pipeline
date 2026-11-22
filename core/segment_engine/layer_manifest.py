@@ -183,6 +183,7 @@ PART_SPECS: Dict[str, Dict[str, Any]] = {
     "eyelid": {"name_zh": "面部_闭眼图", "group": "head_face", "z": 43, "sides": True},
     "tear": {"name_zh": "面部_眼泪", "group": "head_face", "z": 47, "sides": True},
     "mouth_cavity": {"name_zh": "面部_口内", "group": "head_face", "z": 42, "sides": False},
+    "mouth_open": {"name_zh": "面部_张嘴候选", "group": "head_face", "z": 42, "sides": False},
 }
 
 #: canonical 部件 → 权威表（``composer.STANDARD_LAYER_ORDER``）里的代表层名。
@@ -209,6 +210,7 @@ STANDARD_ORDER_NAMES: Dict[str, str] = {
     "nose": "nose",
     "mouth": "mouth",
     "mouth_cavity": "mouth_cavity",
+    "mouth_open": "mouth_open",
     "neck": "neck",
     "arm": "arm_L",
     "forearm": "arm_lower_L",

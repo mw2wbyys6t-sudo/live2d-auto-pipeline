@@ -111,6 +111,7 @@ class LayerComposer:
         "nose", "nose_mouth",
         # 口内：合成层，必须在嘴线**之前**（先画腔体，再画嘴唇）。
         "mouth_cavity",
+        "mouth_open",
         # P1 口部细节（split_mouth_details）：腔体 -> 舌 -> 齿 -> 唇 -> 嘴线。
         "tongue", "teeth", "lip_lower", "lip_upper",
         "mouth",
@@ -311,11 +312,12 @@ class LayerComposer:
     #: 这三层与闭眼图不同：闭眼图静止时被眼球完全挡住，而腮红/眼泪静止时必须靠
     #: **不透明度 0** 隐去。所以合成预览要跳过它们（否则静止画面凭空多出腮红），
     #: 质量门也不能把它们当成"越界扩张"（它们静止时根本不画）。
-    REST_INVISIBLE_PARTS = (CHEEK_LAYER, "tear_left", "tear_right")
-
     #: 口内层：从嘴线层取形状与色调，合成"口腔内侧"。
     MOUTH_CAVITY_SOURCES = ("mouth", "mouth_outer", "mouth_line")
     MOUTH_CAVITY_NAME = "mouth_cavity"
+    MOUTH_OPEN_NAME = "mouth_open"
+    MOUTH_OPEN_RGB = (112, 34, 48)
+    REST_INVISIBLE_PARTS = (CHEEK_LAYER, "tear_left", "tear_right", MOUTH_OPEN_NAME)
     #: 口内色 = 嘴线色向暖红偏移的比例（嘴线通常是近黑的墨线）。
     MOUTH_CAVITY_WARMTH = 0.45
 
@@ -332,6 +334,7 @@ class LayerComposer:
             name: tuple(sources) for name, sources in cls.EYELID_SOURCES
         }
         out[cls.MOUTH_CAVITY_NAME] = tuple(cls.MOUTH_CAVITY_SOURCES)
+        out[cls.MOUTH_OPEN_NAME] = tuple(cls.MOUTH_CAVITY_SOURCES)
         return out
 
     def __init__(self, device: str = "auto") -> None:
@@ -643,6 +646,21 @@ class LayerComposer:
                     self._store_layer(layers, dest, self.MOUTH_CAVITY_NAME, cavity)
                     made.append(self.MOUTH_CAVITY_NAME)
 
+        if self.MOUTH_OPEN_NAME not in layers:
+            face = self._skin_array(layers)
+            mouth = self._alpha_over(
+                [self._layer_array(layers, name) for name in self.MOUTH_CAVITY_SOURCES
+                 if name in layers], h, w)
+            opened = self._synthesize_open_mouth(face, mouth)
+            if opened is not None:
+                self._store_layer(layers, dest, self.MOUTH_OPEN_NAME, opened,
+                                  rest_opacity=0.0)
+                layers[self.MOUTH_OPEN_NAME]["provenance"] = "inferred_expression"
+                layers[self.MOUTH_OPEN_NAME]["status"] = "manual_review_required"
+                layers[self.MOUTH_OPEN_NAME]["expression_state"] = "open_mouth"
+                layers[self.MOUTH_OPEN_NAME]["source_parts"] = list(self.MOUTH_CAVITY_SOURCES)
+                made.append(self.MOUTH_OPEN_NAME)
+
         # ---- 静止时不可见的两类表情层（靠不透明度键形淡入）----
         # 它们**不**参与"静止逐像素不变"的证明：静止时由不透明度 0 隐去，
         # 所以 `rest_opacity=0` 必须一路带到合成预览与导出端。
@@ -925,6 +943,46 @@ class LayerComposer:
         cavity[interior, :3] = colour
         cavity[interior, 3] = 255
         return cavity
+
+    def _synthesize_open_mouth(self, face: Optional[np.ndarray],
+                               mouth: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        if face is None or mouth is None:
+            return None
+        face_mask = face[..., 3] >= 128
+        mouth_mask = mouth[..., 3] >= 128
+        if not face_mask.any() or not mouth_mask.any():
+            return None
+        ys, xs = np.nonzero(mouth_mask)
+        y0, y1 = int(ys.min()), int(ys.max())
+        x0, x1 = int(xs.min()), int(xs.max())
+        mouth_w = x1 - x0 + 1
+        mouth_h = y1 - y0 + 1
+        if mouth_w < 3 or mouth_h < 1:
+            return None
+        face_ys, face_xs = np.nonzero(face_mask)
+        face_h = int(face_ys.max() - face_ys.min() + 1)
+        target_h = max(mouth_h + 2, min(int(round(face_h * 0.14)), mouth_w))
+        target_w = max(mouth_w, int(round(mouth_w * 1.25)))
+        cx = (x0 + x1) / 2.0
+        cy = (y0 + y1) / 2.0
+        yy, xx = np.ogrid[:face.shape[0], :face.shape[1]]
+        rx = max(1.0, target_w / 2.0)
+        ry = max(1.0, target_h / 2.0)
+        face_y0 = int(face_ys.min())
+        face_y1 = int(face_ys.max())
+        face_x0 = int(face_xs.min())
+        face_x1 = int(face_xs.max())
+        if cy - ry < face_y0 or cy + ry > face_y1 or cx - rx < face_x0 or cx + rx > face_x1:
+            return None
+        norm = ((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2
+        aperture = (norm <= 1.0) & face_mask
+        inside = aperture & ~mouth_mask
+        if not inside.any():
+            return None
+        opened = np.zeros_like(face)
+        opened[inside, :3] = np.asarray(self.MOUTH_OPEN_RGB, dtype=np.uint8)
+        opened[inside, 3] = 255
+        return opened
 
     @staticmethod
     def _erode_mask(mask: np.ndarray, radius: int = 1) -> np.ndarray:

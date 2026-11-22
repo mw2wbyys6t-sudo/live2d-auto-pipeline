@@ -24,7 +24,7 @@ import (
 
 // Version 是后端的语义版本号，集中定义避免散落多处版本字符串不同步。
 // v0.10.3：首次集中化管理，更新时只需改这一处。
-const Version = "v0.10.12-go"
+const Version = "v0.10.12-beta-go"
 
 type Handler struct {
 	cfg            *config.Config
@@ -177,48 +177,10 @@ func (h *Handler) GenerateImage(c *gin.Context) {
 		})
 		return
 	}
-
-	// 尝试从缓存获取
-	var result *models.GenerateImageResponse
-	var fromCache bool
-
-	if h.cache != nil && req.Seed != 0 {
-		result, fromCache = h.cache.Get(req.Prompt, req.Width, req.Height, req.Seed, req.ModelID)
-	}
-
-	if !fromCache {
-		// 缓存未命中，生成图片
-		var err error
-		result, err = h.imageGenerator.GenerateImage(req)
-		if err != nil {
-			if h.userFacingGenerateError(c, err) {
-				return
-			}
-			h.serverError(c, "图片生成", err)
-			return
-		}
-
-		// 将结果存入缓存
-		if h.cache != nil && req.Seed != 0 {
-			h.cache.Set(req.Prompt, req.Width, req.Height, req.Seed, req.ModelID, result)
-		}
-	}
-
-	response := models.Response{
-		Success: true,
-		Message: "图片生成成功",
-		Data:    result,
-	}
-
-	if fromCache {
-		response.Message = "图片生成成功（来自缓存）"
-		response.Data = map[string]interface{}{
-			"result":     result,
-			"from_cache": true,
-		}
-	}
-
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusGone, models.Response{
+		Success: false,
+		Error:   "此单图接口已停用，请使用角色生成工作流；生成失败时不会返回占位图。",
+	})
 }
 
 // GenerateCharacter v0.10.0: 增强版生成（角色一致性 + 语义分割 + Live2D导出）

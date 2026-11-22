@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "samples": [
+    {
+      "id": "synthetic-structure-contract",
+      "format": "psd",
+      "path": "synthetic-structure.psd.fixture",
+      "sha256": "aff8c96ce1d2ca0345578878e516abf4b13862d03369578815638d4dae0e64cc",
+      "sample_kind": "synthetic",
+      "rights_holder": "project-generated",
+      "source": "text-only-structural-fixture",
+      "license": {
+        "id": "CC0-1.0",
+        "status": "verified",
+        "evidence": "",
+        "purposes": ["testing"],
+        "redistribution": "allowed"
+      },
+      "category": ["psd_structure"],
+      "annotation_version": "1",
+      "actions": ["head_turn", "blink_mouth", "arm_elbow", "walk"],
+      "expected_structure": ["group_path", "layer_name", "canvas_offset", "draw_order", "visibility"]
+    }
+  ]
+}

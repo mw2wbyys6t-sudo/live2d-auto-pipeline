@@ -27,6 +27,11 @@ def test_synthesized_exemption_names_are_in_standard_layer_order():
     assert exempt <= set(LayerComposer.STANDARD_LAYER_ORDER)
 
 
+def test_open_mouth_is_ordered_after_its_inferred_cavity_and_before_lips():
+    order = LayerComposer.STANDARD_LAYER_ORDER
+    assert order.index("mouth_cavity") < order.index("mouth_open") < order.index("mouth")
+
+
 def test_eyebrows_without_side_do_not_satisfy_left_and_right_required_slots():
     manifest = build_manifest(
         [_layer("eyebrows")], source=SOURCE_SEMANTIC, canvas=(1024, 1536))
@@ -37,7 +42,7 @@ def test_eyebrows_without_side_do_not_satisfy_left_and_right_required_slots():
 
 def test_synthesized_layers_are_registered_in_the_head_face_group():
     """闭眼图/眼泪/口内必须在清单里登记，不能落进 accessory 组。"""
-    for name in ("eyelid_left", "tear_left", "mouth_cavity"):
+    for name in ("eyelid_left", "tear_left", "mouth_cavity", "mouth_open"):
         data = build_manifest(
             [_layer(name)], source=SOURCE_SEMANTIC, canvas=(1024, 1536)).to_dict()
         entry = data["layers"][0]

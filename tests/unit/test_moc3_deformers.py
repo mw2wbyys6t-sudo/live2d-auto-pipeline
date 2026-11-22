@@ -27,8 +27,13 @@ from live2d_builder.exporter.moc3_model import (
     reference_rect,
     to_grid_st,
 )
+from live2d_builder.exporter.moc3_pipeline import OPACITY_KEYFORM_LAYERS
 
 PPU = 100.0
+
+
+def test_open_mouth_uses_mouth_open_parameter_for_opacity():
+    assert OPACITY_KEYFORM_LAYERS["mouth_open"] == (("ParamMouthOpenY", (0.0, 1.0)),)
 
 # Task 1.5 的黄金字节夹具：根级（无父变形器）全产物字节，由**改动前**的编译器生成。
 # 落成 base64 文本而不是 .bin —— 仓库 .gitignore 的 `*.bin` 是权重文件规则，会连带

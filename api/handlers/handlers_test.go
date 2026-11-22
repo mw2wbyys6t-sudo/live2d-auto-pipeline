@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -184,7 +183,6 @@ func TestGetAPIInfo(t *testing.T) {
 	}
 }
 
-
 func TestListCharacters_Empty(t *testing.T) {
 	h := newTestHandler(t)
 	r := gin.New()
@@ -321,63 +319,26 @@ func TestGenerateImage_MissingPrompt(t *testing.T) {
 	}
 }
 
-// TestGenerateImage_LocalPathReportsSuccess 锁住「本地生成器路径必须回报 success=true」。
-//
-// 这条路径（generateWithLocalGenerator）不经过 Python 工作流，早先漏赋值 Success，
-// 于是响应体里出现「外层 success=true / 内层 data.success=false」的自相矛盾：
-// 前端 web/lib/api-client.ts 的 mapLegacyResponse 按 data.success 判断成败，
-// 成功的一次生成会被显示成失败。
-func TestGenerateImage_LocalPathReportsSuccess(t *testing.T) {
-	python := "python3"
-	if runtime.GOOS == "windows" {
-		python = "python"
-	}
-	if _, err := exec.LookPath(python); err != nil {
-		t.Skipf("跳过：找不到 %s（%v）", python, err)
-	}
-
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatalf("解析仓库根失败: %v", err)
-	}
-	script := filepath.Join(repoRoot, "local_image_generator.py")
-	if _, err := os.Stat(script); err != nil {
-		t.Skipf("跳过：找不到本地生成器脚本 %s（%v）", script, err)
-	}
-
-	h := newTestHandlerWithPython(t, python)
-	h.cfg.Python.ScriptsDir = repoRoot
+func TestGenerateImage_RejectsLegacyPlaceholderEndpoint(t *testing.T) {
+	h := newTestHandler(t)
 	r := gin.New()
 	r.POST("/api/generate", h.GenerateImage)
 
-	body := `{"prompt":"test prompt","width":256,"height":256,"seed":42}`
+	body := `{"prompt":"test prompt","width":256,"height":256}`
 	req := httptest.NewRequest(http.MethodPost, "/api/generate", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d: %s", w.Code, w.Body.String())
 	}
-
-	var resp struct {
-		Success bool `json:"success"`
-		Data    struct {
-			Success   bool   `json:"success"`
-			ImagePath string `json:"image_path"`
-		} `json:"data"`
-	}
+	var resp models.Response
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("解析响应失败: %v（body=%s）", err, w.Body.String())
+		t.Fatalf("解析响应失败: %v", err)
 	}
-	if !resp.Success {
-		t.Error("外层 success 应为 true")
-	}
-	if !resp.Data.Success {
-		t.Error("data.success 应为 true —— 本地生成器已产出图片，漏赋值会让前端把成功显示成失败")
-	}
-	if resp.Data.ImagePath == "" {
-		t.Error("data.image_path 不应为空")
+	if resp.Success || !strings.Contains(resp.Error, "角色生成工作流") {
+		t.Fatalf("旧接口应明确拒绝并指向新流程，响应=%+v", resp)
 	}
 }
 

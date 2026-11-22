@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,27 @@ import (
 	"live2d-api/config"
 	"live2d-api/models"
 )
+
+func TestGenerateWithCharacterDoesNotReturnPlaceholderOnWorkflowFailure(t *testing.T) {
+	cfg := &config.Config{Output: config.OutputConfig{BaseDir: t.TempDir()}}
+	generator := NewImageGenerator(cfg)
+	generator.runWorkflow = func(models.GenerateRequest) (*models.GenerateImageResponse, error) {
+		return nil, ErrNoImageEngine
+	}
+
+	resp, err := generator.GenerateWithCharacter(models.GenerateRequest{Provider: "auto"})
+	if resp != nil || !errors.Is(err, ErrNoImageEngine) {
+		t.Fatalf("应返回无引擎错误而不是占位图，resp=%+v err=%v", resp, err)
+	}
+}
+
+func TestGenerateImageDoesNotCallPlaceholderGenerator(t *testing.T) {
+	generator := NewImageGenerator(&config.Config{Output: config.OutputConfig{BaseDir: t.TempDir()}})
+	resp, err := generator.GenerateImage(models.GenerateImageRequest{Prompt: "portrait"})
+	if resp != nil || err == nil {
+		t.Fatalf("未配置真实生成流程时应返回错误，resp=%+v err=%v", resp, err)
+	}
+}
 
 // 部分成功契约：立绘已经画出来、后续分层/绑定失败时，必须把真图交出去，
 // 而不是让调用方回退本地占位图。这里钉住三条边界：

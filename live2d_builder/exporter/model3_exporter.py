@@ -29,6 +29,11 @@ from PIL import Image
 
 from core.logger import get_logger
 from live2d_builder.exporter.moc3_model import resolve_pixels_per_unit
+from live2d_builder.exporter.atlas_consistency import (
+    verify_atlas_layout,
+    verify_atlas_pixels,
+    verify_model_uvs,
+)
 from live2d_builder.exporter.texture_atlas import TextureAtlas
 from live2d_builder.blendshapes.parameters import ParameterSet
 from live2d_builder.blendshapes.expressions import ExpressionBuilder
@@ -53,6 +58,7 @@ class Model3Exporter:
     def __init__(self, max_atlas_size: int = 2048) -> None:
         self.max_atlas_size = max_atlas_size
         self._atlas = TextureAtlas(max_size=max_atlas_size)
+        self._export_validation: Dict[str, Any] = {}
         self._params = ParameterSet()
         self._expressions = ExpressionBuilder()
         self._physics = PhysicsBuilder()
@@ -148,6 +154,9 @@ class Model3Exporter:
             layers, out, character_name,
             rest_opacity=builder_result.get("layer_opacity") or {})
 
+        self._verify_model_atlas_uvs(meshes, layers)
+        export_validation = dict(self._export_validation)
+
         # 8. Motions 不在这里生成 —— 由 moc3 编译之后按权威可驱动集合写入
         #    （见 moc3_pipeline.write_idle_motion）。在这里生成只能看到编译前的
         #    单轴网格键形，会漏掉全部 warp 变形器参数。
@@ -195,6 +204,7 @@ class Model3Exporter:
             "model3_json": str(model3_path),
             "moc3_ref": moc_filename,
             "atlas_uvs": getattr(self, "_last_atlas_uvs", {}),
+            "export_validation": export_validation,
             "textures": [str(out / f) for f in texture_files],
             "texture_files": texture_files,
             "physics": str(out / physics_filename) if physics_filename else "",
@@ -474,15 +484,21 @@ class Model3Exporter:
         out_dir: Path,
         character_name: str,
     ) -> List[str]:
-        """Pack and save texture atlases; return relative filenames."""
+        """Validate, pack and save texture atlases; return relative filenames."""
         if not layers:
-            log.warning("No layers provided; creating empty texture")
-            empty = Image.new("RGBA", (4, 4), (0, 0, 0, 0))
-            fname = f"{character_name}.texture_00.png"
-            empty.save(str(out_dir / fname))
-            return [fname]
+            raise ValueError("atlas layout 校验未通过: 没有图层可供正式导出")
 
         atlas_result = self._atlas.pack(layers)
+        layout_report = verify_atlas_layout(atlas_result)
+        self._require_export_check("atlas layout", layout_report)
+        pixel_report = verify_atlas_pixels(atlas_result, layers)
+        self._require_export_check("atlas pixels", pixel_report)
+        if pixel_report.get("skipped"):
+            raise ValueError("atlas pixels 未验证: " + "; ".join(pixel_report["skipped"]))
+        self._export_validation = {
+            "atlas_layout": layout_report,
+            "atlas_pixels": pixel_report,
+        }
         # 供 moc3 编译等下游使用：每层在图集中的归一化 UV 摆放
         self._last_atlas_uvs = dict(atlas_result.get("uvs", {}))
         texture_files: List[str] = []
@@ -491,6 +507,45 @@ class Model3Exporter:
             atlas_img.save(str(out_dir / fname))
             texture_files.append(fname)
         return texture_files
+
+    @staticmethod
+    def _require_export_check(name: str, report: Dict[str, Any]) -> None:
+        if report.get("available") is not True or report.get("ok") is not True:
+            details = report.get("errors") or ["校验不可用或未验证"]
+            raise ValueError(f"{name} 校验未通过: {'; '.join(str(item) for item in details)}")
+
+    def _verify_model_atlas_uvs(
+        self,
+        meshes: Dict[str, Dict],
+        layers: Dict[str, Image.Image],
+    ) -> None:
+        from live2d_builder.exporter.moc3_pipeline import uv_for_vertex
+
+        atlas_uvs = getattr(self, "_last_atlas_uvs", {}) or {}
+        model_meshes = []
+        for name, mesh in meshes.items():
+            vertices = mesh.get("vertices")
+            if vertices is None:
+                continue
+            vertices = vertices.tolist() if hasattr(vertices, "tolist") else list(vertices)
+            rect = atlas_uvs.get(str(name))
+            if rect is None:
+                continue
+            width = float(mesh.get("width") or rect["bbox"][2])
+            height = float(mesh.get("height") or rect["bbox"][3])
+            uvs = [uv_for_vertex(rect, float(vertex[0]), float(vertex[1]), width, height)
+                   for vertex in vertices]
+            model_meshes.append({
+                "name": str(name),
+                "vertices": vertices,
+                "uvs": uvs,
+                "width": width,
+                "height": height,
+            })
+
+        report = verify_model_uvs({"meshes": model_meshes}, atlas_uvs, uv_for_vertex)
+        self._require_export_check("model vertex UV", report)
+        self._export_validation["model_vertex_uvs"] = report
 
     # ------------------------------------------------------------------
     # Mesh data export (JSON for Cubism import)

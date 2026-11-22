@@ -1,7 +1,7 @@
 {
   "name": "pygmalion-launch",
   "private": true,
-  "version": "0.10.11",
+  "version": "0.10.12-beta",
   "type": "module",
   "scripts": {
     "dev": "vite --port 3210",
