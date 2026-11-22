@@ -186,10 +186,13 @@ jobs:
       - name: Build Tauri app + NSIS installer
         working-directory: desktop
         run: |
-          # 只有 tag 构建才需要 updater 产物（.nsis.zip + .sig）。main/dispatch
-          # 构建关掉 createUpdaterArtifacts，否则没配 TAURI_SIGNING_PRIVATE_KEY
-          # 时 tauri 会直接报错，把一次普通合并变成失败构建。
-          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+          # 只有 tag 构建且显式开启 updater 时才产出签名产物（.nsis.zip + .sig）。
+          # v0.10.12-beta.1 发布时仓库 secret TAURI_SIGNING_PRIVATE_KEY 的内容
+          # 不是合法的原始私钥（tauri 报 Missing comment in secret key），
+          # 因此先用仓库变量 L2D_UPDATER_ENABLED 控制：未设置 = 关闭自动更新产物，
+          # tag 也能正常出安装包。修复 secret 后在仓库 Variables 里把
+          # L2D_UPDATER_ENABLED 设为 true 即可恢复。
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:UPDATER_ENABLED -eq 'true') {
             cargo tauri build --bundles nsis --verbose
           } else {
             cargo tauri build --bundles nsis --verbose --config '{"bundle":{"createUpdaterArtifacts":false}}'
@@ -197,6 +200,7 @@ jobs:
           exit $LASTEXITCODE
         env:
           GITHUB_REF_TYPE: ${{ github.ref_type }}
+          UPDATER_ENABLED: ${{ vars.L2D_UPDATER_ENABLED }}
           # 自动更新签名：私钥只存在于仓库 secret，公钥在 tauri.conf.json 的
           # plugins.updater.pubkey。没有私钥时 createUpdaterArtifacts 会失败，
           # 因此这里必须提供；密钥丢失则已发布版本无法再被更新（需换新公钥）。
@@ -286,7 +290,7 @@ jobs:
       # 用户那边的自动更新只会「升到更高版本」，所以发版前必须把这里与
       # desktop/Cargo.toml 的 version 一起改。
       - name: Prepare updater manifest (latest.json)
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && vars.L2D_UPDATER_ENABLED == 'true'
         id: upd
         shell: pwsh
         run: |
@@ -330,7 +334,7 @@ jobs:
           "manifest=$out" >> $env:GITHUB_OUTPUT
 
       - name: Attach installer to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && vars.L2D_UPDATER_ENABLED == 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ github.ref_name }}

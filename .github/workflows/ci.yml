@@ -450,7 +450,23 @@ jobs:
 
       - name: Build Tauri app + NSIS installer
         working-directory: desktop
-        run: cargo tauri build --bundles nsis
+        run: |
+          # 与 tauri-build.yml 同一开关：未设置 L2D_UPDATER_ENABLED 时关闭
+          # createUpdaterArtifacts，避免因签名私钥格式问题让 tag 发布失败。
+          if ($env:UPDATER_ENABLED -eq 'true') {
+            cargo tauri build --bundles nsis
+          } else {
+            cargo tauri build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          }
+          exit $LASTEXITCODE
+        env:
+          UPDATER_ENABLED: ${{ vars.L2D_UPDATER_ENABLED }}
+          # 与 tauri-build.yml 对齐：tauri.conf.json 开了
+          # createUpdaterArtifacts=true，tag 构建必须提供签名私钥，
+          # 否则 tauri 直接报错「A public key has been found, but no
+          # private key」。之前这里漏传，tag 发布每次都卡在本步骤。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       # 签名最终 NSIS 安装包与 Tauri 壳（发布资产就是这里的 setup.exe）。
       - name: Sign installer and app shell (no-op unless configured)
